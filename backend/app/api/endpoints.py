@@ -1631,12 +1631,77 @@ _PROMPT_SKILL_ALIAS = {
     "script_generator_episode_script.txt": "skill:script_generation/script_generator_episode_script.txt",
     "scene_regenerate.txt": "skill:script_generation/scene_regenerate.txt",
     "shot_generator.txt": "skill:script_generation/shot_generator.txt",
+    "shot_regenerate.txt": "shot_regenerate.txt",
     "promo_generator_global.txt": "skill:promo_generation/promo_generator_global.txt",
     "promo_generator_episode_script.txt": "skill:promo_generation/promo_generator_episode_script.txt",
     "image_style_extractor.txt": "skill:image_style_extraction/image_style_extractor.txt",
     "voice_tts_planner_system.txt": "voice_tts_planner_system.txt",
     "voice_tts_planner_user.txt": "voice_tts_planner_user.txt",
 }
+
+
+def _build_prompt_resolution_debug(prompt_ref: str) -> Dict[str, Any]:
+    ref = str(prompt_ref or "").strip()
+    alias = _PROMPT_SKILL_ALIAS.get(ref)
+    prompt_dir = os.path.join(str(settings.BASE_DIR), "app", "core", "prompts")
+    skill_root = os.path.join(prompt_dir, "skills")
+
+    candidates: List[str] = []
+    for item in [ref, alias]:
+        item_text = str(item or "").strip()
+        if item_text and item_text not in candidates:
+            candidates.append(item_text)
+
+    out: Dict[str, Any] = {
+        "prompt_ref": ref,
+        "alias": alias,
+        "prompt_dir": prompt_dir,
+        "candidates": [],
+    }
+
+    for item_text in candidates:
+        candidate_info: Dict[str, Any] = {"ref": item_text}
+        if item_text.startswith("skill:"):
+            raw = item_text[len("skill:"):]
+            parts = [piece for piece in raw.split("/") if piece]
+            skill_id = parts[0] if parts else ""
+            prompt_name = parts[1] if len(parts) > 1 else "system_prompt.txt"
+            skill_file = os.path.join(skill_root, skill_id, prompt_name)
+            meta = get_skill_meta(skill_id)
+            prompt_refs = meta.get("prompts") if isinstance(meta, dict) and isinstance(meta.get("prompts"), list) else []
+
+            fallback_candidates = []
+            for fallback_ref in prompt_refs:
+                fallback_text = str(fallback_ref or "").strip()
+                if not fallback_text:
+                    continue
+                fallback_path = os.path.join(prompt_dir, fallback_text)
+                fallback_candidates.append({
+                    "ref": fallback_text,
+                    "path": fallback_path,
+                    "exists": os.path.isfile(fallback_path),
+                })
+
+            candidate_info.update({
+                "type": "skill",
+                "skill_id": skill_id,
+                "prompt_name": prompt_name,
+                "direct_path": skill_file,
+                "direct_exists": os.path.isfile(skill_file),
+                "registry_skill_found": bool(meta),
+                "registry_prompt_refs": prompt_refs,
+                "fallback_candidates": fallback_candidates,
+            })
+        else:
+            prompt_path = os.path.join(prompt_dir, item_text)
+            candidate_info.update({
+                "type": "file",
+                "path": prompt_path,
+                "exists": os.path.isfile(prompt_path),
+            })
+        out["candidates"].append(candidate_info)
+
+    return out
 
 
 def _resolve_prompt_text(prompt_ref: str) -> str:
@@ -1686,11 +1751,55 @@ async def get_prompt_content(filename: str, current_user: User = Depends(get_cur
         if skill_id:
             return await get_prompt_skill_detail(skill_id, current_user)
 
+    debug_info = _build_prompt_resolution_debug(filename)
+
     try:
-        return {"content": _resolve_prompt_text(filename)}
-    except FileNotFoundError:
-        logger.error("Prompt file not found: %s", filename)
-        raise HTTPException(status_code=404, detail=f"Prompt file '{filename}' not found.")
+        content = _resolve_prompt_text(filename)
+        logger.info(
+            "Prompt content loaded: filename=%s alias=%s content_len=%s",
+            filename,
+            debug_info.get("alias"),
+            len(content or ""),
+        )
+        return {
+            "content": content,
+            "debug": {
+                "prompt_ref": debug_info.get("prompt_ref"),
+                "alias": debug_info.get("alias"),
+                "content_len": len(content or ""),
+            },
+        }
+    except FileNotFoundError as exc:
+        logger.error(
+            "Prompt file not found: filename=%s err=%s debug=%s",
+            filename,
+            exc,
+            json.dumps(debug_info, ensure_ascii=False, default=str),
+        )
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": f"Prompt file '{filename}' not found.",
+                "prompt": filename,
+                "debug": debug_info,
+            },
+        )
+    except Exception as exc:
+        logger.exception(
+            "Prompt file load failed: filename=%s debug=%s",
+            filename,
+            json.dumps(debug_info, ensure_ascii=False, default=str),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Failed to load prompt file '{filename}'.",
+                "prompt": filename,
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+                "debug": debug_info,
+            },
+        )
 
 
 @router.get("/prompts/skills")
@@ -2355,41 +2464,46 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 if episode_for_inventory:
                     project_id_for_inventory = int(episode_for_inventory.project_id)
 
+            inventory = {
+                "characters": [],
+                "props": [],
+                "environments": [],
+            }
+            inventory_source = "empty_fallback"
             if project_id_for_inventory:
                 inventory = _build_project_subject_inventory(db, project_id_for_inventory, limit_per_type=80)
-                inventory_block = _format_project_subject_inventory_block(inventory)
-                inventory_system_guard = (
-                    "\n\n"
-                    "[Existing Subjects Reuse Guard - High Priority]\n"
-                    "The injected System-level Subjects Inventory contains authoritative existing reusable subjects for this project.\n"
-                    "You MUST reuse these existing subjects first whenever they match the script.\n"
-                    "Do NOT rename, redefine, replace, or regenerate them as new entities.\n"
-                    "When names and descriptions are provided, treat both as canonical recognition anchors.\n"
-                    "Only create a new subject when the script clearly requires an entity that is not already present in the inventory.\n"
-                    "If you output entity JSON, existing inventory subjects must be reused by reference and MUST NOT be duplicated as newly generated entities."
-                )
-                system_instruction = f"{system_instruction}{inventory_system_guard}"
-                inventory_guidance = (
-                    "System-level subject reuse rules:\n"
-                    "- Treat the above inventory as authoritative identifiers for this project.\n"
-                    "- Prefer reusing listed subject_ref names directly in Scene Subjects and Part 2 outputs.\n"
-                    "- Preserve anchor semantics when generating/repairing character, prop, and environment subjects.\n"
-                    "- Use both the provided names and descriptions/anchors as recognition baselines.\n"
-                    "- Do not duplicate existing inventory subjects in newly generated entity outputs."
-                )
-                user_content = f"{inventory_block}\n\n{inventory_guidance}\n\n{user_content}"
-                logger.info(
-                    "Injected system-level subject inventory into analyze_scene prompt: chars=%s props=%s envs=%s",
-                    len(inventory.get("characters") or []),
-                    len(inventory.get("props") or []),
-                    len(inventory.get("environments") or []),
-                )
-            else:
-                logger.info(
-                    "Skipped system-level subject inventory injection for analyze_scene: no accessible project_id resolved (direct_project_id=%s, episode_id=%s)",
-                    direct_project_id,
-                    ep_id_for_inventory,
-                )
+                inventory_source = f"project:{project_id_for_inventory}"
+
+            inventory_block = _format_project_subject_inventory_block(inventory)
+            inventory_system_guard = (
+                "\n\n"
+                "[Existing Subjects Reuse Guard - High Priority]\n"
+                "The injected System-level Subjects Inventory contains authoritative existing reusable subjects for this project.\n"
+                "You MUST reuse these existing subjects first whenever they match the script.\n"
+                "Do NOT rename, redefine, replace, overwrite, or regenerate them as new entities.\n"
+                "When names and descriptions are provided, treat both as canonical recognition anchors.\n"
+                "Only create a new subject when the script clearly requires an entity that is not already present in the inventory.\n"
+                "If the injected inventory is empty, you must still treat it as an explicit empty baseline rather than as a missing section.\n"
+                "If you output entity JSON, existing inventory subjects must be reused by reference and MUST NOT be duplicated as newly generated entities."
+            )
+            system_instruction = f"{system_instruction}{inventory_system_guard}"
+            inventory_guidance = (
+                "System-level subject reuse rules:\n"
+                "- Treat the above inventory as authoritative identifiers for this project.\n"
+                "- This inventory block is always present, even when all categories are empty.\n"
+                "- Prefer reusing listed subject_ref names directly in Scene Subjects and Part 2 outputs.\n"
+                "- Preserve anchor semantics when generating/repairing character, prop, and environment subjects.\n"
+                "- Use both the provided names and descriptions/anchors as recognition baselines.\n"
+                "- Do not duplicate existing inventory subjects in newly generated entity outputs."
+            )
+            user_content = f"{inventory_block}\n\n{inventory_guidance}\n\n{user_content}"
+            logger.info(
+                "Injected system-level subject inventory into analyze_scene prompt: source=%s chars=%s props=%s envs=%s",
+                inventory_source,
+                len(inventory.get("characters") or []),
+                len(inventory.get("props") or []),
+                len(inventory.get("environments") or []),
+            )
         except Exception as inventory_inject_err:
             logger.warning("[analyze_scene] failed to inject system-level subject inventory: %s", inventory_inject_err)
 
@@ -8208,7 +8322,7 @@ class SceneOut(BaseModel):
 
 class SceneRegenerateRequest(BaseModel):
     user_requirements: str
-    prompt_file: Optional[str] = "scene_analysis.txt"
+    prompt_file: Optional[str] = "scene_regenerate.txt"
     system_prompt: Optional[str] = None
     max_scenes: Optional[int] = 4
     entity_only_mode: Optional[bool] = False
@@ -8278,9 +8392,9 @@ def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, 
     def _format_bucket(bucket_name: str) -> str:
         items = inventory.get(bucket_name) or []
         if not items:
-            return f"- {bucket_name}: (none)"
+            return f"{bucket_name}: (none)"
 
-        lines: List[str] = [f"- {bucket_name} ({len(items)}):"]
+        lines: List[str] = [f"{bucket_name} ({len(items)}):"]
         for item in items:
             bits: List[str] = []
             subject_ref = str(item.get("subject_ref") or "").strip()
@@ -8299,10 +8413,12 @@ def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, 
         return "\n".join(lines)
 
     return (
-        "System-level Subjects Inventory (authoritative reusable entities; use subject_ref + anchor for recognition):\n"
+        "[System-level Subjects Inventory]\n"
+        "Existing Entity Inventory By Category (project baseline dependencies; reusable as-is; DO NOT rewrite/rename/redefine):\n"
         f"{_format_bucket('characters')}\n"
         f"{_format_bucket('props')}\n"
-        f"{_format_bucket('environments')}"
+        f"{_format_bucket('environments')}\n"
+        "Constraint: Existing entities are immutable references for this analysis. You may depend on them, but must not overwrite, rename, redefine, or regenerate them."
     )
 
 
@@ -8444,6 +8560,42 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         if candidate:
             candidates.append(candidate)
 
+    def _extract_object_after_label(source: str, label: str) -> Optional[str]:
+        lower = source.lower()
+        idx = lower.find(label.lower())
+        if idx < 0:
+            return None
+        obj_start = source.find("{", idx)
+        if obj_start < 0:
+            return None
+
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(obj_start, len(source)):
+            ch = source[i]
+            if in_str:
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_str = False
+                continue
+
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[obj_start:i + 1]
+        return None
+
     def _extract_object_near_key(source: str, key_name: str) -> Optional[str]:
         lower = source.lower()
         needle = f'"{key_name.lower()}"'
@@ -8489,6 +8641,58 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
     if key_object:
         candidates.append(key_object)
 
+    labeled_object = _extract_object_after_label(text, "SUBJECTS_JSON")
+    if labeled_object:
+        candidates.append(labeled_object)
+
+    def _pick_text(*values: Any) -> str:
+        for value in values:
+            candidate = str(value or "").strip()
+            if candidate:
+                return candidate
+        return ""
+
+    def _normalize_item(section: str, item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(item)
+        normalized["name"] = _pick_text(
+            item.get("name"),
+            item.get("subject_name_exact"),
+            item.get("subject_name"),
+            item.get("name_zh"),
+            item.get("display_name"),
+            item.get("name_en"),
+        )
+        normalized["name_en"] = _pick_text(
+            item.get("name_en"),
+            item.get("english_name"),
+            item.get("en_name"),
+        )
+
+        if section == "characters":
+            description_cn = _pick_text(
+                item.get("description_cn"),
+                item.get("description"),
+                item.get("narrative_description"),
+                item.get("appearance_cn"),
+            )
+            if not description_cn:
+                description_cn = "；".join(
+                    value for value in [
+                        _pick_text(item.get("appearance_cn")),
+                        _pick_text(item.get("clothing")),
+                        _pick_text(item.get("action_characteristics")),
+                    ] if value
+                )
+            normalized["description_cn"] = description_cn
+        elif section in ("props", "environments"):
+            normalized["description_cn"] = _pick_text(
+                item.get("description_cn"),
+                item.get("description"),
+                item.get("narrative_description"),
+            )
+
+        return normalized
+
     dedup_keys = set()
     for candidate in candidates:
         dedup_key = candidate[:2000]
@@ -8508,10 +8712,20 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
             items = parsed.get(section)
             if not isinstance(items, list):
                 continue
-            payload[section].extend([item for item in items if isinstance(item, dict)])
+            normalized_items = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                normalized = _normalize_item(section, item)
+                if not normalized.get("name"):
+                    continue
+                normalized_items.append(normalized)
+            payload[section].extend(normalized_items)
 
         if any(len(payload.get(k) or []) > 0 for k in ("characters", "props", "environments")):
             return payload
+
+    return payload
 
     return payload
 
@@ -8653,26 +8867,93 @@ async def regenerate_scene(
         raise HTTPException(status_code=400, detail="user_requirements is required")
 
     safe_max_scenes = max(1, min(int(req.max_scenes or 4), 8))
+    entity_only_mode = bool(req.entity_only_mode)
 
     system_instruction = ""
     if req.system_prompt:
         system_instruction = str(req.system_prompt)
     else:
-        prompt_filename = str(req.prompt_file or "scene_analysis.txt").strip() or "scene_analysis.txt"
+        prompt_filename = str(req.prompt_file or "scene_regenerate.txt").strip() or "scene_regenerate.txt"
         try:
             system_instruction = _resolve_prompt_text(prompt_filename)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
 
-    regen_injection = (
-        "\n\n"
-        "[Regeneration Mode Injection]\n"
-        "You are in SCENE REGENERATION MODE for an existing scene row.\n"
-        "Primary objective: adjust output according to [User Requirements] with highest priority.\n"
-        "Keep global project/episode consistency from the base prompt, but do NOT rewrite unrelated episodes.\n"
-        f"Return 1 to {safe_max_scenes} scene rows only, in markdown table format compatible with scene_analysis conventions.\n"
-        "For this task, old scene row is replaced by regenerated row(s)."
-    )
+    project_global_info = project.global_info if isinstance(project.global_info, dict) else {}
+
+    def _project_info_str(key: str) -> str:
+        value = project_global_info.get(key)
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return ", ".join([str(v or "").strip() for v in value if str(v or "").strip()])
+        return str(value or "").strip()
+
+    project_context_lines = [
+        f"Project Title: {project.title}",
+        f"Episode Title: {episode.title}",
+    ]
+    for key, label in (
+        ("script_title", "Script Title"),
+        ("series_episode", "Series Episode"),
+        ("type", "Type"),
+        ("base_positioning", "Base Positioning"),
+        ("language", "Language"),
+        ("Global_Style", "Global Style"),
+        ("tone", "Tone"),
+        ("lighting", "Lighting"),
+        ("borrowed_films", "Borrowed Films"),
+    ):
+        value = _project_info_str(key)
+        if value:
+            project_context_lines.append(f"{label}: {value}")
+
+    project_context_block = "\n".join(project_context_lines)
+
+    scene_subject_seed_lines = [
+        f"Environment Name Seed: {str(db_scene.environment_name or '').strip() or '(empty)'}",
+        f"Linked Characters Seed: {str(db_scene.linked_characters or '').strip() or '(empty)'}",
+        f"Key Props Seed: {str(db_scene.key_props or '').strip() or '(empty)'}",
+    ]
+    scene_subject_seeds_block = "\n".join(scene_subject_seed_lines)
+
+    if entity_only_mode:
+        regen_injection = (
+            "\n\n"
+            "[Regeneration Mode Injection]\n"
+            "You are in SCENE ENTITY SUPPLEMENT MODE for one existing scene row.\n"
+            "Primary objective: supplement the missing entities required by this scene according to [User Requirements] with highest priority.\n"
+            "You MUST use project context + existing subject inventory + current scene content together as the extraction basis.\n"
+            "You MUST follow scene_analysis subject extraction principles: reuse existing subjects first, only add truly missing subjects, and keep naming stable.\n"
+            "You MUST follow the full Chinese subject-sync rules defined in scene_regenerate.txt; if any shorter runtime summary conflicts with those file rules, the file rules win.\n"
+            "You MUST complete hidden required entities when an action physically depends on a source object, carrier, receiver, or container; for example, pouring implies a source container, and taking a tissue implies a tissue source container.\n"
+            "You MUST keep concrete scene-visible object coverage explicit; do not collapse tables, cups, doors, windows, lamps, phones, keyboards, and similar visible objects into vague generic categories.\n"
+            "You MUST NOT merge two readable outfits or two readable identity states into one character item; if two states are needed, output two separate character entities with dependency logic.\n"
+            "You MUST apply clothing hint recognition: touching, adjusting, lifting, fastening, or straightening a distinctive garment/accessory counts as evidence that the corresponding outfit state already exists and may require a separate character entity.\n"
+            "You MUST preserve project language rules from the prompt file: do not force dialogue, visible text, labels, or screen text into English unless the project language actually requires English.\n"
+            "Character generation prompts must preserve full-body framing with shoes visible as the asset baseline.\n"
+            "Environment generation prompts must remain clean-plate, no-human prompts: no over-shoulder wording, no shoulder silhouettes, no human reflections, no human shadows, no role labels, and no CHAR references inside environment prompts.\n"
+            "Return exactly 1 scene row patch in markdown table format plus one SUBJECTS_JSON object for missing entities only.\n"
+            "In entity-only mode, scene/shots are not replaced; the row patch only updates environment_name / linked_characters / key_props when needed to reflect supplemented entities."
+        )
+    else:
+        regen_injection = (
+            "\n\n"
+            "[Regeneration Mode Injection]\n"
+            "You are in FULL SCENE REGENERATION MODE for one existing scene row.\n"
+            "Primary objective: regenerate the scene according to [User Requirements] while also supplementing any newly required entities.\n"
+            "You MUST use project context + existing subject inventory + current scene content together as the generation basis.\n"
+            "You MUST follow scene_analysis subject extraction principles: reuse existing subjects first, only add truly missing subjects, and keep naming stable.\n"
+            "You MUST follow the full Chinese subject-sync rules defined in scene_regenerate.txt; if any shorter runtime summary conflicts with those file rules, the file rules win.\n"
+            "You MUST complete hidden required entities when an action physically depends on a source object, carrier, receiver, or container; for example, pouring implies a source container, and taking a tissue implies a tissue source container.\n"
+            "You MUST keep concrete scene-visible object coverage explicit; do not collapse tables, cups, doors, windows, lamps, phones, keyboards, and similar visible objects into vague generic categories.\n"
+            "You MUST NOT merge two readable outfits or two readable identity states into one character item; if two states are needed, output two separate character entities with dependency logic.\n"
+            "You MUST apply clothing hint recognition: touching, adjusting, lifting, fastening, or straightening a distinctive garment/accessory counts as evidence that the corresponding outfit state already exists and may require a separate character entity.\n"
+            "You MUST preserve project language rules from the prompt file: do not force dialogue, visible text, labels, or screen text into English unless the project language actually requires English.\n"
+            "Character generation prompts must preserve full-body framing with shoes visible as the asset baseline.\n"
+            "Environment generation prompts must remain clean-plate, no-human prompts: no over-shoulder wording, no shoulder silhouettes, no human reflections, no human shadows, no role labels, and no CHAR references inside environment prompts.\n"
+            f"Return 1 to {safe_max_scenes} regenerated scene rows in markdown table format plus one SUBJECTS_JSON object for missing entities only."
+        )
     system_instruction = f"{system_instruction}{regen_injection}"
 
     scene_snapshot = (
@@ -8704,36 +8985,59 @@ async def regenerate_scene(
         len(existing_subject_inventory.get("environments") or []),
     )
 
+    mode_specific_task_lines = (
+        "- This task is mainly for supplementing missing entities of the current scene, not rewriting the whole scene.\n"
+        "- Return a single current-scene row patch only; do not split into multiple rows in entity supplement mode.\n"
+    ) if entity_only_mode else (
+        f"- Regenerate this scene into 1 to {safe_max_scenes} scene rows when needed by user requirements.\n"
+        "- Supplement any newly required entities at the same time.\n"
+    )
+
+    mode_specific_output_line = (
+        "1) One scene markdown table row patch for the current scene (importable by scene parser).\n"
+        if entity_only_mode else
+        "1) Scene markdown table rows (importable by scene parser).\n"
+    )
+
     user_prompt = (
-        f"Project Title: {project.title}\n"
-        f"Episode Title: {episode.title}\n"
+        f"[Project Context]\n{project_context_block}\n\n"
         f"Source Scene Database ID: {db_scene.id}\n\n"
         f"Current Scene (Markdown Row):\n{scene_snapshot}\n\n"
+        f"[Current Scene Subject Seeds]\n{scene_subject_seeds_block}\n\n"
         f"{existing_subjects_block}\n\n"
-        f"User Requirements:\n{user_requirements}\n\n"
+        f"[User Supplement Requirements]\n{user_requirements}\n\n"
         "Task Instructions:\n"
-        f"- Regenerate this scene into 1 to {safe_max_scenes} scene rows.\n"
-        "- Follow scene_analysis output table conventions.\n"
-        "- Prioritize User Requirements over the previous scene wording.\n"
-        "- Keep output concise and directly importable as scene rows.\n"
-        "- You may split into multiple rows when needed.\n"
+        "- Use Project Context + Current Scene + Current Scene Subject Seeds + System-level Subjects Inventory together.\n"
+        "- Follow scene_analysis extraction principles for characters / props / environments.\n"
+        "- Follow the full Chinese subject-sync rules in scene_regenerate.txt; if this runtime summary is shorter, the file rules still apply in full.\n"
+        "- Prioritize User Supplement Requirements over the old scene wording when deciding what is missing.\n"
+        f"{mode_specific_task_lines}"
         "- Treat System-level Subjects Inventory as authoritative dependency baselines already available in project DB.\n"
         "- Existing entities are immutable references: MUST NOT be rewritten, renamed, redefined, or replaced.\n"
         "- Reuse subject_ref tokens and keep anchor semantics consistent for recognition continuity.\n"
         "- They can be referenced/reused directly, but MUST NOT be regenerated as new entities.\n"
-        "- MUST supplement complete missing subjects from script content and return JSON with keys: characters, props, environments.\n"
+        "- MUST supplement complete missing subjects required by the current scene from scene content + user requirements, and return JSON with keys: characters, props, environments.\n"
+        "- Subject extraction MUST NOT depend on whether the subject already has an image or image_url. Even subjects with no image asset yet MUST still be extracted and returned when they are required by the scene.\n"
+        "- Every returned subject item must include import-usable names and description: name + name_en + description_cn are mandatory content fields. Missing image assets are allowed; missing names/descriptions are not.\n"
+        "- Hidden required entities must be completed when the action semantics require them; do not omit source containers, receivers, or scene-required support objects merely because they were implicit in the text.\n"
+        "- Keep scene-visible concrete object coverage explicit; if a table, cup, door, window, lamp, phone, keyboard, or similar object matters to the scene, account for it specifically rather than replacing it with a vague category label.\n"
+        "- Never combine two readable wardrobe or identity states into one character JSON item.\n"
+        "- Clothing hint recognition is mandatory: touching, adjusting, lifting, fastening, or straightening a distinctive garment/accessory counts as evidence for that outfit state and may require a separate character entity.\n"
+        "- Preserve the project language rules from the prompt file; do not convert visible language content to English unless the project language actually requires English.\n"
+        "- Character prompts must remain full-body with shoes visible.\n"
+        "- Environment prompts must stay no-human and clean-plate: no OTS shoulder wording, no human residue, no role labels, and no CHAR references.\n"
         "- SUBJECTS_JSON must contain ONLY missing/new entities that are not already listed in System-level Subjects Inventory.\n"
         "- Keep existing subject names stable; do not duplicate existing names in SUBJECTS_JSON.\n"
         "- If no missing entity exists for a category, return an empty array for that category.\n\n"
         "Required Output Format:\n"
-        "1) Scene markdown table rows (importable by scene parser).\n"
+        f"{mode_specific_output_line}"
         "2) SUBJECTS_JSON: one valid JSON object only, with complete import-ready fields (same semantics as system subjects import):\n"
         "{\n"
-        "  \"characters\": [{\"name\": \"...\", \"name_en\": \"...\", \"gender\": \"...\", \"role\": \"...\", \"archetype\": \"...\", \"appearance_cn\": \"...\", \"clothing\": \"...\", \"action_characteristics\": \"...\", \"generation_prompt_cn\": \"...\", \"generation_prompt_en\": \"...\", \"negative_prompt_en\": \"...\", \"anchor_description\": \"...\", \"visual_dependencies\": [], \"dependency_strategy\": {\"type\": \"...\", \"logic\": \"...\"}}],\n"
+        "  \"characters\": [{\"name\": \"...\", \"name_en\": \"...\", \"description_cn\": \"...\", \"gender\": \"...\", \"role\": \"...\", \"archetype\": \"...\", \"appearance_cn\": \"...\", \"clothing\": \"...\", \"action_characteristics\": \"...\", \"generation_prompt_cn\": \"...\", \"generation_prompt_en\": \"...\", \"negative_prompt_en\": \"...\", \"anchor_description\": \"...\", \"visual_dependencies\": [], \"dependency_strategy\": {\"type\": \"...\", \"logic\": \"...\"}}],\n"
         "  \"props\": [{\"name\": \"...\", \"name_en\": \"...\", \"description_cn\": \"...\", \"generation_prompt_cn\": \"...\", \"generation_prompt_en\": \"...\", \"negative_prompt_en\": \"...\", \"anchor_description\": \"...\", \"visual_dependencies\": [], \"dependency_strategy\": {\"type\": \"...\", \"logic\": \"...\"}}],\n"
         "  \"environments\": [{\"name\": \"...\", \"name_en\": \"...\", \"atmosphere\": \"...\", \"visual_params\": \"...\", \"description_cn\": \"...\", \"generation_prompt_cn\": \"...\", \"generation_prompt_en\": \"...\", \"negative_prompt_en\": \"...\", \"anchor_description\": \"...\", \"visual_dependencies\": [], \"dependency_strategy\": {\"type\": \"...\", \"logic\": \"...\"}}]\n"
         "}\n"
-        "Name fields are mandatory for each entity item. Missing optional fields should use empty string / empty array / empty object.\n"
+        "Image/image_url fields are NOT required for extraction and may be omitted. Name and description fields are mandatory for each entity item. Missing other optional fields should use empty string / empty array / empty object.\n"
         "No prose outside these two parts."
     )
 
@@ -8757,7 +9061,7 @@ async def regenerate_scene(
 
     cleaned = sanitize_llm_markdown_output(raw)
     parsed_rows = _parse_scene_rows_from_markdown(cleaned)
-    if not parsed_rows:
+    if not parsed_rows and not entity_only_mode:
         raise HTTPException(status_code=502, detail="Failed to parse regenerated scene markdown table")
 
     subjects_json = _extract_subjects_json_from_text(raw)
@@ -8776,8 +9080,6 @@ async def regenerate_scene(
     fallback_key_props = db_scene.key_props
 
     created_scenes: List[Scene] = []
-    entity_only_mode = bool(req.entity_only_mode)
-
     try:
         if entity_only_mode:
             preferred_row = parsed_rows[0] if parsed_rows else {}
@@ -8996,6 +9298,12 @@ def read_episode_shots(
 class AIShotGenRequest(BaseModel):
     user_prompt: Optional[str] = None
     system_prompt: Optional[str] = None
+
+
+class AIShotRegenerateRequest(BaseModel):
+    content: Optional[List[Dict[str, Any]]] = None
+    additional_instructions: Optional[str] = None
+    prompt_file: Optional[str] = "shot_generator.txt"
 
 def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     # 2. Gather Data
@@ -9345,6 +9653,58 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
 """
     
     return system_prompt, user_input
+
+
+def _extract_shot_regenerate_marker(raw_logic: str) -> Tuple[Optional[str], str]:
+    text = str(raw_logic or "").strip()
+    if not text:
+        return None, ""
+
+    if re.search(r"=更新分镜\s*$", text):
+        return "update", re.sub(r"\s*=更新分镜\s*$", "", text).strip()
+    if re.search(r"=补充分镜\s*$", text):
+        return "add", re.sub(r"\s*=补充分镜\s*$", "", text).strip()
+    return None, text
+
+
+def _build_shot_regenerate_prompts(
+    db: Session,
+    scene: Scene,
+    project: Project,
+    *,
+    staged_markdown: str,
+    additional_instructions: str,
+) -> Tuple[str, str]:
+    system_prompt = _resolve_prompt_text("shot_generator.txt")
+    _, base_user_prompt = _build_shot_prompts(db, scene, project)
+
+    safe_markdown = str(staged_markdown or "").strip()
+    safe_instructions = str(additional_instructions or "").strip() or "(none)"
+
+    runtime_rules = (
+        "# Runtime Regeneration Rules\n"
+        "You are not generating a full fresh shot list. You are producing a selective supplement/update diff against the current staged shot markdown.\n"
+        "Return a markdown table only. Do not add prose before or after the table.\n"
+        "Only include rows that need to change or be newly inserted. Omit unchanged rows entirely.\n"
+        "For an existing shot that should be modified, preserve its existing Shot ID exactly and append '=更新分镜' to the end of 'Shot Logic (CN)'.\n"
+        "For a newly inserted shot, create a Shot ID derived from its neighboring base shot using an underscore numeric suffix such as '_1', '_2', and append '=补充分镜' to the end of 'Shot Logic (CN)'.\n"
+        "Every returned row must include a valid marker in 'Shot Logic (CN)' so downstream import can distinguish updates from additions.\n"
+        "Do not rewrite or renumber unaffected shots.\n"
+        "Keep the table schema compatible with the staged shot markdown table.\n"
+    )
+
+    user_prompt = (
+        "# Scene Context Reference\n"
+        "The following block is the authoritative current scene context, including scene text and entity descriptions.\n\n"
+        f"{str(base_user_prompt or '').strip()}\n\n"
+        f"{runtime_rules}\n"
+        "# Current Staged Shot Markdown (Authoritative Baseline)\n"
+        "Use this markdown table as the source of truth for current shot order, existing Shot IDs, and current content.\n\n"
+        f"{safe_markdown}\n\n"
+        "# User Supplement Instructions\n"
+        f"{safe_instructions}\n"
+    )
+    return system_prompt, user_prompt
 
 @router.get("/scenes/{scene_id}/ai_prompt_preview")
 def ai_prompt_preview(
@@ -10073,6 +10433,222 @@ async def ai_generate_shots(
             m_log = locals().get('model')
             billing_service.log_failed_transaction(db, current_user.id, "llm_chat", p_log, m_log, str(e))
         except: pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/scenes/{scene_id}/ai_regenerate_shots")
+async def ai_regenerate_shots(
+    scene_id: int,
+    req: Optional[AIShotRegenerateRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
+):
+    if async_mode == "1":
+        tid = _submit_async(
+            ai_regenerate_shots,
+            user_id=current_user.id,
+            kind="ai_regenerate_shots",
+            scene_id=scene_id,
+            req=req,
+            async_mode="0",
+        )
+        return JSONResponse({"task_id": tid, "async": True})
+
+    try:
+        scene = db.query(Scene).filter(Scene.id == scene_id).first()
+        if not scene:
+            raise HTTPException(status_code=404, detail="Scene not found")
+
+        episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+        if not episode:
+            raise HTTPException(status_code=404, detail="Episode not found")
+
+        project = _require_project_access(db, episode.project_id, current_user)
+
+        staged_rows = []
+        staged_markdown = ""
+        if req and isinstance(req.content, list) and req.content:
+            staged_rows, staged_markdown = _validate_shot_rows_roundtrip_or_raise(
+                req.content,
+                source_label="Current staged shot table",
+                status_code=400,
+            )
+        else:
+            stored_markdown = str(scene.ai_shots_result or "").strip()
+            if not stored_markdown:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No staged AI shot markdown is available for regeneration",
+                )
+            _, parsed_rows, _ = _parse_shot_markdown_or_raise(
+                stored_markdown,
+                source_label="Stored staged shot table",
+                status_code=400,
+            )
+            staged_rows, staged_markdown = _validate_shot_rows_roundtrip_or_raise(
+                parsed_rows,
+                source_label="Stored staged shot table",
+                status_code=400,
+            )
+
+        prompt_filename = str((req.prompt_file if req else "") or "shot_generator.txt").strip() or "shot_generator.txt"
+        try:
+            if prompt_filename != "shot_generator.txt":
+                system_prompt = _resolve_prompt_text(prompt_filename)
+                _, base_user_prompt = _build_shot_prompts(db, scene, project)
+                user_input = (
+                    f"# Scene Context Reference\n{str(base_user_prompt or '').strip()}\n\n"
+                    f"# Current Staged Shot Markdown\n{staged_markdown}\n\n"
+                    f"# User Supplement Instructions\n{str((req.additional_instructions if req else '') or '').strip() or '(none)'}\n"
+                )
+            else:
+                system_prompt, user_input = _build_shot_regenerate_prompts(
+                    db,
+                    scene,
+                    project,
+                    staged_markdown=staged_markdown,
+                    additional_instructions=str((req.additional_instructions if req else "") or "").strip(),
+                )
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail=f"Prompt file '{prompt_filename}' could not be loaded.")
+
+        llm_config = agent_service.get_active_llm_config(current_user.id)
+        if not llm_config:
+            raise HTTPException(status_code=400, detail="No active LLM config")
+        llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
+
+        provider = llm_config.get("provider")
+        model = llm_config.get("model")
+        reservation_tx = None
+        if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+            messages_est = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ]
+            est = billing_service.estimate_input_output_tokens_from_messages(messages_est, output_ratio=1.5)
+            reserve_details = {
+                "item": "regenerate_shots",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "system_prompt_len": len(system_prompt or ""),
+                "user_prompt_len": len(user_input or ""),
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            }
+            reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+        else:
+            billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+        _release_db_connection(db, "ai_regenerate_shots_llm_call")
+        response_dict = await llm_service.generate_content_with_fallback(user_input, system_prompt, llm_config)
+        response_content_raw = response_dict.get("content", "")
+        usage = response_dict.get("usage", {})
+
+        if str(response_content_raw).startswith("Error:"):
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, str(response_content_raw))
+            raise HTTPException(status_code=500, detail=str(response_content_raw))
+
+        raw_str = str(response_content_raw or "").strip()
+        if not raw_str:
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, "empty llm response")
+            raise HTTPException(status_code=502, detail="LLM returned empty response")
+
+        raw_text_original = str(response_content_raw or "")
+        if re.search(r"\bPROHIBITED_CONTENT\b", raw_str, flags=re.IGNORECASE):
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, "provider moderation block")
+            raise HTTPException(status_code=502, detail="Provider moderation blocked shot regeneration (PROHIBITED_CONTENT)")
+
+        response_content = sanitize_llm_markdown_output(response_content_raw)
+        if not response_content:
+            if reservation_tx:
+                billing_service.cancel_reservation(db, reservation_tx.id, "empty response after sanitize")
+            raise HTTPException(status_code=502, detail="LLM response became empty after sanitize")
+
+        if reservation_tx:
+            actual_details = {"item": "regenerate_shots"}
+            if usage:
+                actual_details.update(usage)
+            _apply_llm_routing_to_billing_details(actual_details, response_dict)
+            if "prompt_tokens" in actual_details and "input_tokens" not in actual_details:
+                actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
+            if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
+                actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
+            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+        else:
+            details = {"item": "regenerate_shots"}
+            if usage:
+                details.update(usage)
+            _apply_llm_routing_to_billing_details(details, response_dict)
+            if "prompt_tokens" in details and "input_tokens" not in details:
+                details["input_tokens"] = details.get("prompt_tokens", 0)
+            if "completion_tokens" in details and "output_tokens" not in details:
+                details["output_tokens"] = details.get("completion_tokens", 0)
+            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+
+        headers, regenerated_rows, table_line_count = parse_shots_markdown_table(response_content)
+        if not regenerated_rows:
+            raw_preview = response_content.replace("\n", " ")[:300]
+            raise HTTPException(status_code=502, detail=f"Regenerate Shots returned 0 parsed rows; raw preview: {raw_preview}")
+        if table_line_count >= 4 and len(regenerated_rows) > 0 and (len(regenerated_rows) * 2) <= table_line_count:
+            raise HTTPException(
+                status_code=502,
+                detail="Shot regeneration output may have lost rows during markdown parsing; regenerate before apply.",
+            )
+
+        validated_rows = _validate_shot_rows_or_raise(
+            regenerated_rows,
+            source_label="Regenerated shot diff table",
+            status_code=502,
+        )
+
+        marker_errors: List[str] = []
+        for idx, row in enumerate(validated_rows, start=1):
+            shot_id = _pick_shot_cell(row, ["Shot ID", "shot_id", "镜头ID"], "")
+            shot_logic = _pick_shot_cell(row, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
+            marker_mode, _ = _extract_shot_regenerate_marker(shot_logic)
+            if marker_mode not in {"update", "add"}:
+                marker_errors.append(f"row {idx} ({shot_id or 'unknown shot'}) missing required Shot Logic marker")
+                continue
+            if marker_mode == "add" and not re.search(r"_\d+$", str(shot_id or "")):
+                marker_errors.append(f"row {idx} ({shot_id or 'unknown shot'}) add-shot id must use _1/_2 style suffix")
+
+        if marker_errors:
+            detail = "; ".join(marker_errors[:5])
+            if len(marker_errors) > 5:
+                detail += f"; and {len(marker_errors) - 5} more rows"
+            raise HTTPException(status_code=502, detail=f"Regenerated shot diff failed marker validation: {detail}")
+
+        return {
+            "timestamp": now_bj_iso(),
+            "raw_text": raw_text_original,
+            "content": validated_rows,
+            "usage": usage,
+            "warnings": [],
+            "source_row_count": len(staged_rows),
+            "result_row_count": len(validated_rows),
+            "headers": headers,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "[ai_regenerate_shots] unhandled_error scene_id=%s user_id=%s error=%s",
+            scene_id,
+            current_user.id,
+            e,
+        )
+        try:
+            p_log = locals().get("provider")
+            m_log = locals().get("model")
+            billing_service.log_failed_transaction(db, current_user.id, "llm_chat", p_log, m_log, str(e))
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/scenes/{scene_id}/latest_ai_result")

@@ -14,6 +14,15 @@ def _env_or_default(key: str, default: str) -> str:
     stripped = value.strip()
     return stripped if stripped else default
 
+
+def _path_env_or_default(key: str, default_relative: str) -> str:
+    value = os.getenv(key)
+    raw = value.strip() if value and value.strip() else default_relative
+    path = Path(raw)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return str(path.resolve())
+
 class Settings(BaseSettings):
     BASE_DIR: Path = BASE_DIR
     PROJECT_NAME: str = "AI Story"
@@ -43,7 +52,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "43200"))
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
-    UPLOAD_DIR: str = "uploads"
+    UPLOAD_DIR: str = _path_env_or_default("UPLOAD_DIR", "uploads")
     SECURITY_HEADERS_ENABLED: bool = os.getenv("SECURITY_HEADERS_ENABLED", "1") not in {"0", "false", "False"}
     SECURITY_HSTS_SECONDS: int = int(os.getenv("SECURITY_HSTS_SECONDS", "31536000"))
     GZIP_MINIMUM_SIZE: int = int(os.getenv("GZIP_MINIMUM_SIZE", "1024"))

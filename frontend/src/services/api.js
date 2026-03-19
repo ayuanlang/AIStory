@@ -390,6 +390,34 @@ const buildApiErrorMessage = (error) => {
     return error?.message || 'Request failed';
 };
 
+const summarizePromptDebug = (debugPayload) => {
+    if (!debugPayload || typeof debugPayload !== 'object') return '';
+
+    const segments = [];
+    const alias = String(debugPayload.alias || '').trim();
+    if (alias) {
+        segments.push(`alias=${alias}`);
+    }
+
+    const candidates = Array.isArray(debugPayload.candidates) ? debugPayload.candidates : [];
+    if (candidates.length > 0) {
+        const compactCandidates = candidates.map((candidate) => {
+            const ref = String(candidate?.ref || '').trim() || '(empty)';
+            const type = String(candidate?.type || '').trim() || 'unknown';
+            if (type === 'skill') {
+                const directExists = candidate?.direct_exists ? 'direct:yes' : 'direct:no';
+                const registryFound = candidate?.registry_skill_found ? 'registry:yes' : 'registry:no';
+                return `${ref} [${type}, ${directExists}, ${registryFound}]`;
+            }
+            const exists = candidate?.exists ? 'exists:yes' : 'exists:no';
+            return `${ref} [${type}, ${exists}]`;
+        });
+        segments.push(`candidates=${compactCandidates.join('; ')}`);
+    }
+
+    return segments.join(' | ');
+};
+
 const IMAGE_SUBMIT_IDEMPOTENCY_WINDOW_MS = 30 * 1000;
 const imageSubmitIdempotencyCache = new Map();
 
@@ -781,6 +809,24 @@ export const generateSceneShots = async (sceneId, promptData = null, runtimeHook
         });
     } catch (error) {
         console.error('[API] generateSceneShots failed', {
+            sceneId,
+            status: error?.response?.status,
+            detail: error?.response?.data?.detail,
+            responseData: error?.response?.data,
+            message: error?.message,
+        });
+        throw error;
+    }
+}
+
+export const regenerateSceneShots = async (sceneId, payload = null, runtimeHooks = {}) => {
+    try {
+        return await asyncLLMPost(`/scenes/${sceneId}/ai_regenerate_shots`, payload, {
+            onTaskCreated: runtimeHooks?.onTaskCreated,
+            pollOptions: runtimeHooks?.pollOptions,
+        });
+    } catch (error) {
+        console.error('[API] regenerateSceneShots failed', {
             sceneId,
             status: error?.response?.status,
             detail: error?.response?.data?.detail,
@@ -2424,8 +2470,27 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
 };
 
 export const fetchPrompt = async (filename) => {
-    const response = await api.get(`/prompts/${filename}`);
-    return response.data;
+    try {
+        const response = await api.get(`/prompts/${filename}`);
+        return response.data;
+    } catch (error) {
+        const status = Number(error?.response?.status || 0);
+        const detail = buildApiErrorMessage(error) || `Failed to load prompt '${filename}'`;
+        const debugPayload = error?.response?.data?.detail?.debug || error?.response?.data?.debug || null;
+        const debugSummary = summarizePromptDebug(debugPayload);
+        const message = [
+            `Prompt '${filename}' load failed`,
+            status ? `(HTTP ${status})` : '',
+            `: ${detail}`,
+            debugSummary ? ` | ${debugSummary}` : '',
+        ].join('');
+        const wrapped = new Error(message);
+        wrapped.status = status;
+        wrapped.filename = filename;
+        wrapped.detail = detail;
+        wrapped.debug = debugPayload;
+        throw wrapped;
+    }
 };
 
 export const fetchPromptSkills = async () => {

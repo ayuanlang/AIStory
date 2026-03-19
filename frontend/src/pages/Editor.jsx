@@ -5,7 +5,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare } from 'lucide-react';
+import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -21,6 +21,84 @@ const getFullUrl = (url) => {
         return `${base}${url}`;
     }
     return url;
+};
+
+const brokenMediaUrls = new Set();
+const brokenSceneImageUrls = new Set();
+
+const rememberBrokenMediaUrl = (url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized) return;
+    brokenMediaUrls.add(normalized);
+};
+
+const isBrokenMediaUrl = (url) => {
+    return brokenMediaUrls.has(String(url || '').trim());
+};
+
+const getSafeMediaUrl = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw || isBrokenMediaUrl(raw)) return '';
+    return getFullUrl(raw);
+};
+
+const rememberBrokenSceneImageUrl = (url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized) return;
+    brokenSceneImageUrls.add(normalized);
+    rememberBrokenMediaUrl(normalized);
+};
+
+const isBrokenSceneImageUrl = (url) => {
+    return brokenSceneImageUrls.has(String(url || '').trim());
+};
+
+const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps }) => {
+    const rawSrc = String(src || '').trim();
+    const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
+
+    useEffect(() => {
+        setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
+    }, [rawSrc]);
+
+    const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
+    if (!resolvedSrc) return fallback || null;
+
+    return (
+        <img
+            src={resolvedSrc}
+            alt={alt}
+            className={className}
+            onError={() => {
+                rememberBrokenMediaUrl(rawSrc);
+                setFailed(true);
+            }}
+            {...imgProps}
+        />
+    );
+};
+
+const SafeAudio = ({ src, fallback = null, ...audioProps }) => {
+    const rawSrc = String(src || '').trim();
+    const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
+
+    useEffect(() => {
+        setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
+    }, [rawSrc]);
+
+    const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
+    if (!resolvedSrc) return fallback || null;
+
+    return (
+        <audio
+            src={resolvedSrc}
+            onError={() => {
+                rememberBrokenMediaUrl(rawSrc);
+                setFailed(true);
+            }}
+            {...audioProps}
+        />
+    );
 };
 
 const normalizeMediaRefList = (items) => {
@@ -161,10 +239,20 @@ const LazyHoverVideo = ({
     const containerRef = useRef(null);
     const videoRef = useRef(null);
     const [shouldLoad, setShouldLoad] = useState(false);
+    const [videoFailed, setVideoFailed] = useState(() => !src || isBrokenMediaUrl(src));
+    const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
+
+    useEffect(() => {
+        setVideoFailed(!src || isBrokenMediaUrl(src));
+    }, [src]);
+
+    useEffect(() => {
+        setPosterFailed(!poster || isBrokenMediaUrl(poster));
+    }, [poster]);
 
     useEffect(() => {
         const node = containerRef.current;
-        if (!node || shouldLoad || !src) return undefined;
+        if (!node || shouldLoad || !src || videoFailed) return undefined;
 
         const observer = new IntersectionObserver(
             (entries) => {
@@ -182,7 +270,7 @@ const LazyHoverVideo = ({
 
         observer.observe(node);
         return () => observer.disconnect();
-    }, [shouldLoad, src]);
+    }, [shouldLoad, src, videoFailed]);
 
     const handleMouseEnter = async () => {
         if (!playOnHover) return;
@@ -218,10 +306,18 @@ const LazyHoverVideo = ({
         >
             <video
                 ref={videoRef}
-                src={shouldLoad ? getFullUrl(src) : undefined}
-                poster={poster ? getFullUrl(poster) : undefined}
+                src={shouldLoad && !videoFailed ? getFullUrl(src) : undefined}
+                poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
                 preload={shouldLoad ? preload : 'none'}
                 className={mediaClassName}
+                onError={() => {
+                    if (src) rememberBrokenMediaUrl(src);
+                    setVideoFailed(true);
+                    if (poster) {
+                        rememberBrokenMediaUrl(poster);
+                        setPosterFailed(true);
+                    }
+                }}
                 {...videoProps}
             />
         </div>
@@ -245,21 +341,31 @@ const ManagedVideoPlayer = ({
 }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [loadState, setLoadState] = useState(() => (src && !suspend ? 'loading' : 'idle'));
+    const [videoFailed, setVideoFailed] = useState(() => !src || isBrokenMediaUrl(src));
+    const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
 
     useEffect(() => {
-        if (!src || suspend) {
+        setVideoFailed(!src || isBrokenMediaUrl(src));
+    }, [src]);
+
+    useEffect(() => {
+        setPosterFailed(!poster || isBrokenMediaUrl(poster));
+    }, [poster]);
+
+    useEffect(() => {
+        if (!src || suspend || videoFailed) {
             setLoadState('idle');
             return;
         }
         setLoadState('loading');
-    }, [src, suspend]);
+    }, [src, suspend, videoFailed]);
 
     const isBusy = loadState === 'loading' || loadState === 'buffering';
     const busyText = loadState === 'buffering'
         ? t('视频缓冲中...', 'Buffering video...')
         : t('视频下载中...', 'Downloading video...');
 
-    if (!src) {
+    if (!src || videoFailed) {
         return (
             <div className={`relative ${wrapperClassName}`.trim()} onClick={onClick}>
                 <div className={`absolute inset-0 flex items-center justify-center opacity-20 ${className}`.trim()}>
@@ -275,7 +381,7 @@ const ManagedVideoPlayer = ({
                 <video
                     key={src}
                     src={getFullUrl(src)}
-                    poster={poster ? getFullUrl(poster) : undefined}
+                    poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
                     className={className}
                     controls={controls}
                     autoPlay={autoPlay}
@@ -292,9 +398,22 @@ const ManagedVideoPlayer = ({
                     onSeeking={() => setLoadState('buffering')}
                     onSeeked={() => setLoadState('ready')}
                     onSuspend={() => setLoadState((prev) => (prev === 'loading' ? 'ready' : prev))}
+                    onError={() => {
+                        rememberBrokenMediaUrl(src);
+                        setVideoFailed(true);
+                        setLoadState('idle');
+                    }}
                 />
-            ) : poster ? (
-                <img src={getFullUrl(poster)} className={className} alt="video-poster" />
+            ) : poster && !posterFailed ? (
+                <SafeImage
+                    src={poster}
+                    className={className}
+                    alt="video-poster"
+                    onError={() => {
+                        rememberBrokenMediaUrl(poster);
+                        setPosterFailed(true);
+                    }}
+                />
             ) : (
                 <div className={`absolute inset-0 flex items-center justify-center opacity-20 ${className}`.trim()}>
                     <Video className="w-8 h-8" />
@@ -739,6 +858,7 @@ import {
     generateVoice,
     fetchAssets, 
     generateSceneShots,
+    regenerateSceneShots,
     fetchSceneShotsPrompt,
     createAsset,
     uploadAsset,
@@ -10348,10 +10468,11 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
     )
 };
 
-const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh' }) => {
+const SceneCard = ({ scene, entities, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh' }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isShotMenuOpen, setIsShotMenuOpen] = useState(false);
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
 
     useEffect(() => {
@@ -10398,7 +10519,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                            (enClean && (enClean.includes(targetName) || targetName.includes(enClean)));
                  });
             }
-            if (match && match.image_url) validUrls.push(match.image_url);
+            if (match && match.image_url && !isBrokenSceneImageUrl(match.image_url)) validUrls.push(match.image_url);
         });
 
         // Use Set to remove duplicates
@@ -10417,7 +10538,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
     const handleGenerate = async (e) => {
         e.stopPropagation();
         if (isGenerating) return;
-        
+        setIsShotMenuOpen(false);
         setIsGenerating(true);
         if (onGenerateShots) {
             await onGenerateShots(scene.id);
@@ -10425,8 +10546,17 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
         setIsGenerating(false);
     };
 
+    const handleSupplement = async (e) => {
+        e.stopPropagation();
+        setIsShotMenuOpen(false);
+        if (typeof onSupplementShots === 'function') {
+            await onSupplementShots(scene);
+        }
+    };
+
     const handleDelete = async (e) => {
         e.stopPropagation();
+        setIsShotMenuOpen(false);
         if (!onDelete || !scene?.id) return;
         await onDelete(scene);
     };
@@ -10437,6 +10567,12 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
     };
 
     const imgUrl = images.length > 0 ? images[currentIndex] : null;
+    const handleSceneImageError = () => {
+        if (!imgUrl) return;
+        rememberBrokenSceneImageUrl(imgUrl);
+        setImages((prev) => prev.filter((url) => String(url || '').trim() !== String(imgUrl || '').trim()));
+        setCurrentIndex(0);
+    };
 
     return (
         <div 
@@ -10448,6 +10584,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                     <motion.img 
                         key={imgUrl}
                         src={getFullUrl(imgUrl)} 
+                        onError={handleSceneImageError}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         transition={{ duration: 0.5 }}
@@ -10486,7 +10623,37 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                     {scene.scene_no || scene.id}
                 </div>
                 <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 relative">
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setIsShotMenuOpen((prev) => !prev);
+                            }}
+                            className="bg-black/70 hover:bg-black text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 shadow-lg border border-white/10"
+                            title={t('镜头菜单', 'Shot Menu')}
+                        >
+                            <MoreHorizontal className="w-3 h-3" />
+                            {t('镜头', 'Shots')}
+                        </button>
+                        {isShotMenuOpen && (
+                            <div className="absolute top-full right-0 mt-1 min-w-[148px] rounded-lg border border-white/10 bg-[#111111] shadow-2xl overflow-hidden">
+                                <button
+                                    onClick={handleGenerate}
+                                    disabled={isGenerating}
+                                    className="w-full px-3 py-2 text-left text-[11px] text-white/90 hover:bg-white/10 flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    {isGenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                                    {t('AI 镜头', 'AI Shots')}
+                                </button>
+                                <button
+                                    onClick={handleSupplement}
+                                    className="w-full px-3 py-2 text-left text-[11px] text-amber-100 hover:bg-amber-500/10 flex items-center gap-2"
+                                >
+                                    <Sparkles className="w-3 h-3" />
+                                    {t('补充镜头', 'Supplement Shots')}
+                                </button>
+                            </div>
+                        )}
                         <button
                             onClick={handleDelete}
                             className="bg-red-500/90 hover:bg-red-500 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 shadow-lg"
@@ -10568,7 +10735,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                 </div>
 
                 <div className="pt-2 border-t border-white/5 mt-auto">
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                         <button
                             onClick={handleGenerate}
                             disabled={isGenerating}
@@ -10577,6 +10744,14 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
                         >
                             {isGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
                             {t('AI 镜头', 'AI Shots')}
+                        </button>
+                        <button
+                            onClick={handleSupplement}
+                            className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-500/30 px-2 py-1.5 rounded text-[11px] font-semibold flex items-center justify-center gap-1"
+                            title={t('打开补充镜头菜单', 'Open shot supplement flow')}
+                        >
+                            <Sparkles className="w-3 h-3"/>
+                            {t('补充镜头', 'Supplement')}
                         </button>
                         <button
                             onClick={handleDelete}
@@ -10593,7 +10768,7 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onDelete, select
     );
 };
 
-const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShots, uiLang = 'zh' }) => {
+const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, onSwitchToShots, uiLang = 'zh' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const defaultSceneRegenRequirement = t('补充所缺实体', 'Supplement missing entities');
     const SCENE_AI_SHOTS_BATCH_KIND = 'scene-ai-shots-batch';
@@ -10635,6 +10810,15 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const [sceneRegenReimporting, setSceneRegenReimporting] = useState(false);
     const [sceneRegenScenePatching, setSceneRegenScenePatching] = useState(false);
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
+    const [shotRegenModal, setShotRegenModal] = useState({
+        open: false,
+        sceneId: null,
+        instructions: '',
+        submitting: false,
+        error: '',
+    });
+    const [pendingShotSupplementSceneId, setPendingShotSupplementSceneId] = useState(null);
+    const [shotSupplementImportReport, setShotSupplementImportReport] = useState(null);
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
     const [batchAiShotsProgress, setBatchAiShotsProgress] = useState(() => createBatchAiShotsProgressState());
     const [isSceneBatchProgressDismissed, setIsSceneBatchProgressDismissed] = useState(false);
@@ -11156,6 +11340,463 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         return '';
     };
 
+    const splitCombinedCnPrompt = (raw) => {
+        const textValue = String(raw || '').trim();
+        if (!textValue) {
+            return {
+                start_frame_cn: '',
+                video_prompt_cn: '',
+                keyframes_cn: '',
+                end_frame_cn: '',
+            };
+        }
+
+        const lines = textValue
+            .split(/\n|<br\s*\/?>/i)
+            .map((line) => String(line || '').trim())
+            .filter(Boolean);
+
+        let start = '';
+        let video = '';
+        let keyframes = '';
+        let end = '';
+
+        lines.forEach((line) => {
+            const lower = line.toLowerCase();
+            if (/^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])/.test(lower) || /^起始帧\s*[:：]/.test(line)) {
+                start = line.replace(/^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])/i, '').trim();
+                return;
+            }
+            if (/^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])/.test(lower) || /^视频(提示词)?\s*[:：]/.test(line)) {
+                video = line.replace(/^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])/i, '').trim();
+                return;
+            }
+            if (/^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])/.test(lower) || /^关键帧\s*[:：]/.test(line)) {
+                keyframes = line.replace(/^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])/i, '').trim();
+                return;
+            }
+            if (/^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])/.test(lower) || /^(收尾帧|结束帧)\s*[:：]/.test(line)) {
+                end = line.replace(/^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])/i, '').trim();
+            }
+        });
+
+        if (!start && !video && !keyframes && !end) {
+            return {
+                start_frame_cn: textValue,
+                video_prompt_cn: textValue,
+                keyframes_cn: textValue,
+                end_frame_cn: textValue,
+            };
+        }
+
+        if (!end && start) end = start;
+
+        return {
+            start_frame_cn: start,
+            video_prompt_cn: video,
+            keyframes_cn: keyframes,
+            end_frame_cn: end,
+        };
+    };
+
+    const extractShotRegenMarker = (rawLogic) => {
+        const textValue = String(rawLogic || '').trim();
+        if (!textValue) return { mode: null, cleanLogic: '' };
+        if (/=更新分镜\s*$/.test(textValue)) {
+            return {
+                mode: 'update',
+                cleanLogic: textValue.replace(/\s*=更新分镜\s*$/, '').trim(),
+            };
+        }
+        if (/=补充分镜\s*$/.test(textValue)) {
+            return {
+                mode: 'add',
+                cleanLogic: textValue.replace(/\s*=补充分镜\s*$/, '').trim(),
+            };
+        }
+        return { mode: null, cleanLogic: textValue };
+    };
+
+    const buildCanonicalAiStagingRow = (shot, fallbackSceneCode = '') => {
+        const base = {
+            'Shot ID': getStagingShotField(shot, 'shot_id'),
+            'Shot Name': getStagingShotField(shot, 'shot_name'),
+            'Scene ID': getStagingShotField(shot, 'scene_id') || String(fallbackSceneCode || ''),
+            'Shot Logic (CN)': getStagingShotField(shot, 'shot_logic_cn'),
+            'Start Frame': getStagingShotField(shot, 'start_frame'),
+            'Video Content': getStagingShotField(shot, 'video_content'),
+            'Duration (s)': getStagingShotField(shot, 'duration'),
+            'Keyframes': getStagingShotField(shot, 'keyframes'),
+            'End Frame': getStagingShotField(shot, 'end_frame'),
+            'Start Frame (CN)': getStagingShotField(shot, 'start_frame_cn'),
+            'Video Content (CN)': getStagingShotField(shot, 'video_content_cn'),
+            'Keyframes (CN)': getStagingShotField(shot, 'keyframes_cn'),
+            'End Frame (CN)': getStagingShotField(shot, 'end_frame_cn'),
+            'Associated Entities': getStagingShotField(shot, 'associated_entities'),
+        };
+
+        Object.keys(shot || {}).forEach((key) => {
+            if (base[key] !== undefined) return;
+            const value = shot?.[key];
+            if (value === undefined || value === null || String(value).trim() === '') return;
+            base[key] = String(value);
+        });
+
+        return base;
+    };
+
+    const sortAiStagingRows = (rows) => {
+        return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
+            const leftId = String(getStagingShotField(left, 'shot_id') || '').trim();
+            const rightId = String(getStagingShotField(right, 'shot_id') || '').trim();
+            return leftId.localeCompare(rightId, undefined, { numeric: true, sensitivity: 'base' });
+        });
+    };
+
+    const buildShotWritePayloadFromRow = (shot, options = {}) => {
+        const fallbackSceneCode = String(options?.fallbackSceneCode || '').trim();
+        const existingTechnicalNotes = String(options?.existingTechnicalNotes || '').trim();
+        const promptCnRaw = String(shot?.['Prompt (CN)'] || shot?.prompt_cn || '').trim();
+        const startFrameCnRaw = getStagingShotField(shot, 'start_frame_cn');
+        const videoPromptCnRaw = getStagingShotField(shot, 'video_content_cn');
+        const keyframesCnRaw = getStagingShotField(shot, 'keyframes_cn');
+        const endFrameCnRaw = getStagingShotField(shot, 'end_frame_cn');
+        const combinedFallback = splitCombinedCnPrompt(promptCnRaw);
+
+        let technicalNotesObj = {};
+        if (existingTechnicalNotes) {
+            try {
+                const parsed = JSON.parse(existingTechnicalNotes);
+                if (parsed && typeof parsed === 'object') technicalNotesObj = parsed;
+            } catch (_) {
+                technicalNotesObj = {};
+            }
+        }
+
+        const finalStartCn = startFrameCnRaw || combinedFallback.start_frame_cn;
+        const finalVideoCn = videoPromptCnRaw || combinedFallback.video_prompt_cn;
+        const finalKeyframesCn = keyframesCnRaw || combinedFallback.keyframes_cn;
+        const finalEndCn = endFrameCnRaw || combinedFallback.end_frame_cn;
+
+        if (finalStartCn) technicalNotesObj.start_frame_cn = finalStartCn;
+        if (finalVideoCn) technicalNotesObj.video_prompt_cn = finalVideoCn;
+        if (finalKeyframesCn) technicalNotesObj.keyframes_cn = finalKeyframesCn;
+        if (finalEndCn) technicalNotesObj.end_frame_cn = finalEndCn;
+
+        if (finalStartCn || finalVideoCn || finalKeyframesCn || finalEndCn) {
+            technicalNotesObj.shot_prompt_cn = [
+                `起始帧：${finalStartCn || ''}`,
+                `视频：${finalVideoCn || ''}`,
+                `关键帧：${finalKeyframesCn || ''}`,
+                `收尾帧：${finalEndCn || ''}`,
+            ].join('<br>');
+        }
+
+        return {
+            shot_id: getStagingShotField(shot, 'shot_id'),
+            shot_name: getStagingShotField(shot, 'shot_name'),
+            scene_code: getStagingShotField(shot, 'scene_id') || fallbackSceneCode,
+            start_frame: getStagingShotField(shot, 'start_frame'),
+            end_frame: getStagingShotField(shot, 'end_frame'),
+            video_content: getStagingShotField(shot, 'video_content'),
+            duration: getStagingShotField(shot, 'duration'),
+            associated_entities: getStagingShotField(shot, 'associated_entities'),
+            shot_logic_cn: getStagingShotField(shot, 'shot_logic_cn'),
+            keyframes: getStagingShotField(shot, 'keyframes'),
+            technical_notes: Object.keys(technicalNotesObj).length > 0 ? JSON.stringify(technicalNotesObj) : existingTechnicalNotes || '',
+        };
+    };
+
+    const hasAiShotRegenMarkers = useMemo(() => {
+        return (Array.isArray(aiShotsStaging?.content) ? aiShotsStaging.content : []).some((row) => {
+            const marker = extractShotRegenMarker(getStagingShotField(row, 'shot_logic_cn'));
+            return marker.mode === 'update' || marker.mode === 'add';
+        });
+    }, [aiShotsStaging?.content]);
+
+    const buildShotSupplementImportSummaryLines = (report) => {
+        if (!report || typeof report !== 'object') return [];
+        const lines = [];
+        lines.push(t(
+            `更新 ${Number(report.updated_count || 0)} 条，新增 ${Number(report.created_count || 0)} 条，跳过 ${Number(report.skipped_count || 0)} 条。`,
+            `Updated ${Number(report.updated_count || 0)}, created ${Number(report.created_count || 0)}, skipped ${Number(report.skipped_count || 0)}.`
+        ));
+        const skipReasons = Array.isArray(report.skipped_items)
+            ? Array.from(new Set(report.skipped_items.map((item) => String(item?.reason || '').trim()).filter(Boolean)))
+            : [];
+        if (skipReasons.length > 0) {
+            lines.push(t(`跳过原因：${skipReasons.join('；')}`, `Skipped because: ${skipReasons.join('; ')}`));
+        }
+        return lines;
+    };
+
+    const openShotRegenModal = () => {
+        if (!editingScene?.id) return;
+        if (!Array.isArray(aiShotsStaging?.content) || aiShotsStaging.content.length === 0) {
+            alert(t('请先准备当前场景的 AI 镜头暂存内容，再执行补充分镜。', 'Prepare staged AI shots for this scene before running shot supplement.'));
+            return;
+        }
+        setShotRegenModal({
+            open: true,
+            sceneId: editingScene.id,
+            instructions: '',
+            submitting: false,
+            error: '',
+        });
+    };
+
+    const handleOpenShotSupplementMenu = async (scene) => {
+        const sceneId = Number(scene?.id || 0);
+        if (!sceneId) return;
+        setPendingShotSupplementSceneId(sceneId);
+        setEditingScene(scene);
+    };
+
+    const applySelectiveAiShotDiff = async (sceneId, rows) => {
+        const stagedRows = Array.isArray(rows) ? rows : [];
+        if (!stagedRows.length) {
+            throw new Error('No staged shot rows available for selective apply');
+        }
+
+        const existingShots = await fetchShots(sceneId);
+        const shotByDisplayId = new Map();
+        (Array.isArray(existingShots) ? existingShots : []).forEach((shot) => {
+            const key = String(shot?.shot_id || '').trim().toUpperCase();
+            if (!key) return;
+            shotByDisplayId.set(key, shot);
+        });
+
+        const fallbackSceneCode = String(
+            editingScene?.scene_code || editingScene?.scene_no || editingScene?.scene_id || ''
+        ).trim();
+
+        let updatedCount = 0;
+        let createdCount = 0;
+        let skippedCount = 0;
+        const updatedItems = [];
+        const createdItems = [];
+        const skippedItems = [];
+        const errors = [];
+
+        for (const row of stagedRows) {
+            const shotId = String(getStagingShotField(row, 'shot_id') || '').trim();
+            const shotLogic = getStagingShotField(row, 'shot_logic_cn');
+            const { mode, cleanLogic } = extractShotRegenMarker(shotLogic);
+            if (!mode) {
+                skippedCount += 1;
+                skippedItems.push({
+                    shot_id: shotId || t('未命名', 'Unnamed'),
+                    shot_name: String(getStagingShotField(row, 'shot_name') || '').trim(),
+                    reason: t('未带补充分镜 marker', 'Missing shot supplement marker'),
+                });
+                continue;
+            }
+            if (!shotId) {
+                errors.push(t('存在缺少 Shot ID 的补充分镜行。', 'A shot supplement row is missing Shot ID.'));
+                continue;
+            }
+
+            const normalizedId = shotId.toUpperCase();
+            if (mode === 'update') {
+                const existingShot = shotByDisplayId.get(normalizedId);
+                if (!existingShot) {
+                    errors.push(t(`未找到待更新镜头: ${shotId}`, `Target shot for update was not found: ${shotId}`));
+                    continue;
+                }
+
+                const payload = buildShotWritePayloadFromRow(row, {
+                    fallbackSceneCode,
+                    existingTechnicalNotes: existingShot?.technical_notes || '',
+                });
+                payload.shot_logic_cn = cleanLogic || payload.shot_logic_cn;
+                await updateShot(existingShot.id, payload);
+                updatedCount += 1;
+                updatedItems.push({
+                    shot_id: shotId,
+                    shot_name: String(payload.shot_name || existingShot?.shot_name || '').trim(),
+                    reason: t('按 =更新分镜 更新既有镜头', 'Updated existing shot via =更新分镜'),
+                });
+                shotByDisplayId.set(normalizedId, { ...existingShot, ...payload });
+                continue;
+            }
+
+            if (shotByDisplayId.has(normalizedId)) {
+                errors.push(t(`新增镜头 ID 已存在: ${shotId}`, `Add-shot ID already exists: ${shotId}`));
+                continue;
+            }
+
+            const payload = buildShotWritePayloadFromRow(row, {
+                fallbackSceneCode,
+                existingTechnicalNotes: '',
+            });
+            payload.shot_logic_cn = cleanLogic || payload.shot_logic_cn;
+            const created = await createShot(sceneId, payload);
+            createdCount += 1;
+            createdItems.push({
+                shot_id: shotId,
+                shot_name: String(payload.shot_name || created?.shot_name || '').trim(),
+                reason: t('按 =补充分镜 新增镜头', 'Created new shot via =补充分镜'),
+            });
+            shotByDisplayId.set(normalizedId, created);
+        }
+
+        if (errors.length > 0) {
+            const detail = errors.slice(0, 5).join('\n');
+            throw new Error(errors.length > 5 ? `${detail}\n...` : detail);
+        }
+
+        return {
+            updatedCount,
+            createdCount,
+            skippedCount,
+            updatedItems,
+            createdItems,
+            skippedItems,
+        };
+    };
+
+    const handleConfirmShotRegenerate = async () => {
+        const sceneId = shotRegenModal.sceneId || editingScene?.id;
+        if (!sceneId) return;
+
+        setShotRegenModal((prev) => ({ ...prev, submitting: true, error: '' }));
+        setAiShotsFlowStatus({
+            phase: 'generating',
+            sceneId,
+            message: t('正在补充分镜...', 'Generating shot supplement...'),
+        });
+
+        try {
+            const result = await regenerateSceneShots(sceneId, {
+                content: aiShotsStaging.content || [],
+                additional_instructions: String(shotRegenModal.instructions || '').trim(),
+            });
+
+            const nextRows = Array.isArray(result?.content) ? result.content : [];
+            if (!nextRows.length) {
+                throw new Error(t('补充分镜返回空结果。', 'Shot supplement returned empty result.'));
+            }
+
+            setAiShotsStaging((prev) => ({
+                ...prev,
+                sceneId,
+                content: nextRows,
+                rawText: result?.raw_text || '',
+                usage: result?.usage || null,
+                timestamp: result?.timestamp || null,
+                warnings: Array.isArray(result?.warnings) ? result.warnings : [],
+                error: null,
+            }));
+            setShotSupplementImportReport(null);
+            setAiShotsFlowStatus({
+                phase: 'importing',
+                sceneId,
+                message: t('补充分镜已生成，正在自动导入到场景...', 'Shot supplement generated. Importing to scene...'),
+            });
+
+            const summary = await applySelectiveAiShotDiff(sceneId, nextRows);
+            const nextReport = {
+                scene_id: sceneId,
+                updated_count: summary.updatedCount,
+                created_count: summary.createdCount,
+                skipped_count: summary.skippedCount,
+                updated_items: summary.updatedItems,
+                created_items: summary.createdItems,
+                skipped_items: summary.skippedItems,
+            };
+            nextReport.summary_lines = buildShotSupplementImportSummaryLines(nextReport);
+            setShotSupplementImportReport(nextReport);
+            setShotRegenModal({ open: false, sceneId: null, instructions: '', submitting: false, error: '' });
+            setAiShotsFlowStatus({
+                phase: 'completed',
+                sceneId,
+                message: t(
+                    `补充分镜已自动导入：更新 ${summary.updatedCount} 条，新增 ${summary.createdCount} 条，跳过 ${summary.skippedCount} 条。`,
+                    `Shot supplement auto-imported: ${summary.updatedCount} updated, ${summary.createdCount} created, ${summary.skippedCount} skipped.`
+                ),
+            });
+            onLog?.(
+                t(
+                    `补充分镜已自动导入：更新 ${summary.updatedCount} 条，新增 ${summary.createdCount} 条，跳过 ${summary.skippedCount} 条。`,
+                    `Shot supplement auto-imported: ${summary.updatedCount} updated, ${summary.createdCount} created, ${summary.skippedCount} skipped.`
+                ),
+                'success'
+            );
+            alert(
+                t(
+                    `补充分镜自动导入完成\n更新: ${summary.updatedCount}\n新增: ${summary.createdCount}\n跳过: ${summary.skippedCount}`,
+                    `Shot supplement auto-import completed\nUpdated: ${summary.updatedCount}\nCreated: ${summary.createdCount}\nSkipped: ${summary.skippedCount}`
+                )
+            );
+            if (typeof refreshShots === 'function') {
+                await refreshShots();
+            }
+        } catch (e) {
+            const message = e?.response?.data?.detail || e?.message || 'Shot supplement failed';
+            console.error('[SceneManager] shot supplement failed', e);
+            setShotRegenModal((prev) => ({ ...prev, submitting: false, error: message }));
+            setAiShotsFlowStatus({
+                phase: 'failed',
+                sceneId,
+                message: t(`补充分镜失败：${message}`, `Shot supplement failed: ${message}`),
+            });
+            onLog?.(t('补充分镜失败: ', 'Shot supplement failed: ') + message, 'error');
+        }
+    };
+
+    const handleApplyAiShotsStaging = async () => {
+        if (!editingScene?.id) return;
+
+        setAiShotsStaging((prev) => ({ ...prev, applying: true }));
+        try {
+            if (hasAiShotRegenMarkers) {
+                if (!await confirmUiMessage(t('应用这些补充分镜吗？只会更新带 =更新分镜 的镜头，并新增带 =补充分镜 的镜头。', 'Apply this shot supplement? Only rows marked =更新分镜 will update existing shots, and rows marked =补充分镜 will be created.'))) {
+                    return;
+                }
+                const summary = await applySelectiveAiShotDiff(editingScene.id, aiShotsStaging.content || []);
+                const nextReport = {
+                    scene_id: editingScene.id,
+                    updated_count: summary.updatedCount,
+                    created_count: summary.createdCount,
+                    skipped_count: summary.skippedCount,
+                    updated_items: summary.updatedItems,
+                    created_items: summary.createdItems,
+                    skipped_items: summary.skippedItems,
+                };
+                nextReport.summary_lines = buildShotSupplementImportSummaryLines(nextReport);
+                setShotSupplementImportReport(nextReport);
+                onLog?.(
+                    t(
+                        `补充分镜已导入：更新 ${summary.updatedCount} 条，新增 ${summary.createdCount} 条，跳过 ${summary.skippedCount} 条。`,
+                        `Shot supplement imported: ${summary.updatedCount} updated, ${summary.createdCount} created, ${summary.skippedCount} skipped.`
+                    ),
+                    'success'
+                );
+                alert(
+                    t(
+                        `补充分镜导入完成\n更新: ${summary.updatedCount}\n新增: ${summary.createdCount}\n跳过: ${summary.skippedCount}`,
+                        `Shot supplement import completed\nUpdated: ${summary.updatedCount}\nCreated: ${summary.createdCount}\nSkipped: ${summary.skippedCount}`
+                    )
+                );
+            } else {
+                if (!await confirmUiMessage(t('应用这些镜头吗？这会替换现有镜头。', 'Apply these shots? This will replace existing shots.'))) {
+                    return;
+                }
+                setShotSupplementImportReport(null);
+                await applySceneAIResult(editingScene.id, { content: aiShotsStaging.content || [] });
+                onLog?.(t('镜头已应用到数据库。', 'Shots applied to database.'), 'success');
+            }
+
+            if (typeof refreshShots === 'function') {
+                await refreshShots();
+            }
+        } catch (e) {
+            onLog?.(t('应用镜头失败: ', 'Failed to apply shots: ') + (e?.response?.data?.detail || e?.message), 'error');
+        } finally {
+            setAiShotsStaging((prev) => ({ ...prev, applying: false }));
+        }
+    };
+
     const aiShotsStagingColumns = useMemo(() => {
         const rows = Array.isArray(aiShotsStaging?.content) ? aiShotsStaging.content : [];
         const discovered = [];
@@ -11425,6 +12066,82 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         return `${contextInfo}${header}\n${content}`;
     };
 
+    const normalizeSubjectType = (rawType, fallback = 'character') => {
+        const normalized = String(rawType || '').trim().toLowerCase().replace(/[\s_\-]/g, '');
+        if (['character', 'characters', 'char', 'role', 'roles', 'people', 'person', '人物', '角色'].includes(normalized)) {
+            return 'character';
+        }
+        if (['prop', 'props', 'item', 'items', 'object', '道具', '物件'].includes(normalized)) {
+            return 'prop';
+        }
+        if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境'].includes(normalized)) {
+            return 'environment';
+        }
+        return fallback;
+    };
+
+    const buildSceneRegenImportSummaryLines = useCallback((report) => {
+        const summary = report && typeof report === 'object' ? report : {};
+        const jsonCountByType = (summary.subjects_json_count_by_type && typeof summary.subjects_json_count_by_type === 'object')
+            ? summary.subjects_json_count_by_type
+            : {
+                character: 0,
+                prop: 0,
+                environment: 0,
+            };
+        const byType = (summary.by_type && typeof summary.by_type === 'object')
+            ? summary.by_type
+            : {
+                character: { created: 0, skipped: 0 },
+                prop: { created: 0, skipped: 0 },
+                environment: { created: 0, skipped: 0 },
+            };
+
+        const llmTotal = Number(summary.subjects_json_count || 0)
+            || (Number(jsonCountByType.character || 0) + Number(jsonCountByType.prop || 0) + Number(jsonCountByType.environment || 0));
+        const createdTotal = Number(summary.created_count || 0);
+        const skippedTotal = Number(summary.skipped_count || 0);
+
+        return [
+            t(
+                `LLM 补充实体总数：${llmTotal}（角色 ${Number(jsonCountByType.character || 0)} / 场景 ${Number(jsonCountByType.environment || 0)} / 道具 ${Number(jsonCountByType.prop || 0)}）`,
+                `LLM suggested entities: ${llmTotal} (characters ${Number(jsonCountByType.character || 0)} / environments ${Number(jsonCountByType.environment || 0)} / props ${Number(jsonCountByType.prop || 0)})`
+            ),
+            t(
+                `实际新增导入：${createdTotal}（角色 ${Number(byType.character?.created || 0)} / 场景 ${Number(byType.environment?.created || 0)} / 道具 ${Number(byType.prop?.created || 0)}）`,
+                `Actually imported as new: ${createdTotal} (characters ${Number(byType.character?.created || 0)} / environments ${Number(byType.environment?.created || 0)} / props ${Number(byType.prop?.created || 0)})`
+            ),
+            t(
+                `识别为已存在并跳过：${skippedTotal}（角色 ${Number(byType.character?.skipped || 0)} / 场景 ${Number(byType.environment?.skipped || 0)} / 道具 ${Number(byType.prop?.skipped || 0)}）`,
+                `Recognized as existing and skipped: ${skippedTotal} (characters ${Number(byType.character?.skipped || 0)} / environments ${Number(byType.environment?.skipped || 0)} / props ${Number(byType.prop?.skipped || 0)})`
+            ),
+        ];
+    }, [t]);
+
+    const showSceneRegenImportSummaryAlert = useCallback((report, options = {}) => {
+        const summary = report && typeof report === 'object' ? report : {};
+        const isReimport = Boolean(options?.isReimport);
+        const generatedSceneCount = Number(options?.generatedSceneCount || 0);
+        const lines = Array.isArray(summary.summary_lines) ? summary.summary_lines : buildSceneRegenImportSummaryLines(summary);
+        const header = isReimport
+            ? t('补实体完成', 'Entity Patch Completed')
+            : (summary.entity_only_mode
+                ? t('补充实体完成', 'Entity Supplement Completed')
+                : t('补充实体完成', 'Entity Supplement Completed'));
+
+        const detailLines = [header];
+        if (!isReimport && !summary.entity_only_mode) {
+            detailLines.push(
+                t(
+                    `新场景数：${generatedSceneCount}`,
+                    `Generated scenes: ${generatedSceneCount}`
+                )
+            );
+        }
+        detailLines.push(...lines);
+        alert(detailLines.join('\n'));
+    }, [buildSceneRegenImportSummaryLines, t]);
+
     const importSubjectsFromRegeneratedJson = useCallback(async (subjectsJson) => {
         const payload = (subjectsJson && typeof subjectsJson === 'object') ? subjectsJson : null;
         if (!projectId || !payload) {
@@ -11506,12 +12223,34 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             environment: Array.isArray(normalizedPayload.environments) ? normalizedPayload.environments.length : 0,
         };
 
-        const importReport = await doImportText(JSON.stringify(normalizedPayload, null, 2), 'json');
+        let importReport = null;
+        if (typeof onImportText !== 'function') {
+            return {
+                created: 0,
+                skipped: plannedByType.character + plannedByType.prop + plannedByType.environment,
+                createdItems: [],
+                skippedItems: [],
+                byType: {
+                    character: { created: 0, skipped: plannedByType.character },
+                    prop: { created: 0, skipped: plannedByType.prop },
+                    environment: { created: 0, skipped: plannedByType.environment },
+                },
+            };
+        }
+
+        try {
+            importReport = await onImportText(JSON.stringify(normalizedPayload, null, 2), 'json');
+        } catch (error) {
+            throw new Error(error?.message || String(error || 'Import failed'));
+        }
+
         const importedCounts = {
             character: Number(importReport?.importedSubjectCounts?.character || 0),
             prop: Number(importReport?.importedSubjectCounts?.prop || 0),
             environment: Number(importReport?.importedSubjectCounts?.environment || 0),
         };
+        const createdItems = Array.isArray(importReport?.createdSubjectItems) ? importReport.createdSubjectItems : [];
+        const skippedItems = Array.isArray(importReport?.skippedSubjectItems) ? importReport.skippedSubjectItems : [];
 
         const byType = {
             character: {
@@ -11541,11 +12280,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         return {
             created,
             skipped,
-            createdItems: [],
-            skippedItems: [],
+            createdItems,
+            skippedItems,
             byType,
         };
-    }, [projectId]);
+    }, [projectId, onImportText]);
 
     const persistSceneRegenSubjectsReport = useCallback(async (report) => {
         if (!activeEpisode?.id || !report) return false;
@@ -11667,7 +12406,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 phase: 'failed',
                 percent: 100,
                 message: t('重导入失败。', 'Re-import failed.'),
-                error: t('没有可重导入的数据：上次重生成结果未包含 subjects_json。请先重新执行一次“重生成场景”。', 'No re-importable payload found: last regenerate result does not include subjects_json. Please run Regenerate Scene once first.'),
+                error: t('没有可重导入的数据：上次补充实体结果未包含 subjects_json。请先重新执行一次“补充实体”。', 'No re-importable payload found: last entity supplement result does not include subjects_json. Please run Supplement Entities once first.'),
             });
             onLog?.(
                 t('当前没有可重导入的重生成 LLM 内容（subjects_json 为空）。', 'No re-importable regenerated LLM payload found (subjects_json is empty).'),
@@ -11701,6 +12440,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 last_reimport_at: new Date().toISOString(),
                 persisted: report?.persisted === true,
             };
+            nextReport.summary_lines = buildSceneRegenImportSummaryLines(nextReport);
 
             try {
                 const persisted = await persistSceneRegenSubjectsReport(nextReport);
@@ -11719,11 +12459,12 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
 
             onLog?.(
                 t(
-                    `已重新导入重生成 LLM 内容：新增 ${importResult.created} 条，复用并跳过 ${importResult.skipped} 条。`,
-                    `Re-imported regenerated LLM content: created ${importResult.created}, reused/skipped ${importResult.skipped}.`
+                    `已重新导入重生成 LLM 内容：新增 ${importResult.created} 条，复用并跳过 ${importResult.skipped} 条。${(nextReport.summary_lines || []).join('；')}`,
+                    `Re-imported regenerated LLM content: created ${importResult.created}, reused/skipped ${importResult.skipped}. ${(nextReport.summary_lines || []).join('; ')}`
                 ),
                 'success'
             );
+            showSceneRegenImportSummaryAlert(nextReport, { isReimport: true });
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || t('重导入失败', 'Re-import failed');
             setSceneRegenProgress({
@@ -12192,6 +12933,25 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const buildSceneRegenUserPromptPreview = (sceneRow, requirements) => {
         const scene = sceneRow || {};
         const reqText = String(requirements || '').trim() || defaultSceneRegenRequirement;
+        const projectInfo = (project?.global_info && typeof project.global_info === 'object')
+            ? project.global_info
+            : {};
+
+        const projectContextLines = [
+            `Project Title: ${project?.title || ''}`,
+            `Episode Title: ${activeEpisode?.title || ''}`,
+            projectInfo?.script_title ? `Script Title: ${projectInfo.script_title}` : '',
+            projectInfo?.series_episode ? `Series Episode: ${projectInfo.series_episode}` : '',
+            projectInfo?.type ? `Type: ${projectInfo.type}` : '',
+            projectInfo?.base_positioning ? `Base Positioning: ${projectInfo.base_positioning}` : '',
+            projectInfo?.language ? `Language: ${projectInfo.language}` : '',
+            projectInfo?.Global_Style ? `Global Style: ${projectInfo.Global_Style}` : '',
+            projectInfo?.tone ? `Tone: ${projectInfo.tone}` : '',
+            projectInfo?.lighting ? `Lighting: ${projectInfo.lighting}` : '',
+            Array.isArray(projectInfo?.borrowed_films) && projectInfo.borrowed_films.length > 0
+                ? `Borrowed Films: ${projectInfo.borrowed_films.join(', ')}`
+                : '',
+        ].filter(Boolean);
 
         const bucket = {
             character: [],
@@ -12200,7 +12960,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         };
         const seen = new Set();
         (Array.isArray(entities) ? entities : []).forEach((entity) => {
-            const type = normalizeSubjectType(entity?.type, 'character');
+            const type = normalizeSubjectType(entity?.type || entity?.subject_type || entity?.entity_type, 'character');
             if (!bucket[type]) return;
             const names = [entity?.name, entity?.name_en]
                 .map((v) => String(v || '').trim())
@@ -12230,10 +12990,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         ].join('\n');
 
         return [
-            `Project Title: ${project?.title || ''}`,
-            `Episode Title: ${activeEpisode?.title || ''}`,
+            '[Project Context]',
+            ...projectContextLines,
             `Source Scene Database ID: ${scene?.id || ''}`,
             '',
+            '[Current Scene]',
             `Scene No: ${scene?.scene_no || ''}`,
             `Scene Name: ${scene?.scene_name || ''}`,
             `Equivalent Duration: ${scene?.equivalent_duration || ''}`,
@@ -12243,9 +13004,10 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             `Linked Characters: ${scene?.linked_characters || ''}`,
             `Key Props: ${scene?.key_props || ''}`,
             '',
+            '[System-level Subjects Inventory]',
             existingEntityBlock,
             '',
-            'User Requirements:',
+            '[User Supplement Requirements]',
             reqText,
         ].join('\n');
     };
@@ -12253,7 +13015,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
     const openSceneRegenPromptModal = async (sceneRow, requirements) => {
         setSceneRegenPromptModal({ open: true, loading: true, data: null });
         try {
-            const res = await fetchPrompt('scene_analysis.txt');
+            const res = await fetchPrompt('scene_regenerate.txt');
             const sysPrompt = String(res?.content || '').trim();
             const userPreview = buildSceneRegenUserPromptPreview(sceneRow, requirements);
             setSceneRegenPromptModal({
@@ -12266,8 +13028,26 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             });
         } catch (e) {
             setSceneRegenPromptModal({ open: false, loading: false, data: null });
-            onLog?.(`SceneManager: Failed to load regeneration prompt - ${e?.message || e}`, 'error');
-            alert(t('加载重生成提示词失败。', 'Failed to load regeneration prompt.'));
+            const status = Number(e?.status || 0);
+            const detail = String(e?.message || e || '').trim() || 'Unknown error';
+            console.error('[SceneManager] Failed to load regeneration prompt', {
+                filename: 'scene_regenerate.txt',
+                status: status || null,
+                detail,
+                debug: e?.debug || null,
+                error: e,
+            });
+            onLog?.(
+                `SceneManager: Failed to load regeneration prompt 'scene_regenerate.txt'${status ? ` (HTTP ${status})` : ''} - ${detail}`,
+                'error'
+            );
+            const alertDetail = detail.length > 600 ? `${detail.slice(0, 600)}...` : detail;
+            alert(
+                t(
+                    `加载补充实体提示词失败：${alertDetail}`,
+                    `Failed to load entity supplement prompt: ${alertDetail}`,
+                )
+            );
         }
     };
 
@@ -12288,11 +13068,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
         const confirmed = await confirmUiMessage(
             t(
                 (sceneRegenEntityOnlyMode
-                    ? `将按“仅补实体”模式执行场景重生成：不替换场景与分镜，仅回填环境锚点/关联角色/关键道具并导入实体。目标：${label}。是否继续？`
-                    : `将重生成场景 ${label}，并删除旧场景及其镜头。是否继续？`),
+                    ? `将按“仅补实体”模式执行补充实体：注入项目信息、现有 subjects、当前场景内容与补充要求，仅补该场景缺失实体，并按需回填环境锚点/关联角色/关键道具。目标：${label}。是否继续？`
+                    : `将为场景 ${label} 执行补充实体，并在需要时补充新场景行与实体。是否继续？`),
                 (sceneRegenEntityOnlyMode
-                    ? `Run regenerate in Entity-Only mode for ${label}: keep scene/shots unchanged, patch environment anchor/linked characters/key props, and import entities. Continue?`
-                    : `Regenerate scene ${label}, replace it with new scene rows, and delete old scene with its shots. Continue?`)
+                    ? `Run scene entity supplement mode for ${label}: inject project context, existing subjects, current scene content, and user requirements; supplement missing entities only; patch environment anchor/linked characters/key props if needed. Continue?`
+                    : `Run Supplement Entities for ${label}: supplement missing entities and add any needed scene rows or entities. Continue?`)
             )
         );
         if (!confirmed) return;
@@ -12350,7 +13130,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             setSceneRegenProgress({
                 phase: 'llm',
                 percent: 38,
-                message: t('提交重生成提示词到 LLM...', 'Submitting regeneration prompt to LLM...'),
+                message: t('提交补充实体提示词到 LLM...', 'Submitting entity supplement prompt to LLM...'),
                 error: '',
             });
             const result = await regenerateScene(oldSceneId, {
@@ -12458,6 +13238,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 generated_scene_count: Number(generated.length || 0),
                 entity_only_mode: Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode),
                 subjects_json_count: totalSubjectsJsonCount,
+                subjects_json_count_by_type: {
+                    character: Number(rawSubjectsJsonCount.characters || 0),
+                    prop: Number(rawSubjectsJsonCount.props || 0),
+                    environment: Number(rawSubjectsJsonCount.environments || 0),
+                },
                 raw_markdown: String(result?.raw_markdown || ''),
                 subjects_json: subjectsJson || { characters: [], props: [], environments: [] },
                 created_count: Number(importResult.created || 0),
@@ -12473,6 +13258,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 saved_at: new Date().toISOString(),
                 persisted: false,
             };
+            sceneRegenSubjectResult.summary_lines = buildSceneRegenImportSummaryLines(sceneRegenSubjectResult);
 
             try {
                 const persisted = await persistSceneRegenSubjectsReport(sceneRegenSubjectResult);
@@ -12499,14 +13285,18 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             onLog?.(
                 t(
                     ((Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode))
-                        ? `场景重生成完成（仅补实体模式）：未替换场景/分镜，已回填环境锚点、关联角色、关键道具；按 subjects_json 新增 ${importResult.created} 条（复用并跳过 ${importResult.skipped} 条）。`
-                        : `场景重生成完成：替换 1 个旧场景，新增 ${generated.length} 个场景；按 subjects_json 增量导入 ${importResult.created} 条（跳过已存在 ${importResult.skipped} 条）。`),
+                        ? `补充实体完成（仅补实体模式）：未替换场景/分镜，已回填环境锚点、关联角色、关键道具；按 subjects_json 新增 ${importResult.created} 条（复用并跳过 ${importResult.skipped} 条）。${(sceneRegenSubjectResult.summary_lines || []).join('；')}`
+                        : `补充实体完成：新增 ${generated.length} 个场景变更；按 subjects_json 增量导入 ${importResult.created} 条（跳过已存在 ${importResult.skipped} 条）。${(sceneRegenSubjectResult.summary_lines || []).join('；')}`),
                     ((Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode))
-                        ? `Scene regeneration completed (Entity-only mode): scene/shots unchanged; patched environment anchor, linked characters, key props; created ${importResult.created} entities from subjects_json and reused/skipped ${importResult.skipped}.`
-                        : `Scene regeneration completed: replaced 1 scene with ${generated.length} new scene(s); incrementally created ${importResult.created} subject entities from subjects_json and reused/skipped ${importResult.skipped} existing subjects.`)
+                        ? `Entity supplement completed (Entity-only mode): scene/shots unchanged; patched environment anchor, linked characters, key props; created ${importResult.created} entities from subjects_json and reused/skipped ${importResult.skipped}. ${(sceneRegenSubjectResult.summary_lines || []).join('; ')}`
+                        : `Entity supplement completed: applied ${generated.length} scene change(s); incrementally created ${importResult.created} subject entities from subjects_json and reused/skipped ${importResult.skipped} existing subjects. ${(sceneRegenSubjectResult.summary_lines || []).join('; ')}`)
                 ),
                 'success'
             );
+            showSceneRegenImportSummaryAlert(sceneRegenSubjectResult, {
+                isReimport: false,
+                generatedSceneCount: Number(generated.length || 0),
+            });
         } catch (e) {
             const status = Number(e?.response?.status || 0);
             const detail = e?.response?.data?.detail || e?.message || t('重生成失败', 'Regeneration failed');
@@ -12537,10 +13327,10 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                         // ignore refresh failure
                     }
                 }
-                alert(t('场景重生成失败：目标场景不存在或后端接口不可用。已尝试刷新场景列表。', 'Scene regeneration failed: target scene not found or backend route unavailable. Scene list refresh attempted.'));
+                alert(t('补充实体失败：目标场景不存在或后端接口不可用。已尝试刷新场景列表。', 'Entity supplement failed: target scene not found or backend route unavailable. Scene list refresh attempted.'));
             } else {
-                onLog?.(`${t('场景重生成失败', 'Scene regeneration failed')}: ${detail}`, 'error');
-                alert(`${t('场景重生成失败：', 'Scene regeneration failed: ')}${detail}`);
+                onLog?.(`${t('补充实体失败', 'Entity supplement failed')}: ${detail}`, 'error');
+                alert(`${t('补充实体失败：', 'Entity supplement failed: ')}${detail}`);
             }
         } finally {
             setSceneRegenerating(false);
@@ -12788,6 +13578,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 error: null,
                 loading: false,
             }));
+            setShotSupplementImportReport(null);
             return;
         }
 
@@ -12797,6 +13588,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
             error: null,
             sceneId,
         }));
+        setShotSupplementImportReport(null);
 
         try {
             const latest = await getSceneLatestAIResult(sceneId);
@@ -12854,9 +13646,23 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 saving: false,
                 applying: false,
             }));
+            setShotSupplementImportReport(null);
             setAiShotRowEditor({ open: false, index: -1, data: null });
         }
     }, [editingScene?.id]);
+
+    useEffect(() => {
+        if (!pendingShotSupplementSceneId) return;
+        if (!editingScene?.id || Number(editingScene.id) !== Number(pendingShotSupplementSceneId)) return;
+        if (aiShotsStaging.loading) return;
+
+        if (Array.isArray(aiShotsStaging.content) && aiShotsStaging.content.length > 0) {
+            openShotRegenModal();
+        } else {
+            alert(t('当前场景还没有可补充的 AI 镜头暂存内容。请先生成 AI 镜头。', 'This scene has no staged AI shots to supplement yet. Generate AI shots first.'));
+        }
+        setPendingShotSupplementSceneId(null);
+    }, [pendingShotSupplementSceneId, editingScene?.id, aiShotsStaging.loading, aiShotsStaging.content]);
 
     const handleConfirmGenerateShots = async () => {
          const { sceneId, data } = shotPromptModal;
@@ -13090,6 +13896,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                     onToggleSelect={toggleSceneSelected}
                                     onClick={() => setEditingScene(scene)} 
                                     onGenerateShots={handleGenerateShots}
+                                    onSupplementShots={handleOpenShotSupplementMenu}
                                     onDelete={handleDeleteScene}
                                 />
                             );
@@ -13123,10 +13930,10 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                         onClick={() => { void handleRegenerateScene(); }}
                                         disabled={!editingScene?.id || sceneRegenerating}
                                         className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                                        title={editingScene?.id ? t('按要求重生成并替换当前场景', 'Regenerate and replace current scene') : t('请先保存场景', 'Save scene first')}
+                                        title={editingScene?.id ? t('按要求补充当前场景缺失实体', 'Supplement missing entities for current scene') : t('请先保存场景', 'Save scene first')}
                                     >
                                         {sceneRegenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3"/>}
-                                        {sceneRegenerating ? t('重生成中...', 'Regenerating...') : t('重生成场景', 'Regenerate Scene')}
+                                        {sceneRegenerating ? t('补充中...', 'Supplementing...') : t('补充实体', 'Supplement Entities')}
                                     </button>
                                     <button
                                         onClick={() => editingScene?.id && handleGenerateShots(editingScene.id)}
@@ -13175,12 +13982,12 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                     </div>
                                     
                                     <div className="pt-4 border-t border-white/5 h-full flex flex-col">
-                                         <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-2 block text-amber-300/90">{t('重生成要求', 'Regeneration Requirements')}</label>
+                                         <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-2 block text-amber-300/90">{t('补充要求', 'Supplement Requirements')}</label>
                                          <textarea
                                             className="w-full bg-black/40 border border-amber-500/20 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-amber-400/60 resize-y custom-scrollbar leading-relaxed min-h-[96px] mb-4"
                                             value={sceneRegenRequirements}
                                             onChange={e => setSceneRegenRequirements(e.target.value)}
-                                                          placeholder={t('可留空，默认“补充所缺实体”；也可输入例如：拆分为2个场景、强化机位方向、补足角色反应镜头等。', 'Optional. If empty, defaults to "Supplement missing entities"; you can also specify: split into 2 scenes, strengthen camera direction, add reaction beats.')}
+                                                          placeholder={t('可留空，默认“补充所缺实体”；也可输入例如：补上缺失角色/服装版本/环境变体/关键道具，并说明命名或锚点要求。', 'Optional. If empty, defaults to "Supplement missing entities"; you can also specify: add missing characters / outfit variants / environment variants / key props, and clarify naming or anchor requirements.')}
                                         />
                                         <label className="mb-3 inline-flex items-center gap-2 text-xs text-white/80 select-none">
                                             <input
@@ -13191,7 +13998,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                 disabled={sceneRegenerating}
                                             />
                                             <span>
-                                                {t('仅补实体（默认）：不替换场景、不删除分镜；仅更新环境锚点/关联角色/关键道具并导入实体', 'Entity-only (default): keep scene/shots unchanged; only patch environment anchor/linked characters/key props and import entities')}
+                                                {t('仅补实体（默认）：注入项目信息、现有 subjects、当前场景内容与补充要求；不替换场景、不删除分镜；仅补缺失实体并按需更新环境锚点/关联角色/关键道具', 'Entity-only (default): inject project context, existing subjects, current scene content, and supplement requirements; keep scene/shots unchanged; only fill missing entities and patch environment anchor / linked characters / key props when needed')}
                                             </span>
                                         </label>
                                         {(sceneRegenerating || sceneRegenReimporting || sceneRegenScenePatching || sceneRegenProgress.phase === 'reimport_subjects_json' || sceneRegenProgress.phase === 'rebuild_scenes_from_raw' || sceneRegenProgress.phase === 'done' || sceneRegenProgress.phase === 'failed') && (
@@ -13223,7 +14030,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                             <div className="mb-4 rounded border border-white/10 bg-black/20 p-3">
                                                 <div className="flex items-center justify-between gap-2 mb-2">
                                                     <div className="text-xs font-bold uppercase tracking-wide text-white/90">
-                                                        {t('重生成新增实体结果', 'Regenerated New Entities Result')}
+                                                        {t('补充实体结果', 'Entity Supplement Result')}
                                                     </div>
                                                     <div className="flex items-center gap-2">
                                                         <div className={`text-[10px] font-mono px-2 py-0.5 rounded border ${sceneRegenSubjectsReport.entity_only_mode ? 'text-sky-100 border-sky-400/40 bg-sky-500/15' : 'text-violet-100 border-violet-400/40 bg-violet-500/15'}`}>
@@ -13267,6 +14074,20 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                     <span className="mx-2">|</span>
                                                     {t('补场景', 'Patch Scenes')}: <span className="font-mono text-white/80">{Number(sceneRegenSubjectsReport?.scene_patch?.updated_count || 0)}↑/{Number(sceneRegenSubjectsReport?.scene_patch?.created_count || 0)}+</span>
                                                 </div>
+                                                {Array.isArray(sceneRegenSubjectsReport.summary_lines) && sceneRegenSubjectsReport.summary_lines.length > 0 && (
+                                                    <div className="mb-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+                                                        <div className="text-[11px] font-bold uppercase tracking-wide text-white/85 mb-1.5">
+                                                            {t('补充与导入汇总', 'Supplement and Import Summary')}
+                                                        </div>
+                                                        <div className="space-y-1">
+                                                            {sceneRegenSubjectsReport.summary_lines.map((line, idx) => (
+                                                                <div key={`scene-regen-summary-${idx}`} className="text-[11px] text-white/75 leading-relaxed">
+                                                                    {line}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
                                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                                     {[
                                                         { key: 'character', label: t('角色', 'Characters') },
@@ -13318,6 +14139,15 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                             <div className="text-[10px] text-muted-foreground">双击任意行可弹窗编辑并保存更新</div>
                                             <div className="flex items-center gap-2">
                                                 <button
+                                                    onClick={openShotRegenModal}
+                                                    disabled={!editingScene?.id || aiShotsStaging.loading || aiShotsStaging.saving || aiShotsStaging.applying || (aiShotsStaging.content || []).length === 0}
+                                                    className="px-3 py-1.5 bg-amber-600/80 hover:bg-amber-500/90 rounded-md text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                                                    title={t('基于当前暂存镜头、实体描述和附加要求，生成仅包含变更/新增项的补充分镜结果', 'Generate a selective shot supplement based on current staged shots, entity descriptions, and extra instructions')}
+                                                >
+                                                    <Sparkles className="w-3 h-3" />
+                                                    {t('补充分镜', 'Supplement Shots')}
+                                                </button>
+                                                <button
                                                     onClick={() => {
                                                         if (!editingScene?.id) return;
                                                         loadLatestAIShotsStaging(editingScene.id);
@@ -13349,24 +14179,18 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                     {aiShotsStaging.saving ? t('保存中…', 'Saving…') : t('保存草稿', 'Save Draft')}
                                                 </button>
                                                 <button
-                                                    onClick={async () => {
-                                                        if (!editingScene.id) return;
-                                                        if (!await confirmUiMessage(t('应用这些镜头吗？这会替换现有镜头。', 'Apply these shots? This will replace existing shots.'))) return;
-                                                        setAiShotsStaging(prev => ({ ...prev, applying: true }));
-                                                        try {
-                                                            await applySceneAIResult(editingScene.id, { content: aiShotsStaging.content || [] });
-                                                            onLog?.(t('镜头已应用到数据库。', 'Shots applied to database.'), 'success');
-                                                        } catch (e) {
-                                                            onLog?.(t('应用镜头失败: ', 'Failed to apply shots: ') + (e?.response?.data?.detail || e?.message), 'error');
-                                                        } finally {
-                                                            setAiShotsStaging(prev => ({ ...prev, applying: false }));
-                                                        }
-                                                    }}
+                                                    onClick={handleApplyAiShotsStaging}
                                                     disabled={!editingScene.id || aiShotsStaging.applying}
                                                     className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 rounded-md text-xs font-bold text-white disabled:opacity-50"
-                                                    title={t('将暂存镜头导入/应用到 shots 表', 'Import/apply the staged shots into the shots table')}
+                                                    title={hasAiShotRegenMarkers
+                                                        ? t('按 marker 选择性导入补充分镜结果', 'Selectively import the shot supplement result based on markers')
+                                                        : t('将暂存镜头导入/应用到 shots 表', 'Import/apply the staged shots into the shots table')}
                                                 >
-                                                    {aiShotsStaging.applying ? t('应用中…', 'Applying…') : t('应用到场景', 'Apply to Scene')}
+                                                    {aiShotsStaging.applying
+                                                        ? t('应用中…', 'Applying…')
+                                                        : hasAiShotRegenMarkers
+                                                            ? t('导入补充分镜', 'Import Supplement')
+                                                            : t('应用到场景', 'Apply to Scene')}
                                                 </button>
                                             </div>
                                         </div>
@@ -13388,6 +14212,91 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                                                         {aiShotsStaging.warnings.map((msg, idx) => (
                                                             <div key={`ai-shots-warning-${idx}`}>{msg}</div>
                                                         ))}
+                                                    </div>
+                                                )}
+                                                {hasAiShotRegenMarkers && (
+                                                    <div className="text-xs text-sky-100 bg-sky-500/10 border border-sky-500/20 rounded p-3 space-y-1 mb-3">
+                                                        <div>{t('当前暂存区为“补充分镜”结果。', 'Current staging content is a shot supplement diff result.')}</div>
+                                                        <div>{t('=更新分镜 会更新同 ID 既有镜头；=补充分镜 会新增同基准 ID 的后缀镜头。', '=更新分镜 updates an existing shot with the same ID; =补充分镜 creates a suffixed shot under the same base ID.')}</div>
+                                                        <div>{t('未带 marker 的行在导入时会被跳过，不会覆盖原镜头。', 'Rows without a marker are skipped during import and will not overwrite existing shots.')}</div>
+                                                    </div>
+                                                )}
+                                                {shotSupplementImportReport && Number(shotSupplementImportReport.scene_id || 0) === Number(editingScene?.id || 0) && (
+                                                    <div className="mb-3 rounded border border-white/10 bg-black/20 p-3">
+                                                        <div className="flex items-center justify-between gap-2 mb-2">
+                                                            <div className="text-xs font-bold uppercase tracking-wide text-white/90">
+                                                                {t('补充分镜导入汇总', 'Shot Supplement Import Summary')}
+                                                            </div>
+                                                            <div className="text-[10px] font-mono text-sky-100 border border-sky-500/25 bg-sky-500/10 rounded px-2 py-0.5">
+                                                                {t('选择性导入', 'Selective Import')}
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-[11px] text-muted-foreground mb-3">
+                                                            {t('更新', 'Updated')}: <span className="font-mono text-white/80">{Number(shotSupplementImportReport.updated_count || 0)}</span>
+                                                            <span className="mx-2">|</span>
+                                                            {t('新增', 'Created')}: <span className="font-mono text-white/80">{Number(shotSupplementImportReport.created_count || 0)}</span>
+                                                            <span className="mx-2">|</span>
+                                                            {t('跳过', 'Skipped')}: <span className="font-mono text-white/80">{Number(shotSupplementImportReport.skipped_count || 0)}</span>
+                                                        </div>
+                                                        {Array.isArray(shotSupplementImportReport.summary_lines) && shotSupplementImportReport.summary_lines.length > 0 && (
+                                                            <div className="mb-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+                                                                <div className="text-[11px] font-bold uppercase tracking-wide text-white/85 mb-1.5">
+                                                                    {t('执行摘要', 'Execution Summary')}
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    {shotSupplementImportReport.summary_lines.map((line, idx) => (
+                                                                        <div key={`shot-supplement-summary-${idx}`} className="text-[11px] text-white/75 leading-relaxed">
+                                                                            {line}
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                            {[
+                                                                { key: 'updated_items', label: t('已更新', 'Updated'), tone: 'emerald' },
+                                                                { key: 'created_items', label: t('已新增', 'Created'), tone: 'sky' },
+                                                                { key: 'skipped_items', label: t('已跳过', 'Skipped'), tone: 'white' },
+                                                            ].map((group) => {
+                                                                const items = Array.isArray(shotSupplementImportReport[group.key]) ? shotSupplementImportReport[group.key] : [];
+                                                                const toneClass = group.tone === 'emerald'
+                                                                    ? 'text-emerald-200 bg-emerald-500/10 border-emerald-500/20'
+                                                                    : group.tone === 'sky'
+                                                                        ? 'text-sky-100 bg-sky-500/10 border-sky-500/20'
+                                                                        : 'text-white/75 bg-white/5 border-white/10';
+                                                                return (
+                                                                    <div key={group.key} className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                                                                        <div className="flex items-center justify-between mb-1.5 text-[11px] font-bold uppercase tracking-wide text-white/90">
+                                                                            <span>{group.label}</span>
+                                                                            <span className="font-mono text-white/65">{items.length}</span>
+                                                                        </div>
+                                                                        <div className="space-y-1 max-h-40 overflow-auto custom-scrollbar pr-1">
+                                                                            {items.map((item, idx) => {
+                                                                                const shotId = String(item?.shot_id || '').trim();
+                                                                                const shotName = String(item?.shot_name || '').trim();
+                                                                                const reason = String(item?.reason || '').trim();
+                                                                                return (
+                                                                                    <div key={`${group.key}-${idx}`} className={`rounded border px-2 py-1.5 ${toneClass}`}>
+                                                                                        <div className="text-[11px] font-mono truncate" title={shotId || shotName || reason}>
+                                                                                            {shotId || t('未命名镜头', 'Unnamed Shot')}
+                                                                                            {shotName ? ` · ${shotName}` : ''}
+                                                                                        </div>
+                                                                                        {reason ? (
+                                                                                            <div className="text-[10px] leading-relaxed opacity-80 mt-0.5 break-words">
+                                                                                                {reason}
+                                                                                            </div>
+                                                                                        ) : null}
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                            {items.length === 0 && (
+                                                                                <div className="text-[11px] text-muted-foreground">{t('暂无', 'Empty')}</div>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
                                                     </div>
                                                 )}
                                         {(aiShotsStaging.content || []).length === 0 ? (
@@ -13678,11 +14587,74 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onSwitchToShot
                 </div>
             )}
 
+            {shotRegenModal.open && (
+                <div className="fixed inset-0 z-[52] bg-black/80 flex items-center justify-center p-4">
+                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl">
+                        <div className="p-4 border-b border-white/10 flex justify-between items-center">
+                            <h3 className="font-bold flex items-center gap-2"><Sparkles size={16} className="text-amber-300" /> {t('补充分镜', 'Supplement Shots')}</h3>
+                            <button onClick={() => setShotRegenModal({ open: false, sceneId: null, instructions: '', submitting: false, error: '' })} disabled={shotRegenModal.submitting}><X size={18} /></button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            <div className="bg-amber-500/10 border border-amber-500/20 rounded p-3 text-xs text-amber-100 flex items-start gap-2">
+                                <Info size={14} className="shrink-0 mt-0.5" />
+                                <div className="space-y-1">
+                                    <div>{t('本次会复用 shot_generator.txt，并临时注入“只输出变更/新增分镜”的规则。', 'This reuses shot_generator.txt and injects temporary rules to return only changed/new shots.')}</div>
+                                    <div>{t('请在下方输入你希望补充或改写的要求，例如新增镜头节奏、补拍反应镜头、增强角色动作连续性。生成完成后会自动导入到场景，并输出变化报告。', 'Enter the additional requirements below, such as adding beats, inserting reaction shots, or strengthening action continuity. After generation, the result will be auto-imported into the scene with a change report.')}</div>
+                                </div>
+                            </div>
+
+                            <div className="bg-sky-500/10 border border-sky-500/20 rounded p-3 text-xs text-sky-100 space-y-1">
+                                <div>{t('输出规则', 'Output rules')}</div>
+                                <div>{t('1. 只返回需要修改或新增的分镜。', '1. Return only shots that need changes or additions.')}</div>
+                                <div>{t('2. 修改既有分镜时保留 Shot ID，并在 Shot Logic (CN) 末尾追加 =更新分镜。', '2. Preserve Shot ID for existing shots and append =更新分镜 to Shot Logic (CN).')}</div>
+                                <div>{t('3. 新增分镜时使用 _1/_2 这类后缀 Shot ID，并在 Shot Logic (CN) 末尾追加 =补充分镜。', '3. Use suffixed Shot IDs like _1/_2 for new shots and append =补充分镜 to Shot Logic (CN).')}</div>
+                            </div>
+
+                            <div className="flex flex-col gap-2">
+                                <label className="text-xs font-bold text-muted-foreground uppercase">{t('补充要求', 'Additional Instructions')}</label>
+                                <textarea
+                                    className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono min-h-[220px] focus:outline-none focus:border-amber-300/50 resize-y"
+                                    value={shotRegenModal.instructions}
+                                    onChange={(e) => setShotRegenModal((prev) => ({ ...prev, instructions: e.target.value, error: '' }))}
+                                    placeholder={t('例如：在冲突爆发前补一个角色对视镜头；将结尾拆成两条分镜，突出环境反应。', 'Example: add a reaction beat before the conflict; split the ending into two shots to emphasize environment response.')}
+                                    disabled={shotRegenModal.submitting}
+                                />
+                            </div>
+
+                            {shotRegenModal.error ? (
+                                <div className="text-xs text-red-200 bg-red-500/10 border border-red-500/20 rounded p-3">
+                                    {shotRegenModal.error}
+                                </div>
+                            ) : null}
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
+                            <button
+                                onClick={() => setShotRegenModal({ open: false, sceneId: null, instructions: '', submitting: false, error: '' })}
+                                disabled={shotRegenModal.submitting}
+                                className="px-4 py-2 rounded hover:bg-white/10 text-sm"
+                            >
+                                {t('取消', 'Cancel')}
+                            </button>
+                            <button
+                                onClick={handleConfirmShotRegenerate}
+                                disabled={shotRegenModal.submitting}
+                                className="px-6 py-2 bg-amber-500 hover:bg-amber-400 text-black rounded text-sm font-medium flex items-center gap-2"
+                            >
+                                {shotRegenModal.submitting ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                                {shotRegenModal.submitting ? t('生成并导入中...', 'Generating and Importing...') : t('生成并自动导入', 'Generate and Auto-Import')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {sceneRegenPromptModal.open && (
                 <div className="fixed inset-0 z-[55] bg-black/80 flex items-center justify-center p-4">
                     <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
                         <div className="p-4 border-b border-white/10 flex justify-between items-center">
-                            <h3 className="font-bold flex items-center gap-2"><Sparkles size={16} className="text-amber-300"/> {t('确认重生成提示词', 'Confirm Regeneration Prompt')}</h3>
+                            <h3 className="font-bold flex items-center gap-2"><Sparkles size={16} className="text-amber-300"/> {t('确认补充实体提示词', 'Confirm Entity Supplement Prompt')}</h3>
                             <button onClick={() => setSceneRegenPromptModal({ open: false, loading: false, data: null })}><X size={18}/></button>
                         </div>
 
@@ -14378,6 +15350,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         
         try {
             const updated = await analyzeEntityImage(entity.id);
+            setSelectedEntity(prev => (prev?.id === updated.id ? updated : prev));
             setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
             setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
             setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
@@ -15182,6 +16155,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         }
 
         setShowImageModal(false);
+        await handleAnalyzeEntity(updatedEntity);
     };
 
     const handleUpload = async (e) => {
@@ -15190,7 +16164,11 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         setUploading(true);
         try {
             const asset = await uploadAsset(file);
-            await updateEntityImage(asset.url);
+            const updatedEntity = await updateEntityImage(asset.url, false);
+            if (updatedEntity) {
+                setShowImageModal(false);
+                await handleAnalyzeEntity(updatedEntity);
+            }
         } catch (e) {
             console.error(e);
         } finally {
@@ -15698,10 +16676,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                 </div>
             </div>
 
-            <div className="mb-4 text-xs text-amber-100/90 border border-amber-300/20 bg-amber-500/10 rounded-lg px-3 py-2">
-                {t('提示：上传用户自己的图片后，请先执行“提示词反推”或“参考生图”，再进行后续生成。', 'Tip: After uploading user-provided images, run prompt reverse or reference image generation before further generation.')}
-            </div>
-            
             {/* Batch Status Bar */}
             {isBatchGeneratingEntities && batchEntityProgress && (
                 <div className="mb-4 bg-primary/10 border border-primary/20 rounded-lg p-3 flex items-center justify-between text-xs text-primary">
@@ -15762,7 +16736,12 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         )}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent z-10 pointer-events-none"></div>
                         {entity.image_url ? (
-                            <img src={getFullUrl(entity.image_url)} alt={entity.name} className="absolute inset-0 object-cover w-full h-full" />
+                            <SafeImage
+                                src={entity.image_url}
+                                alt={entity.name}
+                                className="absolute inset-0 object-cover w-full h-full"
+                                fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
+                            />
                         ) : (
                             <div className="absolute inset-0 flex items-center justify-center bg-white/5">
                                 <Users className="text-white/20" size={48} />
@@ -15849,7 +16828,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             {/* Left: Image */}
                             <div className="w-1/2 bg-black relative flex items-center justify-center">
                                 {viewingEntity.image_url ? (
-                                    <img src={getFullUrl(viewingEntity.image_url)} alt={viewingEntity.name} className="max-w-full max-h-full object-contain" />
+                                    <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="max-w-full max-h-full object-contain" fallback={<div className="flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
                                 ) : (
                                     <div className="flex flex-col items-center justify-center text-white/20">
                                         <Users size={64} />
@@ -16332,56 +17311,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                                 {imageModalTab === 'library' && (
                                     <div>
-                                        {String(selectedEntity?.type || '').toLowerCase() === 'character' && (
-                                            <div className="mb-3 rounded-lg border border-white/10 bg-black/25 p-3">
-                                                <div className="text-xs font-bold text-white/90 mb-2">
-                                                    {t('选图后动作', 'Post-Selection Action')}
-                                                </div>
-                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                                                    {[
-                                                        {
-                                                            key: 'direct_use',
-                                                            label: t('直接使用图片', 'Use Image Directly'),
-                                                            desc: t('仅替换主体图片，不触发额外处理。', 'Only replace image; no extra processing.')
-                                                        },
-                                                        {
-                                                            key: 'sync_prompt',
-                                                            label: t('按图同步提示词', 'Sync Prompt from Image'),
-                                                            desc: t('应用图片后，立即分析并反写主体信息。非本系统生图原则上先走此步。', 'Apply image, then analyze and write back metadata. For non-system images, this should generally be the first step.')
-                                                        },
-                                                        {
-                                                            key: 'rewrite_and_regenerate',
-                                                            label: t('按图修改提示词并重生成', 'Rewrite Prompt and Regenerate'),
-                                                            desc: t('应用图片后，分析并重写提示词，再生成新图。若原图非六视图/人物不清晰，建议使用此项。', 'Apply image, analyze, rewrite prompt, then regenerate. Recommended when the source image is not six-view or character details are unclear.')
-                                                        },
-                                                    ].map((option) => (
-                                                        <label
-                                                            key={option.key}
-                                                            className={`rounded-md border px-2 py-2 cursor-pointer transition-colors ${imageSelectAction === option.key ? 'border-primary/50 bg-primary/10 text-white' : 'border-white/10 bg-black/20 text-white/75 hover:bg-white/5'}`}
-                                                        >
-                                                            <div className="flex items-center gap-2">
-                                                                <input
-                                                                    type="radio"
-                                                                    name="image-select-action"
-                                                                    checked={imageSelectAction === option.key}
-                                                                    onChange={() => setImageSelectAction(option.key)}
-                                                                    className="accent-primary"
-                                                                />
-                                                                <span className="font-semibold">{option.label}</span>
-                                                            </div>
-                                                            <div className="mt-1 text-[10px] text-white/55">{option.desc}</div>
-                                                        </label>
-                                                    ))}
-                                                </div>
-                                                <div className="mt-2 text-[10px] text-white/50">
-                                                    {t(
-                                                        '说明：点击素材图后会先应用图片，再按上方策略执行。若不是本系统生成的图，原则上应先做“按图同步提示词”；若原图不是六视图或人物细节不清晰，建议继续“按图修改提示词并重生成”。如需批量处理，请在改图后使用顶部“批量提示词反推”或“批量参考生图”。',
-                                                        'Note: Clicking an asset first applies the image, then runs the selected strategy. If the image was not generated by this system, you should generally run Sync Prompt from Image first. If the source is not six-view or character details are unclear, it is recommended to continue with Rewrite Prompt and Regenerate. For batch workflows, after replacing images use the top toolbar actions Batch Prompt Reverse or Batch Reference Generate.'
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-
                                         <div className="mb-3 grid grid-cols-1 sm:grid-cols-[1fr_180px_180px_auto] gap-2">
                                             <input
                                                 type="text"
@@ -20997,7 +21926,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             resetOnLeave
                                         />
                                     ) : shot.image_url ? (
-                                        <img src={getFullUrl(shot.image_url)} alt={shot.shot_name} className="w-full h-full object-contain object-center" />
+                                        <SafeImage src={shot.image_url} alt={shot.shot_name} className="w-full h-full object-contain object-center" fallback={<div className="flex flex-col items-center gap-2 opacity-50"><ImageIcon className="w-8 h-8" /><span className="text-xs">{t('无图片', 'No Image')}</span></div>} />
                                     ) : (
                                         <div className="flex flex-col items-center gap-2 opacity-50">
                                             <ImageIcon className="w-8 h-8" />
@@ -21213,8 +22142,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             )}
                                             {editingShot.image_url ? (
                                                 <>
-                                                    <img 
-                                                        src={getFullUrl(editingShot.image_url)} 
+                                                    <SafeImage
+                                                        src={editingShot.image_url}
                                                         className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90 transition-opacity" 
                                                         onClick={(e) => {
                                                             e.stopPropagation();
@@ -21357,8 +22286,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 if (isSameAsStart && editingShot.image_url) {
                                                      return (
                                                         <div className="relative w-full h-full group/mirror">
-                                                            <img 
-                                                                src={getFullUrl(editingShot.image_url)} 
+                                                            <SafeImage
+                                                                src={editingShot.image_url}
                                                                 className="max-w-full max-h-full object-contain opacity-60 group-hover/mirror:opacity-100 transition-opacity cursor-pointer"
                                                                 title={t('与起始帧相同（提示词少于 5 个词）', 'Same as Start Frame (Prompt < 5 words)')}
                                                                 onClick={(e) => {
@@ -21376,8 +22305,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 if (endUrl) {
                                                     return (
                                                         <>
-                                                            <img 
-                                                                src={getFullUrl(endUrl)} 
+                                                            <SafeImage
+                                                                src={endUrl}
                                                                 className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90 transition-opacity"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
@@ -21677,8 +22606,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 <div className="aspect-video bg-black rounded border border-white/10 relative overflow-hidden group/image cursor-pointer flex items-center justify-center" onClick={() => openAssetDetailModal('keyframe', idx)}>
                                                     {kf.url ? (
                                                         <>
-                                                            <img 
-                                                                src={getFullUrl(kf.url)} 
+                                                            <SafeImage
+                                                                src={kf.url}
                                                                 className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
@@ -21846,7 +22775,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         return allMatches.map((e, idx) => (
                                             <div key={e.id} className="flex flex-col items-center gap-2 min-w-[70px]">
                                                 <div className="w-14 h-14 rounded-full overflow-hidden border border-white/20 bg-black/50 relative">
-                                                    {e.image_url ? <img src={getFullUrl(e.image_url)} className="w-full h-full object-contain object-center" /> : <Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>}
+                                                    {e.image_url ? <SafeImage src={e.image_url} className="w-full h-full object-contain object-center" fallback={<Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>} /> : <Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>}
                                                 </div>
                                                 <span className="text-[10px] text-center line-clamp-1 w-full opacity-80">{e.name}</span>
                                             </div>
@@ -22173,7 +23102,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             <span className="text-xs text-white/80">{t('正在生成起始帧...', 'Generating Start Frame...')}</span>
                                                                         </div>
                                                                     )}
-                                                                    {editingShot.image_url ? <img src={getFullUrl(editingShot.image_url)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    {editingShot.image_url ? <SafeImage src={editingShot.image_url} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
                                                                     { label: t('图片 URL', 'Image URL'), value: editingShot.image_url || '-', breakAll: true },
@@ -22237,7 +23166,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                             <span className="text-xs text-white/80">{t('正在生成结束帧...', 'Generating End Frame...')}</span>
                                                                         </div>
                                                                     )}
-                                                                    {endFrameUrl ? <img src={getFullUrl(endFrameUrl)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    {endFrameUrl ? <SafeImage src={endFrameUrl} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
                                                                     { label: t('结束帧 URL', 'End Frame URL'), value: endFrameUrl || '-', breakAll: true },
@@ -22363,7 +23292,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
                                                                         <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('配音预览', 'Voiceover Preview')}</div>
                                                                         {voiceoverUrl ? (
-                                                                            <audio src={getFullUrl(voiceoverUrl)} controls className="w-full" />
+                                                                            <SafeAudio src={voiceoverUrl} controls className="w-full" fallback={<div className="text-xs text-muted-foreground">{t('配音文件不可用', 'Voiceover file unavailable')}</div>} />
                                                                         ) : (
                                                                             <div className="text-xs text-muted-foreground">{t('暂无配音音频', 'No voiceover audio yet')}</div>
                                                                         )}
@@ -22477,7 +23406,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                         <div className="space-y-3">
                                                             <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
-                                                                {keyframe?.url ? <img src={getFullUrl(keyframe.url)} className="max-w-full max-h-full object-contain"/> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                {keyframe?.url ? <SafeImage src={keyframe.url} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                             </div>
                                                             {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
                                                                 { label: t('关键帧时间', 'Keyframe Time'), value: keyframe?.time || '-' },
@@ -24030,6 +24959,8 @@ const Editor = ({
         }
 
         const importedSubjectCounts = { character: 0, prop: 0, environment: 0 };
+        const createdSubjectItems = [];
+        const skippedSubjectItems = [];
         const importStats = {
             scriptLines: 0,
             scenesCreated: 0,
@@ -24225,6 +25156,12 @@ const Editor = ({
                         if (Object.prototype.hasOwnProperty.call(skippedExistingSubjectCounts, normalizedType)) {
                             skippedExistingSubjectCounts[normalizedType] += 1;
                         }
+                        skippedSubjectItems.push({
+                            type: normalizedType,
+                            name: entityName,
+                            name_en: entityNameEn || '',
+                            reason: 'existing_subject_reused',
+                        });
                         const aliasSuffix = entityNameEn ? ` / ${entityNameEn}` : '';
                         addLog(
                             `Skipped existing ${normalizedType} subject during import: ${entityName}${aliasSuffix}`,
@@ -24257,6 +25194,7 @@ const Editor = ({
                             }
                             const desc = [
                                 `Name (EN): ${entityNameEn || char.name_en || ''}`,
+                                `Description: ${char.description_cn || char.description || char.narrative_description || ''}`,
                                 `Role: ${char.role}`,
                                 `Archetype: ${char.archetype}`,
                                 `Appearance: ${char.appearance_cn}`,
@@ -24301,6 +25239,12 @@ const Editor = ({
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('character', entityNameEn), created);
                                         count++;
                                         importedSubjectCounts.character += 1;
+                                        createdSubjectItems.push({
+                                            type: 'character',
+                                            name: entityName,
+                                            name_en: entityNameEn || '',
+                                            id: created.id,
+                                        });
                                     }
                                 }
                             } catch (err) {
@@ -24328,7 +25272,7 @@ const Editor = ({
                              const desc = [
                                           `Name (EN): ${entityNameEn || prop.name_en || ''}`,
                                 `Type: ${prop.type}`, // inner type from JSON
-                                `Description: ${prop.description_cn}`,
+                                          `Description: ${prop.description_cn || prop.description || ''}`,
                                 prop.generation_prompt_cn ? `Prompt (CN): ${prop.generation_prompt_cn}` : '',
                                 `Prompt: ${prop.generation_prompt_en}`,
                                 prop.negative_prompt_en ? `Negative Prompt: ${prop.negative_prompt_en}` : '',
@@ -24363,6 +25307,12 @@ const Editor = ({
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('prop', entityNameEn), created);
                                         count++;
                                         importedSubjectCounts.prop += 1;
+                                        createdSubjectItems.push({
+                                            type: 'prop',
+                                            name: entityName,
+                                            name_en: entityNameEn || '',
+                                            id: created.id,
+                                        });
                                     }
                                 }
                             } catch (err) {
@@ -24391,7 +25341,7 @@ const Editor = ({
                                           `Name (EN): ${entityNameEn || env.name_en || ''}`,
                                 `Atmosphere: ${env.atmosphere}`,
                                 `Visual Params: ${env.visual_params}`,
-                                `Description: ${env.description_cn}`,
+                                          `Description: ${env.description_cn || env.description || env.narrative_description || ''}`,
                                 env.generation_prompt_cn ? `Prompt (CN): ${env.generation_prompt_cn}` : '',
                                 `Prompt: ${env.generation_prompt_en}`,
                                 env.negative_prompt_en ? `Negative Prompt: ${env.negative_prompt_en}` : ''
@@ -24429,6 +25379,12 @@ const Editor = ({
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('environment', entityNameEn), created);
                                         count++;
                                         importedSubjectCounts.environment += 1;
+                                        createdSubjectItems.push({
+                                            type: 'environment',
+                                            name: entityName,
+                                            name_en: entityNameEn || '',
+                                            id: created.id,
+                                        });
                                     }
                                 }
                             } catch (err) {
@@ -25006,10 +25962,12 @@ const Editor = ({
             }
 
             const importedSubjectsTotal = importedSubjectCounts.character + importedSubjectCounts.prop + importedSubjectCounts.environment;
+            const skippedSubjectsTotal = skippedSubjectItems.length;
             const importedScenesTotal = importStats.scenesCreated + importStats.scenesUpdated;
             const summaryLines = [
                 'Import Successful!',
                 `Subjects: total=${importedSubjectsTotal} (character=${importedSubjectCounts.character}, prop=${importedSubjectCounts.prop}, environment=${importedSubjectCounts.environment})`,
+                `Subjects skipped as existing=${skippedSubjectsTotal}`,
                 `Scenes: created=${importStats.scenesCreated}, updated=${importStats.scenesUpdated}, total=${importedScenesTotal}`,
                 `Shots: created=${importStats.shotsCreated}`,
                 `Script lines: ${importStats.scriptLines}`,
@@ -25024,6 +25982,8 @@ const Editor = ({
                 ok: true,
                 changed: true,
                 importedSubjectCounts,
+                createdSubjectItems,
+                skippedSubjectItems,
                 importStats,
                 importDiagnostics,
                 postImportStatusNote,
@@ -25042,6 +26002,8 @@ const Editor = ({
                 ok: true,
                 changed: false,
                 importedSubjectCounts,
+                createdSubjectItems,
+                skippedSubjectItems,
                 importStats,
                 importDiagnostics,
                 postImportStatusNote,
@@ -25616,7 +26578,7 @@ const Editor = ({
                         )}
                         {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
                         {activeTab === 'subjects' && <SubjectLibrary projectId={id} currentEpisode={activeEpisode} uiLang={uiLang} />}
-                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onSwitchToShots={(sceneId) => {
+                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                             if (sceneId) {
                                 setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
                             }
