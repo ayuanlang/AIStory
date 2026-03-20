@@ -1141,7 +1141,7 @@ const Settings = () => {
                 setImgToolModel(saved.model || "");
                 setImgToolWidth(saved.width || "1024");
                 setImgToolHeight(saved.height || "1024");
-                setImgToolWebHook(saved.webHook || "");
+                setImgToolWebHook((toolName === "Grsai-Image" || toolName === "Kie-Image") && saved.webHook === "-1" ? "" : (saved.webHook || ""));
             } else {
                  // Defaults for known tools
                  if (toolName === "Doubao") {
@@ -1164,7 +1164,7 @@ const Settings = () => {
                      setImgToolModel("sora-image");
                      setImgToolWidth("1024");
                      setImgToolHeight("1024");
-                     setImgToolWebHook("-1");
+                     setImgToolWebHook("");
                  } else if (toolName === "Kie-Image") {
                      setImgToolKey("");
                      setImgToolEndpoint("https://api.kie.ai/api/v1/jobs/createTask");
@@ -1208,7 +1208,7 @@ const Settings = () => {
                 setVidToolEndpoint(ep);
 
                 setVidToolModel(saved.model || "");
-                setVidToolWebHook(saved.webHook || "");
+                setVidToolWebHook((toolName === "Grsai-Video" || toolName === "Kie-Video") && saved.webHook === "-1" ? "" : (saved.webHook || ""));
                 setVidToolDraft(saved.draft || false);
              } else {
                  setVidEndpointMap({});
@@ -1227,7 +1227,7 @@ const Settings = () => {
                     setVidToolKey("");
                     setVidToolEndpoint("https://grsai.dakka.com.cn");
                     setVidToolModel("sora-2");
-                    setVidToolWebHook("-1");
+                          setVidToolWebHook("");
                       } else if (toolName === "Kie-Video") {
                           setVidToolKey("");
                                   setVidToolEndpoint("https://api.kie.ai/api/v1/jobs/createTask");

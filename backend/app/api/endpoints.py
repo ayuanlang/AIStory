@@ -19056,9 +19056,11 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
     _set_generation_callback_payload(stable_ticket, payload)
     payload_status = str((payload or {}).get("status") or "").strip().lower() if isinstance(payload, dict) else ""
     payload_result_url = _extract_job_result_url(payload if isinstance(payload, dict) else {})
+    callback_task_id = _extract_callback_task_id(payload if isinstance(payload, dict) else {})
     logger.info(
-        "[GenerationCallback] received ticket=%s status=%s has_result_url=%s result_url=%s remote=%s",
+        "[GenerationCallback] received ticket=%s task_id=%s status=%s has_result_url=%s result_url=%s remote=%s",
         stable_ticket,
+        callback_task_id or None,
         payload_status or None,
         bool(payload_result_url),
         payload_result_url or None,

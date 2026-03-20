@@ -3265,6 +3265,23 @@ class MediaGenerationService:
             os.getenv("RENDER_INSTANCE_ID", ""),
         )
         tool_conf = config.get("config", {}) or {}
+        raw_callback_url = str(
+            tool_conf.get("webHook")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or ""
+        ).strip()
+        callback_ticket = f"grsai-{gen_type}"
+        callback_url = self._resolve_provider_callback_url(tool_conf, callback_ticket)
+        if callback_url and callback_url != raw_callback_url:
+            logger.info(
+                "[GrsaiTrace][%s] callback auto-assigned | ticket=%s callback_url=%s raw_callback=%s",
+                trace_id,
+                callback_ticket,
+                callback_url,
+                raw_callback_url or None,
+            )
         raw_endpoint = (tool_conf.get("endpoint") or "").strip()
         base_url = config.get("base_url") or "https://grsaiapi.com"
         
@@ -3282,7 +3299,8 @@ class MediaGenerationService:
                 endpoint = f"{base_url}/v1/draw/nano-banana"
             
             final_model = model or "sora-image"
-            payload = {"model": final_model, "prompt": prompt, "webHook": "-1", "shutProgress": False}
+            payload = {"model": final_model, "prompt": prompt, "shutProgress": False}
+            payload["webHook"] = callback_url if callback_url and callback_url != "-1" else "-1"
             base_metadata = {"provider": "grsai", "model": final_model, "prompt": prompt}
 
             normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
@@ -3343,12 +3361,13 @@ class MediaGenerationService:
 
             _debug_log(f"[Grsai] Submitting Payload: {json.dumps(log_payload, ensure_ascii=False)}")
             logger.info(
-                "[GrsaiTrace][%s] image submit prepared | endpoint=%s result_url=%s has_refs=%s refs_count=%s payload_keys=%s",
+                "[GrsaiTrace][%s] image submit prepared | endpoint=%s result_url=%s has_refs=%s refs_count=%s callback_enabled=%s payload_keys=%s",
                 trace_id,
                 endpoint,
                 result_url,
                 bool(payload.get("urls")),
                 len(payload.get("urls") or []),
+                bool(callback_url and callback_url != "-1"),
                 sorted(list(payload.keys())),
             )
             return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, extra_metadata=base_metadata, trace_id=trace_id)
@@ -3425,7 +3444,7 @@ class MediaGenerationService:
                 # prompt truncation moved to end
             else:
                 # Sora/Others
-                payload["webHook"] = "-1"
+                payload["webHook"] = callback_url if callback_url and callback_url != "-1" else "-1"
                 # API requires integer for duration
                 payload["duration"] = int(duration) if duration else 5
                 if aspect_ratio:
@@ -3501,8 +3520,7 @@ class MediaGenerationService:
                  if "firstFrameUrl" in payload and not payload["firstFrameUrl"]:
                      del payload["firstFrameUrl"]
 
-                 # Webhook fix: Docs say "-1" for immediate ID return if no callback used
-                 payload["webHook"] = "-1" 
+                 payload["webHook"] = callback_url if callback_url and callback_url != "-1" else "-1"
 
             # Debug log (sanitized)
             debug_p = _strip_base64_from_log(payload)
@@ -5870,82 +5888,38 @@ class MediaGenerationService:
                 if "prompt_optimizer" not in payload_input:
                     payload_input["prompt_optimizer"] = bool(tool_conf.get("prompt_optimizer", True))
 
-        callback_url = str(
+        raw_callback_url = str(
             tool_conf.get("webHook")
             or tool_conf.get("callBackUrl")
             or tool_conf.get("callback_url")
             or tool_conf.get("callbackUrl")
+            or os.getenv("KIE_CALLBACK_URL")
+            or os.getenv("AISTORY_KIE_CALLBACK_URL")
             or ""
         ).strip()
+        callback_ticket = f"kie-{gen_type}"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callBackUrl", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
 
-        # KIE callbacks:
-        # - Local deployment: disable callbacks and rely on polling.
-        # - Public deployment: auto-assign callback URL when caller did not provide one.
-        if not callback_url:
-            callback_url = str(
-                os.getenv("KIE_CALLBACK_URL")
-                or os.getenv("AISTORY_KIE_CALLBACK_URL")
-                or ""
-            ).strip()
-
-        callback_required_by_model = (
-            (gen_type == "image" and str(model_lower or "").startswith("z-image"))
-            or bool(is_kling_26_i2v_model)
-        )
-
-        deployment_public_hint = bool(
-            str(os.getenv("AISTORY_PUBLIC_BASE_URL") or "").strip()
-            or str(os.getenv("PUBLIC_BASE_URL") or "").strip()
-            or str(getattr(settings, "RENDER_EXTERNAL_URL", "") or "").strip()
-            or str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
-            or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
-            or str(os.getenv("RENDER") or "").strip()
-        )
-
-        if callback_required_by_model and not deployment_public_hint:
-            callback_url = "-1"
-            logger.info("KIE callback disabled for local deployment | model=%s gen_type=%s", model, gen_type)
-
-        if callback_required_by_model and not callback_url:
-            public_base = str(
-                os.getenv("AISTORY_PUBLIC_BASE_URL")
-                or os.getenv("PUBLIC_BASE_URL")
-                or str(getattr(settings, "RENDER_EXTERNAL_URL", "") or "")
-                or os.getenv("RENDER_EXTERNAL_URL")
-                or os.getenv("RAILWAY_STATIC_URL")
-                or ""
-            ).strip()
-
-            if not public_base:
-                frontend_url = str(
-                    os.getenv("AISTORY_FRONTEND_BASE_URL")
-                    or os.getenv("FRONTEND_BASE_URL")
-                    or str(getattr(settings, "FRONTEND_BASE_URL", "") or "")
-                    or "https://aistory-frontend.onrender.com/projects"
-                ).strip()
-                try:
-                    m = re.match(r"^https?://[^/]+", frontend_url, flags=re.IGNORECASE)
-                    frontend_origin = m.group(0) if m else ""
-                except Exception:
-                    frontend_origin = ""
-
-                if frontend_origin:
-                    backend_origin = frontend_origin
-                    backend_origin = backend_origin.replace("-frontend.", "-backend.")
-                    backend_origin = backend_origin.replace("frontend.onrender.com", "backend.onrender.com")
-                    public_base = backend_origin
-
-            if public_base:
-                if not re.match(r"^https?://", public_base, flags=re.IGNORECASE):
-                    public_base = f"https://{public_base}"
-                api_prefix = str(getattr(settings, "API_V1_STR", "/api/v1") or "/api/v1").strip("/")
-                callback_ticket = "kie-z-image" if gen_type == "image" else "kie-kling-2-6-i2v"
-                callback_url = f"{public_base.rstrip('/')}/{api_prefix}/generate/callback/{callback_ticket}"
-                logger.info("KIE callback auto-assigned | callback_url=%s", callback_url)
-
-        if callback_required_by_model and not callback_url:
-            callback_url = "-1"
-            logger.info("KIE callback fallback to disabled mode (-1) | model=%s gen_type=%s", model, gen_type)
+        if callback_url and callback_url != raw_callback_url:
+            logger.info(
+                "KIE callback auto-assigned | model=%s gen_type=%s ticket=%s callback_url=%s raw_callback=%s",
+                model,
+                gen_type,
+                callback_ticket,
+                callback_url,
+                raw_callback_url or None,
+            )
+        elif callback_url == "-1":
+            logger.info(
+                "KIE callback disabled | model=%s gen_type=%s raw_callback=%s public_hint=%s",
+                model,
+                gen_type,
+                raw_callback_url or None,
+                self._is_public_deployment_hint(),
+            )
         if use_veo_api:
             raw_model = str(model or "").strip()
             # According to KIE API, REFERENCE_2_VIDEO only works with "veo3_fast"
@@ -6534,9 +6508,10 @@ class MediaGenerationService:
         initial_submitted_model = str(submitted_model or "").strip()
         veo_retry_models = _build_veo_retry_models(submitted_model) if use_veo_api else []
 
-        if gen_type == "video":
+        if gen_type in {"image", "video"}:
             logger.info(
-                "KIE video submit prepared | endpoint=%s model=%s callback_enabled=%s callback_url=%s input_summary=%s",
+                "KIE submit prepared | gen_type=%s endpoint=%s model=%s callback_enabled=%s callback_url=%s input_summary=%s",
+                gen_type,
                 submit_url,
                 submitted_model,
                 bool(callback_url and callback_url != "-1"),
@@ -7440,6 +7415,66 @@ class MediaGenerationService:
         if not re.match(r"^https?://", public_base, flags=re.IGNORECASE):
             public_base = f"https://{public_base}"
         return f"{public_base}{upload_suffix}"
+
+    def _resolve_public_base_url(self) -> str:
+        public_base = str(
+            os.getenv("AISTORY_PUBLIC_BASE_URL")
+            or os.getenv("PUBLIC_BASE_URL")
+            or str(getattr(settings, "RENDER_EXTERNAL_URL", "") or "")
+            or os.getenv("RENDER_EXTERNAL_URL")
+            or os.getenv("RAILWAY_STATIC_URL")
+            or ""
+        ).strip()
+
+        if not public_base:
+            frontend_url = str(
+                os.getenv("AISTORY_FRONTEND_BASE_URL")
+                or os.getenv("FRONTEND_BASE_URL")
+                or str(getattr(settings, "FRONTEND_BASE_URL", "") or "")
+                or ""
+            ).strip()
+            try:
+                match = re.match(r"^https?://[^/]+", frontend_url, flags=re.IGNORECASE)
+                frontend_origin = match.group(0) if match else ""
+            except Exception:
+                frontend_origin = ""
+            if frontend_origin:
+                public_base = frontend_origin
+                public_base = public_base.replace("-frontend.", "-backend.")
+                public_base = public_base.replace("frontend.onrender.com", "backend.onrender.com")
+
+        if public_base and not re.match(r"^https?://", public_base, flags=re.IGNORECASE):
+            public_base = f"https://{public_base}"
+        return public_base.rstrip("/")
+
+    def _is_public_deployment_hint(self) -> bool:
+        return bool(
+            self._resolve_public_base_url()
+            or str(os.getenv("RENDER") or "").strip()
+            or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
+        )
+
+    def _resolve_provider_callback_url(self, tool_conf: Dict[str, Any], callback_ticket: str) -> str:
+        callback_url = str(
+            tool_conf.get("webHook")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or ""
+        ).strip()
+
+        if callback_url and callback_url != "-1":
+            return callback_url
+
+        if not self._is_public_deployment_hint():
+            return "-1" if callback_url == "-1" else ""
+
+        public_base = self._resolve_public_base_url()
+        if not public_base:
+            return "-1" if callback_url == "-1" else ""
+
+        api_prefix = str(getattr(settings, "API_V1_STR", "/api/v1") or "/api/v1").strip("/")
+        return f"{public_base}/{api_prefix}/generate/callback/{callback_ticket}"
 
     def _data_uri_image_size_bytes(self, value: Any) -> Optional[int]:
         raw = str(value or "")
