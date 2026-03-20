@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy import or_, and_, text, inspect
 from app.db.session import get_db, SessionLocal
-from app.models.all_models import Project, ProjectShare, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig, ProviderKeyPool
+from app.models.all_models import Project, ProjectShare, ProjectAssetReviewThread, ProjectAssetReviewRound, ProjectAssetReviewMessage, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig, ProviderKeyPool
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
@@ -457,6 +457,7 @@ def _extract_callback_task_id(payload: Dict[str, Any]) -> str:
         return ""
 
     direct_candidates = (
+        payload.get("id"),
         payload.get("task_id"),
         payload.get("taskId"),
         payload.get("job_id"),
@@ -470,6 +471,7 @@ def _extract_callback_task_id(payload: Dict[str, Any]) -> str:
     data = payload.get("data")
     if isinstance(data, dict):
         nested_candidates = (
+            data.get("id"),
             data.get("task_id"),
             data.get("taskId"),
             data.get("job_id"),
@@ -931,11 +933,172 @@ def _extract_job_result_url(result: Any) -> str:
         if value:
             return value
 
+    results = result.get("results")
+    if isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict):
+                nested_url = _extract_job_result_url(item)
+                if nested_url:
+                    return nested_url
+            else:
+                value = str(item or "").strip()
+                if value.startswith("http://") or value.startswith("https://"):
+                    return value
+
+    nested_data = result.get("data")
+    if isinstance(nested_data, dict):
+        nested_url = _extract_job_result_url(nested_data)
+        if nested_url:
+            return nested_url
+
     nested = result.get("result")
     if isinstance(nested, dict):
         return _extract_job_result_url(nested)
 
     return ""
+
+
+def _extract_job_provider_task_id(job: Dict[str, Any]) -> str:
+    if not isinstance(job, dict):
+        return ""
+
+    for value in (job.get("provider_task_id"), job.get("task_id"), job.get("taskId")):
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+
+    result = job.get("result")
+    if isinstance(result, dict):
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("task_id", "taskId", "job_id", "jobId"):
+                normalized = str(metadata.get(key) or "").strip()
+                if normalized:
+                    return normalized
+
+    return ""
+
+
+def _normalize_generation_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    if status in {"success", "succeeded", "completed", "done"}:
+        return "succeeded"
+    if status in {"failed", "error"}:
+        return "failed"
+    if status in {"canceled", "cancelled"}:
+        return "canceled"
+    if status in {"queued", "pending", "running", "processing", "in_progress", "in-progress"}:
+        return "running"
+    return status
+
+
+def _build_result_from_provider_callback(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+
+    result_url = _extract_job_result_url(payload)
+    if not result_url:
+        return None
+
+    result: Dict[str, Any] = {"url": result_url}
+    results = payload.get("results")
+    first_result = results[0] if isinstance(results, list) and results else None
+    if isinstance(first_result, dict):
+        for key in ("width", "height", "content"):
+            if first_result.get(key) not in (None, ""):
+                result[key] = first_result.get(key)
+
+    for key in ("width", "height", "content"):
+        if key not in result and payload.get(key) not in (None, ""):
+            result[key] = payload.get(key)
+
+    callback_task_id = _extract_callback_task_id(payload)
+    metadata: Dict[str, Any] = {
+        "provider": "grsai",
+        "status": _normalize_generation_status(payload.get("status")),
+        "raw_callback": payload,
+    }
+    if callback_task_id:
+        metadata["task_id"] = callback_task_id
+        metadata["taskId"] = callback_task_id
+    if payload.get("failure_reason") not in (None, ""):
+        metadata["failure_reason"] = payload.get("failure_reason")
+    if payload.get("error") not in (None, ""):
+        metadata["error"] = payload.get("error")
+    result["metadata"] = metadata
+    return result
+
+
+def _get_generation_callback_payload(ticket: str) -> Dict[str, Any]:
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        return {}
+
+    with GENERATION_CALLBACK_LOCK:
+        _prune_generation_callback_locked()
+        payload = dict(GENERATION_CALLBACK_STORE.get(stable_ticket) or {})
+
+    if not payload:
+        file_payload = _read_generation_callback_file(stable_ticket)
+        if file_payload:
+            payload = dict(file_payload)
+            with GENERATION_CALLBACK_LOCK:
+                _prune_generation_callback_locked()
+                GENERATION_CALLBACK_STORE[stable_ticket] = dict(file_payload)
+
+    raw_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    return dict(raw_payload or {})
+
+
+def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    provider_task_id = _extract_job_provider_task_id(job)
+    if not provider_task_id:
+        return job
+
+    callback_payload = _get_generation_callback_payload("grsai-image")
+    callback_task_id = _extract_callback_task_id(callback_payload)
+    if not callback_task_id or callback_task_id != provider_task_id:
+        return job
+
+    normalized_status = _normalize_generation_status(callback_payload.get("status"))
+    current_status = _normalize_generation_status(job.get("status"))
+    result = _build_result_from_provider_callback(callback_payload)
+    current_result_url = _extract_job_result_url(job.get("result"))
+    callback_result_url = _extract_job_result_url(result or {})
+
+    updates: Dict[str, Any] = {}
+    if callback_result_url and callback_result_url != current_result_url:
+        updates["result"] = result
+
+    if normalized_status in {"succeeded", "failed", "canceled"} and normalized_status != current_status:
+        updates["status"] = normalized_status
+        if not job.get("finished_at"):
+            updates["finished_at"] = now_bj_iso()
+
+    if normalized_status == "succeeded":
+        updates["error"] = None
+    elif normalized_status in {"failed", "canceled"}:
+        failure_parts = [str(callback_payload.get("failure_reason") or "").strip(), str(callback_payload.get("error") or "").strip()]
+        failure_text = " | ".join([part for part in failure_parts if part])
+        if failure_text:
+            updates["error"] = failure_text
+
+    if not updates:
+        return job
+
+    updates.setdefault("provider_task_id", provider_task_id)
+    _set_image_job(job_id, **updates)
+    with IMAGE_JOB_LOCK:
+        updated = dict(IMAGE_JOB_STORE.get(job_id) or {})
+    logger.info(
+        "[ImageJob] finalized from grsai callback | job_id=%s provider_task_id=%s status=%s has_result_url=%s result_url=%s",
+        job_id,
+        provider_task_id,
+        updates.get("status") or current_status or None,
+        bool(callback_result_url),
+        callback_result_url or None,
+    )
+    return updated or job
 
 
 def _apply_no_store_headers(response: Response) -> None:
@@ -3848,12 +4011,16 @@ class ProjectCreate(BaseModel):
     description: Optional[str] = None
     global_info: dict = {}
     aspectRatio: Optional[str] = None
+    share_users: Optional[List[str]] = None
+    reviewer_users: Optional[List[str]] = None
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     global_info: Optional[dict] = None
     aspectRatio: Optional[str] = None
+    share_users: Optional[List[str]] = None
+    reviewer_users: Optional[List[str]] = None
 
 class ProjectOut(BaseModel):
     id: int
@@ -3875,6 +4042,8 @@ class ProjectOut(BaseModel):
 
 class ProjectShareCreate(BaseModel):
     target_user: str
+    role: Optional[str] = "editor"
+    permissions: Optional[Dict[str, Any]] = None
 
 
 class ProjectShareOut(BaseModel):
@@ -3884,7 +4053,117 @@ class ProjectShareOut(BaseModel):
     username: str
     email: Optional[str] = None
     full_name: Optional[str] = None
+    role: str = "editor"
+    permissions: Dict[str, Any] = {}
     created_at: Optional[str] = None
+
+
+class ProjectAssetReviewThreadCreate(BaseModel):
+    reviewer_user_id: Optional[int] = None
+    reviewer_user: Optional[str] = None
+    title: Optional[str] = None
+    request_message: Optional[str] = None
+    scope_type: Optional[str] = "all_current"
+    entity_required: Optional[bool] = True
+    shot_required: Optional[bool] = True
+    entity_ids: Optional[List[int]] = None
+    shot_ids: Optional[List[int]] = None
+    due_at: Optional[str] = None
+
+
+class ProjectAssetReviewThreadOut(BaseModel):
+    id: int
+    project_id: int
+    requester_user_id: int
+    requester_username: Optional[str] = None
+    reviewer_user_id: int
+    reviewer_username: Optional[str] = None
+    title: Optional[str] = None
+    status: str
+    latest_round_no: int
+    latest_activity_at: Optional[str] = None
+    has_unread: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ProjectAssetReviewThreadStatusUpdate(BaseModel):
+    status: str
+
+
+class ProjectAssetReviewThreadReadUpdate(BaseModel):
+    read: bool = True
+
+
+class ProjectAssetReviewRoundCreate(BaseModel):
+    request_message: Optional[str] = None
+    scope_type: Optional[str] = "all_current"
+    entity_required: Optional[bool] = True
+    shot_required: Optional[bool] = True
+    entity_ids: Optional[List[int]] = None
+    shot_ids: Optional[List[int]] = None
+    due_at: Optional[str] = None
+
+
+class ProjectAssetReviewRoundOut(BaseModel):
+    id: int
+    thread_id: int
+    round_no: int
+    initiated_by_user_id: int
+    initiated_by_username: Optional[str] = None
+    request_message: Optional[str] = None
+    scope_type: str
+    entity_required: bool
+    shot_required: bool
+    entity_decision: str
+    shot_decision: str
+    overall_status: str
+    entity_feedback: Optional[str] = None
+    shot_feedback: Optional[str] = None
+    due_at: Optional[str] = None
+    selected_entity_ids: List[int] = []
+    selected_shot_ids: List[int] = []
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    closed_at: Optional[str] = None
+
+
+class ProjectAssetReviewMessageCreate(BaseModel):
+    message_text: Optional[str] = None
+    message_type: Optional[str] = "message"
+    entity_decision: Optional[str] = None
+    shot_decision: Optional[str] = None
+    entity_feedback: Optional[str] = None
+    shot_feedback: Optional[str] = None
+
+
+class ProjectAssetReviewMessageOut(BaseModel):
+    id: int
+    round_id: int
+    sender_user_id: int
+    sender_username: Optional[str] = None
+    sender_role: str
+    message_type: str
+    message_text: Optional[str] = None
+    entity_decision: Optional[str] = None
+    shot_decision: Optional[str] = None
+    entity_feedback: Optional[str] = None
+    shot_feedback: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+_PROJECT_SHARE_ROLES = {"editor", "reviewer", "viewer"}
+_PROJECT_SHARE_PERMISSION_KEYS = {
+    "can_review_assets",
+    "can_reply_review",
+    "can_edit_entities",
+    "can_edit_shots",
+}
+_ASSET_REVIEW_THREAD_STATUSES = {"open", "closed", "archived"}
+_ASSET_REVIEW_SCOPE_TYPES = {"all_current", "selected_only"}
+_ASSET_REVIEW_DECISIONS = {"pending", "approved", "rejected", "conditional"}
+_ASSET_REVIEW_ROUND_STATUSES = {"pending_reviewer", "replied", "in_discussion", "closed", "cancelled"}
+_ASSET_REVIEW_MESSAGE_TYPES = {"request", "reply", "followup", "message", "status_change"}
 
 
 _PROJECT_LEVEL_GENERATION_DEFAULT_KEYS = (
@@ -4118,6 +4397,467 @@ def _is_project_shared_with_user(db: Session, project_id: int, user_id: int) -> 
     return share is not None
 
 
+def _get_project_share_record(db: Session, project_id: int, user_id: int) -> Optional[ProjectShare]:
+    return db.query(ProjectShare).filter(
+        ProjectShare.project_id == project_id,
+        ProjectShare.user_id == user_id,
+    ).first()
+
+
+def _normalize_project_share_role(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in _PROJECT_SHARE_ROLES else "editor"
+
+
+def _normalize_project_share_permissions(value: Any) -> Dict[str, Any]:
+    payload = value if isinstance(value, dict) else {}
+    normalized: Dict[str, Any] = {}
+    for key in _PROJECT_SHARE_PERMISSION_KEYS:
+        if key in payload:
+            normalized[key] = bool(payload.get(key))
+    return normalized
+
+
+def _project_share_has_permission(share: Optional[ProjectShare], permission_key: str) -> bool:
+    if not share:
+        return False
+    permissions = _normalize_project_share_permissions(getattr(share, "permissions", None))
+    return bool(permissions.get(permission_key))
+
+
+def _project_share_can_review_assets(share: Optional[ProjectShare]) -> bool:
+    if not share:
+        return False
+    role = _normalize_project_share_role(getattr(share, "role", None))
+    if role in {"editor", "reviewer"}:
+        return True
+    return _project_share_has_permission(share, "can_review_assets")
+
+
+def _normalize_asset_review_scope_type(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in _ASSET_REVIEW_SCOPE_TYPES else "all_current"
+
+
+def _normalize_asset_review_decision(value: Any, *, allow_empty: bool = True) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None if allow_empty else "pending"
+    if raw not in _ASSET_REVIEW_DECISIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid review decision: {raw}")
+    return raw
+
+
+def _normalize_asset_review_message_type(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in _ASSET_REVIEW_MESSAGE_TYPES else "message"
+
+
+def _normalize_int_list(values: Any) -> List[int]:
+    if not isinstance(values, list):
+        return []
+    normalized: List[int] = []
+    seen = set()
+    for item in values:
+        try:
+            parsed = int(item)
+        except Exception:
+            continue
+        if parsed <= 0 or parsed in seen:
+            continue
+        seen.add(parsed)
+        normalized.append(parsed)
+    return normalized
+
+
+_PROJECT_GLOBAL_INFO_SHARE_USERS_KEY = "project_share_users"
+_PROJECT_GLOBAL_INFO_REVIEWER_USERS_KEY = "project_reviewer_users"
+
+
+def _normalize_user_identifier_list(values: Any) -> List[str]:
+    if values is None:
+        return []
+    raw_items = values if isinstance(values, list) else re.split(r"[,;\n\r]+", str(values or ""))
+    normalized: List[str] = []
+    seen = set()
+    for item in raw_items:
+        value = str(item or "").strip()
+        if not value:
+            continue
+        dedupe_key = value.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(value)
+    return normalized
+
+
+def _resolve_project_share_users(
+    db: Session,
+    identifiers: Any,
+    *,
+    field_name: str,
+    allow_missing: bool = False,
+) -> Tuple[List[User], List[str]]:
+    normalized = _normalize_user_identifier_list(identifiers)
+    resolved_users: List[User] = []
+    canonical_usernames: List[str] = []
+    seen_user_ids = set()
+    missing: List[str] = []
+
+    for identifier in normalized:
+        user = db.query(User).filter(or_(User.username == identifier, User.email == identifier)).first()
+        if not user:
+            missing.append(identifier)
+            continue
+        if int(user.id or 0) in seen_user_ids:
+            continue
+        seen_user_ids.add(int(user.id or 0))
+        resolved_users.append(user)
+        canonical_usernames.append(str(user.username or identifier).strip())
+
+    if missing and not allow_missing:
+        joined = "、".join([str(item).strip() for item in missing if str(item).strip()])
+        if field_name == "share_users":
+            message = f"以下分享人不存在: {joined}"
+        elif field_name == "reviewer_users":
+            message = f"以下审核人不存在: {joined}"
+        else:
+            message = f"以下用户不存在: {joined}"
+        raise HTTPException(status_code=404, detail=message)
+
+    return resolved_users, canonical_usernames
+
+
+def _sync_project_managed_shares(
+    db: Session,
+    project: Project,
+    current_user: User,
+    *,
+    share_users: Optional[Any] = None,
+    reviewer_users: Optional[Any] = None,
+) -> None:
+    if share_users is None and reviewer_users is None:
+        return
+
+    if int(project.owner_id or 0) != int(current_user.id or 0):
+        raise HTTPException(status_code=403, detail="Only project owner can manage share users or reviewer users")
+
+    current_info = dict(project.global_info) if isinstance(project.global_info, dict) else {}
+    existing_share_identifiers = current_info.get(_PROJECT_GLOBAL_INFO_SHARE_USERS_KEY, [])
+    existing_reviewer_identifiers = current_info.get(_PROJECT_GLOBAL_INFO_REVIEWER_USERS_KEY, [])
+
+    effective_share_identifiers = existing_share_identifiers if share_users is None else share_users
+    effective_reviewer_identifiers = existing_reviewer_identifiers if reviewer_users is None else reviewer_users
+
+    share_members, share_canonical_usernames = _resolve_project_share_users(
+        db,
+        effective_share_identifiers,
+        field_name="share_users",
+    )
+    reviewer_members, reviewer_canonical_usernames = _resolve_project_share_users(
+        db,
+        effective_reviewer_identifiers,
+        field_name="reviewer_users",
+    )
+
+    desired_by_user_id: Dict[int, Dict[str, Any]] = {}
+    for user in reviewer_members:
+        if int(project.owner_id or 0) == int(user.id or 0):
+            continue
+        desired_by_user_id[int(user.id)] = {
+            "role": "reviewer",
+            "can_review_assets": True,
+        }
+    for user in share_members:
+        if int(project.owner_id or 0) == int(user.id or 0):
+            continue
+        existing = desired_by_user_id.get(int(user.id), {})
+        desired_by_user_id[int(user.id)] = {
+            "role": "editor",
+            "can_review_assets": bool(existing.get("can_review_assets")),
+        }
+
+    existing_managed_users, _ = _resolve_project_share_users(
+        db,
+        list(existing_share_identifiers) + list(existing_reviewer_identifiers),
+        field_name="managed_project_users",
+        allow_missing=True,
+    )
+    existing_managed_ids = {
+        int(user.id)
+        for user in existing_managed_users
+        if int(project.owner_id or 0) != int(user.id or 0)
+    }
+
+    for user_id in existing_managed_ids | set(desired_by_user_id.keys()):
+        share = _get_project_share_record(db, project.id, user_id)
+        desired = desired_by_user_id.get(user_id)
+        if not desired:
+            if share:
+                db.delete(share)
+            continue
+
+        permissions = _normalize_project_share_permissions(getattr(share, "permissions", None) if share else None)
+        permissions["can_review_assets"] = bool(desired.get("can_review_assets"))
+        next_role = "editor" if desired.get("role") == "editor" else "reviewer"
+
+        if not share:
+            share = ProjectShare(
+                project_id=project.id,
+                user_id=user_id,
+                role=next_role,
+                permissions=permissions,
+            )
+            db.add(share)
+            continue
+
+        share.role = next_role
+        share.permissions = permissions
+        db.add(share)
+
+    current_info[_PROJECT_GLOBAL_INFO_SHARE_USERS_KEY] = [
+        username
+        for user, username in zip(share_members, share_canonical_usernames)
+        if int(project.owner_id or 0) != int(user.id or 0)
+    ]
+    current_info[_PROJECT_GLOBAL_INFO_REVIEWER_USERS_KEY] = [
+        username
+        for user, username in zip(reviewer_members, reviewer_canonical_usernames)
+        if int(project.owner_id or 0) != int(user.id or 0)
+    ]
+    project.global_info = current_info
+
+
+def _serialize_project_share(share: ProjectShare, user: User) -> ProjectShareOut:
+    return ProjectShareOut(
+        id=share.id,
+        project_id=share.project_id,
+        user_id=share.user_id,
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        role=_normalize_project_share_role(getattr(share, "role", None)),
+        permissions=_normalize_project_share_permissions(getattr(share, "permissions", None)),
+        created_at=share.created_at,
+    )
+
+
+def _review_thread_has_unread(thread: ProjectAssetReviewThread, current_user: Optional[User]) -> bool:
+    if not current_user:
+        return False
+    latest_dt = _parse_iso_datetime(getattr(thread, "latest_activity_at", None))
+    if not latest_dt:
+        return False
+    last_read_raw = None
+    if int(getattr(current_user, "id", 0) or 0) == int(getattr(thread, "requester_user_id", 0) or 0):
+        last_read_raw = getattr(thread, "requester_last_read_at", None)
+    elif int(getattr(current_user, "id", 0) or 0) == int(getattr(thread, "reviewer_user_id", 0) or 0):
+        last_read_raw = getattr(thread, "reviewer_last_read_at", None)
+    else:
+        return False
+    last_read_dt = _parse_iso_datetime(last_read_raw)
+    if not last_read_dt:
+        return True
+    return latest_dt > last_read_dt
+
+
+def _mark_review_thread_read_for_user(thread: ProjectAssetReviewThread, current_user: User, *, read_at: Optional[str] = None) -> None:
+    now_iso = str(read_at or now_bj_iso())
+    if int(current_user.id or 0) == int(thread.requester_user_id or 0):
+        thread.requester_last_read_at = now_iso
+    elif int(current_user.id or 0) == int(thread.reviewer_user_id or 0):
+        thread.reviewer_last_read_at = now_iso
+
+
+def _serialize_review_thread(thread: ProjectAssetReviewThread, requester: Optional[User] = None, reviewer: Optional[User] = None, current_user: Optional[User] = None) -> ProjectAssetReviewThreadOut:
+    return ProjectAssetReviewThreadOut(
+        id=thread.id,
+        project_id=thread.project_id,
+        requester_user_id=thread.requester_user_id,
+        requester_username=getattr(requester, "username", None),
+        reviewer_user_id=thread.reviewer_user_id,
+        reviewer_username=getattr(reviewer, "username", None),
+        title=thread.title,
+        status=str(thread.status or "open"),
+        latest_round_no=int(thread.latest_round_no or 0),
+        latest_activity_at=thread.latest_activity_at,
+        has_unread=_review_thread_has_unread(thread, current_user),
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+    )
+
+
+def _serialize_review_round(round_row: ProjectAssetReviewRound, initiator: Optional[User] = None) -> ProjectAssetReviewRoundOut:
+    return ProjectAssetReviewRoundOut(
+        id=round_row.id,
+        thread_id=round_row.thread_id,
+        round_no=int(round_row.round_no or 1),
+        initiated_by_user_id=round_row.initiated_by_user_id,
+        initiated_by_username=getattr(initiator, "username", None),
+        request_message=round_row.request_message,
+        scope_type=str(round_row.scope_type or "all_current"),
+        entity_required=bool(round_row.entity_required),
+        shot_required=bool(round_row.shot_required),
+        entity_decision=str(round_row.entity_decision or "pending"),
+        shot_decision=str(round_row.shot_decision or "pending"),
+        overall_status=str(round_row.overall_status or "pending_reviewer"),
+        entity_feedback=round_row.entity_feedback,
+        shot_feedback=round_row.shot_feedback,
+        due_at=round_row.due_at,
+        selected_entity_ids=_normalize_int_list(getattr(round_row, "selected_entity_ids", None)),
+        selected_shot_ids=_normalize_int_list(getattr(round_row, "selected_shot_ids", None)),
+        created_at=round_row.created_at,
+        updated_at=round_row.updated_at,
+        closed_at=round_row.closed_at,
+    )
+
+
+def _serialize_review_message(message: ProjectAssetReviewMessage, sender: Optional[User] = None) -> ProjectAssetReviewMessageOut:
+    return ProjectAssetReviewMessageOut(
+        id=message.id,
+        round_id=message.round_id,
+        sender_user_id=message.sender_user_id,
+        sender_username=getattr(sender, "username", None),
+        sender_role=str(message.sender_role or "requester"),
+        message_type=str(message.message_type or "message"),
+        message_text=message.message_text,
+        entity_decision=message.entity_decision,
+        shot_decision=message.shot_decision,
+        entity_feedback=message.entity_feedback,
+        shot_feedback=message.shot_feedback,
+        created_at=message.created_at,
+    )
+
+
+def _ensure_review_scope_has_dimension(entity_required: bool, shot_required: bool) -> None:
+    if not entity_required and not shot_required:
+        raise HTTPException(status_code=400, detail="At least one of entity_required or shot_required must be true")
+
+
+def _validate_review_target_ids_for_project(
+    db: Session,
+    project_id: int,
+    entity_ids: List[int],
+    shot_ids: List[int],
+    *,
+    scope_type: str,
+) -> Tuple[List[int], List[int]]:
+    normalized_entity_ids = _normalize_int_list(entity_ids)
+    normalized_shot_ids = _normalize_int_list(shot_ids)
+
+    if scope_type == "selected_only" and not normalized_entity_ids and not normalized_shot_ids:
+        raise HTTPException(status_code=400, detail="selected_only scope requires at least one entity or shot id")
+
+    if normalized_entity_ids:
+        existing_entity_ids = {
+            int(row_id)
+            for row_id, in db.query(Entity.id).filter(
+                Entity.project_id == project_id,
+                Entity.id.in_(normalized_entity_ids),
+            ).all()
+        }
+        missing_entity_ids = [item for item in normalized_entity_ids if item not in existing_entity_ids]
+        if missing_entity_ids:
+            raise HTTPException(status_code=400, detail=f"Entity ids not found in project: {missing_entity_ids}")
+
+    if normalized_shot_ids:
+        existing_shot_ids = {
+            int(row_id)
+            for row_id, in db.query(Shot.id)
+            .join(Scene, Scene.id == Shot.scene_id)
+            .join(Episode, Episode.id == Scene.episode_id)
+            .filter(
+                Episode.project_id == project_id,
+                Shot.id.in_(normalized_shot_ids),
+            ).all()
+        }
+        missing_shot_ids = [item for item in normalized_shot_ids if item not in existing_shot_ids]
+        if missing_shot_ids:
+            raise HTTPException(status_code=400, detail=f"Shot ids not found in project: {missing_shot_ids}")
+
+    return normalized_entity_ids, normalized_shot_ids
+
+
+def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThread, current_user: User, project: Project) -> str:
+    if current_user.id == thread.reviewer_user_id:
+        return "reviewer"
+    if current_user.id == thread.requester_user_id or project.owner_id == current_user.id:
+        return "requester"
+    share = _get_project_share_record(db, thread.project_id, current_user.id)
+    if share and _normalize_project_share_role(getattr(share, "role", None)) == "editor":
+        return "requester"
+    raise HTTPException(status_code=403, detail="Not authorized to reply in this review thread")
+
+
+def _resolve_review_reviewer(
+    db: Session,
+    project: Project,
+    current_user: User,
+    reviewer_user_id: Optional[int],
+    reviewer_user: Optional[str],
+) -> User:
+    resolved_user: Optional[User] = None
+    parsed_user_id = int(reviewer_user_id or 0)
+    if parsed_user_id > 0:
+        resolved_user = db.query(User).filter(User.id == parsed_user_id).first()
+    if not resolved_user:
+        target = str(reviewer_user or "").strip()
+        if target:
+            resolved_user = db.query(User).filter(or_(User.username == target, User.email == target)).first()
+    reviewer = resolved_user
+    if not reviewer:
+        raise HTTPException(status_code=404, detail="Reviewer user not found")
+    if int(project.owner_id or 0) == int(reviewer.id or 0):
+        return reviewer
+    share = _get_project_share_record(db, project.id, reviewer.id)
+    if not share:
+        if int(project.owner_id or 0) != int(current_user.id or 0):
+            raise HTTPException(status_code=400, detail="Reviewer must already have project access")
+        share = ProjectShare(
+            project_id=project.id,
+            user_id=reviewer.id,
+            role="reviewer",
+            permissions={"can_review_assets": True},
+        )
+        db.add(share)
+        db.flush()
+        return reviewer
+    if int(project.owner_id or 0) == int(current_user.id or 0):
+        next_role = _normalize_project_share_role(getattr(share, "role", None))
+        if next_role == "viewer":
+            share.role = "reviewer"
+        permissions = _normalize_project_share_permissions(getattr(share, "permissions", None))
+        permissions["can_review_assets"] = True
+        share.permissions = permissions
+        db.add(share)
+    if not _project_share_can_review_assets(share):
+        if int(project.owner_id or 0) != int(current_user.id or 0):
+            raise HTTPException(status_code=400, detail="Reviewer must have reviewer or editor access")
+    return reviewer
+
+
+def _require_review_thread_access(db: Session, thread_id: int, current_user: User) -> Tuple[ProjectAssetReviewThread, Project]:
+    thread = db.query(ProjectAssetReviewThread).filter(ProjectAssetReviewThread.id == thread_id).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Review thread not found")
+    project = _require_project_access(db, int(thread.project_id), current_user)
+    if current_user.id in {thread.requester_user_id, thread.reviewer_user_id, project.owner_id}:
+        return thread, project
+    share = _get_project_share_record(db, project.id, current_user.id)
+    if share and _normalize_project_share_role(getattr(share, "role", None)) == "editor":
+        return thread, project
+    raise HTTPException(status_code=403, detail="Not authorized to access this review thread")
+
+
+def _require_review_round_access(db: Session, round_id: int, current_user: User) -> Tuple[ProjectAssetReviewRound, ProjectAssetReviewThread, Project]:
+    round_row = db.query(ProjectAssetReviewRound).filter(ProjectAssetReviewRound.id == round_id).first()
+    if not round_row:
+        raise HTTPException(status_code=404, detail="Review round not found")
+    thread, project = _require_review_thread_access(db, int(round_row.thread_id), current_user)
+    return round_row, thread, project
+
+
 def _require_project_access(
     db: Session,
     project_id: int,
@@ -4140,7 +4880,7 @@ def _require_project_access(
         return project
 
     if owner_only:
-        raise HTTPException(status_code=403, detail="Delete is restricted to project owner")
+        raise HTTPException(status_code=403, detail="This action is restricted to project owner")
 
     if _is_project_shared_with_user(db, project.id, current_user.id):
         return project
@@ -4950,6 +5690,14 @@ def create_project(
         
     db_project = Project(title=project.title, global_info=project.global_info, owner_id=current_user.id) 
     db.add(db_project)
+    db.flush()
+    _sync_project_managed_shares(
+        db,
+        db_project,
+        current_user,
+        share_users=project.share_users,
+        reviewer_users=project.reviewer_users,
+    )
     db.commit()
     db.refresh(db_project)
     # New project has no images
@@ -4976,15 +5724,7 @@ def list_project_shares(
         .all()
     )
     return [
-        ProjectShareOut(
-            id=share.id,
-            project_id=share.project_id,
-            user_id=share.user_id,
-            username=user.username,
-            email=user.email,
-            full_name=user.full_name,
-            created_at=share.created_at,
-        )
+        _serialize_project_share(share, user)
         for share, user in rows
     ]
 
@@ -5001,6 +5741,9 @@ def create_project_share(
     if not target:
         raise HTTPException(status_code=400, detail="target_user is required")
 
+    role = _normalize_project_share_role(payload.role)
+    permissions = _normalize_project_share_permissions(payload.permissions)
+
     target_user = db.query(User).filter(or_(User.username == target, User.email == target)).first()
     if not target_user:
         raise HTTPException(status_code=404, detail="Target user not found")
@@ -5014,29 +5757,18 @@ def create_project_share(
         ProjectShare.user_id == target_user.id,
     ).first()
     if existing:
-        return ProjectShareOut(
-            id=existing.id,
-            project_id=existing.project_id,
-            user_id=existing.user_id,
-            username=target_user.username,
-            email=target_user.email,
-            full_name=target_user.full_name,
-            created_at=existing.created_at,
-        )
+        existing.role = role
+        existing.permissions = permissions
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return _serialize_project_share(existing, target_user)
 
-    share = ProjectShare(project_id=project_id, user_id=target_user.id)
+    share = ProjectShare(project_id=project_id, user_id=target_user.id, role=role, permissions=permissions)
     db.add(share)
     db.commit()
     db.refresh(share)
-    return ProjectShareOut(
-        id=share.id,
-        project_id=share.project_id,
-        user_id=share.user_id,
-        username=target_user.username,
-        email=target_user.email,
-        full_name=target_user.full_name,
-        created_at=share.created_at,
-    )
+    return _serialize_project_share(share, target_user)
 
 
 @router.delete("/projects/{project_id}/shares/{shared_user_id}", status_code=204)
@@ -5056,6 +5788,388 @@ def delete_project_share(
     db.delete(share)
     db.commit()
     return None
+
+
+@router.get("/projects/{project_id}/review_threads", response_model=List[ProjectAssetReviewThreadOut])
+def list_project_review_threads(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+    threads = (
+        db.query(ProjectAssetReviewThread)
+        .filter(ProjectAssetReviewThread.project_id == project_id)
+        .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
+        .all()
+    )
+    user_ids = {thread.requester_user_id for thread in threads} | {thread.reviewer_user_id for thread in threads}
+    users = {user.id: user for user in db.query(User).filter(User.id.in_(list(user_ids))).all()} if user_ids else {}
+    return [
+        _serialize_review_thread(thread, requester=users.get(thread.requester_user_id), reviewer=users.get(thread.reviewer_user_id), current_user=current_user)
+        for thread in threads
+    ]
+
+
+@router.get("/projects/review_threads/inbox", response_model=List[ProjectAssetReviewThreadOut])
+def list_review_inbox_threads(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    threads = (
+        db.query(ProjectAssetReviewThread)
+        .filter(ProjectAssetReviewThread.reviewer_user_id == current_user.id)
+        .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
+        .all()
+    )
+    user_ids = {thread.requester_user_id for thread in threads} | {thread.reviewer_user_id for thread in threads}
+    users = {user.id: user for user in db.query(User).filter(User.id.in_(list(user_ids))).all()} if user_ids else {}
+    return [
+        _serialize_review_thread(thread, requester=users.get(thread.requester_user_id), reviewer=users.get(thread.reviewer_user_id), current_user=current_user)
+        for thread in threads
+    ]
+
+
+@router.get("/projects/review_threads/outbox", response_model=List[ProjectAssetReviewThreadOut])
+def list_review_outbox_threads(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    threads = (
+        db.query(ProjectAssetReviewThread)
+        .filter(ProjectAssetReviewThread.requester_user_id == current_user.id)
+        .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
+        .all()
+    )
+    user_ids = {thread.requester_user_id for thread in threads} | {thread.reviewer_user_id for thread in threads}
+    users = {user.id: user for user in db.query(User).filter(User.id.in_(list(user_ids))).all()} if user_ids else {}
+    return [
+        _serialize_review_thread(thread, requester=users.get(thread.requester_user_id), reviewer=users.get(thread.reviewer_user_id), current_user=current_user)
+        for thread in threads
+    ]
+
+
+@router.post("/projects/{project_id}/review_threads", response_model=ProjectAssetReviewThreadOut)
+def create_project_review_thread(
+    project_id: int,
+    payload: ProjectAssetReviewThreadCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = _require_project_access(db, project_id, current_user)
+    share = _get_project_share_record(db, project_id, current_user.id)
+    if share and _normalize_project_share_role(getattr(share, "role", None)) == "viewer":
+        raise HTTPException(status_code=403, detail="Viewer cannot initiate asset reviews")
+
+    reviewer = _resolve_review_reviewer(
+        db,
+        project,
+        current_user,
+        payload.reviewer_user_id,
+        payload.reviewer_user,
+    )
+    scope_type = _normalize_asset_review_scope_type(payload.scope_type)
+    entity_required = bool(payload.entity_required)
+    shot_required = bool(payload.shot_required)
+    _ensure_review_scope_has_dimension(entity_required, shot_required)
+    entity_ids, shot_ids = _validate_review_target_ids_for_project(
+        db,
+        project.id,
+        payload.entity_ids or [],
+        payload.shot_ids or [],
+        scope_type=scope_type,
+    )
+    now_iso = now_bj_iso()
+    thread = ProjectAssetReviewThread(
+        project_id=project.id,
+        requester_user_id=current_user.id,
+        reviewer_user_id=reviewer.id,
+        title=(str(payload.title or "").strip() or f"{project.title or 'Project'} 资产审核"),
+        status="open",
+        latest_round_no=1,
+        latest_activity_at=now_iso,
+        requester_last_read_at=now_iso,
+        reviewer_last_read_at=None,
+        updated_at=now_iso,
+    )
+    db.add(thread)
+    db.flush()
+
+    round_row = ProjectAssetReviewRound(
+        thread_id=thread.id,
+        round_no=1,
+        initiated_by_user_id=current_user.id,
+        request_message=(str(payload.request_message or "").strip() or None),
+        scope_type=scope_type,
+        entity_required=entity_required,
+        shot_required=shot_required,
+        entity_decision="pending",
+        shot_decision="pending",
+        overall_status="pending_reviewer",
+        due_at=(str(payload.due_at or "").strip() or None),
+        selected_entity_ids=entity_ids,
+        selected_shot_ids=shot_ids,
+        updated_at=now_iso,
+    )
+    db.add(round_row)
+    db.flush()
+
+    initial_message = ProjectAssetReviewMessage(
+        round_id=round_row.id,
+        sender_user_id=current_user.id,
+        sender_role="requester",
+        message_type="request",
+        message_text=(str(payload.request_message or "").strip() or None),
+        created_at=now_iso,
+    )
+    db.add(initial_message)
+    db.commit()
+    db.refresh(thread)
+    return _serialize_review_thread(thread, requester=current_user, reviewer=reviewer, current_user=current_user)
+
+
+@router.get("/review_threads/{thread_id}", response_model=ProjectAssetReviewThreadOut)
+def get_review_thread(
+    thread_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    thread, _project = _require_review_thread_access(db, thread_id, current_user)
+    users = {
+        user.id: user
+        for user in db.query(User).filter(User.id.in_([thread.requester_user_id, thread.reviewer_user_id])).all()
+    }
+    return _serialize_review_thread(thread, requester=users.get(thread.requester_user_id), reviewer=users.get(thread.reviewer_user_id), current_user=current_user)
+
+
+@router.post("/review_threads/{thread_id}/read", response_model=ProjectAssetReviewThreadOut)
+def mark_review_thread_read(
+    thread_id: int,
+    payload: ProjectAssetReviewThreadReadUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    thread, _project = _require_review_thread_access(db, thread_id, current_user)
+    if payload.read:
+        _mark_review_thread_read_for_user(thread, current_user)
+        thread.updated_at = now_bj_iso()
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+    users = {
+        user.id: user
+        for user in db.query(User).filter(User.id.in_([thread.requester_user_id, thread.reviewer_user_id])).all()
+    }
+    return _serialize_review_thread(thread, requester=users.get(thread.requester_user_id), reviewer=users.get(thread.reviewer_user_id), current_user=current_user)
+
+
+@router.patch("/review_threads/{thread_id}/status", response_model=ProjectAssetReviewThreadOut)
+def update_review_thread_status(
+    thread_id: int,
+    payload: ProjectAssetReviewThreadStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    thread, project = _require_review_thread_access(db, thread_id, current_user)
+    next_status = str(payload.status or "").strip().lower()
+    if next_status not in _ASSET_REVIEW_THREAD_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid review thread status: {next_status}")
+    sender_role = _resolve_thread_sender_role(db, thread, current_user, project)
+    if next_status == "archived" and sender_role != "requester" and current_user.id != project.owner_id:
+        raise HTTPException(status_code=403, detail="Only requester side can archive review threads")
+
+    now_iso = now_bj_iso()
+    thread.status = next_status
+    thread.updated_at = now_iso
+    thread.latest_activity_at = now_iso
+    db.add(thread)
+
+    if next_status == "closed":
+        db.query(ProjectAssetReviewRound).filter(
+            ProjectAssetReviewRound.thread_id == thread.id,
+            ProjectAssetReviewRound.closed_at.is_(None),
+        ).update(
+            {
+                ProjectAssetReviewRound.overall_status: "closed",
+                ProjectAssetReviewRound.closed_at: now_iso,
+                ProjectAssetReviewRound.updated_at: now_iso,
+            },
+            synchronize_session=False,
+        )
+
+    requester = db.query(User).filter(User.id == thread.requester_user_id).first()
+    reviewer = db.query(User).filter(User.id == thread.reviewer_user_id).first()
+    db.commit()
+    db.refresh(thread)
+    return _serialize_review_thread(thread, requester=requester, reviewer=reviewer)
+
+
+@router.get("/review_threads/{thread_id}/rounds", response_model=List[ProjectAssetReviewRoundOut])
+def list_review_thread_rounds(
+    thread_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    thread, _project = _require_review_thread_access(db, thread_id, current_user)
+    rounds = (
+        db.query(ProjectAssetReviewRound)
+        .filter(ProjectAssetReviewRound.thread_id == thread.id)
+        .order_by(ProjectAssetReviewRound.round_no.asc(), ProjectAssetReviewRound.id.asc())
+        .all()
+    )
+    user_ids = {row.initiated_by_user_id for row in rounds}
+    users = {user.id: user for user in db.query(User).filter(User.id.in_(list(user_ids))).all()} if user_ids else {}
+    return [_serialize_review_round(row, initiator=users.get(row.initiated_by_user_id)) for row in rounds]
+
+
+@router.post("/review_threads/{thread_id}/rounds", response_model=ProjectAssetReviewRoundOut)
+def create_review_thread_round(
+    thread_id: int,
+    payload: ProjectAssetReviewRoundCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    thread, project = _require_review_thread_access(db, thread_id, current_user)
+    sender_role = _resolve_thread_sender_role(db, thread, current_user, project)
+    if sender_role != "requester":
+        raise HTTPException(status_code=403, detail="Only requester side can initiate a new review round")
+
+    scope_type = _normalize_asset_review_scope_type(payload.scope_type)
+    entity_required = bool(payload.entity_required)
+    shot_required = bool(payload.shot_required)
+    _ensure_review_scope_has_dimension(entity_required, shot_required)
+    entity_ids, shot_ids = _validate_review_target_ids_for_project(
+        db,
+        project.id,
+        payload.entity_ids or [],
+        payload.shot_ids or [],
+        scope_type=scope_type,
+    )
+    next_round_no = int(thread.latest_round_no or 0) + 1
+    now_iso = now_bj_iso()
+    round_row = ProjectAssetReviewRound(
+        thread_id=thread.id,
+        round_no=next_round_no,
+        initiated_by_user_id=current_user.id,
+        request_message=(str(payload.request_message or "").strip() or None),
+        scope_type=scope_type,
+        entity_required=entity_required,
+        shot_required=shot_required,
+        entity_decision="pending",
+        shot_decision="pending",
+        overall_status="pending_reviewer",
+        due_at=(str(payload.due_at or "").strip() or None),
+        selected_entity_ids=entity_ids,
+        selected_shot_ids=shot_ids,
+        updated_at=now_iso,
+    )
+    db.add(round_row)
+    db.flush()
+    db.add(ProjectAssetReviewMessage(
+        round_id=round_row.id,
+        sender_user_id=current_user.id,
+        sender_role="requester",
+        message_type="request",
+        message_text=(str(payload.request_message or "").strip() or None),
+        created_at=now_iso,
+    ))
+    thread.latest_round_no = next_round_no
+    thread.latest_activity_at = now_iso
+    _mark_review_thread_read_for_user(thread, current_user, read_at=now_iso)
+    thread.updated_at = now_iso
+    thread.status = "open"
+    db.add(thread)
+    db.commit()
+    db.refresh(round_row)
+    return _serialize_review_round(round_row, initiator=current_user)
+
+
+@router.get("/review_rounds/{round_id}/messages", response_model=List[ProjectAssetReviewMessageOut])
+def list_review_round_messages(
+    round_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    round_row, _thread, _project = _require_review_round_access(db, round_id, current_user)
+    messages = (
+        db.query(ProjectAssetReviewMessage)
+        .filter(ProjectAssetReviewMessage.round_id == round_row.id)
+        .order_by(ProjectAssetReviewMessage.id.asc())
+        .all()
+    )
+    user_ids = {message.sender_user_id for message in messages}
+    users = {user.id: user for user in db.query(User).filter(User.id.in_(list(user_ids))).all()} if user_ids else {}
+    return [_serialize_review_message(message, sender=users.get(message.sender_user_id)) for message in messages]
+
+
+@router.post("/review_rounds/{round_id}/messages", response_model=ProjectAssetReviewMessageOut)
+def create_review_round_message(
+    round_id: int,
+    payload: ProjectAssetReviewMessageCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    round_row, thread, project = _require_review_round_access(db, round_id, current_user)
+    sender_role = _resolve_thread_sender_role(db, thread, current_user, project)
+    message_type = _normalize_asset_review_message_type(payload.message_type)
+    message_text = (str(payload.message_text or "").strip() or None)
+    entity_feedback = (str(payload.entity_feedback or "").strip() or None)
+    shot_feedback = (str(payload.shot_feedback or "").strip() or None)
+    entity_decision = _normalize_asset_review_decision(payload.entity_decision)
+    shot_decision = _normalize_asset_review_decision(payload.shot_decision)
+
+    if sender_role != "reviewer" and (entity_decision or shot_decision):
+        raise HTTPException(status_code=403, detail="Only reviewer can submit review decisions")
+    if sender_role == "reviewer" and message_type == "message" and (entity_decision or shot_decision):
+        message_type = "reply"
+    if sender_role == "requester" and message_type == "message":
+        message_type = "followup"
+    if not any([message_text, entity_feedback, shot_feedback, entity_decision, shot_decision]):
+        raise HTTPException(status_code=400, detail="Message body or review feedback is required")
+
+    now_iso = now_bj_iso()
+    if sender_role == "reviewer":
+        if round_row.entity_required and entity_decision:
+            round_row.entity_decision = entity_decision
+        if round_row.shot_required and shot_decision:
+            round_row.shot_decision = shot_decision
+        if entity_feedback is not None:
+            round_row.entity_feedback = entity_feedback
+        if shot_feedback is not None:
+            round_row.shot_feedback = shot_feedback
+        round_row.overall_status = "replied"
+        round_row.closed_at = now_iso if (
+            (not round_row.entity_required or round_row.entity_decision != "pending")
+            and (not round_row.shot_required or round_row.shot_decision != "pending")
+        ) else None
+        _mark_review_thread_read_for_user(thread, current_user, read_at=now_iso)
+    else:
+        round_row.overall_status = "in_discussion" if round_row.overall_status != "pending_reviewer" else round_row.overall_status
+        _mark_review_thread_read_for_user(thread, current_user, read_at=now_iso)
+
+    round_row.updated_at = now_iso
+    thread.latest_activity_at = now_iso
+    thread.updated_at = now_iso
+    thread.status = "open"
+
+    message = ProjectAssetReviewMessage(
+        round_id=round_row.id,
+        sender_user_id=current_user.id,
+        sender_role=sender_role,
+        message_type=message_type,
+        message_text=message_text,
+        entity_decision=entity_decision,
+        shot_decision=shot_decision,
+        entity_feedback=entity_feedback,
+        shot_feedback=shot_feedback,
+        created_at=now_iso,
+    )
+    db.add(round_row)
+    db.add(thread)
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+    return _serialize_review_message(message, sender=current_user)
 
 
 @router.post("/projects/{project_id}/story_generator/global", response_model=ProjectOut)
@@ -5897,6 +7011,14 @@ def update_project(
         current_info = dict(project.global_info) if project.global_info else {}
         current_info['notes'] = project_in.description
         project.global_info = current_info
+
+    _sync_project_managed_shares(
+        db,
+        project,
+        current_user,
+        share_users=project_in.share_users,
+        reviewer_users=project_in.reviewer_users,
+    )
 
     # Normalize and persist generation defaults for consistent downstream billing inputs.
     project.global_info = _ensure_project_generation_defaults(project.global_info)
@@ -15083,6 +16205,84 @@ def _ensure_project_generation_seed(db: Session, project_id: Optional[int], curr
     )
     return int(new_seed)
 
+def _is_generic_generation_error_text(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return True
+    return text in {
+        "generation failed",
+        "image generation failed",
+        "video generation failed",
+        "voice generation failed",
+        "kie generation failed",
+        "vidu generation failed",
+    }
+
+def _extract_generation_failure_reason(value: Any, depth: int = 0) -> str:
+    if depth > 4 or value is None:
+        return ""
+    if isinstance(value, dict):
+        for key in ("failure_reason", "failedReason", "reason"):
+            candidate = str(value.get(key) or "").strip()
+            if candidate:
+                return candidate
+        for key in ("details", "data", "result", "record", "raw"):
+            candidate = _extract_generation_failure_reason(value.get(key), depth + 1)
+            if candidate:
+                return candidate
+    elif isinstance(value, list):
+        for item in value[:5]:
+            candidate = _extract_generation_failure_reason(item, depth + 1)
+            if candidate:
+                return candidate
+    return ""
+
+def _extract_generation_failure_message(value: Any, depth: int = 0) -> str:
+    if depth > 4 or value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("error", "message", "msg", "failMsg", "detail"):
+            candidate = _extract_generation_failure_message(value.get(key), depth + 1)
+            if candidate:
+                return candidate
+        for key in ("details", "data", "result", "record", "raw"):
+            candidate = _extract_generation_failure_message(value.get(key), depth + 1)
+            if candidate:
+                return candidate
+    elif isinstance(value, list):
+        for item in value[:5]:
+            candidate = _extract_generation_failure_message(item, depth + 1)
+            if candidate:
+                return candidate
+    return ""
+
+def _format_generation_failure_detail(result: Any, fallback_error: str = "Generation failed") -> str:
+    if isinstance(result, dict):
+        base_error = str(result.get("error") or "").strip()
+        details = result.get("details")
+        detail_message = _extract_generation_failure_message(details)
+        failure_reason = (
+            str(result.get("failure_reason") or result.get("failedReason") or "").strip()
+            or _extract_generation_failure_reason(details)
+        )
+
+        if not base_error:
+            base_error = detail_message or fallback_error
+        elif detail_message and detail_message != base_error and _is_generic_generation_error_text(base_error):
+            base_error = detail_message
+        elif detail_message and detail_message != base_error and detail_message.lower() not in base_error.lower():
+            base_error = f"{base_error}: {detail_message}"
+
+        if failure_reason and failure_reason.lower() not in base_error.lower():
+            base_error = f"{base_error} [failure_reason={failure_reason}]"
+
+        return base_error or fallback_error
+
+    text = str(result or "").strip()
+    return text or fallback_error
+
 
 def _build_runtime_llm_config(provider: Optional[str], model: Optional[str], media_type: str = "media") -> Optional[Dict[str, str]]:
     provider_text = str(provider or "").strip()
@@ -16400,7 +17600,7 @@ def _resolve_media_runtime_target(
     }
 
 
-async def _run_generate_image(req: GenerationRequest, current_user: User, db: Session):
+async def _run_generate_image(req: GenerationRequest, current_user: User, db: Session, job_progress_callback: Any = None):
     reservation_tx = None
     runtime_target = _resolve_media_runtime_target(
         provider=req.provider,
@@ -16682,6 +17882,9 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         elif req.uploadCn is not None:
             image_provider_options["uploadCn"] = bool(req.uploadCn)
 
+        if callable(job_progress_callback):
+            image_provider_options["_grsai_task_id_callback"] = job_progress_callback
+
         if req.enable_fallback is not None:
             image_provider_options["enableFallback"] = bool(req.enable_fallback)
         elif req.enableFallback is not None:
@@ -16766,10 +17969,7 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             },
         )
         if "error" in result:
-             # Include details if available
-             detail = result["error"]
-             if "details" in result:
-                 detail = f"{detail}: {result['details']}"
+             detail = _format_generation_failure_detail(result, "Image generation failed")
              
              # Log full error for image gen
              logger.error(f"[GenerateImage] Failed: {detail}")
@@ -17037,6 +18237,19 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
     callback_url = _resolve_callback_url_from_payload(req_payload)
     req_provider = str(req_payload.get("provider") or "").strip() or None
     req_model = str(req_payload.get("model") or "").strip() or None
+
+    def _on_grsai_task_id(task_id: str) -> None:
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            return
+        _set_image_job(job_id, provider_task_id=normalized_task_id)
+        logger.info(
+            "[ImageJob] provider task linked | job_id=%s provider=%s provider_task_id=%s",
+            job_id,
+            "grsai",
+            normalized_task_id,
+        )
+
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -17058,7 +18271,7 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             req_model,
         )
         result = await asyncio.wait_for(
-            _run_generate_image(req_obj, user, db),
+            _run_generate_image(req_obj, user, db, job_progress_callback=_on_grsai_task_id),
             timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
         )
         _set_image_job(
@@ -17069,6 +18282,18 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             error=None,
         )
     except asyncio.TimeoutError:
+        with IMAGE_JOB_LOCK:
+            current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
+        current_status = _normalize_generation_status(current_job.get("status"))
+        current_result_url = _extract_job_result_url(current_job.get("result"))
+        if current_status == "succeeded" and current_result_url:
+            logger.info(
+                "[ImageJob] timeout ignored after callback finalization | job_id=%s provider_task_id=%s result_url=%s",
+                job_id,
+                _extract_job_provider_task_id(current_job) or None,
+                current_result_url,
+            )
+            return
         try:
             billing_service.log_failed_transaction(
                 db,
@@ -17092,6 +18317,18 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             error=f"image job timed out after {IMAGE_JOB_MAX_RUNNING_SECONDS}s",
         )
     except asyncio.CancelledError:
+        with IMAGE_JOB_LOCK:
+            current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
+        current_status = _normalize_generation_status(current_job.get("status"))
+        current_result_url = _extract_job_result_url(current_job.get("result"))
+        if current_status == "succeeded" and current_result_url:
+            logger.info(
+                "[ImageJob] cancellation ignored after callback finalization | job_id=%s provider_task_id=%s result_url=%s",
+                job_id,
+                _extract_job_provider_task_id(current_job) or None,
+                current_result_url,
+            )
+            return
         try:
             billing_service.log_failed_transaction(
                 db,
@@ -17116,6 +18353,18 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
         )
         raise
     except HTTPException as e:
+        with IMAGE_JOB_LOCK:
+            current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
+        current_status = _normalize_generation_status(current_job.get("status"))
+        current_result_url = _extract_job_result_url(current_job.get("result"))
+        if current_status == "succeeded" and current_result_url:
+            logger.info(
+                "[ImageJob] http error ignored after callback finalization | job_id=%s detail=%s provider_task_id=%s",
+                job_id,
+                str(e.detail),
+                _extract_job_provider_task_id(current_job) or None,
+            )
+            return
         _set_image_job(
             job_id,
             status="failed",
@@ -17123,6 +18372,18 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             error=str(e.detail),
         )
     except Exception as e:
+        with IMAGE_JOB_LOCK:
+            current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
+        current_status = _normalize_generation_status(current_job.get("status"))
+        current_result_url = _extract_job_result_url(current_job.get("result"))
+        if current_status == "succeeded" and current_result_url:
+            logger.info(
+                "[ImageJob] exception ignored after callback finalization | job_id=%s error=%s provider_task_id=%s",
+                job_id,
+                str(e),
+                _extract_job_provider_task_id(current_job) or None,
+            )
+            return
         _set_image_job(
             job_id,
             status="failed",
@@ -17330,6 +18591,8 @@ def get_generate_image_job_status(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    job = _maybe_finalize_image_job_from_grsai_callback(job_id, job)
 
     image_status = str(job.get("status") or "").strip().lower()
     if image_status in {"queued", "running"}:
@@ -17938,9 +19201,7 @@ async def generate_voice_endpoint(
             result["metadata"] = stable_meta
 
         if "error" in result:
-            detail = result["error"]
-            if "details" in result:
-                detail = f"{detail}: {result['details']}"
+            detail = _format_generation_failure_detail(result, "Voice generation failed")
             if reservation_tx:
                 try:
                     billing_service.cancel_reservation(db, reservation_tx.id, detail)
@@ -18734,9 +19995,7 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             )
         )
         if "error" in result:
-             detail = result["error"]
-             if "details" in result:
-                 detail = f"{detail}: {result['details']}"
+             detail = _format_generation_failure_detail(result, "Video generation failed")
              
              # Log the full error detail for debugging
              logger.error(f"[GenerateVideo] Failed: {detail}") 

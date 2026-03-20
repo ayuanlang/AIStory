@@ -19,7 +19,7 @@ import ipaddress
 import mimetypes
 from PIL import Image
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Callable
 
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
@@ -3336,6 +3336,9 @@ class MediaGenerationService:
             callback_payload_value = callback_url if callback_url and callback_url != "-1" else "-1"
             payload["webHook"] = callback_payload_value
             payload["webhook"] = callback_payload_value
+            task_id_callback = tool_conf.get("_grsai_task_id_callback")
+            if not callable(task_id_callback):
+                task_id_callback = None
             logger.info(
                 "[GrsaiTrace][%s] image callback payload | callback_enabled=%s webHook=%s webhook=%s",
                 trace_id,
@@ -3412,7 +3415,15 @@ class MediaGenerationService:
                 bool(callback_url and callback_url != "-1"),
                 sorted(list(payload.keys())),
             )
-            return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, extra_metadata=base_metadata, trace_id=trace_id)
+            return await self._submit_and_poll_grsai(
+                endpoint,
+                payload,
+                api_key,
+                result_url,
+                extra_metadata=base_metadata,
+                trace_id=trace_id,
+                task_id_callback=task_id_callback,
+            )
 
         # Video
         elif gen_type == "video":
@@ -4830,7 +4841,7 @@ class MediaGenerationService:
         except Exception as e:
             return {"error": str(e), "submit_failed": True}
 
-    async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None):
+    async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None, task_id_callback: Optional[Callable[[str], Any]] = None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         trace_id = trace_id or f"grsai-{uuid.uuid4().hex[:10]}"
         payload_digest = hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
@@ -4952,6 +4963,19 @@ class MediaGenerationService:
                 logger.error("[GrsaiTrace][%s] submit missing_task_id | response=%s", trace_id, str(data)[:1000])
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
 
+            if callable(task_id_callback):
+                try:
+                    callback_result = task_id_callback(str(task_id))
+                    if asyncio.iscoroutine(callback_result):
+                        await callback_result
+                except Exception as callback_err:
+                    logger.warning(
+                        "[GrsaiTrace][%s] task_id_callback_failed | task_id=%s error=%s",
+                        trace_id,
+                        task_id,
+                        callback_err,
+                    )
+
             for i in range(100):
                 await asyncio.sleep(3)
 
@@ -5005,7 +5029,7 @@ class MediaGenerationService:
                     status_l = str(status or "").lower()
                     if status_l in {"succeeded", "success", "completed", "done"} or (not status_l and media_url):
                         if media_url:
-                            meta = {"raw": p_data}
+                            meta = {"raw": p_data, "submit_raw": data, "task_id": task_id, "taskId": task_id}
                             if extra_metadata:
                                 meta.update(extra_metadata)
                             return {"url": media_url, "metadata": meta}
