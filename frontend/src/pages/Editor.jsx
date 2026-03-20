@@ -18317,7 +18317,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
 const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null }) => {
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
-    const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const resolvedPromptSubmitLang = useMemo(() => {
         return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
@@ -18382,6 +18382,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [isImportOpen, setIsImportOpen] = useState(false);
     // const [editingShot, setEditingShot] = useState(null); // Lifted state
     const [entities, setEntities] = useState([]);
+    const [entityListLoading, setEntityListLoading] = useState(false);
+    const entitiesRef = useRef([]);
+    const entityLoadPromiseRef = useRef(null);
     
     // NEW: Abort Controller Ref for retries
     const abortGenerationRef = useRef(false);
@@ -18394,10 +18397,50 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     };
 
     useEffect(() => {
-        if (projectId) {
-            fetchEntities(projectId).then(setEntities).catch(console.error);
+        entitiesRef.current = Array.isArray(entities) ? entities : [];
+    }, [entities]);
+
+    const loadEntities = useCallback(async () => {
+        const resolvedProjectId = projectId || activeEpisode?.project_id;
+        if (!resolvedProjectId) return entitiesRef.current;
+        if (entityLoadPromiseRef.current) return entityLoadPromiseRef.current;
+
+        const request = (async () => {
+            setEntityListLoading(true);
+            try {
+                const data = await fetchEntities(resolvedProjectId);
+                const nextEntities = Array.isArray(data) ? data : [];
+                setEntities(nextEntities);
+                return nextEntities;
+            } catch (e) {
+                console.error(e);
+                return [];
+            } finally {
+                setEntityListLoading(false);
+                entityLoadPromiseRef.current = null;
+            }
+        })();
+
+        entityLoadPromiseRef.current = request;
+        return request;
+    }, [activeEpisode?.project_id, projectId]);
+
+    const awaitShotGenerationEntities = useCallback(async () => {
+        const resolvedProjectId = projectId || activeEpisode?.project_id;
+        if (!resolvedProjectId) return Array.isArray(entities) ? entities : [];
+        if (Array.isArray(entities) && entities.length > 0 && !entityListLoading) {
+            return entities;
         }
-    }, [projectId]);
+        const loaded = await loadEntities();
+        if (Array.isArray(loaded) && loaded.length > 0) {
+            return loaded;
+        }
+        return Array.isArray(entities) ? entities : [];
+    }, [activeEpisode?.project_id, entities, entityListLoading, loadEntities, projectId]);
+
+    useEffect(() => {
+        loadEntities();
+    }, [loadEntities]);
 
 
     // Note: Provider selection functionality removed (defaults to Backend Active Settings)
@@ -18672,10 +18715,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!shotId) return state;
         const now = Date.now();
         const prev = state[shotId] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 };
+        const previousValue = Boolean(prev[key]);
+        const previousAt = Number(prev[`${key}At`] || 0);
+        const nextAt = value
+            ? (previousValue ? previousAt : now)
+            : 0;
+
+        if (previousValue === Boolean(value) && previousAt === nextAt) {
+            return state;
+        }
+
         const next = {
             ...prev,
             [key]: value,
-            [`${key}At`]: value ? now : 0,
+            [`${key}At`]: nextAt,
         };
         if (!next.start && !next.end && !next.video) {
             const { [shotId]: _, ...rest } = state;
@@ -19840,20 +19893,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
         setPickerConfig({ isOpen: false, callback: null });
     };
-
-    useEffect(() => {
-        if (activeEpisode?.project_id) {
-            // console.log("Fetching Entities for Project:", activeEpisode.project_id);
-            fetchEntities(activeEpisode.project_id)
-                .then(data => {
-                    // console.log("Entities Loaded:", data.length);
-                    setEntities(data);
-                })
-                .catch(console.error);
-        } else {
-            console.warn("ShotsView: No activeEpisode or project_id to fetch entities.");
-        }
-    }, [activeEpisode]);
 
     const refreshShots = useCallback(async () => {
         if (!selectedSceneId || !activeEpisode?.id) return;
@@ -21703,6 +21742,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     on_job_created: (jobId) => {
                         createdImageJobId = String(jobId || '').trim();
                         setPendingImageJob(targetShotId, 'start', jobId);
+                        setShotGeneratingState(targetShotId, 'start', true);
                     },
                 });
                 if (res && res.url) {
@@ -21795,6 +21835,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     on_job_created: (jobId) => {
                         createdImageJobId = String(jobId || '').trim();
                         setPendingImageJob(targetShotId, 'end', jobId);
+                        setShotGeneratingState(targetShotId, 'end', true);
                     },
                 });
                 if (res && res.url) {
@@ -22308,6 +22349,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     on_job_created: (jobId) => {
                         createdVideoJobId = String(jobId || '').trim();
                         setPendingVideoJob(targetShotId, jobId);
+                        setShotGeneratingState(targetShotId, 'video', true);
                     },
                 }, apiKeyframes);
                 onLog?.(t('视频请求已发起', 'Video request dispatched'), 'info');
