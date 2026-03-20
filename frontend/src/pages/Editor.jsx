@@ -1282,6 +1282,21 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         setProjectTab((prev) => (prev === 'promo_generator' ? 'promo_generator' : 'story_generator'));
     }, [mode]);
 
+    const loadProjectReviewPanel = useCallback(async () => {
+        if (!id) return;
+        setIsReviewPanelLoading(true);
+        try {
+            const threads = await fetchProjectReviewThreads(id);
+            const normalizedThreads = Array.isArray(threads) ? threads : [];
+            setProjectReviewThreads(normalizedThreads);
+        } catch (reviewErr) {
+            console.warn('Failed to load project review panel', reviewErr);
+            setProjectReviewThreads([]);
+        } finally {
+            setIsReviewPanelLoading(false);
+        }
+    }, [id]);
+
     const pollEpisodeScriptsStatus = useCallback(async () => {
         if (!id) return null;
         try {
@@ -1327,6 +1342,162 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             cancelled = true;
         };
     }, [id, pollEpisodeScriptsStatus, isGeneratingEpisodeScripts]);
+
+    useEffect(() => {
+        if (!id || mode !== 'overview') return;
+        loadProjectReviewPanel();
+    }, [id, mode, loadProjectReviewPanel]);
+
+    useEffect(() => {
+        if (!id || mode !== 'overview') return undefined;
+
+        const refreshIfVisible = () => {
+            if (document.visibilityState !== 'visible') return;
+            loadProjectReviewPanel();
+        };
+
+        const intervalId = window.setInterval(refreshIfVisible, 30000);
+        document.addEventListener('visibilitychange', refreshIfVisible);
+        window.addEventListener('focus', refreshIfVisible);
+
+        return () => {
+            window.clearInterval(intervalId);
+            document.removeEventListener('visibilitychange', refreshIfVisible);
+            window.removeEventListener('focus', refreshIfVisible);
+        };
+    }, [id, mode, loadProjectReviewPanel]);
+
+    useEffect(() => {
+        fetchMe()
+            .then((user) => setCurrentUserId(Number(user?.id || 0) || null))
+            .catch(() => setCurrentUserId(null));
+    }, []);
+
+    const quickReviewUnreadCount = useMemo(
+        () => projectReviewThreads.filter((thread) => !!thread?.has_unread).length,
+        [projectReviewThreads]
+    );
+
+    const handleCreateQuickProjectReview = async () => {
+        if (!id) return;
+        const reviewerUser = String(quickReviewDraft.reviewer_user || '').trim();
+        if (!reviewerUser) {
+            alert(t('请先输入审核人用户名或邮箱。', 'Please enter reviewer username or email first.'));
+            return;
+        }
+        if (!quickReviewDraft.entity_required && !quickReviewDraft.shot_required) {
+            alert(t('至少需要选择实体审核或镜头审核。', 'Please enable entity review or shot review.'));
+            return;
+        }
+        setIsReviewPanelSubmitting(true);
+        try {
+            await createProjectReviewThread(id, {
+                reviewer_user: reviewerUser,
+                title: quickReviewDraft.title,
+                request_message: quickReviewDraft.request_message,
+                scope_type: 'all_current',
+                entity_required: !!quickReviewDraft.entity_required,
+                shot_required: !!quickReviewDraft.shot_required,
+            });
+            setQuickReviewDraft({
+                reviewer_user: '',
+                title: '',
+                request_message: '',
+                entity_required: true,
+                shot_required: true,
+            });
+            await loadProjectReviewPanel();
+            alert(t('审核请求已发起。', 'Review request created.'));
+        } catch (err) {
+            console.error('Failed to create quick project review', err);
+            alert(err?.response?.data?.detail || t('发起审核失败。', 'Failed to create review request.'));
+        } finally {
+            setIsReviewPanelSubmitting(false);
+        }
+    };
+
+    const loadQuickReviewThreadDetail = useCallback(async (threadId, preferredRoundId = null) => {
+        if (!threadId) {
+            setSelectedQuickReviewThreadId(null);
+            setSelectedQuickReviewRounds([]);
+            setSelectedQuickReviewRoundId(null);
+            setSelectedQuickReviewMessages([]);
+            return;
+        }
+        setIsQuickReviewDetailLoading(true);
+        try {
+            await markReviewThreadRead(threadId);
+            const rounds = await fetchReviewThreadRounds(threadId);
+            const normalizedRounds = Array.isArray(rounds) ? rounds : [];
+            const activeRoundId = preferredRoundId || normalizedRounds[normalizedRounds.length - 1]?.id || null;
+            setSelectedQuickReviewThreadId(threadId);
+            setSelectedQuickReviewRounds(normalizedRounds);
+            setSelectedQuickReviewRoundId(activeRoundId);
+            if (activeRoundId) {
+                const messages = await fetchReviewRoundMessages(activeRoundId);
+                setSelectedQuickReviewMessages(Array.isArray(messages) ? messages : []);
+            } else {
+                setSelectedQuickReviewMessages([]);
+            }
+            setQuickReviewReplyDraft({
+                message_text: '',
+                entity_decision: 'pending',
+                shot_decision: 'pending',
+                entity_feedback: '',
+                shot_feedback: '',
+            });
+            await loadProjectReviewPanel();
+        } catch (err) {
+            console.error('Failed to load quick review thread detail', err);
+            alert(err?.response?.data?.detail || t('加载审核详情失败。', 'Failed to load review details.'));
+        } finally {
+            setIsQuickReviewDetailLoading(false);
+        }
+    }, [loadProjectReviewPanel, t]);
+
+    const handleSelectQuickReviewRound = async (roundId) => {
+        if (!roundId) return;
+        setIsQuickReviewDetailLoading(true);
+        try {
+            const messages = await fetchReviewRoundMessages(roundId);
+            setSelectedQuickReviewRoundId(roundId);
+            setSelectedQuickReviewMessages(Array.isArray(messages) ? messages : []);
+        } catch (err) {
+            console.error('Failed to load quick review round messages', err);
+            alert(err?.response?.data?.detail || t('加载轮次消息失败。', 'Failed to load round messages.'));
+        } finally {
+            setIsQuickReviewDetailLoading(false);
+        }
+    };
+
+    const handleCreateQuickReviewReply = async () => {
+        if (!selectedQuickReviewRoundId || !selectedQuickReviewThreadId) return;
+        const selectedThread = projectReviewThreads.find((item) => Number(item.id) === Number(selectedQuickReviewThreadId));
+        const selectedRound = selectedQuickReviewRounds.find((item) => Number(item.id) === Number(selectedQuickReviewRoundId));
+        if (!selectedThread || !selectedRound) return;
+        const amReviewer = Number(currentUserId || 0) === Number(selectedThread.reviewer_user_id || 0);
+        const payload = {
+            message_text: quickReviewReplyDraft.message_text,
+            message_type: 'message',
+        };
+        if (amReviewer) {
+            payload.entity_decision = quickReviewReplyDraft.entity_decision;
+            payload.shot_decision = quickReviewReplyDraft.shot_decision;
+            payload.entity_feedback = quickReviewReplyDraft.entity_feedback;
+            payload.shot_feedback = quickReviewReplyDraft.shot_feedback;
+        }
+        setIsReviewPanelSubmitting(true);
+        try {
+            await createReviewRoundMessage(selectedQuickReviewRoundId, payload);
+            await loadQuickReviewThreadDetail(selectedQuickReviewThreadId, selectedQuickReviewRoundId);
+            alert(t('审核回复已发送。', 'Review reply sent.'));
+        } catch (err) {
+            console.error('Failed to create quick review reply', err);
+            alert(err?.response?.data?.detail || t('发送审核回复失败。', 'Failed to send review reply.'));
+        } finally {
+            setIsReviewPanelSubmitting(false);
+        }
+    };
 
     // Project-level Character Canon (keep original tag-selection UX)
     const [canonName, setCanonName] = useState('');
@@ -1646,6 +1817,8 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                      merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
                      merged.video_sound = resolveVideoSoundFromInfo(merged);
                      merged.generation_seed = resolveProjectSeedFromInfo(merged);
+                     merged.project_share_users = normalizeUserListValues(merged.project_share_users);
+                     merged.project_reviewer_users = normalizeUserListValues(merged.project_reviewer_users);
                      if (merged.tech_params?.visual_standard) {
                          merged.tech_params.visual_standard.quality = normalizeProjectEpisodeQuality(merged.tech_params.visual_standard.quality);
                      }
@@ -1942,6 +2115,8 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
 
             const global_info = {
                 ...info,
+                project_share_users: normalizeUserListValues(info.project_share_users),
+                project_reviewer_users: normalizeUserListValues(info.project_reviewer_users),
                 video_sound: resolvedVideoSound,
                 project_generation_defaults: {
                     ...(info.project_generation_defaults || {}),
@@ -1975,7 +2150,11 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             if (resolvedSeed !== null) {
                 global_info.generation_seed = resolvedSeed;
             }
-            await updateProject(id, { global_info });
+            await updateProject(id, {
+                global_info,
+                share_users: global_info.project_share_users,
+                reviewer_users: global_info.project_reviewer_users,
+            });
             alert("Project info saved!");
             if (onProjectUpdate) onProjectUpdate();
         } catch (e) {
@@ -2521,6 +2700,8 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                 ? normalizeProjectEpisodeTone(value)
                                 : key === 'lighting'
                                     ? normalizeProjectEpisodeLighting(value)
+                        : key === 'project_share_users' || key === 'project_reviewer_users'
+                            ? normalizeUserListValues(value)
                         : value,
         }));
     };
@@ -2733,6 +2914,33 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                             placeholder={t('其他需要补充的重要信息...', 'Any other important information...')}
                         />
                     </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('分享人（可选，可多个）', 'Share Users (Optional, Multiple)')}</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-24 resize-none"
+                                value={formatUserListForTextarea(info.project_share_users)}
+                                onChange={(e) => updateField('project_share_users', e.target.value)}
+                                placeholder={t('输入用户名或邮箱，支持逗号、分号或换行分隔', 'Enter usernames or emails, separated by commas, semicolons, or new lines')}
+                            />
+                            <div className="mt-2 text-xs text-muted-foreground">
+                                {formatManagedUserHint(info.project_share_users, t)}
+                            </div>
+                        </div>
+                        <div>
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('审核人（可选，可多个）', 'Reviewer Users (Optional, Multiple)')}</label>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-24 resize-none"
+                                value={formatUserListForTextarea(info.project_reviewer_users)}
+                                onChange={(e) => updateField('project_reviewer_users', e.target.value)}
+                                placeholder={t('输入用户名或邮箱，保存时校验是否存在', 'Enter usernames or emails. Existence will be validated on save')}
+                            />
+                            <div className="mt-2 text-xs text-muted-foreground">
+                                {formatManagedUserHint(info.project_reviewer_users, t)}
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 )}
 
@@ -2818,6 +3026,256 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
 
+                </div>
+                )}
+
+                {mode === 'overview' && (
+                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6 xl:col-span-2">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between border-b border-white/10 pb-3">
+                        <div>
+                            <h3 className="text-lg font-semibold text-primary">{t('项目审核协作', 'Project Review Collaboration')}</h3>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                                {t('可直接从项目总览发起实体/镜头审核，不必回到项目列表。', 'Create entity and shot review requests directly from project overview without returning to the project list.')}
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-muted-foreground">
+                                {t(`线程 ${projectReviewThreads.length}`, `Threads ${projectReviewThreads.length}`)}
+                            </span>
+                            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${quickReviewUnreadCount > 0 ? 'bg-amber-500 text-black' : 'border border-white/10 text-muted-foreground'}`}>
+                                {t(`未读 ${quickReviewUnreadCount}`, `Unread ${quickReviewUnreadCount}`)}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+                        <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
+                            <div className="text-sm font-semibold">{t('快速发起审核', 'Quick Review Request')}</div>
+                            <>
+                                <input
+                                    value={quickReviewDraft.reviewer_user}
+                                    onChange={(e) => setQuickReviewDraft((prev) => ({ ...prev, reviewer_user: e.target.value }))}
+                                    placeholder={t('输入审核人用户名或邮箱', 'Enter reviewer username or email')}
+                                    className="w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                                />
+                            </>
+                            <input
+                                value={quickReviewDraft.title}
+                                onChange={(e) => setQuickReviewDraft((prev) => ({ ...prev, title: e.target.value }))}
+                                placeholder={t('审核标题，可选', 'Review title, optional')}
+                                className="w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                            />
+                            <textarea
+                                value={quickReviewDraft.request_message}
+                                onChange={(e) => setQuickReviewDraft((prev) => ({ ...prev, request_message: e.target.value }))}
+                                placeholder={t('写明本次审核目标、注意点与截止要求', 'Describe goals, focus points, and deadline expectations for this review')}
+                                className="w-full h-28 resize-none rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                            />
+                            <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                                <label className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!quickReviewDraft.entity_required}
+                                        onChange={(e) => setQuickReviewDraft((prev) => ({ ...prev, entity_required: e.target.checked }))}
+                                    />
+                                    {t('实体审核', 'Entity Review')}
+                                </label>
+                                <label className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!quickReviewDraft.shot_required}
+                                        onChange={(e) => setQuickReviewDraft((prev) => ({ ...prev, shot_required: e.target.checked }))}
+                                    />
+                                    {t('镜头审核', 'Shot Review')}
+                                </label>
+                            </div>
+                            <button
+                                onClick={handleCreateQuickProjectReview}
+                                disabled={isReviewPanelSubmitting || isReviewPanelLoading}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 ${(isReviewPanelSubmitting || isReviewPanelLoading) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                            >
+                                {isReviewPanelSubmitting ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('发起中...', 'Creating...')}</> : <><Users className="w-4 h-4" /> {t('发起审核', 'Create Review')}</>}
+                            </button>
+                            <div className="text-xs text-muted-foreground">
+                                {t('可直接输入任意已存在用户的用户名或邮箱；若项目作者指定了新审核人，系统会自动授予 reviewer 访问。', 'You can directly enter any existing username or email; when the project owner assigns a new reviewer, reviewer access will be granted automatically.')}
+                            </div>
+                        </div>
+
+                        <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="text-sm font-semibold">{t('最近审核线程', 'Recent Review Threads')}</div>
+                                <button
+                                    onClick={loadProjectReviewPanel}
+                                    disabled={isReviewPanelLoading}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 text-white hover:bg-white/20 disabled:opacity-50"
+                                >
+                                    {isReviewPanelLoading ? t('刷新中...', 'Refreshing...') : t('刷新', 'Refresh')}
+                                </button>
+                            </div>
+                            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.85fr_1.15fr]">
+                                <div className="space-y-2 max-h-96 overflow-auto pr-1">
+                                    {isReviewPanelLoading && projectReviewThreads.length === 0 ? (
+                                        <div className="text-sm text-muted-foreground">{t('加载中...', 'Loading...')}</div>
+                                    ) : projectReviewThreads.length === 0 ? (
+                                        <div className="text-sm text-muted-foreground">{t('暂无审核线程', 'No review threads yet')}</div>
+                                    ) : projectReviewThreads.slice(0, 8).map((thread) => (
+                                        <button
+                                            key={`editor-review-thread-${thread.id}`}
+                                            onClick={() => loadQuickReviewThreadDetail(thread.id)}
+                                            className={`w-full rounded-lg border p-3 text-left transition ${Number(selectedQuickReviewThreadId) === Number(thread.id) ? 'border-primary/40 bg-primary/10' : 'border-white/10 bg-black/30 hover:bg-white/5'}`}
+                                        >
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="truncate text-sm font-medium text-white">{thread.title || `${t('审核线程', 'Review Thread')} #${thread.id}`}</div>
+                                                    <div className="mt-1 text-xs text-muted-foreground">{thread.requester_username || '-'} → {thread.reviewer_username || '-'}</div>
+                                                </div>
+                                                <div className="flex flex-col items-end gap-1">
+                                                    {thread.has_unread && <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-black">{t('未读', 'Unread')}</span>}
+                                                    <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-muted-foreground">{thread.status || 'open'}</span>
+                                                </div>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                    {!selectedQuickReviewThreadId ? (
+                                        <div className="flex min-h-56 items-center justify-center text-sm text-muted-foreground">
+                                            {t('选择一个审核线程查看详情并直接回复。', 'Select a review thread to inspect details and reply directly.')}
+                                        </div>
+                                    ) : (
+                                        (() => {
+                                            const selectedThread = projectReviewThreads.find((item) => Number(item.id) === Number(selectedQuickReviewThreadId));
+                                            const selectedRound = selectedQuickReviewRounds.find((item) => Number(item.id) === Number(selectedQuickReviewRoundId)) || selectedQuickReviewRounds[selectedQuickReviewRounds.length - 1] || null;
+                                            const amReviewer = Number(currentUserId || 0) === Number(selectedThread?.reviewer_user_id || 0);
+                                            return (
+                                                <div className="space-y-4">
+                                                    <div className="border-b border-white/10 pb-3">
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div className="text-sm font-semibold text-white">{selectedThread?.title || `${t('审核线程', 'Review Thread')} #${selectedThread?.id || ''}`}</div>
+                                                            {isQuickReviewDetailLoading && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+                                                        </div>
+                                                        <div className="mt-1 text-xs text-muted-foreground">{selectedThread?.requester_username || '-'} → {selectedThread?.reviewer_username || '-'}</div>
+                                                    </div>
+
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {selectedQuickReviewRounds.map((round) => (
+                                                            <button
+                                                                key={`editor-round-${round.id}`}
+                                                                onClick={() => handleSelectQuickReviewRound(round.id)}
+                                                                className={`rounded-full px-3 py-1 text-xs transition ${Number(selectedQuickReviewRoundId) === Number(round.id) ? 'bg-primary text-primary-foreground' : 'bg-white/10 text-muted-foreground hover:text-white'}`}
+                                                            >
+                                                                #{round.round_no}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+
+                                                    {selectedRound && (
+                                                        <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-muted-foreground space-y-2">
+                                                            {selectedRound.request_message && <div>{selectedRound.request_message}</div>}
+                                                            <div className="flex flex-wrap gap-4">
+                                                                {selectedRound.entity_required && <span>{t('实体', 'Entity')}: {selectedRound.entity_decision || 'pending'}</span>}
+                                                                {selectedRound.shot_required && <span>{t('镜头', 'Shot')}: {selectedRound.shot_decision || 'pending'}</span>}
+                                                            </div>
+                                                            {selectedRound.entity_feedback && <div>{t('实体意见', 'Entity feedback')}: {selectedRound.entity_feedback}</div>}
+                                                            {selectedRound.shot_feedback && <div>{t('镜头意见', 'Shot feedback')}: {selectedRound.shot_feedback}</div>}
+                                                        </div>
+                                                    )}
+
+                                                    <div className="max-h-48 space-y-2 overflow-auto pr-1">
+                                                        {selectedQuickReviewMessages.length === 0 ? (
+                                                            <div className="text-sm text-muted-foreground">{t('暂无消息', 'No messages')}</div>
+                                                        ) : selectedQuickReviewMessages.map((message) => (
+                                                            <div key={`editor-review-msg-${message.id}`} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                                                                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                                                                    <span>{message.sender_username || '-'}</span>
+                                                                    <span>{message.sender_role === 'reviewer' ? t('审核方', 'Reviewer') : t('发起方', 'Requester')}</span>
+                                                                </div>
+                                                                {message.message_text && <div className="mt-1 text-sm text-white">{message.message_text}</div>}
+                                                                <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                                                                    {message.entity_decision && message.entity_decision !== 'pending' && <div>{t('实体结论', 'Entity decision')}: {message.entity_decision}</div>}
+                                                                    {message.shot_decision && message.shot_decision !== 'pending' && <div>{t('镜头结论', 'Shot decision')}: {message.shot_decision}</div>}
+                                                                    {message.entity_feedback && <div>{t('实体意见', 'Entity feedback')}: {message.entity_feedback}</div>}
+                                                                    {message.shot_feedback && <div>{t('镜头意见', 'Shot feedback')}: {message.shot_feedback}</div>}
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    {selectedRound && (
+                                                        <div className="space-y-3 border-t border-white/10 pt-3">
+                                                            <textarea
+                                                                value={quickReviewReplyDraft.message_text}
+                                                                onChange={(e) => setQuickReviewReplyDraft((prev) => ({ ...prev, message_text: e.target.value }))}
+                                                                placeholder={amReviewer ? t('填写审核回复与结论', 'Add review reply and decisions') : t('填写补充说明或回应', 'Add follow-up notes or response')}
+                                                                className="w-full h-24 resize-none rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                                                            />
+                                                            {amReviewer && (
+                                                                <>
+                                                                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                                                        {selectedRound.entity_required && (
+                                                                            <select
+                                                                                value={quickReviewReplyDraft.entity_decision}
+                                                                                onChange={(e) => setQuickReviewReplyDraft((prev) => ({ ...prev, entity_decision: e.target.value }))}
+                                                                                className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                                                                            >
+                                                                                <option value="pending">{t('实体待定', 'Entity pending')}</option>
+                                                                                <option value="approved">{t('实体通过', 'Entity approved')}</option>
+                                                                                <option value="conditional">{t('实体有条件通过', 'Entity conditional')}</option>
+                                                                                <option value="rejected">{t('实体不通过', 'Entity rejected')}</option>
+                                                                            </select>
+                                                                        )}
+                                                                        {selectedRound.shot_required && (
+                                                                            <select
+                                                                                value={quickReviewReplyDraft.shot_decision}
+                                                                                onChange={(e) => setQuickReviewReplyDraft((prev) => ({ ...prev, shot_decision: e.target.value }))}
+                                                                                className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                                                                            >
+                                                                                <option value="pending">{t('镜头待定', 'Shot pending')}</option>
+                                                                                <option value="approved">{t('镜头通过', 'Shot approved')}</option>
+                                                                                <option value="conditional">{t('镜头有条件通过', 'Shot conditional')}</option>
+                                                                                <option value="rejected">{t('镜头不通过', 'Shot rejected')}</option>
+                                                                            </select>
+                                                                        )}
+                                                                    </div>
+                                                                    {selectedRound.entity_required && (
+                                                                        <textarea
+                                                                            value={quickReviewReplyDraft.entity_feedback}
+                                                                            onChange={(e) => setQuickReviewReplyDraft((prev) => ({ ...prev, entity_feedback: e.target.value }))}
+                                                                            placeholder={t('实体审核意见', 'Entity review feedback')}
+                                                                            className="w-full h-20 resize-none rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                                                                        />
+                                                                    )}
+                                                                    {selectedRound.shot_required && (
+                                                                        <textarea
+                                                                            value={quickReviewReplyDraft.shot_feedback}
+                                                                            onChange={(e) => setQuickReviewReplyDraft((prev) => ({ ...prev, shot_feedback: e.target.value }))}
+                                                                            placeholder={t('镜头审核意见', 'Shot review feedback')}
+                                                                            className="w-full h-20 resize-none rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
+                                                                        />
+                                                                    )}
+                                                                </>
+                                                            )}
+                                                            <button
+                                                                onClick={handleCreateQuickReviewReply}
+                                                                disabled={isReviewPanelSubmitting}
+                                                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 ${isReviewPanelSubmitting ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                                            >
+                                                                {isReviewPanelSubmitting ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('发送中...', 'Sending...')}</> : <>{t('发送回复', 'Send Reply')}</>}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()
+                                    )}
+                                </div>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                                {t('更完整的轮次管理、状态变更和归档仍在项目列表的“项目协作”工作台中。', 'Full round management, status changes, and archiving remain in the project collaboration workspace on the project list page.')}
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 )}
 
@@ -15371,6 +15829,18 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         }
     }, [projectId]);
 
+    const awaitShotGenerationEntities = useCallback(async () => {
+        if (!projectId) return Array.isArray(entities) ? entities : [];
+        if (Array.isArray(entities) && entities.length > 0 && !entityListLoading) {
+            return entities;
+        }
+        const loaded = await loadEntities();
+        if (Array.isArray(loaded) && loaded.length > 0) {
+            return loaded;
+        }
+        return Array.isArray(entities) ? entities : [];
+    }, [entities, entityListLoading, loadEntities, projectId]);
+
     useEffect(() => {
         loadEntities();
     }, [loadEntities]);
@@ -17898,6 +18368,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+    const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
     const [stoppingVideoByShot, setStoppingVideoByShot] = useState({});
@@ -17930,6 +18401,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!activeEpisode?.id) return '';
         return `aistory.shotGenerationState.${activeEpisode.id}`;
     }, [activeEpisode?.id]);
+    const imageJobStateStorageKey = useMemo(() => {
+        if (!activeEpisode?.id) return '';
+        return `aistory.shotImageJobs.${activeEpisode.id}`;
+    }, [activeEpisode?.id]);
     const videoJobStateStorageKey = useMemo(() => {
         if (!activeEpisode?.id) return '';
         return `aistory.shotVideoJobs.${activeEpisode.id}`;
@@ -17940,6 +18415,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const generationMediaBaselineRef = useRef({});
     const startFrameAutoInheritRef = useRef('');
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
+    const IMAGE_JOB_STATE_TTL_MS = 1000 * 60 * 60;
     const VIDEO_JOB_STATE_TTL_MS = 1000 * 60 * 60;
     const shotsRefreshRequestSeqRef = useRef(0);
 
@@ -18215,6 +18691,56 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [videoJobStateStorageKey]);
 
+    const normalizeImageJobState = useCallback((raw) => {
+        if (!raw || typeof raw !== 'object') return {};
+        const now = Date.now();
+        const cleaned = {};
+        Object.entries(raw).forEach(([jobKey, payload]) => {
+            const stableKey = String(jobKey || '').trim();
+            const stableShotId = String(payload?.shotId || '').trim();
+            const stableKind = payload?.kind === 'end' ? 'end' : 'start';
+            const stableJobId = String(payload?.jobId || '').trim();
+            const startedAt = Number(payload?.startedAt || 0);
+            if (!stableKey || !stableShotId || !stableJobId) return;
+            if (startedAt > 0 && (now - startedAt) > IMAGE_JOB_STATE_TTL_MS) return;
+            cleaned[stableKey] = {
+                shotId: stableShotId,
+                kind: stableKind,
+                jobId: stableJobId,
+                startedAt: startedAt || now,
+            };
+        });
+        return cleaned;
+    }, [IMAGE_JOB_STATE_TTL_MS]);
+
+    const readImageJobStateStorage = useCallback(() => {
+        if (!imageJobStateStorageKey) return {};
+        try {
+            const raw = localStorage.getItem(imageJobStateStorageKey);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            return normalizeImageJobState(parsed);
+        } catch (e) {
+            console.warn('Failed to read shot image job state', e);
+            return {};
+        }
+    }, [imageJobStateStorageKey, normalizeImageJobState]);
+
+    const writeImageJobStateStorage = useCallback((state) => {
+        if (!imageJobStateStorageKey) return;
+        try {
+            const normalized = normalizeImageJobState(state);
+            pendingImageJobsRef.current = { ...normalized };
+            if (Object.keys(normalized).length === 0) {
+                localStorage.removeItem(imageJobStateStorageKey);
+                return;
+            }
+            localStorage.setItem(imageJobStateStorageKey, JSON.stringify(normalized));
+        } catch (e) {
+            console.warn('Failed to write shot image job state', e);
+        }
+    }, [imageJobStateStorageKey, normalizeImageJobState]);
+
     const writeVideoJobStateStorage = useCallback((state) => {
         if (!videoJobStateStorageKey) return;
         try {
@@ -18310,22 +18836,69 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const stableKind = kind === 'end' ? 'end' : 'start';
         const stableJobId = String(jobId || '').trim();
         if (!stableShotId || !stableJobId) return;
-        pendingImageJobsRef.current[`${stableShotId}:${stableKind}`] = stableJobId;
-    }, []);
+        const prev = readImageJobStateStorage();
+        const key = `${stableShotId}:${stableKind}`;
+        const next = {
+            ...prev,
+            [key]: {
+                shotId: stableShotId,
+                kind: stableKind,
+                jobId: stableJobId,
+                startedAt: Date.now(),
+            },
+        };
+        writeImageJobStateStorage(next);
+    }, [readImageJobStateStorage, writeImageJobStateStorage]);
 
     const getPendingImageJobId = useCallback((shotId, kind) => {
         const stableShotId = String(shotId || '').trim();
         const stableKind = kind === 'end' ? 'end' : 'start';
         if (!stableShotId) return '';
-        return String(pendingImageJobsRef.current[`${stableShotId}:${stableKind}`] || '').trim();
-    }, []);
+        const key = `${stableShotId}:${stableKind}`;
+        const inMemory = pendingImageJobsRef.current[key];
+        if (inMemory && typeof inMemory === 'object') {
+            return String(inMemory.jobId || '').trim();
+        }
+        if (typeof inMemory === 'string') {
+            return String(inMemory || '').trim();
+        }
+        const all = readImageJobStateStorage();
+        return String(all?.[key]?.jobId || '').trim();
+    }, [readImageJobStateStorage]);
 
     const clearPendingImageJob = useCallback((shotId, kind) => {
         const stableShotId = String(shotId || '').trim();
         const stableKind = kind === 'end' ? 'end' : 'start';
         if (!stableShotId) return;
-        delete pendingImageJobsRef.current[`${stableShotId}:${stableKind}`];
-    }, []);
+        const key = `${stableShotId}:${stableKind}`;
+        const prev = readImageJobStateStorage();
+        if (!Object.prototype.hasOwnProperty.call(prev, key)) {
+            delete pendingImageJobsRef.current[key];
+            return;
+        }
+        const next = { ...prev };
+        delete next[key];
+        writeImageJobStateStorage(next);
+    }, [readImageJobStateStorage, writeImageJobStateStorage]);
+
+    const clearPendingImageJobsByJobId = useCallback((jobId) => {
+        const stableJobId = String(jobId || '').trim();
+        if (!stableJobId) return;
+        const prev = readImageJobStateStorage();
+        const next = {};
+        let changed = false;
+        Object.entries(prev).forEach(([key, payload]) => {
+            const existingJobId = String(payload?.jobId || '').trim();
+            if (existingJobId === stableJobId) {
+                changed = true;
+                return;
+            }
+            next[key] = payload;
+        });
+        if (changed) {
+            writeImageJobStateStorage(next);
+        }
+    }, [readImageJobStateStorage, writeImageJobStateStorage]);
 
     const releaseShotImageUiByShotId = useCallback((shotId, kind) => {
         const stableShotId = String(shotId || '').trim();
@@ -18338,15 +18911,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const releaseShotImageUiByJobId = useCallback((jobId) => {
         const stableJobId = String(jobId || '').trim();
         if (!stableJobId) return;
-        Object.entries(pendingImageJobsRef.current || {}).forEach(([key, value]) => {
-            if (String(value || '').trim() !== stableJobId) return;
+        const prev = readImageJobStateStorage();
+        Object.entries(prev || {}).forEach(([key, payload]) => {
+            if (String(payload?.jobId || '').trim() !== stableJobId) return;
             const [shotId, kind] = String(key || '').split(':');
             if (shotId) {
                 setShotGeneratingState(shotId, kind === 'end' ? 'end' : 'start', false);
             }
-            delete pendingImageJobsRef.current[key];
         });
-    }, [setShotGeneratingState]);
+        clearPendingImageJobsByJobId(stableJobId);
+    }, [clearPendingImageJobsByJobId, readImageJobStateStorage, setShotGeneratingState]);
 
     const isMissingJobError = useCallback((error) => {
         const detail = String(error?.response?.data?.detail || error?.message || '').trim().toLowerCase();
@@ -18494,6 +19068,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     ]);
 
     useEffect(() => {
+        pendingImageJobsRef.current = readImageJobStateStorage();
+    }, [activeEpisode?.id, readImageJobStateStorage]);
+
+    useEffect(() => {
         hasHydratedGenerationStateRef.current = false;
         if (!generationStateStorageKey) {
             setGeneratingStateByShot({});
@@ -18561,6 +19139,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const currentGeneratingState = editingShot?.id
         ? (generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 })
         : { start: false, end: false, video: false };
+    const currentShotGenerating = Boolean(currentGeneratingState.start || currentGeneratingState.end || currentGeneratingState.video);
     const currentVoiceGenerating = editingShot?.id
         ? !!voiceGeneratingByShot[String(editingShot.id)]
         : false;
@@ -19290,6 +19869,131 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     useEffect(() => {
         setHasShotInitialLoadCompleted(false);
     }, [activeEpisode?.id]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        let cancelled = false;
+
+        const resumePendingImageJobs = async () => {
+            const normalizedPending = readImageJobStateStorage();
+            pendingImageJobsRef.current = { ...normalizedPending };
+
+            const entries = Object.entries(normalizedPending);
+            if (entries.length === 0) return;
+
+            for (const [, payload] of entries) {
+                if (cancelled) break;
+
+                const stableShotId = String(payload?.shotId || '').trim();
+                const stableKind = payload?.kind === 'end' ? 'end' : 'start';
+                const jobId = String(payload?.jobId || '').trim();
+                if (!stableShotId || !jobId) {
+                    clearPendingImageJob(stableShotId, stableKind);
+                    continue;
+                }
+
+                let errorStreak = 0;
+                let waitMs = 2500;
+                setShotGeneratingState(stableShotId, stableKind, true);
+
+                while (!cancelled) {
+                    try {
+                        const status = await getImageGenerationJobStatus(jobId);
+                        const phase = String(status?.status || '').toLowerCase();
+                        const resultUrl = extractImageJobResultUrl(status);
+                        errorStreak = 0;
+                        waitMs = 2500;
+
+                        if (resultUrl || phase === 'succeeded' || phase === 'completed') {
+                            if (resultUrl) {
+                                const currentShot = (shots || []).find((item) => String(item?.id) === stableShotId)
+                                    || (editingShot && String(editingShot?.id) === stableShotId ? editingShot : null);
+                                if (stableKind === 'start') {
+                                    const nextData = { image_url: resultUrl };
+                                    try {
+                                        await onUpdateShot(stableShotId, nextData);
+                                    } catch (persistErr) {
+                                        console.warn('Resume image job save failed:', persistErr);
+                                    }
+                                    setEditingShot((prev) => (prev && String(prev.id) === stableShotId ? { ...prev, ...nextData } : prev));
+                                } else {
+                                    let tech = {};
+                                    try {
+                                        tech = JSON.parse(currentShot?.technical_notes || '{}');
+                                    } catch {
+                                        tech = {};
+                                    }
+                                    tech.end_frame_url = resultUrl;
+                                    tech.video_gen_mode = 'start_end';
+                                    const nextData = { technical_notes: JSON.stringify(tech) };
+                                    try {
+                                        await onUpdateShot(stableShotId, nextData);
+                                    } catch (persistErr) {
+                                        console.warn('Resume image job save failed:', persistErr);
+                                    }
+                                    setEditingShot((prev) => {
+                                        if (!prev || String(prev.id) !== stableShotId) return prev;
+                                        return { ...prev, ...nextData };
+                                    });
+                                }
+                                onLog?.(`Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation completed for shot ${stableShotId}.`, 'success');
+                                refreshShotAssetsMeta();
+                                await refreshShots();
+                            }
+                            clearPendingImageJob(stableShotId, stableKind);
+                            setShotGeneratingState(stableShotId, stableKind, false);
+                            break;
+                        }
+
+                        if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
+                            clearPendingImageJob(stableShotId, stableKind);
+                            setShotGeneratingState(stableShotId, stableKind, false);
+                            const errMsg = String(status?.error || 'unknown error');
+                            const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
+                            onLog?.(`Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation failed for shot ${stableShotId}: ${errMsg}`, tone);
+                            break;
+                        }
+                    } catch (e) {
+                        const detail = e?.response?.data?.detail || e?.message || '';
+                        const detailLower = String(detail).toLowerCase();
+                        if (detailLower.includes('job not found')) {
+                            clearPendingImageJob(stableShotId, stableKind);
+                            setShotGeneratingState(stableShotId, stableKind, false);
+                            onLog?.(`Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
+                            break;
+                        }
+
+                        errorStreak += 1;
+                        waitMs = Math.min(12000, Math.round(waitMs * 1.6));
+                        if (errorStreak >= 6) {
+                            onLog?.(`Image polling paused for shot ${stableShotId} due to repeated network/resource errors.`, 'warning');
+                            break;
+                        }
+                    }
+
+                    await new Promise((resolve) => setTimeout(resolve, waitMs));
+                }
+            }
+        };
+
+        resumePendingImageJobs();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        activeEpisode?.id,
+        clearPendingImageJob,
+        editingShot,
+        extractImageJobResultUrl,
+        onLog,
+        onUpdateShot,
+        readImageJobStateStorage,
+        refreshShots,
+        setEditingShot,
+        setShotGeneratingState,
+        shots,
+    ]);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
@@ -20267,10 +20971,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     // --- Helper: Parsing Entities matches ---
     // Updated Logic: Matches both [Name] and {Name}, allowing specific text source
-    const getSuggestedRefImages = useCallback((shot, sourceText = null, strictMode = false) => {
+    const getSuggestedRefImages = useCallback((shot, sourceText = null, strictMode = false, entitySource = null) => {
         if (!shot) return [];
-        // In ShotsView, 'entities' contains ALL entities (fetched by project)
-        const entList = entities;
+        const entList = Array.isArray(entitySource) ? entitySource : entities;
         
         if (!entList.length) {
             return [];
@@ -20344,8 +21047,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return [...new Set(refs)];
     }, [entities]);
 
-    const getPromptMatchedEntities = useCallback((shot, sourceText = '') => {
-        if (!shot || !Array.isArray(entities) || entities.length === 0) return [];
+    const getPromptMatchedEntities = useCallback((shot, sourceText = '', entitySource = null) => {
+        const entityPool = Array.isArray(entitySource) ? entitySource : entities;
+        if (!shot || !Array.isArray(entityPool) || entityPool.length === 0) return [];
 
         const normalizeName = (text) => normalizeEntityToken(text);
         const regexes = [
@@ -20372,7 +21076,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const candidates = Array.from(candidateSet);
         if (candidates.length === 0) return [];
 
-        return entities.filter((entity) => {
+        return entityPool.filter((entity) => {
             const nameCn = normalizeName(entity?.name || '');
             const nameEn = normalizeName(entity?.name_en || '');
             if (!nameCn && !nameEn) return false;
@@ -20380,14 +21084,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         });
     }, [entities]);
 
-    const getEndFrameVisibleRefs = useCallback((shot, sourceText = '') => {
+    const getEndFrameVisibleRefs = useCallback((shot, sourceText = '', entitySource = null) => {
         const tech = JSON.parse(shot?.technical_notes || '{}');
         const isManualMode = Array.isArray(tech.end_ref_image_urls);
         const isUserEdited = Boolean(tech.end_ref_image_urls_user_edited);
         const isLockedManual = isManualMode && isUserEdited;
         const deletedRefs = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
 
-        const matchedEntities = getPromptMatchedEntities(shot, sourceText);
+        const matchedEntities = getPromptMatchedEntities(shot, sourceText, entitySource);
         const autoMatches = matchedEntities
             .map((entity) => String(entity?.image_url || '').trim())
             .filter(Boolean);
@@ -20579,25 +21283,24 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const generateAssetWithLang = async (assetType, keyframeIndex = -1, options = {}) => {
         if (!editingShot) return;
+        const shotState = generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false };
+        if (shotState.start || shotState.end || shotState.video) return;
         const cfgOverride = Number(options?.cfg);
         const normalizedCfgOverride = Number.isFinite(cfgOverride) && cfgOverride > 0
             ? clampShotImageCfg(cfgOverride)
             : null;
 
         if (assetType === 'start') {
-            setShotGeneratingState(editingShot.id, 'start', true);
             await handleGenerateStartFrame(null, normalizedCfgOverride);
             return;
         }
 
         if (assetType === 'end') {
-            setShotGeneratingState(editingShot.id, 'end', true);
             await handleGenerateEndFrame(null, normalizedCfgOverride);
             return;
         }
 
         if (assetType === 'video') {
-            setShotGeneratingState(editingShot.id, 'video', true);
             await handleGenerateVideo();
             return;
         }
@@ -20673,7 +21376,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     
     // --- Entity Injection Helper ---
     // Injects anchor description while keeping original entity token shape.
-    const injectEntityFeatures = (text, isUserEdited = false) => {
+    const injectEntityFeatures = (text, isUserEdited = false, entitySource = null) => {
         if (!text) return { text, modified: false };
 
         const styleAdjustedText = applyGlobalStyleToPrompt(text, { injectIfMissing: true });
@@ -20685,7 +21388,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
         
         // In ShotsView, 'entities' contains ALL entities.
-        const entList = entities;
+        const entList = Array.isArray(entitySource) ? entitySource : entities;
 
         const isSubjectEntity = (entity) => {
             const typeValue = String(entity?.type || '').trim().toLowerCase();
@@ -20827,13 +21530,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     // --- Generation Handlers ---
     const handleGenerateStartFrame = async (promptOverride = null, cfgOverride = null) => {
         if (!editingShot) return;
-        const targetShotId = editingShot.id;
+        const shotSnapshot = editingShot;
+        const targetShotId = shotSnapshot.id;
         let createdImageJobId = '';
 
         // Check inherit logic - Inherit from previous End Frame
-        const currentPrompt = String(promptOverride || editingShot.start_frame || '').trim();
+        const currentPrompt = String(promptOverride || shotSnapshot.start_frame || '').trim();
         if (isStartFrameInheritPrompt(currentPrompt)) {
-            const prevEndUrl = findPrevShotEndFrameUrl(editingShot.id);
+            const prevEndUrl = findPrevShotEndFrameUrl(shotSnapshot.id);
 
             if (prevEndUrl) {
                 try {
@@ -20860,15 +21564,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(targetShotId, 'start', true);
         abortGenerationRef.current = false; 
 
-        const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const resolvedEntities = await awaitShotGenerationEntities();
+
+        const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
         const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
         const rawPrompt = promptOverride
             || (resolvedPromptSubmitLang === 'cn'
-                ? (cnStartPrompt || editingShot.start_frame || editingShot.video_content || "A cinematic shot")
-                : (editingShot.start_frame || cnStartPrompt || editingShot.video_content || "A cinematic shot"));
+            ? (cnStartPrompt || shotSnapshot.start_frame || shotSnapshot.video_content || "A cinematic shot")
+            : (shotSnapshot.start_frame || cnStartPrompt || shotSnapshot.video_content || "A cinematic shot"));
         const isManual = techNotes.manual_start_frame === true;
 
-        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
 
         onLog?.('Generating Start Frame...', 'info');
         
@@ -20896,14 +21602,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 
                 let refs = [];
                 try {
-                    const noteStr = editingShot.technical_notes || '{}';
+                    const noteStr = shotSnapshot.technical_notes || '{}';
                     const tech = JSON.parse(noteStr);
                     const isManualMode = Array.isArray(tech.ref_image_urls);
                     const isUserEdited = Boolean(tech.ref_image_urls_user_edited);
                     const isLockedManual = isManualMode && isUserEdited;
                     
                     // Always calculate auto-suggested refs first (with new robust logic)
-                    const autoMatches = getSuggestedRefImages(editingShot, rawPrompt, true);
+                    const autoMatches = getSuggestedRefImages(shotSnapshot, rawPrompt, true, resolvedEntities);
 
                     if (isLockedManual) {
                         refs = [...tech.ref_image_urls];
@@ -20932,13 +21638,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     project_id: projectId,
                         episode_id: activeEpisode?.id,
                     shot_id: targetShotId,
-                    shot_number: editingShot.shot_id,
-                    shot_name: editingShot.shot_name,
+                    shot_number: shotSnapshot.shot_id,
+                    shot_name: shotSnapshot.shot_name,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'start_frame',
                         ...(cfgOverride ? { cfg: cfgOverride } : {}),
                         ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
                         createdImageJobId = String(jobId || '').trim();
                         setPendingImageJob(targetShotId, 'start', jobId);
@@ -20975,20 +21681,23 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const handleGenerateEndFrame = async (promptOverride = null, cfgOverride = null) => {
         if (!editingShot) return;
-        const targetShotId = editingShot.id;
+        const shotSnapshot = editingShot;
+        const targetShotId = shotSnapshot.id;
         let createdImageJobId = '';
         setShotGeneratingState(targetShotId, 'end', true);
         abortGenerationRef.current = false;
 
-        const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const resolvedEntities = await awaitShotGenerationEntities();
+
+        const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
         const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
         const rawPrompt = promptOverride
             || (resolvedPromptSubmitLang === 'cn'
-                ? (cnEndPrompt || editingShot.end_frame || "End frame")
-                : (editingShot.end_frame || cnEndPrompt || "End frame"));
+                ? (cnEndPrompt || shotSnapshot.end_frame || "End frame")
+                : (shotSnapshot.end_frame || cnEndPrompt || "End frame"));
         const isManual = techNotes.manual_end_frame === true;
 
-        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
 
         onLog?.('Generating End Frame...', 'info');
 
@@ -21009,8 +21718,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              }
 
              try {
-                const tech = JSON.parse(editingShot.technical_notes || '{}');
-                const uniqueRefs = getEndFrameVisibleRefs(editingShot, rawPrompt);
+                const tech = JSON.parse(shotSnapshot.technical_notes || '{}');
+                const uniqueRefs = getEndFrameVisibleRefs(shotSnapshot, rawPrompt, resolvedEntities);
                 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
@@ -21021,13 +21730,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     project_id: projectId,
                     episode_id: activeEpisode?.id,
                     shot_id: targetShotId,
-                    shot_number: editingShot.shot_id,
-                    shot_name: editingShot.shot_name,
+                    shot_number: shotSnapshot.shot_id,
+                    shot_name: shotSnapshot.shot_name,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'end_frame',
                     ...(cfgOverride ? { cfg: cfgOverride } : {}),
                     ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
                         createdImageJobId = String(jobId || '').trim();
                         setPendingImageJob(targetShotId, 'end', jobId);
@@ -21071,24 +21780,36 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         abortGenerationRef.current = true;
         setShotGeneratingState(stableShotId, stableKind, false);
 
-        const jobId = getPendingImageJobId(stableShotId, stableKind);
+        const resolved = await syncShotMediaRuntimeState({
+            shotId: stableShotId,
+            mediaKey: stableKind,
+            releaseIfMissing: false,
+        });
+        const jobId = String(resolved?.jobId || '').trim();
+
         if (!jobId) {
-            onLog?.(t('已停止前端重试循环。未检测到可停止的后端图片任务。', 'Stopped local retry loop. No active backend image job found.'), 'warning');
+            releaseShotImageUiByShotId(stableShotId, stableKind);
+            onLog?.(t('已停止前端重试循环，并清除本地图片运行状态。未检测到可停止的后端图片任务。', 'Stopped local retry loop and cleared local image running state. No active backend image job found.'), 'warning');
             return;
         }
 
         try {
-            const res = await stopGenerationJob('image', jobId);
+            const res = await stopGenerationJob('image', jobId, { force: true });
             onLog?.(res?.message || t('已请求停止图片任务。', 'Image stop requested.'), 'warning');
             showNotification(t('已请求停止图片任务', 'Image stop requested'), 'warning');
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            if (isMissingJobError(e)) {
+                releaseShotImageUiByShotId(stableShotId, stableKind);
+                onLog?.(t('后端图片任务已不存在，已清除本地运行状态。', 'Backend image job no longer exists. Cleared local running state.'), 'warning');
+                return;
+            }
             onLog?.(`${t('停止图片任务失败', 'Failed to stop image task')}: ${detail}`, 'error');
             showNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
         } finally {
             clearPendingImageJob(stableShotId, stableKind);
         }
-    }, [clearPendingImageJob, editingShot?.id, getPendingImageJobId, onLog, setShotGeneratingState, t]);
+    }, [clearPendingImageJob, editingShot?.id, isMissingJobError, onLog, releaseShotImageUiByShotId, setShotGeneratingState, syncShotMediaRuntimeState, t]);
 
     const handleSetEndFrameFromVideoLastFrame = useCallback(async () => {
         if (!editingShot?.id) return;
@@ -21402,23 +22123,26 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
-        const targetShotId = editingShot.id;
+        const shotSnapshot = editingShot;
+        const targetShotId = shotSnapshot.id;
         const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
-        if (targetGeneratingState.video) {
+        if (targetGeneratingState.start || targetGeneratingState.end || targetGeneratingState.video) {
              return; 
         }
 
         setShotGeneratingState(targetShotId, 'video', true);
 
-        const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+        const resolvedEntities = await awaitShotGenerationEntities();
+
+        const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
         const cnVideoPrompt = String(techNotes.video_prompt_cn || '').trim();
         const rawPrompt = promptOverride
             || (resolvedPromptSubmitLang === 'cn'
-                ? (cnVideoPrompt || getShotVideoPromptEn(editingShot) || "Video motion")
-                : (getShotVideoPromptEn(editingShot) || cnVideoPrompt || "Video motion"));
+                ? (cnVideoPrompt || getShotVideoPromptEn(shotSnapshot) || "Video motion")
+                : (getShotVideoPromptEn(shotSnapshot) || cnVideoPrompt || "Video motion"));
         const isManual = techNotes.manual_video_prompt === true;
 
-        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
 
         let createdVideoJobId = '';
 
@@ -21437,12 +22161,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         onLog?.('Generating Video...', 'info');
         try {
-            const tech = JSON.parse(editingShot.technical_notes || '{}');
+            const tech = JSON.parse(shotSnapshot.technical_notes || '{}');
             const keyframes = tech.keyframes || [];
 
-            const normalizedEndPrompt = String(editingShot.end_frame || '').trim().toUpperCase();
+            const normalizedEndPrompt = String(shotSnapshot.end_frame || '').trim().toUpperCase();
             const shouldReuseStartAsEnd = normalizedEndPrompt === 'NO';
-            const currentStartFrameUrl = String(editingShot.image_url || '').trim();
+            const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
             if (shouldReuseStartAsEnd && currentStartFrameUrl) {
                 const previousEndUrl = String(tech.end_frame_url || '').trim();
                 if (previousEndUrl !== currentStartFrameUrl) {
@@ -21459,14 +22183,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             const effectiveVideoMode = resolveUnifiedVideoMode(tech);
             const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
-                promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
-                associatedEntities: editingShot?.associated_entities || '',
-                entityPool: entities,
+                promptText: `${getShotVideoPromptEn(shotSnapshot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
+                associatedEntities: shotSnapshot?.associated_entities || '',
+                entityPool: resolvedEntities,
                 includeAssociatedEntities: false,
             });
             const uniqueRefs = tech.video_ref_image_urls_manual === true && Array.isArray(tech.video_ref_image_urls)
                 ? normalizeMediaRefList(tech.video_ref_image_urls)
-                : buildAutoVideoRefList(editingShot, tech, effectiveVideoMode, promptEntityRefs);
+                : buildAutoVideoRefList(shotSnapshot, tech, effectiveVideoMode, promptEntityRefs);
 
             const splitReferenceMediaUrls = (urls) => {
                 const imageRefs = [];
@@ -21520,12 +22244,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiRefVideoUrls, apiLastFrameUrl, durParam, {
                     project_id: projectId,
                     shot_id: targetShotId,
-                    shot_number: editingShot.shot_id,
-                    shot_name: editingShot.shot_name,
+                    shot_number: shotSnapshot.shot_id,
+                    shot_name: shotSnapshot.shot_name,
                     ref_mode: effectiveVideoMode,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'video',
-                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, entities),
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
                         createdVideoJobId = String(jobId || '').trim();
                         setPendingVideoJob(targetShotId, jobId);
@@ -21547,7 +22271,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     || project?.global_info?.language
                     || ''
                 ).trim();
-                const voiceBuild = buildVoicePromptWithEntityContext(finalPrompt, entities, projectLanguage, uiLang);
+                const voiceBuild = buildVoicePromptWithEntityContext(finalPrompt, resolvedEntities, projectLanguage, uiLang);
                 usedVoicePrompt = String(voiceBuild.voicePrompt || '').trim();
                 if (!usedVoicePrompt) {
                     onLog?.(t('未检测到对白，已跳过配音生成', 'No dialogue detected, skipped voiceover generation'), 'warning');
@@ -21710,7 +22434,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 return next;
             });
         }
-    }, [clearPendingVideoJob, getPendingVideoJobId, onLog, setShotGeneratingState, t]);
+    }, [onLog, releaseShotVideoUiByShotId, syncShotMediaRuntimeState, t]);
 
     const pollShotBatchStatus = useCallback(async () => {
         if (!activeEpisode?.id) return null;
@@ -21828,6 +22552,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     };
 
     const startShotBatchByMode = async (mode) => {
+        if (isShotBatchStarting || isBatchGeneratingRef.current) return;
         if (!activeEpisode?.id) {
             const msg = t('请先选择分集。', 'Please select an episode first.');
             onLog?.(msg, 'warning');
@@ -21853,6 +22578,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             : await confirmUiMessage(`Generate missing Start/End frames for all ${shots.length} shots? This may take a while.`);
         if (!ok) return;
 
+        setIsShotBatchStarting(true);
         try {
             const targetShotIds = shots.map((shot) => shot.id).filter(Boolean);
             if (targetShotIds.length === 0) {
@@ -21896,6 +22622,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const detail = e?.response?.data?.detail || e?.message || 'batch start failed';
             onLog?.(`Batch start failed: ${detail}`, 'error');
             alert(`Batch start failed: ${detail}`);
+        } finally {
+            setIsShotBatchStarting(false);
         }
     };
 
@@ -22081,21 +22809,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             </button>
                              <button 
                                 onClick={handleBatchGenerate}
-                                disabled={isBatchGenerating || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${isBatchGenerating ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
                                 title={t('批量生成缺失的起始/结束帧', 'Batch Generate Missing Start/End Frames')}
                             >
-                                {isBatchGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                <span>{t('补帧', 'Frames')}</span>
+                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('补帧', 'Frames')}</span>
                             </button>
                             <button 
                                 onClick={handleBatchGenerateVideo}
-                                disabled={isBatchGenerating || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${isBatchGenerating ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
                                 title={t('批量生成视频（会先自动生成图片）', 'Batch Generate Videos (Auto-creates images first)')}
                             >
-                                {isBatchGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>}
-                                <span>{t('视频', 'Video')}</span>
+                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>}
+                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('视频', 'Video')}</span>
                             </button>
                             {isBatchGenerating && (
                                 <button
@@ -22413,11 +23141,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 )}
                                                 <button 
                                                     onClick={() => generateAssetWithLang('start')} 
-                                                    disabled={currentGeneratingState.start}
-                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.start ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                    disabled={currentShotGenerating}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                 >
-                                                    {currentGeneratingState.start ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                    {currentGeneratingState.start ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                    {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentShotGenerating ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                 </button>
                                             </div>
                                         </div>
@@ -22529,8 +23257,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                                 <button
                                                     onClick={handleSetEndFrameFromVideoLastFrame}
-                                                    disabled={!editingShot.video_url || currentGeneratingState.end}
-                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${(!editingShot.video_url || currentGeneratingState.end) ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                                    disabled={!editingShot.video_url || currentShotGenerating}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${(!editingShot.video_url || currentShotGenerating) ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
                                                     title={t('从当前视频提取最后一帧', 'Extract last frame from current video')}
                                                 >
                                                     <Video className="w-3 h-3"/> {t('取视频尾帧', 'Last Frame')}
@@ -22547,11 +23275,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 )}
                                                 <button 
                                                     onClick={() => generateAssetWithLang('end')} 
-                                                    disabled={currentGeneratingState.end}
-                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.end ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                    disabled={currentShotGenerating}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
                                                 >
-                                                    {currentGeneratingState.end ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                    {currentGeneratingState.end ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                    {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentShotGenerating ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                 </button>
                                             </div>
                                         </div>
@@ -22710,11 +23438,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                                                 <button 
                                                     onClick={() => generateAssetWithLang('video')} 
-                                                    disabled={currentGeneratingState.video}
-                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentGeneratingState.video ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30' }`}
+                                                    disabled={currentShotGenerating}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30' }`}
                                                 >
-                                                    {currentGeneratingState.video ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
-                                                    {currentGeneratingState.video ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                    {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
+                                                    {currentShotGenerating ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                 </button>
                                                 <button
                                                     onClick={() => handleForceStopShotVideo(editingShot?.id)}
@@ -22870,9 +23598,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         <button 
                                                             onClick={() => generateAssetWithLang('keyframe', idx)} 
                                                             className="px-1.5 py-0.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded flex items-center gap-1"
-                                                            disabled={kf.loading}
+                                                            disabled={kf.loading || currentShotGenerating}
                                                         >
-                                                            {kf.loading ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                            {kf.loading || currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
                                                             {t('生成', 'Generate')}
                                                         </button>
                                                         <button 
@@ -23403,8 +24131,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         label: t('生成起始帧', 'Generate Start Frame'),
                                                                         busyLabel: t('起始帧生成中...', 'Generating Start Frame...'),
                                                                         onClick: () => generateAssetWithLang('start', -1, { cfg: currentImageCfgValue }),
-                                                                        disabled: currentGeneratingState.start,
-                                                                        busy: currentGeneratingState.start,
+                                                                        disabled: currentShotGenerating,
+                                                                        busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
                                                                 </div>
@@ -23467,15 +24195,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         label: t('生成结束帧', 'Generate End Frame'),
                                                                         busyLabel: t('结束帧生成中...', 'Generating End Frame...'),
                                                                         onClick: () => generateAssetWithLang('end', -1, { cfg: currentImageCfgValue }),
-                                                                        disabled: currentGeneratingState.end,
-                                                                        busy: currentGeneratingState.end,
+                                                                        disabled: currentShotGenerating,
+                                                                        busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
                                                                     {renderDetailActionButton({
                                                                         label: t('提取视频尾帧', 'Extract Video Last Frame'),
                                                                         busyLabel: t('提取视频尾帧', 'Extract Video Last Frame'),
                                                                         onClick: handleSetEndFrameFromVideoLastFrame,
-                                                                        disabled: !editingShot.video_url || currentGeneratingState.end,
+                                                                        disabled: !editingShot.video_url || currentShotGenerating,
                                                                         variant: 'warning',
                                                                         title: t('从当前视频提取最后一帧', 'Extract last frame from current video'),
                                                                     })}
@@ -23612,8 +24340,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         label: t('生成视频', 'Generate Video'),
                                                                         busyLabel: t('视频生成中...', 'Generating Video...'),
                                                                         onClick: () => generateAssetWithLang('video'),
-                                                                        disabled: currentGeneratingState.video,
-                                                                        busy: currentGeneratingState.video,
+                                                                        disabled: currentShotGenerating,
+                                                                        busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
                                                                     {renderDetailActionButton({
@@ -23713,8 +24441,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     label: t('生成关键帧', 'Generate Keyframe'),
                                                                     busyLabel: t('关键帧生成中...', 'Generating Keyframe...'),
                                                                     onClick: () => generateAssetWithLang('keyframe', assetDetailModal.keyframeIndex, { cfg: currentImageCfgValue }),
-                                                                    disabled: !!keyframe?.loading,
-                                                                    busy: !!keyframe?.loading,
+                                                                    disabled: !!keyframe?.loading || currentShotGenerating,
+                                                                    busy: !!keyframe?.loading || currentShotGenerating,
                                                                     variant: 'primary',
                                                                 })}
                                                                 {renderDetailActionButton({
@@ -26399,8 +27127,8 @@ const Editor = ({
         }
 
         const ok = await confirmUiMessage(t(
-            `确认删除任务记录？\n${kind} / ${jobId}\n该操作仅删除任务池记录，不会恢复已停止任务。`,
-            `Delete this job record?\n${kind} / ${jobId}\nThis removes it from job history and cannot be undone.`
+            `确认删除任务记录？\n${kind} / ${jobId}\n若任务仍在运行，将一并终止并清除当前页面的挂起状态。`,
+            `Delete this job record?\n${kind} / ${jobId}\nIf the job is still running, this will also terminate it and clear the pending UI state.`
         ));
         if (!ok) return;
 

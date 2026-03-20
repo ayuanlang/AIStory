@@ -3267,6 +3267,7 @@ class MediaGenerationService:
         tool_conf = config.get("config", {}) or {}
         raw_callback_url = str(
             tool_conf.get("webHook")
+                or tool_conf.get("webhook")
             or tool_conf.get("callBackUrl")
             or tool_conf.get("callback_url")
             or tool_conf.get("callbackUrl")
@@ -3300,7 +3301,9 @@ class MediaGenerationService:
             
             final_model = model or "sora-image"
             payload = {"model": final_model, "prompt": prompt, "shutProgress": False}
-            payload["webHook"] = callback_url if callback_url and callback_url != "-1" else "-1"
+            callback_payload_value = callback_url if callback_url and callback_url != "-1" else "-1"
+            payload["webHook"] = callback_payload_value
+            payload["webhook"] = callback_payload_value
             base_metadata = {"provider": "grsai", "model": final_model, "prompt": prompt}
 
             normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
@@ -3444,7 +3447,9 @@ class MediaGenerationService:
                 # prompt truncation moved to end
             else:
                 # Sora/Others
-                payload["webHook"] = callback_url if callback_url and callback_url != "-1" else "-1"
+                callback_payload_value = callback_url if callback_url and callback_url != "-1" else "-1"
+                payload["webHook"] = callback_payload_value
+                payload["webhook"] = callback_payload_value
                 # API requires integer for duration
                 payload["duration"] = int(duration) if duration else 5
                 if aspect_ratio:
@@ -7457,6 +7462,7 @@ class MediaGenerationService:
     def _resolve_provider_callback_url(self, tool_conf: Dict[str, Any], callback_ticket: str) -> str:
         callback_url = str(
             tool_conf.get("webHook")
+            or tool_conf.get("webhook")
             or tool_conf.get("callBackUrl")
             or tool_conf.get("callback_url")
             or tool_conf.get("callbackUrl")
