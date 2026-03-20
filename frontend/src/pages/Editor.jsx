@@ -18493,6 +18493,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const activeResumeVideoJobsRef = useRef(new Set());
     const pausedResumeVideoJobsRef = useRef({});
     const pendingImageJobsRef = useRef({});
+    const shotsRef = useRef([]);
+    const editingShotRef = useRef(null);
+    const generatingStateByShotRef = useRef({});
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [localKeyframes, setLocalKeyframes] = useState([]);
     const generationStateStorageKey = useMemo(() => {
@@ -18774,6 +18777,18 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return applyGeneratingStateChange(prev, stableShotId, key, value);
         });
     }, [applyGeneratingStateChange, setStoredShotGeneratingState, shots, editingShot, getShotEndFrameUrl]);
+
+    useEffect(() => {
+        shotsRef.current = Array.isArray(shots) ? shots : [];
+    }, [shots]);
+
+    useEffect(() => {
+        editingShotRef.current = editingShot || null;
+    }, [editingShot]);
+
+    useEffect(() => {
+        generatingStateByShotRef.current = generatingStateByShot || {};
+    }, [generatingStateByShot]);
 
     const readVideoJobStateStorage = useCallback(() => {
         if (!videoJobStateStorageKey) return {};
@@ -19075,7 +19090,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const isVideo = stableMediaKey === 'video';
         const assetType = stableMediaKey === 'end' ? 'end_frame' : (stableMediaKey === 'start' ? 'start_frame' : '');
-        const shotState = generatingStateByShot[String(stableShotId)] || { start: false, end: false, video: false };
+        const shotState = generatingStateByShotRef.current[String(stableShotId)] || { start: false, end: false, video: false };
         const hasGeneratingFlag = Boolean(shotState?.[stableMediaKey]);
 
         const getJobId = () => (
@@ -19164,7 +19179,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return { state: 'idle', jobId: '', source: 'none' };
     }, [
         findMatchingShotMediaJobInPool,
-        generatingStateByShot,
         getPendingImageJobId,
         getPendingVideoJobId,
         isMissingJobError,
@@ -20000,8 +20014,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                         if (resultUrl || phase === 'succeeded' || phase === 'completed') {
                             if (resultUrl) {
-                                const currentShot = (shots || []).find((item) => String(item?.id) === stableShotId)
-                                    || (editingShot && String(editingShot?.id) === stableShotId ? editingShot : null);
+                                const currentShot = (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
+                                    || (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null);
                                 if (stableKind === 'start') {
                                     const nextData = { image_url: resultUrl };
                                     try {
@@ -20078,7 +20092,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, [
         activeEpisode?.id,
         clearPendingImageJob,
-        editingShot,
         extractImageJobResultUrl,
         onLog,
         onUpdateShot,
@@ -20086,7 +20099,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         refreshShots,
         setEditingShot,
         setShotGeneratingState,
-        shots,
     ]);
 
     useEffect(() => {
@@ -20489,16 +20501,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 const currentStartUrl = String(shot?.image_url || '');
                 const currentEndUrl = String(getShotEndFrameUrl(shot));
                 const currentVideoUrl = String(shot?.video_url || '');
+                const hasFreshStartUrl = Boolean(currentStartUrl) && currentStartUrl !== String(base.start || '');
+                const hasFreshEndUrl = Boolean(currentEndUrl) && currentEndUrl !== String(base.end || '');
+                const hasFreshVideoUrl = Boolean(currentVideoUrl) && currentVideoUrl !== String(base.video || '');
 
-                if (updated.start && Object.prototype.hasOwnProperty.call(base, 'start') && currentStartUrl !== String(base.start || '')) {
+                if (updated.start && Object.prototype.hasOwnProperty.call(base, 'start') && hasFreshStartUrl) {
                     updated.start = false;
                     updated.startAt = 0;
                 }
-                if (updated.end && Object.prototype.hasOwnProperty.call(base, 'end') && currentEndUrl !== String(base.end || '')) {
+                if (updated.end && Object.prototype.hasOwnProperty.call(base, 'end') && hasFreshEndUrl) {
                     updated.end = false;
                     updated.endAt = 0;
                 }
-                if (updated.video && Object.prototype.hasOwnProperty.call(base, 'video') && currentVideoUrl !== String(base.video || '')) {
+                if (updated.video && Object.prototype.hasOwnProperty.call(base, 'video') && hasFreshVideoUrl) {
                     updated.video = false;
                     updated.videoAt = 0;
                 }

@@ -397,6 +397,11 @@ def _write_generation_job_pool_cache(key: str, payload: Dict[str, Any]) -> None:
         }
 
 
+def _clear_generation_job_pool_cache() -> None:
+    with _GENERATION_JOB_POOL_CACHE_LOCK:
+        _GENERATION_JOB_POOL_CACHE.clear()
+
+
 def _is_generation_job_stale(payload: Dict[str, Any], *, now_dt: Optional[datetime] = None) -> bool:
     anchor = (
         _parse_iso_datetime(payload.get("updated_at"))
@@ -18186,6 +18191,8 @@ def _set_image_job(job_id: str, **fields) -> None:
 
         _write_image_job_file(job_id, current)
 
+    _clear_generation_job_pool_cache()
+
 
 def _normalize_callback_url(raw: Any) -> str:
     url = str(raw or "").strip()
@@ -20268,6 +20275,8 @@ def _set_video_job(job_id: str, **fields) -> None:
                 VIDEO_ACTIVE_SCOPE_STORE.pop(task_scope, None)
 
         _write_video_job_file(job_id, current)
+
+    _clear_generation_job_pool_cache()
 
 
 async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
