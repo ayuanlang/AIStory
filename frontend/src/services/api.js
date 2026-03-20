@@ -640,13 +640,72 @@ export const fetchProjectShares = async (projectId) => {
     return response.data;
 }
 
-export const createProjectShare = async (projectId, target_user) => {
-    const response = await api.post(`/projects/${projectId}/shares`, { target_user });
+export const createProjectShare = async (projectId, target_user, options = {}) => {
+    const response = await api.post(`/projects/${projectId}/shares`, {
+        target_user,
+        role: options?.role,
+        permissions: options?.permissions,
+    });
     return response.data;
 }
 
 export const deleteProjectShare = async (projectId, sharedUserId) => {
     const response = await api.delete(`/projects/${projectId}/shares/${sharedUserId}`);
+    return response.data;
+}
+
+export const fetchProjectReviewThreads = async (projectId) => {
+    const response = await api.get(`/projects/${projectId}/review_threads`);
+    return response.data;
+}
+
+export const fetchReviewInboxThreads = async () => {
+    const response = await api.get('/projects/review_threads/inbox');
+    return response.data;
+}
+
+export const fetchReviewOutboxThreads = async () => {
+    const response = await api.get('/projects/review_threads/outbox');
+    return response.data;
+}
+
+export const createProjectReviewThread = async (projectId, payload) => {
+    const response = await api.post(`/projects/${projectId}/review_threads`, payload || {});
+    return response.data;
+}
+
+export const fetchReviewThread = async (threadId) => {
+    const response = await api.get(`/review_threads/${threadId}`);
+    return response.data;
+}
+
+export const markReviewThreadRead = async (threadId) => {
+    const response = await api.post(`/review_threads/${threadId}/read`, { read: true });
+    return response.data;
+}
+
+export const updateReviewThreadStatus = async (threadId, status) => {
+    const response = await api.patch(`/review_threads/${threadId}/status`, { status });
+    return response.data;
+}
+
+export const fetchReviewThreadRounds = async (threadId) => {
+    const response = await api.get(`/review_threads/${threadId}/rounds`);
+    return response.data;
+}
+
+export const createReviewThreadRound = async (threadId, payload) => {
+    const response = await api.post(`/review_threads/${threadId}/rounds`, payload || {});
+    return response.data;
+}
+
+export const fetchReviewRoundMessages = async (roundId) => {
+    const response = await api.get(`/review_rounds/${roundId}/messages`);
+    return response.data;
+}
+
+export const createReviewRoundMessage = async (roundId, payload) => {
+    const response = await api.post(`/review_rounds/${roundId}/messages`, payload || {});
     return response.data;
 }
 
@@ -1279,6 +1338,73 @@ const normalizeGenerationResult = (payload) => {
     };
 };
 
+const extractGenerationFailureReason = (payload, depth = 0) => {
+    if (!payload || depth > 4) return '';
+    if (typeof payload === 'string') return '';
+    if (Array.isArray(payload)) {
+        for (const item of payload.slice(0, 5)) {
+            const found = extractGenerationFailureReason(item, depth + 1);
+            if (found) return found;
+        }
+        return '';
+    }
+    if (typeof payload === 'object') {
+        for (const key of ['failure_reason', 'failedReason', 'reason']) {
+            const value = String(payload?.[key] || '').trim();
+            if (value) return value;
+        }
+        for (const key of ['details', 'data', 'result', 'record', 'raw']) {
+            const found = extractGenerationFailureReason(payload?.[key], depth + 1);
+            if (found) return found;
+        }
+    }
+    return '';
+};
+
+const extractGenerationFailureMessage = (payload, depth = 0) => {
+    if (payload == null || depth > 4) return '';
+    if (typeof payload === 'string') return payload.trim();
+    if (Array.isArray(payload)) {
+        for (const item of payload.slice(0, 5)) {
+            const found = extractGenerationFailureMessage(item, depth + 1);
+            if (found) return found;
+        }
+        return '';
+    }
+    if (typeof payload === 'object') {
+        for (const key of ['error', 'message', 'msg', 'failMsg', 'detail']) {
+            const found = extractGenerationFailureMessage(payload?.[key], depth + 1);
+            if (found) return found;
+        }
+        for (const key of ['details', 'data', 'result', 'record', 'raw']) {
+            const found = extractGenerationFailureMessage(payload?.[key], depth + 1);
+            if (found) return found;
+        }
+    }
+    return '';
+};
+
+const buildGenerationFailureMessage = (payload, fallbackMessage) => {
+    const baseError = String(payload?.error || '').trim();
+    const detailMessage = extractGenerationFailureMessage(payload?.details);
+    const failureReason = String(payload?.failure_reason || payload?.failedReason || '').trim()
+        || extractGenerationFailureReason(payload?.details);
+
+    let message = baseError || detailMessage || fallbackMessage;
+    if (detailMessage && detailMessage !== message && !message.toLowerCase().includes(detailMessage.toLowerCase())) {
+        const generic = ['generation failed', 'image generation job failed', 'video generation job failed'];
+        if (generic.includes(message.toLowerCase())) {
+            message = detailMessage;
+        } else {
+            message = `${message}: ${detailMessage}`;
+        }
+    }
+    if (failureReason && !message.toLowerCase().includes(failureReason.toLowerCase())) {
+        message = `${message} [failure_reason=${failureReason}]`;
+    }
+    return message || fallbackMessage;
+};
+
 const isLocalLikeHostname = (hostname) => {
     const host = String(hostname || '').trim().toLowerCase();
     if (!host) return false;
@@ -1367,7 +1493,7 @@ const pollGenerationCallbackUntilDone = async (
                     return result || payload?.result || {};
                 }
                 if (status === 'failed' || status === 'error' || status === 'canceled' || status === 'cancelled') {
-                    throw new Error(payload?.error || `${kind} callback returned ${status}`);
+                    throw new Error(buildGenerationFailureMessage(payload, `${kind} callback returned ${status}`));
                 }
             }
 
@@ -1411,7 +1537,7 @@ const pollImageJobUntilDone = async (
                 return result || data.result || {};
             }
             if (status === 'failed' || status === 'error' || status === 'canceled' || status === 'cancelled') {
-                throw new Error(data.error || 'Image generation job failed');
+                throw new Error(buildGenerationFailureMessage(data, 'Image generation job failed'));
             }
 
             await sleep(intervalMs);
@@ -1450,7 +1576,7 @@ const pollVideoJobUntilDone = async (
                 return result || data.result || {};
             }
             if (status === 'failed' || status === 'error' || status === 'canceled' || status === 'cancelled') {
-                throw new Error(data.error || 'Video generation job failed');
+                throw new Error(buildGenerationFailureMessage(data, 'Video generation job failed'));
             }
 
             await sleep(intervalMs);
