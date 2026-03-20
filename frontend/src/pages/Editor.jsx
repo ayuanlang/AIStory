@@ -42,6 +42,24 @@ const getSafeMediaUrl = (url) => {
     return getFullUrl(raw);
 };
 
+const extractImageJobResultUrl = (statusResp) => {
+    const result = (statusResp?.result && typeof statusResp.result === 'object') ? statusResp.result : {};
+    const candidates = [
+        result?.url,
+        result?.image_url,
+        result?.imageUrl,
+        result?.generated_url,
+        statusResp?.url,
+        statusResp?.image_url,
+        statusResp?.imageUrl,
+    ];
+    for (const value of candidates) {
+        const stable = String(value || '').trim();
+        if (stable) return stable;
+    }
+    return '';
+};
+
 const rememberBrokenSceneImageUrl = (url) => {
     const normalized = String(url || '').trim();
     if (!normalized) return;
@@ -10981,7 +10999,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
     )
 };
 
-const SceneCard = ({ scene, entities, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh' }) => {
+const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh' }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -11194,9 +11212,16 @@ const SceneCard = ({ scene, entities, onClick, onGenerateShots, onSupplementShot
             <div className="p-3 space-y-3 flex-1 flex flex-col">
                 <div className="space-y-1">
                     <h3 className="font-semibold text-sm text-white line-clamp-1" title={scene.scene_name}>{scene.scene_name || t('未命名场景', 'Untitled Scene')}</h3>
-                    <div className="text-[10px] text-muted-foreground truncate">
-                        <span className="opacity-60">{t('环境：', 'Env:')}</span>{' '}
-                        <span className="text-white/70" title={scene.environment_name}>{scene.environment_name || '-'}</span>
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                        <div className="truncate min-w-0">
+                            <span className="opacity-60">{t('环境：', 'Env:')}</span>{' '}
+                            <span className="text-white/70" title={scene.environment_name}>{scene.environment_name || '-'}</span>
+                        </div>
+                        <div className="shrink-0 inline-flex items-center gap-1 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-cyan-100">
+                            <Film className="w-3 h-3" />
+                            <span>{shotCount}</span>
+                            <span className="opacity-80">{t('分镜', 'Shots')}</span>
+                        </div>
                     </div>
                 </div>
 
@@ -11298,6 +11323,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         errors: [],
     });
     const [scenes, setScenes] = useState([]);
+    const [sceneShotCountMap, setSceneShotCountMap] = useState({});
     const [sceneListLoading, setSceneListLoading] = useState(false);
     const [sceneSortMode, setSceneSortMode] = useState('updated_desc');
     const [sceneSortDirection, setSceneSortDirection] = useState('desc');
@@ -11360,6 +11386,36 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         index: -1,
         data: null,
     });
+    const sceneIdSignature = useMemo(
+        () => (Array.isArray(scenes)
+            ? scenes
+                .map((scene) => Number(scene?.id || 0))
+                .filter((id) => id > 0)
+                .sort((left, right) => left - right)
+                .join(',')
+            : ''),
+        [scenes]
+    );
+
+    const refreshSceneShotCounts = useCallback(async () => {
+        if (!activeEpisode?.id) {
+            setSceneShotCountMap({});
+            return;
+        }
+        try {
+            const rows = await fetchEpisodeShots(activeEpisode.id);
+            const nextCounts = {};
+            (Array.isArray(rows) ? rows : []).forEach((shot) => {
+                const sceneId = Number(shot?.scene_id || 0);
+                if (sceneId <= 0) return;
+                nextCounts[sceneId] = (nextCounts[sceneId] || 0) + 1;
+            });
+            setSceneShotCountMap(nextCounts);
+        } catch (e) {
+            console.warn('Failed to refresh scene shot counts', e);
+            setSceneShotCountMap({});
+        }
+    }, [activeEpisode?.id]);
 
     const getAiShotsTaskStorageKey = useCallback((episodeId, sceneId) => {
         if (!episodeId || !sceneId) return '';
@@ -12551,6 +12607,22 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         if (projectId) fetchEntities(projectId).then(setEntities).catch(console.error);
         loadScenes();
     }, [activeEpisode, projectId, parseScenesFromText]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) {
+            setSceneShotCountMap({});
+            return;
+        }
+        if (batchAiShotsProgress.running) return;
+        refreshSceneShotCounts();
+    }, [
+        activeEpisode?.id,
+        sceneIdSignature,
+        aiShotsFlowStatus.phase,
+        batchAiShotsProgress.running,
+        batchAiShotsProgress.total,
+        refreshSceneShotCounts,
+    ]);
 
     const buildSceneContentMarkdown = (sceneRows = []) => {
         if (!activeEpisode) return '';
@@ -14404,6 +14476,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                                     key={idx} 
                                     scene={scene} 
                                     entities={entities} 
+                                    shotCount={Number(sceneShotCountMap?.[Number(scene?.id || 0)] || 0)}
                                     uiLang={uiLang}
                                     selected={selectedSceneKeySet.has(sceneKey)}
                                     onToggleSelect={toggleSceneSelected}
@@ -15472,24 +15545,6 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
     }, [projectId]);
     const SUBJECT_IMAGE_JOB_TTL_MS = 1000 * 60 * 60 * 6;
     const SUBJECT_IMAGE_JOB_MAX_RUNNING_MS = 1000 * 60 * 20;
-
-    const extractImageJobResultUrl = useCallback((statusResp) => {
-        const result = (statusResp?.result && typeof statusResp.result === 'object') ? statusResp.result : {};
-        const candidates = [
-            result?.url,
-            result?.image_url,
-            result?.imageUrl,
-            result?.generated_url,
-            statusResp?.url,
-            statusResp?.image_url,
-            statusResp?.imageUrl,
-        ];
-        for (const value of candidates) {
-            const stable = String(value || '').trim();
-            if (stable) return stable;
-        }
-        return '';
-    }, []);
 
     const normalizeSubjectImageJobs = useCallback((raw) => {
         if (!raw || typeof raw !== 'object') return {};

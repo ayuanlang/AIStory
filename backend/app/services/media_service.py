@@ -1,6 +1,7 @@
 
 import requests
 import re
+import urllib.parse
 import urllib3
 import time
 import base64
@@ -55,6 +56,18 @@ def _strip_base64_from_log(obj):
     if isinstance(obj, (list, tuple)):
         return [_strip_base64_from_log(item) for item in obj]
     return obj
+
+def _strip_query_from_log_url(value: Any) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        if parsed.scheme and parsed.netloc:
+            return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    except Exception:
+        pass
+    return raw[:300]
 
 def _debug_log(msg, level="info"):
     """Print to console and write to logger."""
@@ -3274,7 +3287,26 @@ class MediaGenerationService:
             or ""
         ).strip()
         callback_ticket = f"grsai-{gen_type}"
+        callback_deployment_hint = self._is_public_deployment_hint()
+        callback_public_base = self._resolve_public_base_url()
         callback_url = self._resolve_provider_callback_url(tool_conf, callback_ticket)
+        callback_source = "none"
+        if raw_callback_url and raw_callback_url != "-1":
+            callback_source = "explicit"
+        elif callback_url and callback_url != "-1":
+            callback_source = "auto_public"
+        elif callback_url == "-1" or raw_callback_url == "-1":
+            callback_source = "disabled"
+        logger.info(
+            "[GrsaiTrace][%s] callback resolution | ticket=%s raw_callback=%s resolved_callback=%s callback_source=%s deployment_hint=%s public_base=%s",
+            trace_id,
+            callback_ticket,
+            _strip_query_from_log_url(raw_callback_url),
+            _strip_query_from_log_url(callback_url),
+            callback_source,
+            callback_deployment_hint,
+            _strip_query_from_log_url(callback_public_base),
+        )
         if callback_url and callback_url != raw_callback_url:
             logger.info(
                 "[GrsaiTrace][%s] callback auto-assigned | ticket=%s callback_url=%s raw_callback=%s",
@@ -3304,6 +3336,13 @@ class MediaGenerationService:
             callback_payload_value = callback_url if callback_url and callback_url != "-1" else "-1"
             payload["webHook"] = callback_payload_value
             payload["webhook"] = callback_payload_value
+            logger.info(
+                "[GrsaiTrace][%s] image callback payload | callback_enabled=%s webHook=%s webhook=%s",
+                trace_id,
+                bool(callback_url and callback_url != "-1"),
+                _strip_query_from_log_url(payload.get("webHook")),
+                _strip_query_from_log_url(payload.get("webhook")),
+            )
             base_metadata = {"provider": "grsai", "model": final_model, "prompt": prompt}
 
             normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)

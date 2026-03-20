@@ -89,6 +89,28 @@ const runSingleFlight = (key, producer) => {
     return task;
 };
 
+let reviewRoutesUnsupported = false;
+
+const isMissingReviewRouteError = (error) => {
+    const status = Number(error?.response?.status || 0);
+    if (status !== 404) return false;
+    const path = String(error?.config?.url || '').trim().toLowerCase();
+    return path.includes('/review_threads') || path.includes('/review_rounds');
+};
+
+const markReviewRoutesUnsupported = (error) => {
+    if (!isMissingReviewRouteError(error)) return false;
+    reviewRoutesUnsupported = true;
+    return true;
+};
+
+const ensureReviewRoutesAvailable = () => {
+    if (!reviewRoutesUnsupported) return;
+    const error = new Error('Project review routes are not available on the current backend.');
+    error.code = 'REVIEW_ROUTES_UNAVAILABLE';
+    throw error;
+};
+
 // ── Async LLM task polling utilities ────────────────────────────────────
 // Backend LLM endpoints accept ?async=1 and return { task_id, async: true }.
 // pollTask() polls GET /tasks/{task_id} until completed or failed.
@@ -655,56 +677,82 @@ export const deleteProjectShare = async (projectId, sharedUserId) => {
 }
 
 export const fetchProjectReviewThreads = async (projectId) => {
-    const response = await api.get(`/projects/${projectId}/review_threads`);
-    return response.data;
+    if (reviewRoutesUnsupported) return [];
+    try {
+        const response = await api.get(`/projects/${projectId}/review_threads`);
+        return response.data;
+    } catch (error) {
+        if (markReviewRoutesUnsupported(error)) return [];
+        throw error;
+    }
 }
 
 export const fetchReviewInboxThreads = async () => {
-    const response = await api.get('/projects/review_threads/inbox');
-    return response.data;
+    if (reviewRoutesUnsupported) return [];
+    try {
+        const response = await api.get('/projects/review_threads/inbox');
+        return response.data;
+    } catch (error) {
+        if (markReviewRoutesUnsupported(error)) return [];
+        throw error;
+    }
 }
 
 export const fetchReviewOutboxThreads = async () => {
-    const response = await api.get('/projects/review_threads/outbox');
-    return response.data;
+    if (reviewRoutesUnsupported) return [];
+    try {
+        const response = await api.get('/projects/review_threads/outbox');
+        return response.data;
+    } catch (error) {
+        if (markReviewRoutesUnsupported(error)) return [];
+        throw error;
+    }
 }
 
 export const createProjectReviewThread = async (projectId, payload) => {
+    ensureReviewRoutesAvailable();
     const response = await api.post(`/projects/${projectId}/review_threads`, payload || {});
     return response.data;
 }
 
 export const fetchReviewThread = async (threadId) => {
+    ensureReviewRoutesAvailable();
     const response = await api.get(`/review_threads/${threadId}`);
     return response.data;
 }
 
 export const markReviewThreadRead = async (threadId) => {
+    ensureReviewRoutesAvailable();
     const response = await api.post(`/review_threads/${threadId}/read`, { read: true });
     return response.data;
 }
 
 export const updateReviewThreadStatus = async (threadId, status) => {
+    ensureReviewRoutesAvailable();
     const response = await api.patch(`/review_threads/${threadId}/status`, { status });
     return response.data;
 }
 
 export const fetchReviewThreadRounds = async (threadId) => {
+    ensureReviewRoutesAvailable();
     const response = await api.get(`/review_threads/${threadId}/rounds`);
     return response.data;
 }
 
 export const createReviewThreadRound = async (threadId, payload) => {
+    ensureReviewRoutesAvailable();
     const response = await api.post(`/review_threads/${threadId}/rounds`, payload || {});
     return response.data;
 }
 
 export const fetchReviewRoundMessages = async (roundId) => {
+    ensureReviewRoutesAvailable();
     const response = await api.get(`/review_rounds/${roundId}/messages`);
     return response.data;
 }
 
 export const createReviewRoundMessage = async (roundId, payload) => {
+    ensureReviewRoutesAvailable();
     const response = await api.post(`/review_rounds/${roundId}/messages`, payload || {});
     return response.data;
 }
