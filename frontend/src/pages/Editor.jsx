@@ -901,6 +901,12 @@ import {
     saveProjectCharacterCanonInput,
     saveProjectCharacterCanonCategories,
     updateProjectCharacterProfiles,
+    fetchProjectReviewThreads,
+    createProjectReviewThread,
+    fetchReviewThreadRounds,
+    fetchReviewRoundMessages,
+    createReviewRoundMessage,
+    markReviewThreadRead,
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
@@ -1102,6 +1108,30 @@ const normalizeCanonTagCategories = (raw) => {
     return normalized.length > 0 ? normalized : null;
 };
 
+const normalizeUserListValues = (value) => {
+    const rawItems = Array.isArray(value) ? value : String(value || '').split(/[;,\n\r]+/);
+    const out = [];
+    const seen = new Set();
+    rawItems.forEach((item) => {
+        const parsed = String(item || '').trim();
+        if (!parsed) return;
+        const dedupeKey = parsed.toLowerCase();
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        out.push(parsed);
+    });
+    return out;
+};
+
+const formatUserListForTextarea = (value) => normalizeUserListValues(value).join('\n');
+
+const formatManagedUserHint = (value, t) => {
+    const count = normalizeUserListValues(value).length;
+    return count > 0
+        ? t(`已解析 ${count} 个用户，保存时会校验是否存在`, `Parsed ${count} users. Existence will be validated on save`)
+        : t('留空即可，保存时才会校验输入的用户', 'Leave empty if unused. Entered users will be validated on save');
+};
+
 const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], uiLang = 'en', mode = 'overview' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const resolveVideoSoundFromInfo = (payload) => {
@@ -1149,6 +1179,8 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         video_sound: true,
         borrowed_films: [],
         generation_seed: "",
+        project_share_users: [],
+        project_reviewer_users: [],
         character_relationships: "",
         notes: "",
         story_dna_global_md: "",
@@ -1218,6 +1250,29 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const episodeScriptsStatusTimerRef = useRef(null);
     const globalStoryAutosaveTimerRef = useRef(null);
     const skipNextGlobalStoryAutosaveRef = useRef(true);
+    const [projectReviewThreads, setProjectReviewThreads] = useState([]);
+    const [isReviewPanelLoading, setIsReviewPanelLoading] = useState(false);
+    const [isReviewPanelSubmitting, setIsReviewPanelSubmitting] = useState(false);
+    const [currentUserId, setCurrentUserId] = useState(null);
+    const [selectedQuickReviewThreadId, setSelectedQuickReviewThreadId] = useState(null);
+    const [selectedQuickReviewRounds, setSelectedQuickReviewRounds] = useState([]);
+    const [selectedQuickReviewRoundId, setSelectedQuickReviewRoundId] = useState(null);
+    const [selectedQuickReviewMessages, setSelectedQuickReviewMessages] = useState([]);
+    const [isQuickReviewDetailLoading, setIsQuickReviewDetailLoading] = useState(false);
+    const [quickReviewReplyDraft, setQuickReviewReplyDraft] = useState({
+        message_text: '',
+        entity_decision: 'pending',
+        shot_decision: 'pending',
+        entity_feedback: '',
+        shot_feedback: '',
+    });
+    const [quickReviewDraft, setQuickReviewDraft] = useState({
+        reviewer_user: '',
+        title: '',
+        request_message: '',
+        entity_required: true,
+        shot_required: true,
+    });
 
     useEffect(() => {
         if (mode !== 'generator') {
@@ -18199,6 +18254,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         writeVideoJobStateStorage(next);
     }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
 
+    const releaseShotVideoUiByShotId = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        clearPendingVideoJob(stableShotId);
+        setShotGeneratingState(stableShotId, 'video', false);
+    }, [clearPendingVideoJob, setShotGeneratingState]);
+
     const clearPendingVideoJobsByJobId = useCallback((jobId) => {
         const stableJobId = String(jobId || '').trim();
         if (!stableJobId) return;
@@ -18217,6 +18279,24 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             writeVideoJobStateStorage(next);
         }
     }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
+
+    const releaseShotVideoUiByJobId = useCallback((jobId) => {
+        const stableJobId = String(jobId || '').trim();
+        if (!stableJobId) return;
+        const prev = readVideoJobStateStorage();
+        const matchedShotIds = Object.entries(prev)
+            .filter(([, payload]) => String(payload?.jobId || '').trim() === stableJobId)
+            .map(([shotId]) => String(shotId || '').trim())
+            .filter(Boolean);
+
+        if (matchedShotIds.length > 0) {
+            matchedShotIds.forEach((shotId) => {
+                setShotGeneratingState(shotId, 'video', false);
+            });
+        }
+
+        clearPendingVideoJobsByJobId(stableJobId);
+    }, [clearPendingVideoJobsByJobId, readVideoJobStateStorage, setShotGeneratingState]);
 
     const getPendingVideoJobId = useCallback((shotId) => {
         const stableShotId = String(shotId || '').trim();
@@ -18246,6 +18326,172 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!stableShotId) return;
         delete pendingImageJobsRef.current[`${stableShotId}:${stableKind}`];
     }, []);
+
+    const releaseShotImageUiByShotId = useCallback((shotId, kind) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableKind = kind === 'end' ? 'end' : 'start';
+        if (!stableShotId) return;
+        clearPendingImageJob(stableShotId, stableKind);
+        setShotGeneratingState(stableShotId, stableKind, false);
+    }, [clearPendingImageJob, setShotGeneratingState]);
+
+    const releaseShotImageUiByJobId = useCallback((jobId) => {
+        const stableJobId = String(jobId || '').trim();
+        if (!stableJobId) return;
+        Object.entries(pendingImageJobsRef.current || {}).forEach(([key, value]) => {
+            if (String(value || '').trim() !== stableJobId) return;
+            const [shotId, kind] = String(key || '').split(':');
+            if (shotId) {
+                setShotGeneratingState(shotId, kind === 'end' ? 'end' : 'start', false);
+            }
+            delete pendingImageJobsRef.current[key];
+        });
+    }, [setShotGeneratingState]);
+
+    const isMissingJobError = useCallback((error) => {
+        const detail = String(error?.response?.data?.detail || error?.message || '').trim().toLowerCase();
+        return detail.includes('job not found') || detail.includes('not found');
+    }, []);
+
+    const findMatchingShotMediaJobInPool = useCallback(async ({ shotId, kind, assetType = '' }) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableKind = String(kind || '').trim().toLowerCase();
+        const stableAssetType = String(assetType || '').trim().toLowerCase();
+        if (!stableShotId || !stableKind) return null;
+
+        const data = await getGenerationJobPool({
+            kind: stableKind,
+            running_only: true,
+            limit: 200,
+        });
+        const items = Array.isArray(data?.items) ? data.items : [];
+        const projectIdText = String(projectId || '').trim();
+
+        return items.find((item) => {
+            const itemShotId = String(item?.shot_id || '').trim();
+            const itemProjectId = String(item?.project_id || '').trim();
+            const itemAssetType = String(item?.asset_type || '').trim().toLowerCase();
+
+            if (!itemShotId || itemShotId !== stableShotId) return false;
+            if (projectIdText && itemProjectId && itemProjectId !== projectIdText) return false;
+            if (stableKind === 'image' && stableAssetType && itemAssetType && itemAssetType !== stableAssetType) return false;
+            return true;
+        }) || null;
+    }, [projectId]);
+
+    const syncShotMediaRuntimeState = useCallback(async ({
+        shotId,
+        mediaKey,
+        preferPoolLookup = true,
+        releaseIfMissing = true,
+    }) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableMediaKey = mediaKey === 'video' ? 'video' : (mediaKey === 'end' ? 'end' : 'start');
+        if (!stableShotId) {
+            return { state: 'idle', jobId: '', source: 'none' };
+        }
+
+        const isVideo = stableMediaKey === 'video';
+        const assetType = stableMediaKey === 'end' ? 'end_frame' : (stableMediaKey === 'start' ? 'start_frame' : '');
+        const shotState = generatingStateByShot[String(stableShotId)] || { start: false, end: false, video: false };
+        const hasGeneratingFlag = Boolean(shotState?.[stableMediaKey]);
+
+        const getJobId = () => (
+            isVideo
+                ? getPendingVideoJobId(stableShotId)
+                : getPendingImageJobId(stableShotId, stableMediaKey)
+        );
+
+        const setJobId = (jobId) => {
+            const stableJobId = String(jobId || '').trim();
+            if (!stableJobId) return;
+            if (isVideo) {
+                setPendingVideoJob(stableShotId, stableJobId);
+            } else {
+                setPendingImageJob(stableShotId, stableMediaKey, stableJobId);
+            }
+            setShotGeneratingState(stableShotId, stableMediaKey, true);
+        };
+
+        const releaseUi = () => {
+            if (isVideo) {
+                releaseShotVideoUiByShotId(stableShotId);
+            } else {
+                releaseShotImageUiByShotId(stableShotId, stableMediaKey);
+            }
+        };
+
+        const readStatus = async (jobId) => {
+            const stableJobId = String(jobId || '').trim();
+            if (!stableJobId) return { state: 'idle', jobId: '', source: 'none' };
+
+            try {
+                const status = isVideo
+                    ? await getVideoGenerationJobStatus(stableJobId)
+                    : await getImageGenerationJobStatus(stableJobId);
+                const phase = String(status?.status || '').trim().toLowerCase();
+
+                if (phase === 'queued' || phase === 'running') {
+                    setShotGeneratingState(stableShotId, stableMediaKey, true);
+                    return { state: 'running', jobId: stableJobId, source: 'local', phase };
+                }
+
+                if (releaseIfMissing) {
+                    releaseUi();
+                }
+                return { state: 'terminal', jobId: stableJobId, source: 'local', phase };
+            } catch (error) {
+                if (isMissingJobError(error)) {
+                    return { state: 'missing', jobId: stableJobId, source: 'local' };
+                }
+                return { state: 'unknown', jobId: stableJobId, source: 'local', error };
+            }
+        };
+
+        const localJobId = getJobId();
+        if (localJobId) {
+            const localState = await readStatus(localJobId);
+            if (localState.state === 'running' || localState.state === 'terminal' || localState.state === 'unknown') {
+                return localState;
+            }
+        }
+
+        if (!preferPoolLookup && !hasGeneratingFlag) {
+            return { state: 'idle', jobId: localJobId, source: 'none' };
+        }
+
+        try {
+            const matched = await findMatchingShotMediaJobInPool({
+                shotId: stableShotId,
+                kind: isVideo ? 'video' : 'image',
+                assetType,
+            });
+            const matchedJobId = String(matched?.job_id || '').trim();
+            if (matchedJobId) {
+                setJobId(matchedJobId);
+                return { state: 'running', jobId: matchedJobId, source: 'pool' };
+            }
+        } catch (error) {
+            return { state: 'unknown', jobId: localJobId, source: 'pool', error };
+        }
+
+        if (releaseIfMissing && (hasGeneratingFlag || localJobId)) {
+            releaseUi();
+        }
+
+        return { state: 'idle', jobId: '', source: 'none' };
+    }, [
+        findMatchingShotMediaJobInPool,
+        generatingStateByShot,
+        getPendingImageJobId,
+        getPendingVideoJobId,
+        isMissingJobError,
+        releaseShotImageUiByShotId,
+        releaseShotVideoUiByShotId,
+        setPendingImageJob,
+        setPendingVideoJob,
+        setShotGeneratingState,
+    ]);
 
     useEffect(() => {
         hasHydratedGenerationStateRef.current = false;
@@ -19207,6 +19453,35 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setEditingShot,
         setShotGeneratingState,
         writeVideoJobStateStorage,
+    ]);
+
+    useEffect(() => {
+        if (!editingShot?.id || !activeEpisode?.id) return;
+
+        let cancelled = false;
+        const stableShotId = String(editingShot.id || '').trim();
+
+        const reconcile = async () => {
+            if (!stableShotId) return;
+
+            await syncShotMediaRuntimeState({ shotId: stableShotId, mediaKey: 'video' });
+            if (cancelled) return;
+            await syncShotMediaRuntimeState({ shotId: stableShotId, mediaKey: 'start' });
+            if (cancelled) return;
+            await syncShotMediaRuntimeState({ shotId: stableShotId, mediaKey: 'end' });
+        };
+
+        reconcile();
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        activeEpisode?.id,
+        currentGeneratingState.end,
+        currentGeneratingState.start,
+        currentGeneratingState.video,
+        editingShot?.id,
+        syncShotMediaRuntimeState,
     ]);
 
     const handleManualRebindMediaSlots = useCallback(async () => {
@@ -21392,9 +21667,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const handleForceStopShotVideo = useCallback(async (shotId) => {
         const stableShotId = String(shotId || '').trim();
         if (!stableShotId) return;
-        const jobId = getPendingVideoJobId(stableShotId);
+        const resolved = await syncShotMediaRuntimeState({
+            shotId: stableShotId,
+            mediaKey: 'video',
+            releaseIfMissing: false,
+        });
+        const jobId = String(resolved?.jobId || '').trim();
         if (!jobId) {
-            onLog?.(t('未找到可停止的视频任务。', 'No running video job found to stop.'), 'warning');
+            releaseShotVideoUiByShotId(stableShotId);
+            onLog?.(t('未找到后端视频任务，已清除当前镜头的本地运行状态。', 'No live backend video job was found. Cleared local running state for this shot.'), 'warning');
+            showNotification(t('已清除本地视频运行状态', 'Local video running state cleared'), 'warning');
             return;
         }
 
@@ -21407,12 +21689,18 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setStoppingVideoByShot((prev) => ({ ...prev, [stableShotId]: true }));
         try {
             const res = await stopGenerationJob('video', jobId, { force: true });
-            clearPendingVideoJob(stableShotId);
-            setShotGeneratingState(stableShotId, 'video', false);
+            releaseShotVideoUiByShotId(stableShotId);
             onLog?.(res?.message || t('已强制停止视频任务。', 'Video task force-stopped.'), 'warning');
             showNotification(t('已强制停止视频任务', 'Video task force-stopped'), 'warning');
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            const detailLower = String(detail).toLowerCase();
+            if (detailLower.includes('job not found') || detailLower.includes('not found')) {
+                releaseShotVideoUiByShotId(stableShotId);
+                onLog?.(t('后端任务已不存在，已清除当前镜头的本地运行状态。', 'Backend job no longer exists. Cleared local running state for this shot.'), 'warning');
+                showNotification(t('后端任务不存在，已解除锁定', 'Backend job missing, lock cleared'), 'warning');
+                return;
+            }
             onLog?.(`${t('停止视频任务失败', 'Failed to stop video task')}: ${detail}`, 'error');
             showNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
         } finally {
@@ -22430,8 +22718,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                                 <button
                                                     onClick={() => handleForceStopShotVideo(editingShot?.id)}
-                                                    disabled={!getPendingVideoJobId(editingShot?.id) || Boolean(stoppingVideoByShot[String(editingShot?.id || '')])}
-                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${(!getPendingVideoJobId(editingShot?.id) || Boolean(stoppingVideoByShot[String(editingShot?.id || '')])) ? 'bg-red-500/10 text-red-300/50 cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? 'bg-red-500/25 text-red-100' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
                                                     title={t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job')}
                                                 >
                                                     {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
@@ -23341,7 +23628,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         label: t('强制停止', 'Force Stop'),
                                                                         busyLabel: t('停止中...', 'Stopping...'),
                                                                         onClick: () => handleForceStopShotVideo(editingShot?.id),
-                                                                        disabled: !pendingVideoJobId || isStoppingCurrentVideo,
+                                                                        disabled: false,
                                                                         busy: isStoppingCurrentVideo,
                                                                         variant: 'danger',
                                                                         title: t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job'),
@@ -26085,7 +26372,13 @@ const Editor = ({
         setJobPoolStoppingId(`${kind}:${jobId}`);
         try {
             const res = await stopGenerationJob(kind, jobId, { force: true });
+            if (kind === 'video') {
+                releaseShotVideoUiByJobId(jobId);
+            } else if (kind === 'image') {
+                releaseShotImageUiByJobId(jobId);
+            }
             addLog(`Job force stopped: ${kind}/${jobId} - ${res?.message || 'ok'}`, 'warning');
+            await refreshShots();
             await refreshGenerationJobPool();
         } catch (e) {
             addLog(`Failed to stop job ${kind}/${jobId}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
@@ -26115,7 +26408,13 @@ const Editor = ({
         setJobPoolDeletingId(rowKey);
         try {
             const res = await deleteGenerationJob(kind, jobId);
+            if (kind === 'video') {
+                releaseShotVideoUiByJobId(jobId);
+            } else if (kind === 'image') {
+                releaseShotImageUiByJobId(jobId);
+            }
             addLog(`Job deleted: ${kind}/${jobId} - ${res?.message || 'ok'}`, 'warning');
+            await refreshShots();
             await refreshGenerationJobPool();
         } catch (e) {
             addLog(`Failed to delete job ${kind}/${jobId}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
