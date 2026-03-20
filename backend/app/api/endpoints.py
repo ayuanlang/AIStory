@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy import or_, and_, text, inspect
 from app.db.session import get_db, SessionLocal
-from app.models.all_models import Project, ProjectShare, ProjectAssetReviewThread, ProjectAssetReviewRound, ProjectAssetReviewMessage, User, Episode, Scene, Shot, Entity, Asset, APISetting, SystemAPISetting, ScriptSegment, TransactionHistory, SMTPSystemConfig, WechatPayConfig, ProviderKeyPool
+from app.models import all_models as models
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
@@ -28,7 +28,7 @@ from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
 from app.api.deps import get_current_user, cache_user_identity  # Import dependency
 from fastapi.responses import JSONResponse
-from typing import List, Optional, Dict, Any, Union, Tuple
+from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING
 from pydantic import BaseModel
 import bcrypt
 import re
@@ -65,10 +65,54 @@ import copy
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+Project = models.Project
+ProjectShare = models.ProjectShare
+ProjectAssetReviewThread = getattr(models, "ProjectAssetReviewThread", None)
+ProjectAssetReviewRound = getattr(models, "ProjectAssetReviewRound", None)
+ProjectAssetReviewMessage = getattr(models, "ProjectAssetReviewMessage", None)
+User = models.User
+Episode = models.Episode
+Scene = models.Scene
+Shot = models.Shot
+Entity = models.Entity
+Asset = models.Asset
+APISetting = models.APISetting
+SystemAPISetting = models.SystemAPISetting
+ScriptSegment = models.ScriptSegment
+TransactionHistory = models.TransactionHistory
+SMTPSystemConfig = models.SMTPSystemConfig
+WechatPayConfig = models.WechatPayConfig
+ProviderKeyPool = models.ProviderKeyPool
+
+_REVIEW_MODELS_AVAILABLE = all(
+    model is not None
+    for model in (ProjectAssetReviewThread, ProjectAssetReviewRound, ProjectAssetReviewMessage)
+)
+
+if TYPE_CHECKING:
+    from app.models.all_models import (
+        ProjectAssetReviewThread as ProjectAssetReviewThreadModel,
+        ProjectAssetReviewRound as ProjectAssetReviewRoundModel,
+        ProjectAssetReviewMessage as ProjectAssetReviewMessageModel,
+    )
+else:
+    ProjectAssetReviewThreadModel = Any
+    ProjectAssetReviewRoundModel = Any
+    ProjectAssetReviewMessageModel = Any
+
 # Create a local limiter instance for the router decorators
 limiter = Limiter(key_func=get_remote_address)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
+
+
+def _require_review_models() -> None:
+    if _REVIEW_MODELS_AVAILABLE:
+        return
+    raise HTTPException(
+        status_code=503,
+        detail="Project asset review is temporarily unavailable on this deployment",
+    )
 
 
 def get_current_claims(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
@@ -4643,7 +4687,7 @@ def _serialize_project_share(share: ProjectShare, user: User) -> ProjectShareOut
     )
 
 
-def _review_thread_has_unread(thread: ProjectAssetReviewThread, current_user: Optional[User]) -> bool:
+def _review_thread_has_unread(thread: ProjectAssetReviewThreadModel, current_user: Optional[User]) -> bool:
     if not current_user:
         return False
     latest_dt = _parse_iso_datetime(getattr(thread, "latest_activity_at", None))
@@ -4662,7 +4706,7 @@ def _review_thread_has_unread(thread: ProjectAssetReviewThread, current_user: Op
     return latest_dt > last_read_dt
 
 
-def _mark_review_thread_read_for_user(thread: ProjectAssetReviewThread, current_user: User, *, read_at: Optional[str] = None) -> None:
+def _mark_review_thread_read_for_user(thread: ProjectAssetReviewThreadModel, current_user: User, *, read_at: Optional[str] = None) -> None:
     now_iso = str(read_at or now_bj_iso())
     if int(current_user.id or 0) == int(thread.requester_user_id or 0):
         thread.requester_last_read_at = now_iso
@@ -4670,7 +4714,7 @@ def _mark_review_thread_read_for_user(thread: ProjectAssetReviewThread, current_
         thread.reviewer_last_read_at = now_iso
 
 
-def _serialize_review_thread(thread: ProjectAssetReviewThread, requester: Optional[User] = None, reviewer: Optional[User] = None, current_user: Optional[User] = None) -> ProjectAssetReviewThreadOut:
+def _serialize_review_thread(thread: ProjectAssetReviewThreadModel, requester: Optional[User] = None, reviewer: Optional[User] = None, current_user: Optional[User] = None) -> ProjectAssetReviewThreadOut:
     return ProjectAssetReviewThreadOut(
         id=thread.id,
         project_id=thread.project_id,
@@ -4688,7 +4732,7 @@ def _serialize_review_thread(thread: ProjectAssetReviewThread, requester: Option
     )
 
 
-def _serialize_review_round(round_row: ProjectAssetReviewRound, initiator: Optional[User] = None) -> ProjectAssetReviewRoundOut:
+def _serialize_review_round(round_row: ProjectAssetReviewRoundModel, initiator: Optional[User] = None) -> ProjectAssetReviewRoundOut:
     return ProjectAssetReviewRoundOut(
         id=round_row.id,
         thread_id=round_row.thread_id,
@@ -4713,7 +4757,7 @@ def _serialize_review_round(round_row: ProjectAssetReviewRound, initiator: Optio
     )
 
 
-def _serialize_review_message(message: ProjectAssetReviewMessage, sender: Optional[User] = None) -> ProjectAssetReviewMessageOut:
+def _serialize_review_message(message: ProjectAssetReviewMessageModel, sender: Optional[User] = None) -> ProjectAssetReviewMessageOut:
     return ProjectAssetReviewMessageOut(
         id=message.id,
         round_id=message.round_id,
@@ -4779,7 +4823,7 @@ def _validate_review_target_ids_for_project(
     return normalized_entity_ids, normalized_shot_ids
 
 
-def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThread, current_user: User, project: Project) -> str:
+def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThreadModel, current_user: User, project: Project) -> str:
     if current_user.id == thread.reviewer_user_id:
         return "reviewer"
     if current_user.id == thread.requester_user_id or project.owner_id == current_user.id:
@@ -4837,7 +4881,8 @@ def _resolve_review_reviewer(
     return reviewer
 
 
-def _require_review_thread_access(db: Session, thread_id: int, current_user: User) -> Tuple[ProjectAssetReviewThread, Project]:
+def _require_review_thread_access(db: Session, thread_id: int, current_user: User) -> Tuple[ProjectAssetReviewThreadModel, Project]:
+    _require_review_models()
     thread = db.query(ProjectAssetReviewThread).filter(ProjectAssetReviewThread.id == thread_id).first()
     if not thread:
         raise HTTPException(status_code=404, detail="Review thread not found")
@@ -4850,7 +4895,8 @@ def _require_review_thread_access(db: Session, thread_id: int, current_user: Use
     raise HTTPException(status_code=403, detail="Not authorized to access this review thread")
 
 
-def _require_review_round_access(db: Session, round_id: int, current_user: User) -> Tuple[ProjectAssetReviewRound, ProjectAssetReviewThread, Project]:
+def _require_review_round_access(db: Session, round_id: int, current_user: User) -> Tuple[ProjectAssetReviewRoundModel, ProjectAssetReviewThreadModel, Project]:
+    _require_review_models()
     round_row = db.query(ProjectAssetReviewRound).filter(ProjectAssetReviewRound.id == round_id).first()
     if not round_row:
         raise HTTPException(status_code=404, detail="Review round not found")
@@ -5796,6 +5842,7 @@ def list_project_review_threads(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     _require_project_access(db, project_id, current_user)
     threads = (
         db.query(ProjectAssetReviewThread)
@@ -5816,6 +5863,7 @@ def list_review_inbox_threads(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     threads = (
         db.query(ProjectAssetReviewThread)
         .filter(ProjectAssetReviewThread.reviewer_user_id == current_user.id)
@@ -5835,6 +5883,7 @@ def list_review_outbox_threads(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     threads = (
         db.query(ProjectAssetReviewThread)
         .filter(ProjectAssetReviewThread.requester_user_id == current_user.id)
@@ -5856,6 +5905,7 @@ def create_project_review_thread(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     project = _require_project_access(db, project_id, current_user)
     share = _get_project_share_record(db, project_id, current_user.id)
     if share and _normalize_project_share_role(getattr(share, "role", None)) == "viewer":
@@ -5934,6 +5984,7 @@ def get_review_thread(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
     users = {
         user.id: user
@@ -5949,6 +6000,7 @@ def mark_review_thread_read(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
     if payload.read:
         _mark_review_thread_read_for_user(thread, current_user)
@@ -5970,6 +6022,7 @@ def update_review_thread_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     thread, project = _require_review_thread_access(db, thread_id, current_user)
     next_status = str(payload.status or "").strip().lower()
     if next_status not in _ASSET_REVIEW_THREAD_STATUSES:
@@ -6010,6 +6063,7 @@ def list_review_thread_rounds(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
     rounds = (
         db.query(ProjectAssetReviewRound)
@@ -6029,6 +6083,7 @@ def create_review_thread_round(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     thread, project = _require_review_thread_access(db, thread_id, current_user)
     sender_role = _resolve_thread_sender_role(db, thread, current_user, project)
     if sender_role != "requester":
@@ -6090,6 +6145,7 @@ def list_review_round_messages(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     round_row, _thread, _project = _require_review_round_access(db, round_id, current_user)
     messages = (
         db.query(ProjectAssetReviewMessage)
@@ -6109,6 +6165,7 @@ def create_review_round_message(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_review_models()
     round_row, thread, project = _require_review_round_access(db, round_id, current_user)
     sender_role = _resolve_thread_sender_role(db, thread, current_user, project)
     message_type = _normalize_asset_review_message_type(payload.message_type)
