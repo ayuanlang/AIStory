@@ -49,6 +49,9 @@ import urllib.parse
 import socket
 import sys
 import time
+
+
+IMAGE_SYNC_TIMEOUT_SECONDS = min(300, max(55, int(os.getenv("IMAGE_SYNC_TIMEOUT_SECONDS", "180"))))
 import html
 from pathlib import Path
 from collections import deque
@@ -285,6 +288,51 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
+_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "180")))
+_ANALYZE_SCENE_RECENT_TASKS: Dict[str, Dict[str, Any]] = {}
+_ANALYZE_SCENE_RECENT_TASKS_LOCK = threading.Lock()
+
+
+def _normalize_analyze_scene_dedup_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(k): _normalize_analyze_scene_dedup_payload(v)
+            for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalize_analyze_scene_dedup_payload(v) for v in value]
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _build_analyze_scene_dedup_key(user_id: int, request: AnalyzeSceneRequest) -> str:
+    payload = {
+        "user_id": int(user_id or 0),
+        "project_id": getattr(request, "project_id", None),
+        "episode_id": getattr(request, "episode_id", None),
+        "text": getattr(request, "text", None),
+        "prompt_file": getattr(request, "prompt_file", None),
+        "system_prompt": getattr(request, "system_prompt", None),
+        "project_metadata": getattr(request, "project_metadata", None),
+        "analysis_attention_notes": getattr(request, "analysis_attention_notes", None),
+        "reuse_subject_assets": getattr(request, "reuse_subject_assets", None),
+        "include_negative_prompt": getattr(request, "include_negative_prompt", True),
+    }
+    stable_payload = _normalize_analyze_scene_dedup_payload(payload)
+    stable_json = json.dumps(stable_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(stable_json.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _prune_recent_analyze_scene_tasks_locked(now_ts: float) -> None:
+    stale_keys = [
+        key
+        for key, payload in _ANALYZE_SCENE_RECENT_TASKS.items()
+        if (now_ts - float((payload or {}).get("ts") or 0.0)) > _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS
+    ]
+    for key in stale_keys:
+        _ANALYZE_SCENE_RECENT_TASKS.pop(key, None)
+
 # ── Generic async-task polling endpoint ──────────────────────────────────
 @router.get("/tasks/{task_id}")
 def poll_task(task_id: str, current_user: User = Depends(get_current_user)):
@@ -330,6 +378,7 @@ GENERATION_CALLBACK_TTL_SECONDS = max(300, int(os.getenv("GENERATION_CALLBACK_TT
 GENERATION_CALLBACK_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_generation_callbacks")
 WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
 WEBHOOK_REPLAY_LOCK = threading.Lock()
+_UNSIGNED_WEBHOOK_WARNING_EMITTED = False
 
 SHOT_MEDIA_BATCH_CANCEL_EVENTS: Dict[int, threading.Event] = {}
 SHOT_MEDIA_BATCH_CANCEL_LOCK = threading.Lock()
@@ -561,10 +610,13 @@ def _compute_webhook_signature(task_id: str, timestamp_seconds: int, secret: str
 
 
 def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> None:
+    global _UNSIGNED_WEBHOOK_WARNING_EMITTED
     secret = str(settings.WEBHOOK_HMAC_KEY or "").strip()
     if not secret:
         if settings.WEBHOOK_HMAC_ALLOW_UNSIGNED:
-            logger.warning("[WebhookVerify] WEBHOOK_HMAC_KEY missing; accepting unsigned callback")
+            if not _UNSIGNED_WEBHOOK_WARNING_EMITTED:
+                logger.warning("[WebhookVerify] WEBHOOK_HMAC_KEY missing; accepting unsigned callback")
+                _UNSIGNED_WEBHOOK_WARNING_EMITTED = True
             return
         raise HTTPException(status_code=503, detail="Webhook signature key not configured")
 
@@ -668,6 +720,78 @@ def _read_image_job_file(job_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.warning("failed to read image job file job_id=%s err=%s", job_id, e)
     return None
+
+
+def _persist_data_uri_image_result(
+    current_user: User,
+    media_url: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    raw = str(media_url or "").strip()
+    if not raw.startswith("data:image/"):
+        return media_url, metadata
+
+    marker = ";base64,"
+    marker_idx = raw.find(marker)
+    if marker_idx <= 5:
+        raise ValueError("invalid image data URI: missing base64 marker")
+
+    mime = raw[5:marker_idx].strip().lower()
+    b64_part = raw[marker_idx + len(marker):].strip()
+    if not b64_part:
+        raise ValueError("invalid image data URI: empty payload")
+
+    extension_map = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/bmp": ".bmp",
+    }
+    file_ext = extension_map.get(mime)
+    if not file_ext:
+        subtype = mime.split("/", 1)[1] if "/" in mime else "png"
+        subtype = re.sub(r"[^a-z0-9]+", "", subtype.lower()) or "png"
+        file_ext = f".{subtype}"
+
+    binary = base64.b64decode(b64_part)
+    upload_root = settings.UPLOAD_DIR
+    if not os.path.isabs(upload_root):
+        upload_root = os.path.abspath(upload_root)
+
+    user_dir = os.path.join(upload_root, str(getattr(current_user, "id", "unknown")), "generated")
+    os.makedirs(user_dir, exist_ok=True)
+
+    filename = f"provider_result_{uuid.uuid4().hex[:16]}{file_ext}"
+    save_path = os.path.join(user_dir, filename)
+    with open(save_path, "wb") as f:
+        f.write(binary)
+
+    updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    updated_metadata["stored_from_data_uri"] = True
+    updated_metadata["stored_from_data_uri_mime"] = mime
+    updated_metadata["stored_from_data_uri_bytes"] = len(binary)
+
+    try:
+        with Image.open(save_path) as img:
+            updated_metadata["width"] = int(img.width)
+            updated_metadata["height"] = int(img.height)
+            if img.format:
+                updated_metadata["format"] = str(img.format)
+    except Exception as exc:
+        logger.warning("data-uri image metadata probe failed path=%s err=%s", save_path, exc)
+
+    relative_path = os.path.relpath(save_path, upload_root).replace("\\", "/")
+    normalized_url = f"/uploads/{relative_path}"
+    logger.info(
+        "[ImageResultNormalize] stored provider data URI | user_id=%s bytes=%s mime=%s url=%s",
+        getattr(current_user, "id", None),
+        len(binary),
+        mime,
+        normalized_url,
+    )
+    return normalized_url, updated_metadata
 
 
 def _video_job_file_path(job_id: str) -> str:
@@ -2048,8 +2172,49 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
     Returns the raw analysis result (Markdown/JSON).
     """
     if async_mode == "1":
+        dedup_key = _build_analyze_scene_dedup_key(current_user.id, request)
+        now_ts = time.time()
+        reused_task_id = ""
+        reused_status = ""
+
+        with _ANALYZE_SCENE_RECENT_TASKS_LOCK:
+            _prune_recent_analyze_scene_tasks_locked(now_ts)
+            existing = _ANALYZE_SCENE_RECENT_TASKS.get(dedup_key) or {}
+            existing_task_id = str(existing.get("task_id") or "").strip()
+            if existing_task_id:
+                info = _get_task_status(existing_task_id, user_id=current_user.id) or {}
+                status = str(info.get("status") or "").strip().lower()
+                if status in {"pending", "running", "completed"}:
+                    reused_task_id = existing_task_id
+                    reused_status = status
+                else:
+                    _ANALYZE_SCENE_RECENT_TASKS.pop(dedup_key, None)
+
+        if reused_task_id:
+            logger.warning(
+                "[analyze_scene] deduplicated async submit user_id=%s episode_id=%s task_id=%s status=%s window_s=%s",
+                current_user.id,
+                getattr(request, "episode_id", None),
+                reused_task_id,
+                reused_status,
+                _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS,
+            )
+            return JSONResponse({
+                "task_id": reused_task_id,
+                "async": True,
+                "deduplicated": True,
+                "status": reused_status,
+            })
+
         tid = _submit_async(analyze_scene, user_id=current_user.id, kind="analyze_scene",
                             request=request, async_mode="0")
+        with _ANALYZE_SCENE_RECENT_TASKS_LOCK:
+            _prune_recent_analyze_scene_tasks_locked(now_ts)
+            _ANALYZE_SCENE_RECENT_TASKS[dedup_key] = {
+                "task_id": tid,
+                "ts": now_ts,
+                "episode_id": getattr(request, "episode_id", None),
+            }
         return JSONResponse({"task_id": tid, "async": True})
     logger.info("Received analyze_scene request")
     try:
@@ -4467,6 +4632,33 @@ def _normalize_project_share_permissions(value: Any) -> Dict[str, Any]:
     return normalized
 
 
+def _project_share_supports_mapped_field(field_name: str) -> bool:
+    mapper = getattr(ProjectShare, "__mapper__", None)
+    attrs = getattr(mapper, "attrs", None)
+    if attrs is None:
+        return False
+    try:
+        return field_name in attrs.keys()
+    except Exception:
+        return False
+
+
+def _apply_project_share_access_fields(share: ProjectShare, role: Any, permissions: Any) -> ProjectShare:
+    normalized_role = _normalize_project_share_role(role)
+    normalized_permissions = _normalize_project_share_permissions(permissions)
+
+    if _project_share_supports_mapped_field("role") or not hasattr(share, "role"):
+        share.role = normalized_role
+    if _project_share_supports_mapped_field("permissions") or not hasattr(share, "permissions"):
+        share.permissions = normalized_permissions
+    return share
+
+
+def _build_project_share(project_id: int, user_id: int, role: Any, permissions: Any) -> ProjectShare:
+    share = ProjectShare(project_id=project_id, user_id=user_id)
+    return _apply_project_share_access_fields(share, role, permissions)
+
+
 def _project_share_has_permission(share: Optional[ProjectShare], permission_key: str) -> bool:
     if not share:
         return False
@@ -4652,17 +4844,11 @@ def _sync_project_managed_shares(
         next_role = "editor" if desired.get("role") == "editor" else "reviewer"
 
         if not share:
-            share = ProjectShare(
-                project_id=project.id,
-                user_id=user_id,
-                role=next_role,
-                permissions=permissions,
-            )
+            share = _build_project_share(project.id, user_id, next_role, permissions)
             db.add(share)
             continue
 
-        share.role = next_role
-        share.permissions = permissions
+        _apply_project_share_access_fields(share, next_role, permissions)
         db.add(share)
 
     current_info[_PROJECT_GLOBAL_INFO_SHARE_USERS_KEY] = [
@@ -5808,14 +5994,13 @@ def create_project_share(
         ProjectShare.user_id == target_user.id,
     ).first()
     if existing:
-        existing.role = role
-        existing.permissions = permissions
+        _apply_project_share_access_fields(existing, role, permissions)
         db.add(existing)
         db.commit()
         db.refresh(existing)
         return _serialize_project_share(existing, target_user)
 
-    share = ProjectShare(project_id=project_id, user_id=target_user.id, role=role, permissions=permissions)
+    share = _build_project_share(project_id, target_user.id, role, permissions)
     db.add(share)
     db.commit()
     db.refresh(share)
@@ -16034,6 +16219,14 @@ class GenerationRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     image_size: Optional[str] = None
+    quality: Optional[str] = None
+    output_format: Optional[str] = None
+    outputFormat: Optional[str] = None
+    response_format: Optional[str] = None
+    responseFormat: Optional[str] = None
+    output_compression: Optional[str] = None
+    outputCompression: Optional[str] = None
+    background: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
     image_urls: Optional[List[str]] = None
     imageUrls: Optional[List[str]] = None
@@ -16074,6 +16267,9 @@ class VideoGenerationRequest(BaseModel):
     negative_prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    quality: Optional[str] = None
+    output_format: Optional[str] = None
+    outputFormat: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
     ref_video_urls: Optional[List[str]] = None
     image_urls: Optional[List[str]] = None
@@ -16366,7 +16562,7 @@ def _build_runtime_llm_config(provider: Optional[str], model: Optional[str], med
     return None
 
 
-def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]:
+def _build_video_provider_options(req: VideoGenerationRequest, quality: Optional[str] = None, output_format: Optional[str] = None, mode: Optional[str] = None) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
 
     explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
@@ -16387,20 +16583,27 @@ def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]
         options["webHook"] = callback_url
 
     if isinstance(req.image_urls, list):
-        image_urls = [str(item).strip() for item in req.image_urls if str(item).strip()]
+        image_urls = _limit_string_list_input(req.image_urls, None)
         if image_urls:
             options["image_urls"] = image_urls
 
     if isinstance(req.ref_video_urls, list):
-        ref_video_urls = [str(item).strip() for item in req.ref_video_urls if str(item).strip()]
+        ref_video_urls = _limit_string_list_input(req.ref_video_urls, None)
         if ref_video_urls:
             options["reference_video_urls"] = ref_video_urls
 
-    if req.mode is not None:
-        mode = str(req.mode).strip().lower()
-        if mode:
-            options["mode"] = mode
-            options["__mode_source"] = "request"
+    normalized_mode = str(mode if mode is not None else (req.mode or "")).strip().lower()
+    if normalized_mode:
+        options["mode"] = normalized_mode
+        options["__mode_source"] = "request"
+
+    normalized_quality = str(quality if quality is not None else (req.quality or "")).strip().lower()
+    if normalized_quality:
+        options["quality"] = normalized_quality
+
+    normalized_output_format = str(output_format if output_format is not None else (req.output_format or req.outputFormat or "")).strip().lower()
+    if normalized_output_format:
+        options["output_format"] = normalized_output_format
 
     if req.sound is not None:
         options["sound"] = bool(req.sound)
@@ -16419,6 +16622,269 @@ def _build_video_provider_options(req: VideoGenerationRequest) -> Dict[str, Any]
         options["kling_elements"] = req.kling_elements
 
     return options
+
+
+def _coerce_capability_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _iter_api_capability_containers(api_config: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    payload = api_config if isinstance(api_config, dict) else {}
+    modality = _safe_json_dict(payload.get("modality"))
+    containers: List[Dict[str, Any]] = []
+    for raw in (
+        modality.get("capability_flags"),
+        modality.get("image_capabilities"),
+        modality.get("video_capabilities"),
+        modality.get("text_capabilities"),
+        modality.get("digital_human_capabilities"),
+        modality.get("voice_capabilities"),
+        modality.get("music_capabilities"),
+        modality,
+    ):
+        container = _safe_json_dict(raw)
+        if container:
+            containers.append(container)
+    return containers
+
+
+def _read_api_capability_bool(api_config: Optional[Dict[str, Any]], *keys: str) -> Optional[bool]:
+    normalized_keys = [str(key or "").strip() for key in keys if str(key or "").strip()]
+    if not normalized_keys:
+        return None
+    for container in _iter_api_capability_containers(api_config):
+        for key in normalized_keys:
+            value = _coerce_capability_bool(container.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _read_api_capability_int(api_config: Optional[Dict[str, Any]], *keys: str) -> Optional[int]:
+    normalized_keys = [str(key or "").strip() for key in keys if str(key or "").strip()]
+    if not normalized_keys:
+        return None
+    for container in _iter_api_capability_containers(api_config):
+        for key in normalized_keys:
+            value = container.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            try:
+                parsed = int(float(value))
+            except Exception:
+                continue
+            if parsed >= 0:
+                return parsed
+    return None
+
+
+def _read_api_capability_number(api_config: Optional[Dict[str, Any]], *keys: str) -> Optional[float]:
+    normalized_keys = [str(key or "").strip() for key in keys if str(key or "").strip()]
+    if not normalized_keys:
+        return None
+    for container in _iter_api_capability_containers(api_config):
+        for key in normalized_keys:
+            value = container.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            try:
+                return float(value)
+            except Exception:
+                continue
+    return None
+
+
+def _read_api_capability_list(api_config: Optional[Dict[str, Any]], *keys: str) -> List[str]:
+    normalized_keys = [str(key or "").strip() for key in keys if str(key or "").strip()]
+    if not normalized_keys:
+        return []
+    for container in _iter_api_capability_containers(api_config):
+        for key in normalized_keys:
+            raw = container.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, list):
+                values = [str(item).strip() for item in raw if str(item).strip()]
+            else:
+                text = str(raw).strip()
+                if not text:
+                    values = []
+                else:
+                    try:
+                        parsed = json.loads(text)
+                        if isinstance(parsed, list):
+                            values = [str(item).strip() for item in parsed if str(item).strip()]
+                        else:
+                            values = [seg.strip() for seg in text.replace("\n", ",").split(",") if seg.strip()]
+                    except Exception:
+                        values = [seg.strip() for seg in text.replace("\n", ",").split(",") if seg.strip()]
+            if values:
+                deduped: List[str] = []
+                seen = set()
+                for item in values:
+                    key_text = item.lower()
+                    if key_text in seen:
+                        continue
+                    seen.add(key_text)
+                    deduped.append(item)
+                return deduped
+    return []
+
+
+def _read_api_capability_int_list(api_config: Optional[Dict[str, Any]], *keys: str) -> List[int]:
+    values: List[int] = []
+    seen = set()
+    for item in _read_api_capability_list(api_config, *keys):
+        try:
+            parsed = int(float(item))
+        except Exception:
+            continue
+        if parsed <= 0 or parsed in seen:
+            continue
+        seen.add(parsed)
+        values.append(parsed)
+    return sorted(values)
+
+
+def _normalize_capability_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+
+
+def _map_text_value_to_allowed(requested: Any, allowed_values: Any) -> Optional[str]:
+    allowed = [str(item).strip() for item in (allowed_values or []) if str(item).strip()]
+    if not allowed:
+        return None
+    req_text = str(requested or "").strip()
+    if not req_text:
+        return None
+    exact_map = {item.lower(): item for item in allowed}
+    req_lower = req_text.lower()
+    if req_lower in exact_map:
+        return exact_map[req_lower]
+    req_token = _normalize_capability_token(req_text)
+    if req_token:
+        token_map = {_normalize_capability_token(item): item for item in allowed}
+        mapped = token_map.get(req_token)
+        if mapped:
+            return mapped
+    return allowed[0]
+
+
+def _map_int_value_to_allowed(requested: Any, allowed_values: Any) -> Optional[int]:
+    allowed: List[int] = []
+    for item in allowed_values or []:
+        try:
+            parsed = int(float(item))
+        except Exception:
+            continue
+        if parsed > 0:
+            allowed.append(parsed)
+    allowed = sorted(set(allowed))
+    if not allowed:
+        return None
+    try:
+        target = int(float(requested))
+    except Exception:
+        return allowed[0]
+    return int(min(allowed, key=lambda current: (abs(current - target), current)))
+
+
+def _parse_resolution_tier(value: Any) -> Optional[int]:
+    text = str(value or "").strip().lower().replace(" ", "")
+    if not text:
+        return None
+    match = re.match(r"^(\d+)(?:p)?$", text)
+    if match:
+        try:
+            parsed = int(match.group(1))
+        except Exception:
+            return None
+        return parsed if parsed > 0 else None
+    match = re.match(r"^(\d+)[x:](\d+)$", text)
+    if match:
+        try:
+            first = int(match.group(1))
+            second = int(match.group(2))
+        except Exception:
+            return None
+        if first > 0 and second > 0:
+            return min(first, second)
+        return None
+    match = re.match(r"^(\d+(?:\.\d+)?)k$", text)
+    if match:
+        try:
+            return int(float(match.group(1)) * 1000)
+        except Exception:
+            return None
+    return None
+
+
+def _map_resolution_to_allowed(requested: Any, allowed_values: Any) -> Optional[str]:
+    allowed = [str(item).strip() for item in (allowed_values or []) if str(item).strip()]
+    if not allowed:
+        return None
+    req_text = str(requested or "").strip()
+    if not req_text:
+        return None
+    exact_map = {item.lower(): item for item in allowed}
+    req_lower = req_text.lower()
+    if req_lower in exact_map:
+        return exact_map[req_lower]
+    req_num = _parse_resolution_tier(req_text)
+    numeric_allowed: List[Tuple[str, int]] = []
+    for item in allowed:
+        parsed = _parse_resolution_tier(item)
+        if parsed is None:
+            continue
+        numeric_allowed.append((item, int(parsed)))
+    if req_num is None or not numeric_allowed:
+        return allowed[0]
+    lower_or_equal = [pair for pair in numeric_allowed if pair[1] <= int(req_num)]
+    if lower_or_equal:
+        best_val = max(pair[1] for pair in lower_or_equal)
+        for item, val in lower_or_equal:
+            if val == best_val:
+                return item
+    min_val = min(pair[1] for pair in numeric_allowed)
+    for item, val in numeric_allowed:
+        if val == min_val:
+            return item
+    return allowed[0]
+
+
+def _limit_media_ref_input(value: Any, limit: Optional[int]) -> Any:
+    if limit is None:
+        return value
+    if limit <= 0:
+        return [] if isinstance(value, list) else None
+    if isinstance(value, list):
+        refs = [str(item).strip() for item in value if str(item).strip()]
+        return refs[:limit]
+    text = str(value or "").strip()
+    if not text:
+        return value
+    return text if limit >= 1 else None
+
+
+def _limit_string_list_input(value: Any, limit: Optional[int]) -> List[str]:
+    if isinstance(value, list):
+        values = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        values = []
+    if limit is None:
+        return values
+    if limit <= 0:
+        return []
+    return values[:limit]
 
 
 def _extract_json_object_from_text(raw_text: Any) -> Dict[str, Any]:
@@ -17010,6 +17476,13 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
             for k in ["provider", "model", "duration", "width", "height", "aspect_ratio", "submit_aspect_ratio", "prompt", "seed"]:
                 if k in source_metadata:
                     meta[k] = source_metadata[k]
+            provider_usage = _extract_provider_usage_from_metadata(source_metadata)
+            if provider_usage:
+                meta["usage"] = provider_usage
+                meta["provider_usage"] = provider_usage
+                usage_source = str(source_metadata.get("usage_source") or "").strip()
+                if usage_source:
+                    meta["usage_source"] = usage_source
 
         provider_alias_map = _build_provider_alias_lookup(db)
         meta = _attach_provider_alias_to_dict(meta, provider_alias_map)
@@ -17259,6 +17732,24 @@ def _safe_int_token(value: Any) -> int:
         return parsed if parsed > 0 else 0
     except Exception:
         return 0
+
+
+def _extract_provider_usage_from_metadata(metadata: Any) -> Dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+
+    for key in ("provider_usage", "usage"):
+        value = metadata.get(key)
+        if isinstance(value, dict) and value:
+            return dict(value)
+
+    raw_payload = metadata.get("raw")
+    if isinstance(raw_payload, dict):
+        raw_usage = raw_payload.get("usage")
+        if isinstance(raw_usage, dict) and raw_usage:
+            return dict(raw_usage)
+
+    return {}
 
 
 def _build_standard_billing_details(
@@ -17593,11 +18084,11 @@ async def generate_image_endpoint(
     db: Session = Depends(get_db)
 ):
     try:
-        return await asyncio.wait_for(_run_generate_image(req, current_user, db), timeout=55)
+        return await asyncio.wait_for(_run_generate_image(req, current_user, db), timeout=IMAGE_SYNC_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=504,
-            detail="Synchronous image generation timed out. Please use /generate/image/submit and poll /generate/image/jobs/{job_id}.",
+            detail=f"Synchronous image generation timed out after {IMAGE_SYNC_TIMEOUT_SECONDS}s. Please use /generate/image/submit and poll /generate/image/jobs/{{job_id}}.",
         )
 
 
@@ -17900,6 +18391,23 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         effective_cfg = _normalize_cfg(getattr(req, "cfg", None))
         if effective_cfg is None:
             effective_cfg = _normalize_cfg(user_advanced.get("cfg"))
+
+        cfg_supported = _read_api_capability_bool(
+            pre_api_cfg,
+            "supports_cfg",
+            "cfg_supported",
+        )
+        if cfg_supported is False:
+            effective_cfg = None
+        elif effective_cfg is not None:
+            cfg_min = _read_api_capability_number(pre_api_cfg, "cfg_min")
+            cfg_max = _read_api_capability_number(pre_api_cfg, "cfg_max")
+            effective_cfg = _clamp_float(
+                effective_cfg,
+                float(cfg_min) if cfg_min is not None else 0.0,
+                float(cfg_max) if cfg_max is not None else 2.0,
+                float(cfg_min) if cfg_min is not None else 1.0,
+            )
         if explicit_seed:
             image_provider_options["seed"] = int(explicit_seed)
             image_provider_options["seeds"] = int(explicit_seed)
@@ -17916,22 +18424,158 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             if image_mode:
                 image_provider_options["mode"] = image_mode
 
+        allowed_image_modes = _read_api_capability_list(
+            pre_api_cfg,
+            "mode_values",
+            "mode",
+            "allowed_modes",
+            "supported_modes",
+        )
+        if image_provider_options.get("mode") is not None and allowed_image_modes:
+            image_provider_options["mode"] = _map_text_value_to_allowed(
+                image_provider_options.get("mode"),
+                allowed_image_modes,
+            )
+
+        allowed_image_aspect_ratios = _read_api_capability_list(
+            pre_api_cfg,
+            "aspect_ratio_values",
+            "aspect_ratios",
+            "aspect_ratio",
+            "allowed_aspect_ratios",
+            "supported_aspect_ratios",
+        )
+        if aspect_ratio and allowed_image_aspect_ratios:
+            aspect_ratio = _map_text_value_to_allowed(aspect_ratio, allowed_image_aspect_ratios)
+
+        allowed_image_sizes = _read_api_capability_list(
+            pre_api_cfg,
+            "image_size_values",
+            "image_sizes",
+            "image_size",
+            "allowed_image_sizes",
+            "supported_image_sizes",
+        )
+        if image_size and allowed_image_sizes:
+            image_size = _map_text_value_to_allowed(image_size, allowed_image_sizes)
+
+        allowed_image_qualities = _read_api_capability_list(
+            pre_api_cfg,
+            "quality_values",
+            "qualities",
+            "quality_levels",
+            "allowed_qualities",
+            "supported_qualities",
+        )
+        image_quality = str(req.quality or "").strip().lower() or None
+        if image_quality and allowed_image_qualities:
+            image_quality = _map_text_value_to_allowed(image_quality, allowed_image_qualities)
+
+        allowed_output_formats = _read_api_capability_list(
+            pre_api_cfg,
+            "output_format_values",
+            "output_formats",
+            "allowed_output_formats",
+            "supported_output_formats",
+        )
+        output_format = str(req.output_format or req.outputFormat or "").strip().lower() or None
+        if output_format and allowed_output_formats:
+            output_format = _map_text_value_to_allowed(output_format, allowed_output_formats)
+
+        allowed_response_formats = _read_api_capability_list(
+            pre_api_cfg,
+            "response_format_values",
+            "response_formats",
+            "allowed_response_formats",
+            "supported_response_formats",
+        )
+        response_format = str(req.response_format or req.responseFormat or "").strip().lower() or None
+        if response_format and allowed_response_formats:
+            response_format = _map_text_value_to_allowed(response_format, allowed_response_formats)
+
+        allowed_output_compressions = _read_api_capability_list(
+            pre_api_cfg,
+            "output_compression_values",
+            "output_compressions",
+            "allowed_output_compressions",
+            "supported_output_compressions",
+        )
+        output_compression = str(req.output_compression or req.outputCompression or "").strip().lower() or None
+        if output_compression and allowed_output_compressions:
+            output_compression = _map_text_value_to_allowed(output_compression, allowed_output_compressions)
+
+        allowed_backgrounds = _read_api_capability_list(
+            pre_api_cfg,
+            "background_values",
+            "backgrounds",
+            "allowed_backgrounds",
+            "supported_backgrounds",
+        )
+        image_background = str(req.background or "").strip().lower() or None
+        if image_background and allowed_backgrounds:
+            image_background = _map_text_value_to_allowed(image_background, allowed_backgrounds)
+
+        allowed_image_resolutions = _read_api_capability_list(
+            pre_api_cfg,
+            "supported_resolutions",
+            "resolution_values",
+            "resolution",
+            "allowed_resolutions",
+        )
+        if width and height and allowed_image_resolutions:
+            mapped_resolution = _map_resolution_to_allowed(f"{int(width)}x{int(height)}", allowed_image_resolutions)
+            parsed_w, parsed_h = _parse_resolution_dims(mapped_resolution)
+            if parsed_w and parsed_h:
+                width = int(parsed_w)
+                height = int(parsed_h)
+
+        image_ref_limit = _read_api_capability_int(
+            pre_api_cfg,
+            "reference_image_limit",
+            "max_reference_images",
+            "max_image_refs",
+        )
+        max_images_per_call = _read_api_capability_int(
+            pre_api_cfg,
+            "max_images_per_call",
+            "max_images",
+            "image_num_limit",
+        )
+        if image_ref_limit is not None:
+            req.ref_image_url = _limit_media_ref_input(req.ref_image_url, image_ref_limit)
+
         if isinstance(req.files_url, list):
-            image_provider_options["filesUrl"] = [str(item).strip() for item in req.files_url if str(item).strip()]
+            image_provider_options["filesUrl"] = _limit_string_list_input(req.files_url, image_ref_limit)
         elif isinstance(req.filesUrl, list):
-            image_provider_options["filesUrl"] = [str(item).strip() for item in req.filesUrl if str(item).strip()]
+            image_provider_options["filesUrl"] = _limit_string_list_input(req.filesUrl, image_ref_limit)
 
         if isinstance(req.image_urls, list):
-            image_provider_options["image_urls"] = [str(item).strip() for item in req.image_urls if str(item).strip()]
+            image_provider_options["image_urls"] = _limit_string_list_input(req.image_urls, image_ref_limit)
         elif isinstance(req.imageUrls, list):
-            image_provider_options["image_urls"] = [str(item).strip() for item in req.imageUrls if str(item).strip()]
+            image_provider_options["image_urls"] = _limit_string_list_input(req.imageUrls, image_ref_limit)
+
+        if image_quality:
+            image_provider_options["quality"] = image_quality
+
+        if output_format:
+            image_provider_options["output_format"] = output_format
+
+        if response_format:
+            image_provider_options["response_format"] = response_format
+
+        if output_compression:
+            image_provider_options["output_compression"] = output_compression
+
+        if image_background:
+            image_provider_options["background"] = image_background
 
         file_url_candidate = str(req.file_url or req.fileUrl or "").strip()
         if file_url_candidate:
             image_provider_options["fileUrl"] = file_url_candidate
 
         mask_url_candidate = str(req.mask_url or req.maskUrl or "").strip()
-        if mask_url_candidate:
+        supports_mask = _read_api_capability_bool(pre_api_cfg, "supports_mask", "mask_supported")
+        if mask_url_candidate and supports_mask is not False:
             image_provider_options["maskUrl"] = mask_url_candidate
 
         if req.is_enhance is not None:
@@ -17955,6 +18599,14 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         fallback_model_candidate = str(req.fallback_model or req.fallbackModel or "").strip()
         if fallback_model_candidate:
             image_provider_options["fallbackModel"] = fallback_model_candidate
+
+        if max_images_per_call is not None:
+            files_urls = image_provider_options.get("filesUrl")
+            if isinstance(files_urls, list):
+                image_provider_options["filesUrl"] = files_urls[:max_images_per_call]
+            image_urls = image_provider_options.get("image_urls")
+            if isinstance(image_urls, list):
+                image_provider_options["image_urls"] = image_urls[:max_images_per_call]
 
         effective_negative_prompt, negative_prompt_source = _resolve_effective_negative_prompt(
             req.negative_prompt,
@@ -18031,20 +18683,22 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             },
         )
         if "error" in result:
-             detail = _format_generation_failure_detail(result, "Image generation failed")
-             
-             # Log full error for image gen
-             logger.error(f"[GenerateImage] Failed: {detail}")
-             billing_service.log_failed_transaction(db, current_user.id, "image_gen", billing_provider, billing_model, detail)
+            detail = _format_generation_failure_detail(result, "Image generation failed")
+            ambiguous_submit = bool((result or {}).get("ambiguous_submit"))
+            status_code = 502 if ambiguous_submit else 400
 
-             if reservation_tx:
-                 try:
-                     billing_service.cancel_reservation(db, reservation_tx.id, detail)
-                     reservation_tx = None
-                 except Exception:
-                     pass
-             
-             raise HTTPException(status_code=400, detail=detail)
+            # Log full error for image gen
+            logger.error(f"[GenerateImage] Failed: {detail}")
+            billing_service.log_failed_transaction(db, current_user.id, "image_gen", billing_provider, billing_model, detail)
+
+            if reservation_tx:
+                try:
+                    billing_service.cancel_reservation(db, reservation_tx.id, detail)
+                    reservation_tx = None
+                except Exception:
+                    pass
+
+            raise HTTPException(status_code=status_code, detail=detail)
 
         _log_api_switch_regenerate_if_needed(
             db=db,
@@ -18098,6 +18752,11 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
                 if submitted_image_count and submitted_image_count > 0:
                     settle_details["image_count"] = int(submitted_image_count)
 
+            provider_usage = _extract_provider_usage_from_metadata(result_meta)
+            if provider_usage:
+                settle_details["provider_usage"] = provider_usage
+                settle_details["usage_source"] = str(result_meta.get("usage_source") or "provider").strip() or "provider"
+
             if billing_provider:
                 settle_details["provider"] = billing_provider
             if billing_model:
@@ -18114,6 +18773,15 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         
         # Register Asset
         if result.get("url"):
+            normalized_url, normalized_meta = _persist_data_uri_image_result(
+                current_user,
+                result.get("url"),
+                result.get("metadata"),
+            )
+            result["url"] = normalized_url
+            if normalized_meta is not None:
+                result["metadata"] = normalized_meta
+
             # Only register if not error? result.get("url") check handles it.
             _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
             _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
@@ -19201,6 +19869,76 @@ async def generate_voice_endpoint(
                 provider_options.get("language_code"),
             )
 
+        timestamps_supported = _read_api_capability_bool(
+            pre_api_cfg,
+            "supports_timestamps",
+            "timestamps_supported",
+        )
+        previous_text_supported = _read_api_capability_bool(
+            pre_api_cfg,
+            "supports_previous_text",
+            "previous_text_supported",
+            "supports_context_text",
+            "context_text_supported",
+        )
+        next_text_supported = _read_api_capability_bool(
+            pre_api_cfg,
+            "supports_next_text",
+            "next_text_supported",
+            "supports_context_text",
+            "context_text_supported",
+        )
+        if timestamps_supported is False:
+            provider_options.pop("timestamps", None)
+        if previous_text_supported is False:
+            provider_options.pop("previous_text", None)
+        if next_text_supported is False:
+            provider_options.pop("next_text", None)
+
+        allowed_voice_values = _read_api_capability_list(
+            pre_api_cfg,
+            "voice_values",
+            "voices",
+            "allowed_voices",
+            "supported_voices",
+        )
+        allowed_language_values = _read_api_capability_list(
+            pre_api_cfg,
+            "language_code_values",
+            "language_values",
+            "languages",
+            "allowed_languages",
+            "supported_languages",
+        )
+        mapped_voice = _map_text_value_to_allowed(provider_options.get("voice"), allowed_voice_values)
+        if mapped_voice:
+            provider_options["voice"] = mapped_voice
+        mapped_language = _map_text_value_to_allowed(provider_options.get("language_code"), allowed_language_values)
+        if mapped_language:
+            provider_options["language_code"] = mapped_language
+
+        voice_numeric_fields = {
+            "stability": ("stability_min", "stability_max", 0.0, 1.0),
+            "similarity_boost": ("similarity_boost_min", "similarity_boost_max", 0.0, 1.0),
+            "style": ("style_min", "style_max", 0.0, 1.0),
+            "speed": ("speed_min", "speed_max", 0.7, 1.2),
+        }
+        for field_name, (min_key, max_key, default_min, default_max) in voice_numeric_fields.items():
+            if provider_options.get(field_name) is None:
+                continue
+            min_value = _read_api_capability_number(pre_api_cfg, min_key)
+            max_value = _read_api_capability_number(pre_api_cfg, max_key)
+            effective_min = default_min if min_value is None else float(min_value)
+            effective_max = default_max if max_value is None else float(max_value)
+            if effective_max < effective_min:
+                effective_min, effective_max = effective_max, effective_min
+            provider_options[field_name] = _clamp_float(
+                provider_options.get(field_name),
+                effective_min,
+                effective_max,
+                effective_min,
+            )
+
         logger.warning(
             "[GenerateVoice] planned params | user_id=%s voice=%s language_code=%s stability=%s similarity_boost=%s style=%s speed=%s timestamps=%s seed=%s",
             current_user.id,
@@ -19330,6 +20068,11 @@ async def generate_voice_endpoint(
                     "status": "SETTLED",
                     "billing_mode": "ACTUAL",
                 }
+
+            provider_usage = _extract_provider_usage_from_metadata(final_meta)
+            if provider_usage:
+                settle_details["provider_usage"] = provider_usage
+                settle_details["usage_source"] = str(final_meta.get("usage_source") or "provider").strip() or "provider"
 
             if final_provider:
                 settle_details["provider"] = final_provider
@@ -19603,7 +20346,81 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             aspect_ratio = project_ratio
             aspect_ratio_source = "project_global_info"
 
+        sound_capability = _read_api_capability_bool(
+            pre_api_cfg,
+            "sound_supported",
+            "has_audio",
+            "audio_supported",
+            "supports_audio",
+        )
+        if sound_capability is False:
+            resolved_sound = False
+            sound_source = "system_api_capability"
+
         normalized_mode = str(req.mode or "").strip().lower() or None
+
+        allowed_video_modes = _read_api_capability_list(
+            pre_api_cfg,
+            "mode_values",
+            "mode",
+            "allowed_modes",
+            "supported_modes",
+        )
+        if normalized_mode and allowed_video_modes:
+            normalized_mode = _map_text_value_to_allowed(normalized_mode, allowed_video_modes)
+
+        allowed_video_aspect_ratios = _read_api_capability_list(
+            pre_api_cfg,
+            "aspect_ratio_values",
+            "aspect_ratios",
+            "aspect_ratio",
+            "allowed_aspect_ratios",
+            "supported_aspect_ratios",
+        )
+        if aspect_ratio and allowed_video_aspect_ratios:
+            aspect_ratio = _map_text_value_to_allowed(aspect_ratio, allowed_video_aspect_ratios)
+
+        allowed_video_durations = _read_api_capability_int_list(
+            pre_api_cfg,
+            "durations_seconds",
+            "duration_values",
+            "allowed_durations",
+            "supported_durations",
+        )
+        if req.duration is not None and allowed_video_durations:
+            mapped_duration = _map_int_value_to_allowed(req.duration, allowed_video_durations)
+            if mapped_duration is not None:
+                req.duration = float(mapped_duration)
+
+        allowed_video_qualities = _read_api_capability_list(
+            pre_api_cfg,
+            "quality_values",
+            "qualities",
+            "quality_levels",
+            "allowed_qualities",
+            "supported_qualities",
+        )
+        video_quality = str(req.quality or "").strip().lower() or None
+        if video_quality and allowed_video_qualities:
+            video_quality = _map_text_value_to_allowed(video_quality, allowed_video_qualities)
+
+        allowed_video_output_formats = _read_api_capability_list(
+            pre_api_cfg,
+            "output_format_values",
+            "output_formats",
+            "allowed_output_formats",
+            "supported_output_formats",
+        )
+        video_output_format = str(req.output_format or req.outputFormat or "").strip().lower() or None
+        if video_output_format and allowed_video_output_formats:
+            video_output_format = _map_text_value_to_allowed(video_output_format, allowed_video_output_formats)
+
+        max_duration_cap = _read_api_capability_int(
+            pre_api_cfg,
+            "max_duration",
+        )
+        if req.duration is not None and max_duration_cap is not None and max_duration_cap > 0:
+            req.duration = float(min(float(req.duration), float(max_duration_cap)))
 
         # Inject project visual size defaults for video providers that support/need them.
         width_candidates = [
@@ -19641,6 +20458,21 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         if resolved_video_width and resolved_video_height:
             resolved_video_resolution = f"{int(resolved_video_width)}x{int(resolved_video_height)}"
 
+        allowed_video_resolutions = _read_api_capability_list(
+            pre_api_cfg,
+            "supported_resolutions",
+            "resolution_values",
+            "resolution",
+            "allowed_resolutions",
+        )
+        if resolved_video_resolution and allowed_video_resolutions:
+            mapped_resolution = _map_resolution_to_allowed(resolved_video_resolution, allowed_video_resolutions)
+            parsed_w, parsed_h = _parse_resolution_dims(mapped_resolution)
+            if parsed_w and parsed_h:
+                resolved_video_width = int(parsed_w)
+                resolved_video_height = int(parsed_h)
+                resolved_video_resolution = f"{int(parsed_w)}x{int(parsed_h)}"
+
         image_size_candidates = [
             project_visual.get("image_size"),
             project_global_info.get("image_size"),
@@ -19651,6 +20483,20 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             if normalized:
                 resolved_video_image_size = normalized
                 break
+
+        allowed_video_image_sizes = _read_api_capability_list(
+            pre_api_cfg,
+            "image_size_values",
+            "image_sizes",
+            "image_size",
+            "allowed_image_sizes",
+            "supported_image_sizes",
+        )
+        if resolved_video_image_size and allowed_video_image_sizes:
+            resolved_video_image_size = _map_text_value_to_allowed(
+                resolved_video_image_size,
+                allowed_video_image_sizes,
+            )
 
         # If project only provides logical size tier (e.g. 1K) plus aspect ratio,
         # infer concrete dimensions so billing-rule range matching can use width/height.
@@ -19815,6 +20661,55 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             normalized_ref_mode,
             supports_last_frame_mode=supports_last_frame_mode,
         )
+        image_ref_limit = _read_api_capability_int(
+            pre_api_cfg,
+            "reference_image_limit",
+            "max_reference_images",
+            "max_image_refs",
+        )
+        video_ref_limit = _read_api_capability_int(
+            pre_api_cfg,
+            "reference_video_limit",
+            "max_reference_videos",
+            "max_video_refs",
+        )
+        explicit_last_frame_flag = _read_api_capability_bool(
+            pre_api_cfg,
+            "supports_last_frame",
+            "supports_last_frame_mode",
+            "last_frame_supported",
+        )
+        explicit_first_frame_flag = _read_api_capability_bool(
+            pre_api_cfg,
+            "supports_first_frame",
+            "supports_start_frame",
+            "first_frame_supported",
+            "start_frame_supported",
+        )
+        supports_keyframes_flag = _read_api_capability_bool(
+            pre_api_cfg,
+            "supports_keyframes",
+            "keyframes_supported",
+            "supports_multi_keyframes",
+        )
+        max_keyframes = _read_api_capability_int(
+            pre_api_cfg,
+            "max_keyframes",
+            "keyframe_limit",
+        )
+        if image_ref_limit is not None:
+            req.ref_image_url = _limit_media_ref_input(req.ref_image_url, image_ref_limit)
+        if isinstance(req.ref_video_urls, list) and video_ref_limit is not None:
+            req.ref_video_urls = _limit_media_ref_input(req.ref_video_urls, video_ref_limit)
+        if explicit_first_frame_flag is False:
+            req.ref_image_url = [] if isinstance(req.ref_image_url, list) else None
+        if explicit_last_frame_flag is False:
+            req.last_frame_url = None
+        if supports_keyframes_flag is False:
+            req.keyframes = None
+        elif isinstance(req.keyframes, list) and max_keyframes is not None:
+            normalized_keyframes = [str(item).strip() for item in req.keyframes if str(item).strip()]
+            req.keyframes = normalized_keyframes[:max_keyframes] if max_keyframes > 0 else []
         normalized_ref_mode = str(ref_normalization_info.get("normalized_mode") or normalized_ref_mode or "")
         logger.info(
             "[GenerateVideo] ref mode normalization | shot_id=%s shot_number=%s ref_mode=%s supports_last_frame=%s fallback_to_refs=%s start_before=%s start_after=%s last_before=%s last_after=%s provider=%s model=%s",
@@ -19946,7 +20841,12 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
         except Exception:
             pass
 
-        video_provider_options = _build_video_provider_options(req)
+        video_provider_options = _build_video_provider_options(
+            req,
+            quality=video_quality,
+            output_format=video_output_format,
+            mode=normalized_mode,
+        )
         is_kie_kling3_video = bool(
             resolved_video_provider == "kie"
             and resolved_video_model in {"kling-3.0/video", "kling3", "kling-3.0", "kling-3-0"}
@@ -20010,6 +20910,27 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             video_provider_options["image_size"] = resolved_video_image_size
         if "sound" not in video_provider_options and resolved_sound is not None:
             video_provider_options["sound"] = bool(resolved_sound)
+        if sound_capability is False:
+            video_provider_options["sound"] = False
+        multi_shots_capability = _read_api_capability_bool(
+            pre_api_cfg,
+            "multi_shots_supported",
+            "supports_multi_shots",
+            "supports_multi_shot",
+        )
+        if multi_shots_capability is False:
+            video_provider_options["multi_shots"] = False
+            video_provider_options.pop("multi_prompt", None)
+        elif is_kie_kling3_video and bool(video_provider_options.get("multi_shots")) and sound_capability is not False:
+            video_provider_options["sound"] = True
+        if image_ref_limit is not None:
+            image_urls = video_provider_options.get("image_urls")
+            if isinstance(image_urls, list):
+                video_provider_options["image_urls"] = _limit_string_list_input(image_urls, image_ref_limit)
+        if video_ref_limit is not None:
+            ref_video_urls = video_provider_options.get("reference_video_urls")
+            if isinstance(ref_video_urls, list):
+                video_provider_options["reference_video_urls"] = _limit_string_list_input(ref_video_urls, video_ref_limit)
         if explicit_seed:
             video_provider_options["seed"] = int(explicit_seed)
             video_provider_options["seeds"] = int(explicit_seed)
@@ -20201,6 +21122,11 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 settle_details["episode_id"] = int(resolved_episode_id)
             if resolved_shot_id:
                 settle_details["shot_id"] = int(resolved_shot_id)
+
+            provider_usage = _extract_provider_usage_from_metadata(final_meta)
+            if provider_usage:
+                settle_details["provider_usage"] = provider_usage
+                settle_details["usage_source"] = str(final_meta.get("usage_source") or "provider").strip() or "provider"
 
             if final_provider:
                 settle_details["provider"] = final_provider
@@ -22137,7 +23063,48 @@ def _dedupe_media_ref_urls(values: Optional[List[str]]) -> List[str]:
     return [x for x in dict.fromkeys(refs) if x]
 
 
+def _system_api_supports_last_frame_flag(provider: Any, model: Any) -> Optional[bool]:
+    provider_text = str(provider or "").strip()
+    model_text = str(model or "").strip()
+    if not provider_text or not model_text:
+        return None
+
+    try:
+        with SessionLocal() as lookup_db:
+            row = get_system_api_setting(
+                lookup_db,
+                provider=provider_text,
+                category="Video",
+                model=model_text,
+            )
+            if row is None:
+                return None
+
+            modality = _safe_json_dict(getattr(row, "modality", None))
+            capability_flags = _safe_json_dict(modality.get("capability_flags"))
+            video_caps = _safe_json_dict(modality.get("video_capabilities"))
+            for container in (capability_flags, video_caps):
+                for key in ("supports_last_frame", "supports_last_frame_mode", "last_frame_supported"):
+                    value = container.get(key)
+                    if isinstance(value, bool):
+                        return value
+                    if value is not None:
+                        text = str(value).strip().lower()
+                        if text in {"1", "true", "yes", "y", "on"}:
+                            return True
+                        if text in {"0", "false", "no", "n", "off"}:
+                            return False
+    except Exception:
+        return None
+
+    return None
+
+
 def _video_api_supports_last_frame_mode(provider: Any, model: Any) -> bool:
+    explicit_flag = _system_api_supports_last_frame_flag(provider, model)
+    if explicit_flag is not None:
+        return explicit_flag
+
     provider_text = str(provider or "").strip().lower()
     model_text = str(model or "").strip().lower()
 

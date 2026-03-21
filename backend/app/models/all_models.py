@@ -27,6 +27,17 @@ class User(Base):
 
     projects = relationship("Project", back_populates="owner")
     shared_projects = relationship("ProjectShare", back_populates="user", cascade="all, delete-orphan")
+    requested_asset_review_threads = relationship(
+        "ProjectAssetReviewThread",
+        foreign_keys="ProjectAssetReviewThread.requester_user_id",
+        back_populates="requester",
+    )
+    assigned_asset_review_threads = relationship(
+        "ProjectAssetReviewThread",
+        foreign_keys="ProjectAssetReviewThread.reviewer_user_id",
+        back_populates="reviewer",
+    )
+    asset_review_messages = relationship("ProjectAssetReviewMessage", back_populates="sender")
     api_settings = relationship("APISetting", back_populates="user")
     assets = relationship("Asset", back_populates="owner")
     system_logs = relationship("SystemLog", back_populates="user")
@@ -79,6 +90,7 @@ class Project(Base):
     shares = relationship("ProjectShare", back_populates="project", cascade="all, delete-orphan")
     episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan")
     entities = relationship("Entity", back_populates="project", cascade="all, delete-orphan")
+    asset_review_threads = relationship("ProjectAssetReviewThread", back_populates="project", cascade="all, delete-orphan")
 
 
 class ProjectShare(Base):
@@ -87,10 +99,81 @@ class ProjectShare(Base):
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    role = Column(String, nullable=False, default="editor")
+    permissions = Column(JSON, default={})
     created_at = Column(String, default=now_bj_iso)
 
     project = relationship("Project", back_populates="shares")
     user = relationship("User", back_populates="shared_projects")
+
+
+class ProjectAssetReviewThread(Base):
+    __tablename__ = "project_asset_review_threads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
+    requester_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    reviewer_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    title = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="open")
+    latest_round_no = Column(Integer, nullable=False, default=0)
+    latest_activity_at = Column(String, default=now_bj_iso)
+    requester_last_read_at = Column(String, nullable=True)
+    reviewer_last_read_at = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+    project = relationship("Project", back_populates="asset_review_threads")
+    requester = relationship("User", foreign_keys=[requester_user_id], back_populates="requested_asset_review_threads")
+    reviewer = relationship("User", foreign_keys=[reviewer_user_id], back_populates="assigned_asset_review_threads")
+    rounds = relationship("ProjectAssetReviewRound", back_populates="thread", cascade="all, delete-orphan")
+
+
+class ProjectAssetReviewRound(Base):
+    __tablename__ = "project_asset_review_rounds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey("project_asset_review_threads.id"), index=True, nullable=False)
+    round_no = Column(Integer, nullable=False, default=1)
+    initiated_by_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    request_message = Column(Text, nullable=True)
+    scope_type = Column(String, nullable=False, default="all_current")
+    entity_required = Column(Boolean, nullable=False, default=True)
+    shot_required = Column(Boolean, nullable=False, default=True)
+    entity_decision = Column(String, nullable=False, default="pending")
+    shot_decision = Column(String, nullable=False, default="pending")
+    overall_status = Column(String, nullable=False, default="pending_reviewer")
+    entity_feedback = Column(Text, nullable=True)
+    shot_feedback = Column(Text, nullable=True)
+    due_at = Column(String, nullable=True)
+    selected_entity_ids = Column(JSON, default=[])
+    selected_shot_ids = Column(JSON, default=[])
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+    closed_at = Column(String, nullable=True)
+
+    thread = relationship("ProjectAssetReviewThread", back_populates="rounds")
+    initiator = relationship("User", foreign_keys=[initiated_by_user_id])
+    messages = relationship("ProjectAssetReviewMessage", back_populates="round", cascade="all, delete-orphan")
+
+
+class ProjectAssetReviewMessage(Base):
+    __tablename__ = "project_asset_review_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    round_id = Column(Integer, ForeignKey("project_asset_review_rounds.id"), index=True, nullable=False)
+    sender_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    sender_role = Column(String, nullable=False, default="requester")
+    message_type = Column(String, nullable=False, default="message")
+    message_text = Column(Text, nullable=True)
+    entity_decision = Column(String, nullable=True)
+    shot_decision = Column(String, nullable=True)
+    entity_feedback = Column(Text, nullable=True)
+    shot_feedback = Column(Text, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+
+    round = relationship("ProjectAssetReviewRound", back_populates="messages")
+    sender = relationship("User", back_populates="asset_review_messages")
 
 class Episode(Base):
     __tablename__ = "episodes"

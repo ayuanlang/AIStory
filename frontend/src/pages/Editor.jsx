@@ -382,11 +382,13 @@ const ManagedVideoPlayer = ({
     const busyText = loadState === 'buffering'
         ? t('视频缓冲中...', 'Buffering video...')
         : t('视频下载中...', 'Downloading video...');
+    const centeredWrapperClassName = `relative flex items-center justify-center overflow-hidden ${wrapperClassName}`.trim();
+    const centeredMediaClassName = `block ${className}`.trim();
 
     if (!src || videoFailed) {
         return (
-            <div className={`relative ${wrapperClassName}`.trim()} onClick={onClick}>
-                <div className={`absolute inset-0 flex items-center justify-center opacity-20 ${className}`.trim()}>
+            <div className={centeredWrapperClassName} onClick={onClick}>
+                <div className={`absolute inset-0 flex items-center justify-center opacity-20 ${centeredMediaClassName}`.trim()}>
                     <Video className="w-8 h-8" />
                 </div>
             </div>
@@ -394,13 +396,13 @@ const ManagedVideoPlayer = ({
     }
 
     return (
-        <div className={`relative ${wrapperClassName}`.trim()} onClick={onClick}>
+        <div className={centeredWrapperClassName} onClick={onClick}>
             {!suspend ? (
                 <video
                     key={src}
                     src={getFullUrl(src)}
                     poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
-                    className={className}
+                    className={centeredMediaClassName}
                     controls={controls}
                     autoPlay={autoPlay}
                     muted={muted}
@@ -425,7 +427,7 @@ const ManagedVideoPlayer = ({
             ) : poster && !posterFailed ? (
                 <SafeImage
                     src={poster}
-                    className={className}
+                    className={centeredMediaClassName}
                     alt="video-poster"
                     onError={() => {
                         rememberBrokenMediaUrl(poster);
@@ -433,7 +435,7 @@ const ManagedVideoPlayer = ({
                     }}
                 />
             ) : (
-                <div className={`absolute inset-0 flex items-center justify-center opacity-20 ${className}`.trim()}>
+                <div className={`absolute inset-0 flex items-center justify-center opacity-20 ${centeredMediaClassName}`.trim()}>
                     <Video className="w-8 h-8" />
                 </div>
             )}
@@ -7263,6 +7265,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const llmRawAutoSaveArmedRef = useRef(false);
     const analysisResumeInFlightRef = useRef(false);
     const analysisStopRequestedRef = useRef(false);
+    const analysisRunInFlightRef = useRef(false);
 
     const isTaskCanceledError = useCallback((error) => {
         if (!error) return false;
@@ -8683,6 +8686,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     };
 
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
+        if (analysisRunInFlightRef.current) {
+            if (onLog) onLog('Skipped duplicate AI Scene Analysis submit while another analysis run is already active.', 'warning');
+            return;
+        }
+        analysisRunInFlightRef.current = true;
         const startedAt = Date.now();
         analysisStopRequestedRef.current = false;
         setIsAnalyzing(true);
@@ -8911,6 +8919,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             setIsAnalyzing(false);
             setActiveAnalysisTaskId('');
             analysisStopRequestedRef.current = false;
+            analysisRunInFlightRef.current = false;
         }
     };
 
@@ -8995,6 +9004,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             alert("No active episode selected.");
             return;
         }
+        if (analysisRunInFlightRef.current) {
+            if (onLog) onLog('Skipped duplicate advanced AI Scene Analysis submit while another analysis run is already active.', 'warning');
+            return;
+        }
+        analysisRunInFlightRef.current = true;
 
         const startedAt = Date.now();
         analysisStopRequestedRef.current = false;
@@ -9219,6 +9233,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             setIsAnalyzing(false);
             setActiveAnalysisTaskId('');
             analysisStopRequestedRef.current = false;
+            analysisRunInFlightRef.current = false;
         }
     };
 
@@ -15380,7 +15395,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     );
 };
 
-const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
+const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh' }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const createSubjectBatchTaskState = () => ({
@@ -15611,6 +15626,37 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         return t('英文', 'English');
     }, [t]);
 
+    const getResolvedEntityGlobalStyleText = useCallback(() => {
+        const info = currentEpisode?.episode_info?.e_global_info;
+        const projectInfo = project?.global_info;
+        return String(
+            info?.Global_Style
+            || info?.global_style
+            || projectInfo?.Global_Style
+            || projectInfo?.global_style
+            || ''
+        ).trim();
+    }, [currentEpisode?.episode_info?.e_global_info, project?.global_info]);
+
+    const prependEntityGlobalStyleToPromptHead = useCallback((text, options = {}) => {
+        const rawText = String(text || '').trim();
+        if (!rawText) return rawText;
+
+        const { injectIfMissing = true } = options || {};
+        const globalStyle = getResolvedEntityGlobalStyleText();
+        if (!globalStyle) return rawText;
+
+        const tokenPattern = /[\[【]\s*(global style|global_style)\s*[\]】]/ig;
+        const replaced = rawText.replace(tokenPattern, `[Global Style](${globalStyle})`);
+        if (replaced !== rawText) return replaced;
+        if (!injectIfMissing) return rawText;
+
+        if (/\[Global Style\]\s*\(/i.test(rawText)) return rawText;
+        if (rawText.toLowerCase().startsWith(globalStyle.toLowerCase())) return rawText;
+
+        return `[Global Style](${globalStyle}). ${rawText}`;
+    }, [getResolvedEntityGlobalStyleText]);
+
     useEffect(() => {
         const syncPromptSubmitLangPref = () => {
             setPromptSubmitLangPref(getPromptSubmitLanguagePreference());
@@ -15656,8 +15702,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
             processed += (processed ? ', ' : '') + suffixes.join(', ');
         }
 
-        return processed;
-    }, [allEntities, currentEpisode?.episode_info, getEntityPromptByLang]);
+        return prependEntityGlobalStyleToPromptHead(processed, { injectIfMissing: true });
+    }, [allEntities, currentEpisode?.episode_info, getEntityPromptByLang, prependEntityGlobalStyleToPromptHead]);
 
     const applyGenerateBatchState = useCallback((running, progress) => {
         if (!isMountedRef.current) return;
@@ -16204,6 +16250,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         if (suffixes.length > 0) {
             finalPrompt = `${finalPrompt}${finalPrompt ? ', ' : ''}${suffixes.join(', ')}`;
         }
+        finalPrompt = prependEntityGlobalStyleToPromptHead(finalPrompt, { injectIfMissing: true });
 
         const primaryRefUrl = String(analyzed?.image_url || entity?.image_url || '').trim();
         const depUrls = [];
@@ -16252,7 +16299,7 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
 
         setStep('done', '重构完成', 'Refactor completed', 100);
         return updatedEntity;
-    }, [allEntities, currentEpisode?.episode_info, currentEpisode?.id, getEntityPromptByLang, projectId, resolvedPromptSubmitLang, t]);
+    }, [allEntities, currentEpisode?.episode_info, currentEpisode?.id, getEntityPromptByLang, prependEntityGlobalStyleToPromptHead, projectId, resolvedPromptSubmitLang, t]);
 
     const handleBatchAnalyzeAndReconstructSubjects = async () => {
         const runtimeSnapshot = getSubjectBatchSnapshot();
@@ -16774,7 +16821,8 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
         // prompt likely already has suffixes appended from initialization, 
         // but we run processPrompt again in case user added new variables.
         // Use allEntities for resolution
-        const finalPrompt = processPrompt(promptToUse, epInfo, allEntities);
+        const processedPrompt = processPrompt(promptToUse, epInfo, allEntities);
+        const finalPrompt = prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true });
         
         // Update UI to show processed prompt (in case var replacement happened)
         setPrompt(finalPrompt);
@@ -17003,7 +17051,10 @@ const SubjectLibrary = ({ projectId, currentEpisode, uiLang = 'zh' }) => {
                         // We pass 'allEntities' so [Reference] replacement works
                         // Note: processPrompt uses allEntities to find values. 
                         // It reads entity.description usually.
-                        const finalPrompt = String(processPrompt(basePrompt, epInfo, allEntities) || '').trim();
+                        const finalPrompt = prependEntityGlobalStyleToPromptHead(
+                            String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
+                            { injectIfMissing: true }
+                        );
                         if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
                             skippedPromptCount += 1;
                             onLog?.(
@@ -19609,7 +19660,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return parts.length > 0 ? " | " + parts.join(", ") : "";
     };
 
-    const applyGlobalStyleToPrompt = useCallback((text, options = {}) => {
+    const prependEntityGlobalStyleToPromptHead = useCallback((text, options = {}) => {
         const rawText = String(text || '').trim();
         if (!rawText) return rawText;
 
@@ -19618,9 +19669,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!globalStyle) return rawText;
 
         const tokenPattern = /[\[【]\s*(global style|global_style)\s*[\]】]/ig;
-        let nextText = rawText.replace(tokenPattern, `[Global Style](${globalStyle})`);
-
-        if (nextText !== rawText) return nextText;
+        const replaced = rawText.replace(tokenPattern, `[Global Style](${globalStyle})`);
+        if (replaced !== rawText) return replaced;
         if (!injectIfMissing) return rawText;
 
         if (/\[Global Style\]\s*\(/i.test(rawText)) return rawText;
@@ -19628,6 +19678,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         return `[Global Style](${globalStyle}). ${rawText}`;
     }, [activeEpisode?.episode_info?.e_global_info, project?.global_info]);
+
+    const applyGlobalStyleToPrompt = useCallback((text, options = {}) => {
+        return prependEntityGlobalStyleToPromptHead(text, options);
+    }, [prependEntityGlobalStyleToPromptHead]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
@@ -23216,11 +23270,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                     {/* Start Frame */}
                                     <div className="space-y-2">
-                                        <div className="flex justify-between items-center">
+                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('起始帧', 'Start Frame')}
                                             </div>
-                                            <div className="flex gap-1">
+                                            <div className="flex flex-wrap items-center justify-end gap-1">
                                                 <button
                                                     onClick={() => openAssetDetailModal('start')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
@@ -23345,11 +23399,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                                     {/* End Frame */}
                                     <div className="space-y-2">
-                                        <div className="flex justify-between items-center">
+                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('结束帧', 'End Frame')}
                                             </div>
-                                            <div className="flex gap-1">
+                                            <div className="flex flex-wrap items-center justify-end gap-1">
                                                 <button
                                                     onClick={() => openAssetDetailModal('end')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
@@ -23492,12 +23546,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                                     {/* Final Video Output (Moved Here) */}
                                     <div className="space-y-2">
-                                        <div className="flex justify-between items-center">
+                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('最终视频', 'Final Video')}
                                             </div>
                                             
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex flex-wrap items-center justify-end gap-1">
                                                 <label className="inline-flex items-center gap-1.5 text-[10px] text-white/80 whitespace-nowrap">
                                                     <input
                                                         type="checkbox"
@@ -27716,7 +27770,7 @@ const Editor = ({
                             />
                         )}
                         {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
-                        {activeTab === 'subjects' && <SubjectLibrary projectId={id} currentEpisode={activeEpisode} uiLang={uiLang} />}
+                        {activeTab === 'subjects' && <SubjectLibrary projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} />}
                         {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                             if (sceneId) {
                                 setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });

@@ -91,15 +91,26 @@ const runSingleFlight = (key, producer) => {
 
 let reviewRoutesUnsupported = false;
 
-const isMissingReviewRouteError = (error) => {
+const isUnsupportedReviewRouteError = (error) => {
     const status = Number(error?.response?.status || 0);
-    if (status !== 404) return false;
     const path = String(error?.config?.url || '').trim().toLowerCase();
-    return path.includes('/review_threads') || path.includes('/review_rounds');
+    const isReviewPath = path.includes('/review_threads') || path.includes('/review_rounds');
+    if (!isReviewPath) return false;
+
+    if (status === 404) return true;
+
+    if (status === 503) {
+        const detail = String(error?.response?.data?.detail || '').trim().toLowerCase();
+        if (detail.includes('project asset review is temporarily unavailable')) {
+            return true;
+        }
+    }
+
+    return false;
 };
 
 const markReviewRoutesUnsupported = (error) => {
-    if (!isMissingReviewRouteError(error)) return false;
+    if (!isUnsupportedReviewRouteError(error)) return false;
     reviewRoutesUnsupported = true;
     return true;
 };
@@ -1516,8 +1527,7 @@ const pollGenerationCallbackUntilDone = async (
     if (!stableTicket) throw new Error('Missing callback ticket');
 
     const start = Date.now();
-    let intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
-    const maxIntervalMs = 3500;
+    const intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
 
     while (Date.now() - start < timeoutMs) {
         if (cancelledRef?.current) throw new Error(`${kind} callback polling cancelled`);
@@ -1546,14 +1556,12 @@ const pollGenerationCallbackUntilDone = async (
             }
 
             await sleep(intervalMs);
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.1));
         } catch (error) {
             if (cancelledRef?.current) throw new Error(`${kind} callback polling cancelled`);
             if (!isTransientPollingError(error)) {
                 throw error;
             }
-            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.3)));
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.3));
+            await sleep(intervalMs);
         }
     }
 
@@ -1565,8 +1573,7 @@ const pollImageJobUntilDone = async (
     { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000, cancelledRef, baseURL } = {}
 ) => {
     const start = Date.now();
-    let intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
-    const maxIntervalMs = 3000;
+    const intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
     while (Date.now() - start < timeoutMs) {
         if (cancelledRef?.current) throw new Error('Image job polling cancelled');
         try {
@@ -1589,14 +1596,12 @@ const pollImageJobUntilDone = async (
             }
 
             await sleep(intervalMs);
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.1));
         } catch (error) {
             if (cancelledRef?.current) throw new Error('Image job polling cancelled');
             if (!isTransientPollingError(error)) {
                 throw error;
             }
-            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.3)));
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.3));
+            await sleep(intervalMs);
         }
     }
 
@@ -1608,8 +1613,7 @@ const pollVideoJobUntilDone = async (
     { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2500, cancelledRef, baseURL } = {}
 ) => {
     const start = Date.now();
-    let intervalMs = Math.max(2000, Number(pollIntervalMs || 2500));
-    const maxIntervalMs = 5000;
+    const intervalMs = Math.max(2000, Number(pollIntervalMs || 2500));
     while (Date.now() - start < timeoutMs) {
         if (cancelledRef?.current) throw new Error('Video job polling cancelled');
         try {
@@ -1628,14 +1632,12 @@ const pollVideoJobUntilDone = async (
             }
 
             await sleep(intervalMs);
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.1));
         } catch (error) {
             if (cancelledRef?.current) throw new Error('Video job polling cancelled');
             if (!isTransientPollingError(error)) {
                 throw error;
             }
-            await sleep(Math.min(maxIntervalMs, Math.round(intervalMs * 1.3)));
-            intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * 1.3));
+            await sleep(intervalMs);
         }
     }
 
@@ -1799,11 +1801,17 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 
 export const submitImageGenerationJob = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
+    const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(options || {}, 'callback_polling')
+        ? options?.callback_polling !== false
+        : DEFAULT_CALLBACK_POLLING_ENABLED;
+    const callbackTicket = callbackPollingEnabled ? createGenerationCallbackTicket('img') : '';
+    const callbackUrl = callbackPollingEnabled ? buildGenerationCallbackUrl(callbackTicket) : '';
     const payload = {
         prompt,
         provider,
         ref_image_url,
         ...(options || {}),
+        ...(callbackUrl ? { callback_url: callbackUrl } : {}),
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
     };
     const response = await api.post('/generate/image/submit', payload);

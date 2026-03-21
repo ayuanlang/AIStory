@@ -6,19 +6,28 @@ import json
 from datetime import datetime
 from sqlalchemy import text, inspect
 from app.db.session import engine, SessionLocal
-from app.models.all_models import (
-    APISetting,
-    User,
-    SystemAPISetting,
-    ProviderKeyPool,
-    SystemAPIBillingRule,
-    TransactionAction,
-    SMTPSystemConfig,
-    WechatPayConfig,
-    TaskDefaultSystemAPI,
-)
+from app.models import all_models as models
 from app.services.system_default_api_service import normalize_task_category
 from app.core.time_utils import now_bj_iso
+
+APISetting = models.APISetting
+User = models.User
+ProjectShare = models.ProjectShare
+ProjectAssetReviewThread = getattr(models, "ProjectAssetReviewThread", None)
+ProjectAssetReviewRound = getattr(models, "ProjectAssetReviewRound", None)
+ProjectAssetReviewMessage = getattr(models, "ProjectAssetReviewMessage", None)
+SystemAPISetting = models.SystemAPISetting
+ProviderKeyPool = models.ProviderKeyPool
+SystemAPIBillingRule = models.SystemAPIBillingRule
+TransactionAction = models.TransactionAction
+SMTPSystemConfig = models.SMTPSystemConfig
+WechatPayConfig = models.WechatPayConfig
+TaskDefaultSystemAPI = models.TaskDefaultSystemAPI
+
+_REVIEW_MODELS_AVAILABLE = all(
+    model is not None
+    for model in (ProjectAssetReviewThread, ProjectAssetReviewRound, ProjectAssetReviewMessage)
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +83,10 @@ def _ensure_core_performance_indexes() -> None:
         # project share checks
         "CREATE INDEX IF NOT EXISTS ix_project_shares_project_user ON project_shares(project_id, user_id)",
         "CREATE INDEX IF NOT EXISTS ix_project_shares_user_project ON project_shares(user_id, project_id)",
+        "CREATE INDEX IF NOT EXISTS ix_review_threads_project_activity ON project_asset_review_threads(project_id, latest_activity_at)",
+        "CREATE INDEX IF NOT EXISTS ix_review_threads_reviewer_activity ON project_asset_review_threads(reviewer_user_id, latest_activity_at)",
+        "CREATE INDEX IF NOT EXISTS ix_review_rounds_thread_roundno ON project_asset_review_rounds(thread_id, round_no)",
+        "CREATE INDEX IF NOT EXISTS ix_review_messages_round_created ON project_asset_review_messages(round_id, created_at)",
         # user api bindings
         "CREATE INDEX IF NOT EXISTS ix_api_settings_user_category_system ON api_settings(user_id, category, system_api_id)",
         # system api selection hot paths
@@ -170,6 +183,72 @@ def check_and_migrate_tables():
                     logger.info("Ensured users.preferences column")
         except Exception as e:
             logger.error(f"Failed to ensure users.preferences column: {e}")
+
+        # Ensure share-role compatibility for legacy project_shares rows.
+        try:
+            inspector = inspect(engine)
+            if inspector.has_table("project_shares"):
+                share_cols = {c['name'] for c in inspector.get_columns('project_shares')}
+                with engine.begin() as conn:
+                    if 'role' not in share_cols:
+                        if is_postgres:
+                            conn.execute(text("ALTER TABLE project_shares ADD COLUMN IF NOT EXISTS role VARCHAR"))
+                        else:
+                            conn.execute(text("ALTER TABLE project_shares ADD COLUMN role VARCHAR"))
+                    if 'permissions' not in share_cols:
+                        if is_postgres:
+                            conn.execute(text("ALTER TABLE project_shares ADD COLUMN IF NOT EXISTS permissions JSON"))
+                        else:
+                            conn.execute(text("ALTER TABLE project_shares ADD COLUMN permissions JSON"))
+                    if is_postgres:
+                        conn.execute(text("UPDATE project_shares SET role = 'editor' WHERE role IS NULL OR role = ''"))
+                        conn.execute(text("UPDATE project_shares SET permissions = '{}'::json WHERE permissions IS NULL"))
+                        conn.execute(text("ALTER TABLE project_shares ALTER COLUMN role SET DEFAULT 'editor'"))
+                    else:
+                        conn.execute(text("UPDATE project_shares SET role = 'editor' WHERE role IS NULL OR role = ''"))
+                        conn.execute(text("UPDATE project_shares SET permissions = '{}' WHERE permissions IS NULL"))
+                logger.info("Ensured project_shares.role and project_shares.permissions columns")
+        except Exception as e:
+            logger.error(f"Failed to ensure project_shares review columns: {e}")
+
+        # Ensure project asset review tables exist for multi-round reviewer workflow.
+        try:
+            if _REVIEW_MODELS_AVAILABLE:
+                inspector = inspect(engine)
+                if not inspector.has_table("project_asset_review_threads"):
+                    ProjectAssetReviewThread.__table__.create(bind=engine, checkfirst=True)
+                    logger.info("Created project_asset_review_threads table")
+                if not inspector.has_table("project_asset_review_rounds"):
+                    ProjectAssetReviewRound.__table__.create(bind=engine, checkfirst=True)
+                    logger.info("Created project_asset_review_rounds table")
+                if not inspector.has_table("project_asset_review_messages"):
+                    ProjectAssetReviewMessage.__table__.create(bind=engine, checkfirst=True)
+                    logger.info("Created project_asset_review_messages table")
+            else:
+                logger.warning("Skipping project asset review table bootstrap because review models are unavailable")
+        except Exception as e:
+            logger.error(f"Failed to ensure project asset review tables: {e}")
+
+        try:
+            if _REVIEW_MODELS_AVAILABLE:
+                inspector = inspect(engine)
+                if inspector.has_table("project_asset_review_threads"):
+                    review_thread_cols = {c['name'] for c in inspector.get_columns('project_asset_review_threads')}
+                    with engine.begin() as conn:
+                        if 'requester_last_read_at' not in review_thread_cols:
+                            if is_postgres:
+                                conn.execute(text("ALTER TABLE project_asset_review_threads ADD COLUMN IF NOT EXISTS requester_last_read_at VARCHAR"))
+                            else:
+                                conn.execute(text("ALTER TABLE project_asset_review_threads ADD COLUMN requester_last_read_at VARCHAR"))
+                        if 'reviewer_last_read_at' not in review_thread_cols:
+                            if is_postgres:
+                                conn.execute(text("ALTER TABLE project_asset_review_threads ADD COLUMN IF NOT EXISTS reviewer_last_read_at VARCHAR"))
+                            else:
+                                conn.execute(text("ALTER TABLE project_asset_review_threads ADD COLUMN reviewer_last_read_at VARCHAR"))
+                        conn.execute(text("UPDATE project_asset_review_threads SET requester_last_read_at = COALESCE(requester_last_read_at, created_at)"))
+                    logger.info("Ensured project_asset_review_threads read-tracking columns")
+        except Exception as e:
+            logger.error(f"Failed to ensure review thread read-tracking columns: {e}")
 
         # Ensure provider_key_pool table exists
         try:

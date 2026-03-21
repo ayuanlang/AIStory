@@ -1,6 +1,31 @@
 
-import React, { useEffect, useState } from 'react';
-import { api, fetchProjects, createProject, getSettings, updateSetting, getSettingDefaults, deleteSetting, deleteProject, recordSystemLogAction, fetchProjectShares, createProjectShare, deleteProjectShare, getKieStandardValueOptions } from '../services/api';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+    api,
+    fetchProjects,
+    createProject,
+    getSettings,
+    updateSetting,
+    getSettingDefaults,
+    deleteSetting,
+    deleteProject,
+    recordSystemLogAction,
+    fetchProjectShares,
+    createProjectShare,
+    deleteProjectShare,
+    fetchProjectReviewThreads,
+    fetchReviewInboxThreads,
+    fetchReviewOutboxThreads,
+    createProjectReviewThread,
+    fetchReviewThread,
+    markReviewThreadRead,
+    updateReviewThreadStatus,
+    fetchReviewThreadRounds,
+    createReviewThreadRound,
+    fetchReviewRoundMessages,
+    createReviewRoundMessage,
+    getKieStandardValueOptions,
+} from '../services/api';
 import { BASE_URL } from '../config';
 import Editor from './Editor';
 import SettingsPage from './Settings';
@@ -29,6 +54,7 @@ import {
     Activity,
     Shield,
     Share2,
+    Bell,
     X,
     Menu,
     Loader2,
@@ -93,6 +119,18 @@ const uniqueNonEmptyStrings = (items) => {
     return out;
 };
 
+const parseUserListInput = (value) => {
+    if (Array.isArray(value)) return uniqueNonEmptyStrings(value);
+    return uniqueNonEmptyStrings(String(value || '').split(/[;,\n\r]+/));
+};
+
+const formatParsedUserHint = (value, t) => {
+    const count = parseUserListInput(value).length;
+    return count > 0
+        ? t(`已解析 ${count} 个用户，创建时会校验是否存在`, `Parsed ${count} users. Existence will be validated on create`)
+        : t('留空即可，创建时才会校验输入的用户', 'Leave empty if unused. Entered users will be validated on create');
+};
+
 const pickPreferredOrFirst = (options, preferred = '') => {
     const normalized = uniqueNonEmptyStrings(options);
     if (preferred && normalized.includes(preferred)) return preferred;
@@ -118,6 +156,61 @@ const normalizeProjectCreateOptions = (payload) => {
         image_size: imageSize.length ? imageSize : [...PROJECT_CREATE_DEFAULT_OPTIONS.image_size],
     };
 };
+
+const PROJECT_SHARE_ROLE_OPTIONS = ['editor', 'reviewer', 'viewer'];
+const REVIEW_LIST_MODE_OPTIONS = ['project', 'inbox', 'outbox'];
+const REVIEW_DECISION_OPTIONS = ['pending', 'approved', 'conditional', 'rejected'];
+const REVIEW_THREAD_STATUS_OPTIONS = ['open', 'closed', 'archived'];
+
+const getProjectShareRoleLabel = (role, t) => {
+    const normalized = String(role || 'editor').trim().toLowerCase();
+    if (normalized === 'reviewer') return t('审核人', 'Reviewer');
+    if (normalized === 'viewer') return t('查看者', 'Viewer');
+    return t('编辑者', 'Editor');
+};
+
+const getReviewDecisionLabel = (decision, t) => {
+    const normalized = String(decision || 'pending').trim().toLowerCase();
+    if (normalized === 'approved') return t('通过', 'Approved');
+    if (normalized === 'conditional') return t('有条件通过', 'Conditional');
+    if (normalized === 'rejected') return t('不通过', 'Rejected');
+    return t('待回复', 'Pending');
+};
+
+const getReviewThreadStatusLabel = (status, t) => {
+    const normalized = String(status || 'open').trim().toLowerCase();
+    if (normalized === 'closed') return t('已关闭', 'Closed');
+    if (normalized === 'archived') return t('已归档', 'Archived');
+    return t('进行中', 'Open');
+};
+
+const getReviewListModeLabel = (mode, t) => {
+    if (mode === 'inbox') return t('待我审核', 'Inbox');
+    if (mode === 'outbox') return t('我的发起', 'Outbox');
+    return t('项目审核', 'Project Reviews');
+};
+
+const createDefaultReviewThreadForm = () => ({
+    reviewer_user: '',
+    title: '',
+    request_message: '',
+    entity_required: true,
+    shot_required: true,
+});
+
+const createDefaultReviewMessageForm = () => ({
+    message_text: '',
+    entity_decision: 'pending',
+    shot_decision: 'pending',
+    entity_feedback: '',
+    shot_feedback: '',
+});
+
+const createDefaultReviewRoundForm = () => ({
+    request_message: '',
+    entity_required: true,
+    shot_required: true,
+});
 
 const sortProjectsNewestFirst = (items = []) => {
     const safeList = Array.isArray(items) ? [...items] : [];
@@ -250,6 +343,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
+    const [newShareUsers, setNewShareUsers] = useState('');
+    const [newReviewerUsers, setNewReviewerUsers] = useState('');
     const [projectCreateOptions, setProjectCreateOptions] = useState(PROJECT_CREATE_DEFAULT_OPTIONS);
     const [newType, setNewType] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.type));
     const [newLanguage, setNewLanguage] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.language));
@@ -267,11 +362,32 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [currentTheme, setCurrentTheme] = useState('default');
     const [toast, setToast] = useState(null);
     const [shareModalProject, setShareModalProject] = useState(null);
+    const [shareModalTab, setShareModalTab] = useState('share');
     const [projectShares, setProjectShares] = useState([]);
     const [projectShareCounts, setProjectShareCounts] = useState({});
+    const [projectUnreadReviewCounts, setProjectUnreadReviewCounts] = useState({});
     const [shareTargetUser, setShareTargetUser] = useState('');
+    const [shareTargetRole, setShareTargetRole] = useState('editor');
+    const [shareTargetCanReview, setShareTargetCanReview] = useState(false);
+    const [shareRoleDrafts, setShareRoleDrafts] = useState({});
+    const [sharePermissionDrafts, setSharePermissionDrafts] = useState({});
     const [shareLoading, setShareLoading] = useState(false);
     const [shareSubmitting, setShareSubmitting] = useState(false);
+    const [reviewListMode, setReviewListMode] = useState('project');
+    const [projectReviewThreads, setProjectReviewThreads] = useState([]);
+    const [reviewInboxThreads, setReviewInboxThreads] = useState([]);
+    const [reviewOutboxThreads, setReviewOutboxThreads] = useState([]);
+    const [reviewLoading, setReviewLoading] = useState(false);
+    const [reviewSubmitting, setReviewSubmitting] = useState(false);
+    const [selectedReviewThreadId, setSelectedReviewThreadId] = useState(null);
+    const [selectedReviewThread, setSelectedReviewThread] = useState(null);
+    const [selectedReviewRounds, setSelectedReviewRounds] = useState([]);
+    const [selectedReviewRoundId, setSelectedReviewRoundId] = useState(null);
+    const [selectedReviewMessages, setSelectedReviewMessages] = useState([]);
+    const [reviewThreadForm, setReviewThreadForm] = useState(createDefaultReviewThreadForm());
+    const [reviewMessageForm, setReviewMessageForm] = useState(createDefaultReviewMessageForm());
+    const [reviewRoundForm, setReviewRoundForm] = useState(createDefaultReviewRoundForm());
+    const [reviewStatusSubmitting, setReviewStatusSubmitting] = useState(false);
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
     const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
         try {
@@ -388,12 +504,6 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     };
     
     useEffect(() => {
-        if (activeTab === 'projects') {
-            loadProjects();
-        }
-    }, [activeTab]);
-
-    useEffect(() => {
         const loadProjectCreateOptions = async () => {
             try {
                 const data = await getKieStandardValueOptions();
@@ -420,7 +530,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         loadProjectCreateOptions();
     }, []);
 
-    const loadProjects = async () => {
+    const loadProjects = useCallback(async () => {
         setIsProjectsLoading(true);
         try {
             const data = await fetchProjects();
@@ -448,17 +558,64 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 nextCounts[projectId] = count;
             });
             setProjectShareCounts(nextCounts);
+
+            const unreadEntries = await Promise.all(
+                (Array.isArray(sorted) ? sorted : []).map(async (item) => {
+                    try {
+                        if (!item?.id) return [item?.id, 0];
+                        const threads = await fetchProjectReviewThreads(item.id);
+                        const unreadCount = Array.isArray(threads)
+                            ? threads.filter((thread) => !!thread?.has_unread).length
+                            : 0;
+                        return [item.id, unreadCount];
+                    } catch {
+                        return [item?.id, 0];
+                    }
+                })
+            );
+            const nextUnreadCounts = {};
+            unreadEntries.forEach(([projectId, count]) => {
+                if (projectId != null) nextUnreadCounts[projectId] = count;
+            });
+            setProjectUnreadReviewCounts(nextUnreadCounts);
         } catch (error) {
             console.error("Failed to load projects", error);
         } finally {
             setIsProjectsLoading(false);
             setHasLoadedProjectsOnce(true);
         }
-    };
+    }, [currentUser?.id]);
+
+    useEffect(() => {
+        if (activeTab === 'projects') {
+            loadProjects();
+        }
+    }, [activeTab, loadProjects]);
+
+    useEffect(() => {
+        if (activeTab !== 'projects' || selectedProjectId) return undefined;
+
+        const refreshIfVisible = () => {
+            if (document.visibilityState !== 'visible') return;
+            loadProjects();
+        };
+
+        const intervalId = window.setInterval(refreshIfVisible, 45000);
+        document.addEventListener('visibilitychange', refreshIfVisible);
+        window.addEventListener('focus', refreshIfVisible);
+
+        return () => {
+            window.clearInterval(intervalId);
+            document.removeEventListener('visibilitychange', refreshIfVisible);
+            window.removeEventListener('focus', refreshIfVisible);
+        };
+    }, [activeTab, selectedProjectId, loadProjects]);
 
     const resetCreateProjectForm = () => {
         setNewTitle('');
         setNewDescription('');
+        setNewShareUsers('');
+        setNewReviewerUsers('');
         setNewType(pickPreferredOrFirst(projectCreateOptions.type));
         setNewLanguage(pickPreferredOrFirst(projectCreateOptions.language));
         setNewBasePositioning(pickPreferredOrFirst(projectCreateOptions.base_positioning));
@@ -471,9 +628,13 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         const title = String(newTitle || '').trim();
         if (!title) return;
         const description = String(newDescription || '');
+        const shareUsers = parseUserListInput(newShareUsers);
+        const reviewerUsers = parseUserListInput(newReviewerUsers);
         await createProject({
             title,
             description,
+            share_users: shareUsers,
+            reviewer_users: reviewerUsers,
             global_info: {
                 script_title: title,
                 type: String(newType || '').trim(),
@@ -609,22 +770,133 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         return t(`已共享给 ${count} 人`, `Shared with ${count} user${count === 1 ? '' : 's'}`);
     };
 
+    const getProjectUnreadReviewCount = (project) => Number(projectUnreadReviewCounts?.[project?.id] || 0);
+
+    const loadProjectSharesForModal = async (projectId) => {
+        const shares = await fetchProjectShares(projectId);
+        const normalizedShares = Array.isArray(shares) ? shares : [];
+        setProjectShares(normalizedShares);
+        setProjectShareCounts((prev) => ({ ...prev, [projectId]: normalizedShares.length }));
+        setShareRoleDrafts(() => {
+            const next = {};
+            normalizedShares.forEach((item) => {
+                next[item.user_id] = String(item.role || 'editor').trim().toLowerCase() || 'editor';
+            });
+            return next;
+        });
+        setSharePermissionDrafts(() => {
+            const next = {};
+            normalizedShares.forEach((item) => {
+                next[item.user_id] = {
+                    can_review_assets: !!item?.permissions?.can_review_assets,
+                };
+            });
+            return next;
+        });
+        return normalizedShares;
+    };
+
+    const loadReviewCollections = async (projectId, preferredThreadId = null) => {
+        const [projectRows, inboxRows, outboxRows] = await Promise.all([
+            fetchProjectReviewThreads(projectId),
+            fetchReviewInboxThreads(),
+            fetchReviewOutboxThreads(),
+        ]);
+        const normalizedProjectRows = Array.isArray(projectRows) ? projectRows : [];
+        const normalizedInboxRows = Array.isArray(inboxRows) ? inboxRows : [];
+        const normalizedOutboxRows = Array.isArray(outboxRows) ? outboxRows : [];
+        setProjectReviewThreads(normalizedProjectRows);
+        setReviewInboxThreads(normalizedInboxRows);
+        setReviewOutboxThreads(normalizedOutboxRows);
+        setProjectUnreadReviewCounts((prev) => ({
+            ...prev,
+            [projectId]: normalizedProjectRows.filter((thread) => !!thread?.has_unread).length,
+        }));
+        const fallbackThread = preferredThreadId
+            || normalizedProjectRows[0]?.id
+            || normalizedInboxRows[0]?.id
+            || normalizedOutboxRows[0]?.id
+            || null;
+        setSelectedReviewThreadId(fallbackThread);
+        return {
+            projectRows: normalizedProjectRows,
+            inboxRows: normalizedInboxRows,
+            outboxRows: normalizedOutboxRows,
+            fallbackThread,
+        };
+    };
+
+    const loadReviewThreadDetail = async (threadId, preferredRoundId = null) => {
+        if (!threadId) {
+            setSelectedReviewThread(null);
+            setSelectedReviewRounds([]);
+            setSelectedReviewRoundId(null);
+            setSelectedReviewMessages([]);
+            return;
+        }
+        const [thread, rounds] = await Promise.all([
+            fetchReviewThread(threadId),
+            fetchReviewThreadRounds(threadId),
+        ]);
+        const normalizedRounds = Array.isArray(rounds) ? rounds : [];
+        const nextRoundId = preferredRoundId || normalizedRounds[normalizedRounds.length - 1]?.id || null;
+        setSelectedReviewThread(thread || null);
+        setSelectedReviewRounds(normalizedRounds);
+        setSelectedReviewRoundId(nextRoundId);
+        if (!nextRoundId) {
+            setSelectedReviewMessages([]);
+            return;
+        }
+        const messages = await fetchReviewRoundMessages(nextRoundId);
+        setSelectedReviewMessages(Array.isArray(messages) ? messages : []);
+    };
+
+    const refreshShareAndReviewModal = async (projectId, preferredThreadId = null) => {
+        setShareLoading(true);
+        setReviewLoading(true);
+        try {
+            await loadProjectSharesForModal(projectId);
+            const reviewData = await loadReviewCollections(projectId, preferredThreadId);
+            if (reviewData.fallbackThread) {
+                await loadReviewThreadDetail(reviewData.fallbackThread);
+            } else {
+                setSelectedReviewThread(null);
+                setSelectedReviewRounds([]);
+                setSelectedReviewRoundId(null);
+                setSelectedReviewMessages([]);
+            }
+        } finally {
+            setShareLoading(false);
+            setReviewLoading(false);
+        }
+    };
+
     const handleOpenShareModal = async (event, project) => {
         event.stopPropagation();
         if (!isProjectOwner(project)) return;
         setShareModalProject(project);
+        setShareModalTab('share');
+        setReviewListMode('project');
         setShareTargetUser('');
-        setShareLoading(true);
+        setShareTargetRole('editor');
+        setShareTargetCanReview(false);
+        setReviewThreadForm(createDefaultReviewThreadForm());
+        setReviewMessageForm(createDefaultReviewMessageForm());
+        setReviewRoundForm(createDefaultReviewRoundForm());
         try {
-            const shares = await fetchProjectShares(project.id);
-            setProjectShares(Array.isArray(shares) ? shares : []);
+            await refreshShareAndReviewModal(project.id);
         } catch (error) {
-            console.error('Failed to load project shares', error);
+            console.error('Failed to load project collaboration data', error);
             setProjectShares([]);
-            setToast({ type: 'error', message: t('加载共享列表失败', 'Failed to load share list') });
+            setProjectReviewThreads([]);
+            setReviewInboxThreads([]);
+            setReviewOutboxThreads([]);
+            setSelectedReviewThread(null);
+            setSelectedReviewRounds([]);
+            setSelectedReviewRoundId(null);
+            setSelectedReviewMessages([]);
+            setToast({ type: 'error', message: t('加载共享或审核数据失败', 'Failed to load sharing or review data') });
             setTimeout(() => setToast(null), 3000);
-        } finally {
-            setShareLoading(false);
         }
     };
 
@@ -635,10 +907,16 @@ const ProjectList = ({ initialTab = 'projects' }) => {
 
         setShareSubmitting(true);
         try {
-            await createProjectShare(shareModalProject.id, target);
-            const shares = await fetchProjectShares(shareModalProject.id);
-            setProjectShares(Array.isArray(shares) ? shares : []);
+            await createProjectShare(shareModalProject.id, target, {
+                role: shareTargetRole,
+                permissions: {
+                    can_review_assets: shareTargetRole === 'reviewer' || !!shareTargetCanReview,
+                },
+            });
+            await loadProjectSharesForModal(shareModalProject.id);
             setShareTargetUser('');
+            setShareTargetRole('editor');
+            setShareTargetCanReview(false);
             setToast({ type: 'success', message: t('共享成功', 'Project shared successfully') });
             setTimeout(() => setToast(null), 2500);
         } catch (error) {
@@ -654,13 +932,234 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         if (!shareModalProject) return;
         try {
             await deleteProjectShare(shareModalProject.id, sharedUserId);
-            setProjectShares((prev) => prev.filter((item) => Number(item.user_id) !== Number(sharedUserId)));
+            const nextShares = projectShares.filter((item) => Number(item.user_id) !== Number(sharedUserId));
+            setProjectShares(nextShares);
+            setProjectShareCounts((prev) => ({ ...prev, [shareModalProject.id]: nextShares.length }));
         } catch (error) {
             console.error('Failed to delete share', error);
             setToast({ type: 'error', message: t('取消共享失败', 'Failed to revoke share') });
             setTimeout(() => setToast(null), 3000);
         }
     };
+
+    const handleUpdateShareRole = async (share) => {
+        if (!shareModalProject || !share) return;
+        const nextRole = String(shareRoleDrafts?.[share.user_id] || share.role || 'editor').trim().toLowerCase() || 'editor';
+        const nextCanReview = !!sharePermissionDrafts?.[share.user_id]?.can_review_assets;
+        setShareSubmitting(true);
+        try {
+            await createProjectShare(shareModalProject.id, share.username || share.email, {
+                role: nextRole,
+                permissions: {
+                    can_review_assets: nextRole === 'reviewer' || nextCanReview,
+                },
+            });
+            await loadProjectSharesForModal(shareModalProject.id);
+            setToast({ type: 'success', message: t('角色已更新', 'Share role updated') });
+            setTimeout(() => setToast(null), 2500);
+        } catch (error) {
+            console.error('Failed to update share role', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('角色更新失败', 'Failed to update share role') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setShareSubmitting(false);
+        }
+    };
+
+    const handleSelectReviewThread = async (threadId, preferredRoundId = null) => {
+        setSelectedReviewThreadId(threadId || null);
+        setReviewLoading(true);
+        try {
+            await markReviewThreadRead(threadId);
+            await loadReviewThreadDetail(threadId, preferredRoundId);
+            setReviewMessageForm(createDefaultReviewMessageForm());
+            setReviewRoundForm(createDefaultReviewRoundForm());
+            if (shareModalProject?.id) {
+                await loadReviewCollections(shareModalProject.id, threadId);
+            }
+        } catch (error) {
+            console.error('Failed to load review thread detail', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('加载审核详情失败', 'Failed to load review details') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setReviewLoading(false);
+        }
+    };
+
+    const handleSelectReviewRound = async (roundId) => {
+        if (!roundId) return;
+        setSelectedReviewRoundId(roundId);
+        setReviewLoading(true);
+        try {
+            const messages = await fetchReviewRoundMessages(roundId);
+            setSelectedReviewMessages(Array.isArray(messages) ? messages : []);
+            setReviewMessageForm(createDefaultReviewMessageForm());
+        } catch (error) {
+            console.error('Failed to load review round messages', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('加载轮次消息失败', 'Failed to load round messages') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setReviewLoading(false);
+        }
+    };
+
+    const handleRefreshReviews = async (preferredThreadId = null) => {
+        if (!shareModalProject) return;
+        setReviewLoading(true);
+        try {
+            const reviewData = await loadReviewCollections(shareModalProject.id, preferredThreadId || selectedReviewThreadId);
+            if (reviewData.fallbackThread) {
+                await loadReviewThreadDetail(preferredThreadId || selectedReviewThreadId || reviewData.fallbackThread, selectedReviewRoundId);
+            } else {
+                setSelectedReviewThread(null);
+                setSelectedReviewRounds([]);
+                setSelectedReviewRoundId(null);
+                setSelectedReviewMessages([]);
+            }
+        } catch (error) {
+            console.error('Failed to refresh reviews', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('刷新审核失败', 'Failed to refresh reviews') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setReviewLoading(false);
+        }
+    };
+
+    const handleCreateReviewRequest = async () => {
+        if (!shareModalProject) return;
+        const reviewerUser = String(reviewThreadForm.reviewer_user || '').trim();
+        if (!reviewerUser) {
+            setToast({ type: 'error', message: t('请输入审核人用户名或邮箱', 'Enter reviewer username or email') });
+            setTimeout(() => setToast(null), 2500);
+            return;
+        }
+        if (!reviewThreadForm.entity_required && !reviewThreadForm.shot_required) {
+            setToast({ type: 'error', message: t('至少选择实体或镜头审核', 'Choose entity or shot review at minimum') });
+            setTimeout(() => setToast(null), 2500);
+            return;
+        }
+        setReviewSubmitting(true);
+        try {
+            const created = await createProjectReviewThread(shareModalProject.id, {
+                reviewer_user: reviewerUser,
+                title: reviewThreadForm.title,
+                request_message: reviewThreadForm.request_message,
+                scope_type: 'all_current',
+                entity_required: !!reviewThreadForm.entity_required,
+                shot_required: !!reviewThreadForm.shot_required,
+            });
+            setReviewThreadForm(createDefaultReviewThreadForm());
+            await handleRefreshReviews(created?.id || null);
+            setReviewListMode('project');
+            if (created?.id) {
+                await handleSelectReviewThread(created.id);
+            }
+            setToast({ type: 'success', message: t('审核请求已发起', 'Review request created') });
+            setTimeout(() => setToast(null), 2500);
+        } catch (error) {
+            console.error('Failed to create review request', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('发起审核失败', 'Failed to create review request') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setReviewSubmitting(false);
+        }
+    };
+
+    const handleCreateReviewRound = async () => {
+        if (!selectedReviewThreadId) return;
+        if (!reviewRoundForm.entity_required && !reviewRoundForm.shot_required) {
+            setToast({ type: 'error', message: t('至少选择实体或镜头审核', 'Choose entity or shot review at minimum') });
+            setTimeout(() => setToast(null), 2500);
+            return;
+        }
+        setReviewSubmitting(true);
+        try {
+            const created = await createReviewThreadRound(selectedReviewThreadId, {
+                request_message: reviewRoundForm.request_message,
+                scope_type: 'all_current',
+                entity_required: !!reviewRoundForm.entity_required,
+                shot_required: !!reviewRoundForm.shot_required,
+            });
+            setReviewRoundForm(createDefaultReviewRoundForm());
+            await handleRefreshReviews(selectedReviewThreadId);
+            if (created?.id) {
+                await handleSelectReviewThread(selectedReviewThreadId, created.id);
+            }
+            setToast({ type: 'success', message: t('新一轮审核已发起', 'New review round created') });
+            setTimeout(() => setToast(null), 2500);
+        } catch (error) {
+            console.error('Failed to create review round', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('发起新一轮失败', 'Failed to create next review round') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setReviewSubmitting(false);
+        }
+    };
+
+    const handleCreateReviewMessage = async () => {
+        if (!selectedReviewRoundId || !selectedReviewThread) return;
+        const payload = {
+            message_text: reviewMessageForm.message_text,
+            message_type: 'message',
+        };
+        const amReviewer = Number(currentUser?.id) === Number(selectedReviewThread.reviewer_user_id);
+        if (amReviewer) {
+            payload.entity_decision = reviewMessageForm.entity_decision;
+            payload.shot_decision = reviewMessageForm.shot_decision;
+            payload.entity_feedback = reviewMessageForm.entity_feedback;
+            payload.shot_feedback = reviewMessageForm.shot_feedback;
+        }
+        setReviewSubmitting(true);
+        try {
+            await createReviewRoundMessage(selectedReviewRoundId, payload);
+            setReviewMessageForm(createDefaultReviewMessageForm());
+            await handleSelectReviewThread(selectedReviewThreadId, selectedReviewRoundId);
+            await handleRefreshReviews(selectedReviewThreadId);
+            setToast({ type: 'success', message: t('审核回复已发送', 'Review reply sent') });
+            setTimeout(() => setToast(null), 2500);
+        } catch (error) {
+            console.error('Failed to create review message', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('发送审核回复失败', 'Failed to send review reply') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setReviewSubmitting(false);
+        }
+    };
+
+    const handleUpdateReviewStatus = async (status) => {
+        if (!selectedReviewThreadId) return;
+        setReviewStatusSubmitting(true);
+        try {
+            await updateReviewThreadStatus(selectedReviewThreadId, status);
+            await handleRefreshReviews(selectedReviewThreadId);
+            await handleSelectReviewThread(selectedReviewThreadId, selectedReviewRoundId);
+            setToast({ type: 'success', message: t('审核状态已更新', 'Review status updated') });
+            setTimeout(() => setToast(null), 2500);
+        } catch (error) {
+            console.error('Failed to update review status', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('更新审核状态失败', 'Failed to update review status') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setReviewStatusSubmitting(false);
+        }
+    };
+
+    const visibleReviewThreads = reviewListMode === 'inbox'
+        ? reviewInboxThreads
+        : reviewListMode === 'outbox'
+            ? reviewOutboxThreads
+            : projectReviewThreads;
+
+    const selectedReviewRound = selectedReviewRounds.find((item) => Number(item.id) === Number(selectedReviewRoundId)) || selectedReviewRounds[selectedReviewRounds.length - 1] || null;
+    const eligibleReviewerShares = projectShares.filter((item) => {
+        const role = String(item?.role || 'editor').trim().toLowerCase();
+        return role === 'editor' || role === 'reviewer' || !!item?.permissions?.can_review_assets;
+    });
+    const canManageSelectedReview = !!selectedReviewThread && (
+        Number(currentUser?.id) === Number(selectedReviewThread.requester_user_id)
+        || Number(currentUser?.id) === Number(shareModalProject?.owner_id)
+    );
+    const amSelectedReviewReviewer = !!selectedReviewThread && Number(currentUser?.id) === Number(selectedReviewThread.reviewer_user_id);
 
     const activeTabTitle = activeTab === 'projects'
         ? t('我的项目', 'My Projects')
@@ -699,7 +1198,9 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         trackMenuAction('project_list.admin.user_admin', t('管理面板', 'Admin Panel'), () => navigate('/admin/users'));
     };
 
-    const SidebarActionItem = ({ id, icon: Icon, label, disabled, onClick, active = false, compact = false, mobile = false, iconClassName = '' }) => (
+    const totalUnreadReviewCount = Object.values(projectUnreadReviewCounts || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+
+    const SidebarActionItem = ({ id, icon: Icon, label, disabled, onClick, active = false, compact = false, mobile = false, iconClassName = '', badgeCount = 0 }) => (
         <button 
             onClick={() => {
                 if (disabled) return;
@@ -716,11 +1217,22 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             title={label}
         >
             <Icon className={`w-5 h-5 ${iconClassName}`.trim()} />
-            {!compact && label}
+            {!compact && <span className="truncate">{label}</span>}
+            {badgeCount > 0 && (
+                compact ? (
+                    <span className="absolute right-2 top-2 inline-flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-black">
+                        {badgeCount > 99 ? '99+' : badgeCount}
+                    </span>
+                ) : (
+                    <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-black">
+                        {badgeCount > 99 ? '99+' : badgeCount}
+                    </span>
+                )
+            )}
         </button>
     );
 
-    const SidebarItem = ({ id, icon: Icon, label, disabled, compact = isSidebarCollapsed, mobile = false }) => (
+    const SidebarItem = ({ id, icon: Icon, label, disabled, compact = isSidebarCollapsed, mobile = false, badgeCount = 0 }) => (
         <SidebarActionItem
             id={id}
             icon={Icon}
@@ -728,6 +1240,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             disabled={disabled}
             compact={compact}
             mobile={mobile}
+            badgeCount={badgeCount}
             active={activeTab === id && !selectedProjectId}
             onClick={() => {
                 trackMenuAction(`project_list.sidebar.${id}`, label, () => {
@@ -804,7 +1317,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 )}
 
                 <div className="space-y-2 flex-1">
-                    <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} />
+                    <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} badgeCount={totalUnreadReviewCount} />
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} />
                     
                     {currentUser?.is_superuser && (
@@ -883,7 +1396,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 </div>
 
                 <div className="space-y-2 flex-1 overflow-y-auto pr-1">
-                    <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} compact={false} mobile />
+                    <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} compact={false} mobile badgeCount={totalUnreadReviewCount} />
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} compact={false} mobile />
                     {currentUser?.is_superuser && (
                         <>
@@ -989,6 +1502,22 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                     </button>
                                 ) : (
                                     <>
+                                        <button
+                                            onClick={() => {
+                                                setActiveTab('projects');
+                                                setSelectedProjectId(null);
+                                                window.scrollTo?.({ top: 0, behavior: 'smooth' });
+                                            }}
+                                            title={t('未读审核', 'Unread reviews')}
+                                            className="relative p-2.5 rounded-full bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                                        >
+                                            <Bell className="w-4 h-4" />
+                                            {totalUnreadReviewCount > 0 && (
+                                                <span className="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-black">
+                                                    {totalUnreadReviewCount > 99 ? '99+' : totalUnreadReviewCount}
+                                                </span>
+                                            )}
+                                        </button>
                                         <div className="relative hidden md:block">
                                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                                             <input 
@@ -1134,6 +1663,33 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             onChange={e => setNewDescription(e.target.value)}
                                             placeholder={t('可留空。用于记录项目背景、目标或备注', 'Can be left empty. Add context, goals, or notes for this project')}
                                         />
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">{t('分享人（可选，可多个）', 'Share Users (Optional, Multiple)')}</label>
+                                                <textarea
+                                                    className="w-full px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none resize-y min-h-[96px]"
+                                                    value={newShareUsers}
+                                                    onChange={(e) => setNewShareUsers(e.target.value)}
+                                                    placeholder={t('输入用户名或邮箱，支持逗号、分号或换行分隔', 'Enter usernames or emails, separated by commas, semicolons, or new lines')}
+                                                />
+                                                <div className="mt-2 text-xs text-muted-foreground">
+                                                    {formatParsedUserHint(newShareUsers, t)}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">{t('审核人（可选，可多个）', 'Reviewer Users (Optional, Multiple)')}</label>
+                                                <textarea
+                                                    className="w-full px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none resize-y min-h-[96px]"
+                                                    value={newReviewerUsers}
+                                                    onChange={(e) => setNewReviewerUsers(e.target.value)}
+                                                    placeholder={t('输入用户名或邮箱，保存时校验是否存在', 'Enter usernames or emails. Existence will be validated on save')}
+                                                />
+                                                <div className="mt-2 text-xs text-muted-foreground">
+                                                    {formatParsedUserHint(newReviewerUsers, t)}
+                                                </div>
+                                            </div>
+                                        </div>
                                     </motion.div>
                                 )}
 
@@ -1220,6 +1776,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                         <div className="flex justify-between items-center">
                                                             <h3 className="text-lg font-semibold text-white group-hover:text-primary transition-colors truncate flex-1 mr-2">{p.title}</h3>
                                                             <div className="flex items-center gap-1">
+                                                                {getProjectUnreadReviewCount(p) > 0 && (
+                                                                    <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-semibold text-black">
+                                                                        {t('审核', 'Review')} {getProjectUnreadReviewCount(p)}
+                                                                    </span>
+                                                                )}
                                                                 {isProjectOwner(p) && (
                                                                     <button
                                                                         onClick={(e) => handleOpenShareModal(e, p)}
@@ -1249,6 +1810,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                             <p className="text-[11px] text-muted-foreground/80 mt-2 mb-4">
                                                                 {getProjectShareCountText(p)}
                                                             </p>
+                                                            {getProjectUnreadReviewCount(p) > 0 && (
+                                                                <p className="text-[11px] text-amber-300 mb-4">
+                                                                    {t(`有 ${getProjectUnreadReviewCount(p)} 条未读审核线程`, `${getProjectUnreadReviewCount(p)} unread review thread${getProjectUnreadReviewCount(p) === 1 ? '' : 's'}`)}
+                                                                </p>
+                                                            )}
                                                             
                                                             {/* Footer Meta */}
                                                             <div className="flex items-center justify-between text-[10px] text-muted-foreground/60 pt-3 border-t border-white/5 group-hover:border-white/10 transition-colors">
@@ -1315,55 +1881,480 @@ const ProjectList = ({ initialTab = 'projects' }) => {
 
             {shareModalProject && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setShareModalProject(null)}>
-                    <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-card p-5" onClick={(e) => e.stopPropagation()}>
+                    <div className="w-full max-w-6xl rounded-2xl border border-white/10 bg-card p-5" onClick={(e) => e.stopPropagation()}>
                         <div className="mb-4 flex items-center justify-between">
-                            <h3 className="text-lg font-semibold">{t('项目共享', 'Project Sharing')} · {shareModalProject.title}</h3>
+                            <div>
+                                <h3 className="text-lg font-semibold">{t('项目协作', 'Project Collaboration')} · {shareModalProject.title}</h3>
+                                <div className="mt-1 text-xs text-muted-foreground">{t('管理共享角色，并发起或处理实体/镜头审核。', 'Manage share roles and create or respond to entity/shot reviews.')}</div>
+                            </div>
                             <button className="rounded p-1 text-muted-foreground hover:bg-secondary" onClick={() => setShareModalProject(null)}>
                                 <X className="h-4 w-4" />
                             </button>
                         </div>
 
-                        <div className="mb-4 flex gap-2">
-                            <input
-                                value={shareTargetUser}
-                                onChange={(e) => setShareTargetUser(e.target.value)}
-                                placeholder={t('输入用户名或邮箱', 'Enter username or email')}
-                                className="flex-1 rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-                            />
-                            <button
-                                onClick={handleCreateShare}
-                                disabled={shareSubmitting || !String(shareTargetUser || '').trim()}
-                                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                            >
-                                {shareSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                                {t('添加', 'Add')}
-                            </button>
+                        <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-white/10 pb-4">
+                            {['share', 'review'].map((tab) => (
+                                <button
+                                    key={tab}
+                                    onClick={() => setShareModalTab(tab)}
+                                    className={`rounded-full px-4 py-2 text-sm transition ${shareModalTab === tab ? 'bg-primary text-primary-foreground' : 'bg-secondary/60 text-muted-foreground hover:text-foreground'}`}
+                                >
+                                    <span className="inline-flex items-center gap-2">
+                                        <span>{tab === 'share' ? t('共享角色', 'Share Roles') : t('资产审核', 'Asset Reviews')}</span>
+                                        {tab === 'review' && reviewInboxThreads.filter((thread) => !!thread?.has_unread).length > 0 && (
+                                            <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-semibold text-black">
+                                                {reviewInboxThreads.filter((thread) => !!thread?.has_unread).length}
+                                            </span>
+                                        )}
+                                    </span>
+                                </button>
+                            ))}
                         </div>
 
-                        <div className="max-h-72 overflow-auto rounded-lg border border-white/10">
-                            {shareLoading ? (
-                                <div className="p-4 text-sm text-muted-foreground">{t('加载中...', 'Loading...')}</div>
-                            ) : projectShares.length === 0 ? (
-                                <div className="p-4 text-sm text-muted-foreground">{t('暂无共享用户', 'No shared users')}</div>
-                            ) : (
-                                <div className="divide-y divide-white/10">
-                                    {projectShares.map((s) => (
-                                        <div key={s.id} className="flex items-center justify-between px-3 py-2">
-                                            <div>
-                                                <div className="text-sm font-medium">{s.username}</div>
-                                                <div className="text-xs text-muted-foreground">{s.email || '-'}</div>
+                        {shareModalTab === 'share' ? (
+                            <div className="grid gap-4 lg:grid-cols-[1.1fr_1.6fr]">
+                                <div className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                                    <div className="mb-3 text-sm font-semibold">{t('添加协作者', 'Add Collaborator')}</div>
+                                    <div className="grid gap-3">
+                                        <input
+                                            value={shareTargetUser}
+                                            onChange={(e) => setShareTargetUser(e.target.value)}
+                                            placeholder={t('输入用户名或邮箱', 'Enter username or email')}
+                                            className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                        />
+                                        <select
+                                            value={shareTargetRole}
+                                            onChange={(e) => setShareTargetRole(e.target.value)}
+                                            className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                        >
+                                            {PROJECT_SHARE_ROLE_OPTIONS.map((role) => (
+                                                <option key={role} value={role}>{getProjectShareRoleLabel(role, t)}</option>
+                                            ))}
+                                        </select>
+                                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                                            <input
+                                                type="checkbox"
+                                                checked={shareTargetRole === 'reviewer' ? true : shareTargetCanReview}
+                                                disabled={shareTargetRole === 'reviewer'}
+                                                onChange={(e) => setShareTargetCanReview(e.target.checked)}
+                                            />
+                                            {t('允许资产审核', 'Allow asset reviews')}
+                                        </label>
+                                        <button
+                                            onClick={handleCreateShare}
+                                            disabled={shareSubmitting || !String(shareTargetUser || '').trim()}
+                                            className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                                        >
+                                            {shareSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                                            {t('添加协作者', 'Add Collaborator')}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                                    <div className="mb-3 flex items-center justify-between">
+                                        <div className="text-sm font-semibold">{t('当前协作者', 'Current Collaborators')}</div>
+                                        <div className="text-xs text-muted-foreground">{t(`共 ${projectShares.length} 人`, `${projectShares.length} users`)}</div>
+                                    </div>
+                                    <div className="max-h-[28rem] overflow-auto rounded-lg border border-white/10">
+                                        {shareLoading ? (
+                                            <div className="p-4 text-sm text-muted-foreground">{t('加载中...', 'Loading...')}</div>
+                                        ) : projectShares.length === 0 ? (
+                                            <div className="p-4 text-sm text-muted-foreground">{t('暂无共享用户', 'No shared users')}</div>
+                                        ) : (
+                                            <div className="divide-y divide-white/10">
+                                                {projectShares.map((s) => {
+                                                    const draftRole = shareRoleDrafts?.[s.user_id] || s.role || 'editor';
+                                                    const draftCanReview = draftRole === 'reviewer' ? true : !!sharePermissionDrafts?.[s.user_id]?.can_review_assets;
+                                                    return (
+                                                        <div key={s.id} className="grid gap-3 px-3 py-3 lg:grid-cols-[1.2fr_0.8fr_0.8fr_auto_auto] lg:items-center">
+                                                            <div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <div className="text-sm font-medium">{s.username}</div>
+                                                                    <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-muted-foreground">{getProjectShareRoleLabel(s.role, t)}</span>
+                                                                </div>
+                                                                <div className="text-xs text-muted-foreground">{s.email || '-'}</div>
+                                                            </div>
+                                                            <select
+                                                                value={draftRole}
+                                                                onChange={(e) => setShareRoleDrafts((prev) => ({ ...prev, [s.user_id]: e.target.value }))}
+                                                                className="rounded-lg border bg-background px-2 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                            >
+                                                                {PROJECT_SHARE_ROLE_OPTIONS.map((role) => (
+                                                                    <option key={role} value={role}>{getProjectShareRoleLabel(role, t)}</option>
+                                                                ))}
+                                                            </select>
+                                                            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={draftCanReview}
+                                                                    disabled={draftRole === 'reviewer'}
+                                                                    onChange={(e) => setSharePermissionDrafts((prev) => ({
+                                                                        ...prev,
+                                                                        [s.user_id]: {
+                                                                            ...(prev?.[s.user_id] || {}),
+                                                                            can_review_assets: e.target.checked,
+                                                                        },
+                                                                    }))}
+                                                                />
+                                                                {t('可审核', 'Can review')}
+                                                            </label>
+                                                            <button
+                                                                onClick={() => handleUpdateShareRole(s)}
+                                                                disabled={shareSubmitting}
+                                                                className="rounded-lg border border-primary/30 px-3 py-2 text-xs text-primary disabled:opacity-50"
+                                                            >
+                                                                {t('保存', 'Save')}
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleDeleteShare(s.user_id)}
+                                                                className="rounded-lg px-3 py-2 text-xs text-red-400 hover:bg-red-500/10"
+                                                            >
+                                                                {t('取消共享', 'Revoke')}
+                                                            </button>
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="grid gap-4 lg:grid-cols-[1.05fr_1.35fr]">
+                                <div className="space-y-4">
+                                    <div className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                            <div className="text-sm font-semibold">{t('审核工作台', 'Review Workspace')}</div>
                                             <button
-                                                onClick={() => handleDeleteShare(s.user_id)}
-                                                className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-500/10"
+                                                onClick={() => handleRefreshReviews(selectedReviewThreadId)}
+                                                disabled={reviewLoading}
+                                                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-muted-foreground disabled:opacity-50"
                                             >
-                                                {t('取消共享', 'Revoke')}
+                                                {reviewLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                                                {t('刷新', 'Refresh')}
                                             </button>
                                         </div>
-                                    ))}
+                                        <div className="mb-4 flex flex-wrap gap-2">
+                                            {REVIEW_LIST_MODE_OPTIONS.map((mode) => (
+                                                <button
+                                                    key={mode}
+                                                    onClick={() => setReviewListMode(mode)}
+                                                    className={`rounded-full px-3 py-1.5 text-xs transition ${reviewListMode === mode ? 'bg-primary text-primary-foreground' : 'bg-secondary/60 text-muted-foreground hover:text-foreground'}`}
+                                                >
+                                                    <span className="inline-flex items-center gap-2">
+                                                        <span>{getReviewListModeLabel(mode, t)}</span>
+                                                        {mode === 'project' && projectReviewThreads.filter((thread) => !!thread?.has_unread).length > 0 && <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-black">{projectReviewThreads.filter((thread) => !!thread?.has_unread).length}</span>}
+                                                        {mode === 'inbox' && reviewInboxThreads.filter((thread) => !!thread?.has_unread).length > 0 && <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-black">{reviewInboxThreads.filter((thread) => !!thread?.has_unread).length}</span>}
+                                                        {mode === 'outbox' && reviewOutboxThreads.filter((thread) => !!thread?.has_unread).length > 0 && <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-black">{reviewOutboxThreads.filter((thread) => !!thread?.has_unread).length}</span>}
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        {reviewListMode === 'project' && (
+                                            <div className="mb-4 rounded-xl border border-white/10 bg-card/40 p-3">
+                                                <div className="mb-3 text-sm font-medium">{t('发起审核', 'Create Review')}</div>
+                                                <div className="grid gap-3">
+                                                    <>
+                                                        <input
+                                                            value={reviewThreadForm.reviewer_user}
+                                                            onChange={(e) => setReviewThreadForm((prev) => ({ ...prev, reviewer_user: e.target.value }))}
+                                                            placeholder={t('输入审核人用户名或邮箱', 'Enter reviewer username or email')}
+                                                            className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                        />
+                                                    </>
+                                                    <input
+                                                        value={reviewThreadForm.title}
+                                                        onChange={(e) => setReviewThreadForm((prev) => ({ ...prev, title: e.target.value }))}
+                                                        placeholder={t('审核标题，可选', 'Review title, optional')}
+                                                        className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                    />
+                                                    <textarea
+                                                        value={reviewThreadForm.request_message}
+                                                        onChange={(e) => setReviewThreadForm((prev) => ({ ...prev, request_message: e.target.value }))}
+                                                        rows={3}
+                                                        placeholder={t('填写审核请求说明', 'Add review request notes')}
+                                                        className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                    />
+                                                    <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                                                        <label className="flex items-center gap-2">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={!!reviewThreadForm.entity_required}
+                                                                onChange={(e) => setReviewThreadForm((prev) => ({ ...prev, entity_required: e.target.checked }))}
+                                                            />
+                                                            {t('实体审核', 'Entity review')}
+                                                        </label>
+                                                        <label className="flex items-center gap-2">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={!!reviewThreadForm.shot_required}
+                                                                onChange={(e) => setReviewThreadForm((prev) => ({ ...prev, shot_required: e.target.checked }))}
+                                                            />
+                                                            {t('镜头审核', 'Shot review')}
+                                                        </label>
+                                                    </div>
+                                                    <button
+                                                        onClick={handleCreateReviewRequest}
+                                                        disabled={reviewSubmitting}
+                                                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                                                    >
+                                                        {reviewSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                                                        {t('发起审核', 'Create Review')}
+                                                    </button>
+                                                    <div className="text-xs text-muted-foreground">{t('可直接输入任意已存在用户的用户名或邮箱；若项目作者指定了新审核人，系统会自动授予 reviewer 访问。', 'You can directly enter any existing username or email; when the project owner assigns a new reviewer, reviewer access will be granted automatically.')}</div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div className="max-h-[32rem] overflow-auto rounded-lg border border-white/10">
+                                            {reviewLoading && visibleReviewThreads.length === 0 ? (
+                                                <div className="p-4 text-sm text-muted-foreground">{t('加载中...', 'Loading...')}</div>
+                                            ) : visibleReviewThreads.length === 0 ? (
+                                                <div className="p-4 text-sm text-muted-foreground">{t('暂无审核线程', 'No review threads')}</div>
+                                            ) : (
+                                                <div className="divide-y divide-white/10">
+                                                    {visibleReviewThreads.map((thread) => (
+                                                        <button
+                                                            key={thread.id}
+                                                            onClick={() => handleSelectReviewThread(thread.id)}
+                                                            className={`w-full px-3 py-3 text-left transition hover:bg-white/5 ${Number(selectedReviewThreadId) === Number(thread.id) ? 'bg-white/5' : ''}`}
+                                                        >
+                                                            <div className="mb-1 flex items-center justify-between gap-3">
+                                                                <div className="flex min-w-0 items-center gap-2">
+                                                                    <div className="truncate text-sm font-medium">{thread.title || `${t('审核线程', 'Review Thread')} #${thread.id}`}</div>
+                                                                    {thread.has_unread && <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-black">{t('未读', 'Unread')}</span>}
+                                                                </div>
+                                                                <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-muted-foreground">{getReviewThreadStatusLabel(thread.status, t)}</span>
+                                                            </div>
+                                                            <div className="text-xs text-muted-foreground">
+                                                                {thread.requester_username || '-'} → {thread.reviewer_username || '-'}
+                                                            </div>
+                                                            <div className="mt-1 text-[11px] text-muted-foreground">
+                                                                {t('最新轮次', 'Latest round')} #{thread.latest_round_no || 0}
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
-                            )}
-                        </div>
+
+                                <div className="rounded-2xl border border-white/10 bg-background/40 p-4">
+                                    {!selectedReviewThread ? (
+                                        <div className="flex h-full min-h-[28rem] items-center justify-center text-sm text-muted-foreground">
+                                            {t('选择一个审核线程查看详情', 'Select a review thread to view details')}
+                                        </div>
+                                    ) : (
+                                        <div className="grid gap-4">
+                                            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+                                                <div>
+                                                    <div className="text-lg font-semibold">{selectedReviewThread.title || `${t('审核线程', 'Review Thread')} #${selectedReviewThread.id}`}</div>
+                                                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                                        <span>{selectedReviewThread.requester_username || '-'}</span>
+                                                        <span>→</span>
+                                                        <span>{selectedReviewThread.reviewer_username || '-'}</span>
+                                                        <span className="rounded-full border border-white/10 px-2 py-0.5">{getReviewThreadStatusLabel(selectedReviewThread.status, t)}</span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {REVIEW_THREAD_STATUS_OPTIONS.map((status) => (
+                                                        <button
+                                                            key={status}
+                                                            onClick={() => handleUpdateReviewStatus(status)}
+                                                            disabled={reviewStatusSubmitting || String(selectedReviewThread.status || 'open') === status}
+                                                            className="rounded-lg border border-white/10 px-3 py-2 text-xs text-muted-foreground disabled:opacity-40"
+                                                        >
+                                                            {getReviewThreadStatusLabel(status, t)}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+                                                <div className="rounded-xl border border-white/10 bg-card/40 p-3">
+                                                    <div className="mb-3 text-sm font-medium">{t('审核轮次', 'Review Rounds')}</div>
+                                                    <div className="space-y-2">
+                                                        {selectedReviewRounds.map((round) => (
+                                                            <button
+                                                                key={round.id}
+                                                                onClick={() => handleSelectReviewRound(round.id)}
+                                                                className={`w-full rounded-lg border px-3 py-2 text-left transition ${Number(selectedReviewRoundId) === Number(round.id) ? 'border-primary/40 bg-primary/10' : 'border-white/10 bg-background hover:bg-white/5'}`}
+                                                            >
+                                                                <div className="flex items-center justify-between gap-3 text-sm">
+                                                                    <span>#{round.round_no}</span>
+                                                                    <span className="text-xs text-muted-foreground">{round.overall_status || '-'}</span>
+                                                                </div>
+                                                                <div className="mt-1 text-xs text-muted-foreground">{round.initiated_by_username || '-'}</div>
+                                                                <div className="mt-1 grid gap-1 text-[11px] text-muted-foreground">
+                                                                    {round.entity_required && <div>{t('实体', 'Entity')}: {getReviewDecisionLabel(round.entity_decision, t)}</div>}
+                                                                    {round.shot_required && <div>{t('镜头', 'Shot')}: {getReviewDecisionLabel(round.shot_decision, t)}</div>}
+                                                                </div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid gap-4">
+                                                    {selectedReviewRound && (
+                                                        <div className="rounded-xl border border-white/10 bg-card/40 p-3">
+                                                            <div className="mb-2 text-sm font-medium">{t('当前轮次摘要', 'Current Round Summary')} #{selectedReviewRound.round_no}</div>
+                                                            <div className="grid gap-2 text-sm text-muted-foreground">
+                                                                {selectedReviewRound.request_message && <div>{selectedReviewRound.request_message}</div>}
+                                                                <div className="flex flex-wrap gap-4 text-xs">
+                                                                    {selectedReviewRound.entity_required && <span>{t('实体', 'Entity')}: {getReviewDecisionLabel(selectedReviewRound.entity_decision, t)}</span>}
+                                                                    {selectedReviewRound.shot_required && <span>{t('镜头', 'Shot')}: {getReviewDecisionLabel(selectedReviewRound.shot_decision, t)}</span>}
+                                                                </div>
+                                                                {selectedReviewRound.entity_feedback && <div><span className="text-foreground">{t('实体意见', 'Entity feedback')}:</span> {selectedReviewRound.entity_feedback}</div>}
+                                                                {selectedReviewRound.shot_feedback && <div><span className="text-foreground">{t('镜头意见', 'Shot feedback')}:</span> {selectedReviewRound.shot_feedback}</div>}
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    <div className="rounded-xl border border-white/10 bg-card/40 p-3">
+                                                        <div className="mb-3 text-sm font-medium">{t('往返消息', 'Messages')}</div>
+                                                        <div className="max-h-[16rem] space-y-2 overflow-auto pr-1">
+                                                            {selectedReviewMessages.length === 0 ? (
+                                                                <div className="text-sm text-muted-foreground">{t('暂无消息', 'No messages')}</div>
+                                                            ) : selectedReviewMessages.map((message) => (
+                                                                <div key={message.id} className="rounded-lg border border-white/10 bg-background/70 p-3">
+                                                                    <div className="mb-1 flex items-center justify-between gap-3">
+                                                                        <div className="text-sm font-medium">{message.sender_username || '-'}</div>
+                                                                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                                                            <span className="rounded-full border border-white/10 px-2 py-0.5">{message.sender_role === 'reviewer' ? t('审核方', 'Reviewer') : t('发起方', 'Requester')}</span>
+                                                                            <span>{message.message_type || 'message'}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    {message.message_text && <div className="text-sm text-foreground">{message.message_text}</div>}
+                                                                    <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                                                                        {message.entity_decision && message.entity_decision !== 'pending' && <div>{t('实体结论', 'Entity decision')}: {getReviewDecisionLabel(message.entity_decision, t)}</div>}
+                                                                        {message.shot_decision && message.shot_decision !== 'pending' && <div>{t('镜头结论', 'Shot decision')}: {getReviewDecisionLabel(message.shot_decision, t)}</div>}
+                                                                        {message.entity_feedback && <div>{t('实体意见', 'Entity feedback')}: {message.entity_feedback}</div>}
+                                                                        {message.shot_feedback && <div>{t('镜头意见', 'Shot feedback')}: {message.shot_feedback}</div>}
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    {selectedReviewThread.status !== 'archived' && selectedReviewRound && (
+                                                        <div className="rounded-xl border border-white/10 bg-card/40 p-3">
+                                                            <div className="mb-3 text-sm font-medium">{amSelectedReviewReviewer ? t('审核回复', 'Reviewer Reply') : t('继续沟通', 'Continue Discussion')}</div>
+                                                            <div className="grid gap-3">
+                                                                <textarea
+                                                                    value={reviewMessageForm.message_text}
+                                                                    onChange={(e) => setReviewMessageForm((prev) => ({ ...prev, message_text: e.target.value }))}
+                                                                    rows={3}
+                                                                    placeholder={amSelectedReviewReviewer ? t('填写审核结论或沟通说明', 'Write review conclusion or discussion notes') : t('填写补充说明或回应', 'Add follow-up notes or response')}
+                                                                    className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                                />
+                                                                {amSelectedReviewReviewer && (
+                                                                    <>
+                                                                        <div className="grid gap-3 md:grid-cols-2">
+                                                                            {selectedReviewRound.entity_required && (
+                                                                                <select
+                                                                                    value={reviewMessageForm.entity_decision}
+                                                                                    onChange={(e) => setReviewMessageForm((prev) => ({ ...prev, entity_decision: e.target.value }))}
+                                                                                    className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                                                >
+                                                                                    {REVIEW_DECISION_OPTIONS.map((decision) => (
+                                                                                        <option key={decision} value={decision}>{t('实体', 'Entity')} · {getReviewDecisionLabel(decision, t)}</option>
+                                                                                    ))}
+                                                                                </select>
+                                                                            )}
+                                                                            {selectedReviewRound.shot_required && (
+                                                                                <select
+                                                                                    value={reviewMessageForm.shot_decision}
+                                                                                    onChange={(e) => setReviewMessageForm((prev) => ({ ...prev, shot_decision: e.target.value }))}
+                                                                                    className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                                                >
+                                                                                    {REVIEW_DECISION_OPTIONS.map((decision) => (
+                                                                                        <option key={decision} value={decision}>{t('镜头', 'Shot')} · {getReviewDecisionLabel(decision, t)}</option>
+                                                                                    ))}
+                                                                                </select>
+                                                                            )}
+                                                                        </div>
+                                                                        {selectedReviewRound.entity_required && (
+                                                                            <textarea
+                                                                                value={reviewMessageForm.entity_feedback}
+                                                                                onChange={(e) => setReviewMessageForm((prev) => ({ ...prev, entity_feedback: e.target.value }))}
+                                                                                rows={2}
+                                                                                placeholder={t('实体审核意见', 'Entity review feedback')}
+                                                                                className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                                            />
+                                                                        )}
+                                                                        {selectedReviewRound.shot_required && (
+                                                                            <textarea
+                                                                                value={reviewMessageForm.shot_feedback}
+                                                                                onChange={(e) => setReviewMessageForm((prev) => ({ ...prev, shot_feedback: e.target.value }))}
+                                                                                rows={2}
+                                                                                placeholder={t('镜头审核意见', 'Shot review feedback')}
+                                                                                className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                                            />
+                                                                        )}
+                                                                    </>
+                                                                )}
+                                                                <button
+                                                                    onClick={handleCreateReviewMessage}
+                                                                    disabled={reviewSubmitting}
+                                                                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                                                                >
+                                                                    {reviewSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                                                                    {t('发送回复', 'Send Reply')}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {canManageSelectedReview && selectedReviewThread.status !== 'archived' && (
+                                                        <div className="rounded-xl border border-white/10 bg-card/40 p-3">
+                                                            <div className="mb-3 text-sm font-medium">{t('发起新一轮审核', 'Start Next Review Round')}</div>
+                                                            <div className="grid gap-3">
+                                                                <textarea
+                                                                    value={reviewRoundForm.request_message}
+                                                                    onChange={(e) => setReviewRoundForm((prev) => ({ ...prev, request_message: e.target.value }))}
+                                                                    rows={3}
+                                                                    placeholder={t('说明本轮需要审核的重点', 'Describe what should be reviewed in this round')}
+                                                                    className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                                                                />
+                                                                <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                                                                    <label className="flex items-center gap-2">
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={!!reviewRoundForm.entity_required}
+                                                                            onChange={(e) => setReviewRoundForm((prev) => ({ ...prev, entity_required: e.target.checked }))}
+                                                                        />
+                                                                        {t('实体审核', 'Entity review')}
+                                                                    </label>
+                                                                    <label className="flex items-center gap-2">
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={!!reviewRoundForm.shot_required}
+                                                                            onChange={(e) => setReviewRoundForm((prev) => ({ ...prev, shot_required: e.target.checked }))}
+                                                                        />
+                                                                        {t('镜头审核', 'Shot review')}
+                                                                    </label>
+                                                                </div>
+                                                                <button
+                                                                    onClick={handleCreateReviewRound}
+                                                                    disabled={reviewSubmitting}
+                                                                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary/30 px-3 py-2 text-sm text-primary disabled:opacity-50"
+                                                                >
+                                                                    {reviewSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                                                                    {t('发起新一轮', 'Create Next Round')}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
