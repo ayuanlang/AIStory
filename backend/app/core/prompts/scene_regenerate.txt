@@ -27,6 +27,8 @@ You MUST use all of them together.
 - System-level Subjects Inventory is the authoritative reusable asset inventory.
 - If an entity already exists in inventory, you must reuse it conceptually and MUST NOT emit it again in SUBJECTS_JSON.
 - Existing names, name_en, anchor_description, and identity-defining traits are frozen.
+- Subjects should default to visually restrained, broadcast-safe wording: keep descriptions, appearance text, and generation prompts non-graphic, non-gory, and low-discomfort unless the scene absolutely requires a state cue.
+- anchor_description is stricter than general description: keep it limited to stable identity anchors such as face shape, hair silhouette, body type, wardrobe silhouette, palette, accessories, shoes, or other non-graphic recognition traits; never use blood, wound detail, bruising spread, exposed tissue, missing body parts, decay, or body-fluid stains as anchors.
 - Never create a near-duplicate, alias-duplicate, translation-duplicate, casing-duplicate, or separator-variant duplicate of an existing subject.
 - SUBJECTS_JSON must contain only truly missing and newly required entities.
 
@@ -71,6 +73,7 @@ You MUST use all of them together.
 - Before producing the row patch, first complete scene-level subject extraction for the current scene.
 - Extraction must cover: characters or humanoid entities, identifiable non-human entities, environment containers, and key spatial anchors.
 - Do not only extract protagonists or the most obvious prop.
+- Shot-facing focus compression is mandatory: keep scene-level extraction fully complete, but for any one beat that is expected to become a single downstream shot, designate only 1-3 core shot-facing subjects for Start/End-frame carrying duty by default, excluding the environment anchor. If more than 3 core subjects genuinely need clear focal carrying duty, split the material into additional beats/shots first. Any additional entities should remain covered in the scene inventory and row patch, but be downgraded to background/support presence only when they are truly non-core in that moment.
 - Every extracted entity must be tied back to the current scene.
 - Extraction must reach concrete object level when the scene makes those objects visible or actionable; do not replace tables, cups, doors, windows, lamps, phones, keyboards, and similar specific objects with vague generic labels.
 
@@ -94,6 +97,8 @@ You MUST use all of them together.
 - Key Props must cover only props with actual scene relevance.
 - Environment Name must reflect the correct reusable environment anchor or required new environment variant.
 - No floating entities: a generated missing subject must also be reflected through the scene row patch where relevant, especially in Environment Name, Linked Characters, or Key Props.
+- Beat-to-shot subject budgeting applies here as well: even when the current scene contains many valid entities, any beat intended to map cleanly into one shot should budget only 1-3 core shot-facing subjects for the downstream Start/End frame, while other entities stay as support/background coverage.
+- Beat-to-shot relief by extra shots also applies here: when a regenerated scene patch would otherwise overload one downstream shot with more than 3 core shot-facing subjects, prefer adding beats/shots over cramming all of them into one focal frame.
 
 ## Character Rules
 
@@ -115,6 +120,8 @@ You MUST use all of them together.
 - Character prompts must be asset-ready, identity-stable, and image-generation-ready.
 - generation_prompt_en and generation_prompt_cn must clearly support full-body readability.
 - Character prompts must explicitly preserve full-body framing with shoes visible.
+- Character descriptions and prompts should stay visually restrained and non-graphic. Prefer mild, identification-first wording such as tired, rain-soaked, dusty, or lightly scuffed over blood-heavy, exposed-wound, or otherwise disturbing depiction.
+- anchor_description must remain even more conservative: only stable recognition cues are allowed, and non-graphic wording is mandatory.
 - Do not use a waist-up, bust, knee-crop, or otherwise shoe-cutting composition as the main character asset prompt.
 - Character prompts must preserve stable anchors, clothing consistency, lighting logic, and lens baseline.
 - For realistic drama styles, avoid plastic skin, CGI feel, toy-like proportions, and oversmoothed detail.
@@ -219,6 +226,8 @@ You MUST use all of them together.
 - 不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
 - 若角色提示词未明确“full body + shoes visible”，或输出画面描述存在脚部/鞋子被遮挡、出框、裁切，判定无效并必须重写。
 - `anchor_description` 与角色身份锚点是不可变更锚点；下游仅允许逐字符继承，不得重写、扩写、弱化、替换同义词或做风格化改写。
+- 视觉舒适度硬规则（Mandatory）：角色 `generation_prompt_cn/en`、`description`、`appearance` 与相关说明默认必须保持克制、可播出、非图形化表达。尽量不要出现血腥、喷溅、开放性伤口、暴露组织、腐烂、残缺、体液污渍等强视觉不适内容；若剧情确实要求人物状态变化，优先使用“疲惫、凌乱、淋湿、沾灰、轻微擦痕、衣物破损但不露创口”等温和且可识别的写法。
+- 锚点内容白名单（Mandatory）：`anchor_description` 只允许写稳定身份锚点，例如脸型、发型轮廓、体态、服装版型、配色、饰品、鞋履、非图形化小痕迹；不得把受伤细节、血迹位置、瘀伤扩散、创口形态、残缺状态等写成锚点。
 - 若美化/风格化与锚点冲突，必须以锚点优先；宁可降低风格化程度，也不得改变锚点。
 - 未给定风格时注入默认角色审美回退语义。
 - 真人剧角色必须显式强调真人感关键词。

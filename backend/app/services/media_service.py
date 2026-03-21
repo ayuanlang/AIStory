@@ -38,6 +38,7 @@ logger = logging.getLogger("media_service")
 # ... imports ...
 
 DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS = min(600, max(300, int(os.getenv("VIDEO_POLL_TIMEOUT_SECONDS", "600"))))
+DEFAULT_N1N_IMAGE_READ_TIMEOUT_SECONDS = max(120, int(os.getenv("N1N_IMAGE_READ_TIMEOUT_SECONDS", "300")))
 
 _BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
 _RAW_BASE64_PATTERN = re.compile(r'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{256,}(?:={0,2})(?![A-Za-z0-9+/=])')
@@ -109,6 +110,109 @@ class MediaGenerationService:
             "video-to-video": "v2v",
         }
         return aliases.get(raw, raw)
+
+    def _normalize_input_format(self, value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "img": "image",
+            "images": "image",
+            "picture": "image",
+            "pictures": "image",
+            "photo": "image",
+            "photos": "image",
+            "txt": "text",
+            "prompt": "text",
+            "prompts": "text",
+            "vid": "video",
+            "videos": "video",
+        }
+        return aliases.get(raw, raw)
+
+    def _is_n1n_kling_image_row(self, row: Any) -> bool:
+        model_lower = str(getattr(row, "model", "") or "").strip().lower()
+        if model_lower == "kling_image":
+            return True
+        supplier_info = self._safe_json_dict(getattr(row, "supplier_info", None) if row is not None else None)
+        n1n_info = self._safe_json_dict(supplier_info.get("n1n"))
+        protocol_key = str(n1n_info.get("protocol_key") or "").strip().lower()
+        family_key = str(n1n_info.get("family_key") or "").strip().lower()
+        return protocol_key == "kling_image" or family_key == "kling"
+
+    def _system_row_supports_generation_mode(self, row: Any, target_generation_mode: Any, cfg: Optional[Dict[str, Any]] = None) -> bool:
+        target_mode = self._normalize_generation_mode(target_generation_mode)
+        if not target_mode:
+            return True
+
+        raw_cfg = cfg if isinstance(cfg, dict) else self._safe_json_dict(getattr(row, "config", None) if row is not None else None)
+        modality = self._safe_json_dict(getattr(row, "modality", None) if row is not None else None)
+        supplier_info = self._safe_json_dict(getattr(row, "supplier_info", None) if row is not None else None)
+
+        containers: List[Dict[str, Any]] = []
+        for item in (
+            raw_cfg,
+            modality.get("capability_flags"),
+            modality.get("image_capabilities"),
+            modality.get("video_capabilities"),
+            modality,
+            supplier_info,
+        ):
+            normalized = self._safe_json_dict(item)
+            if normalized:
+                containers.append(normalized)
+        for nested in supplier_info.values() if isinstance(supplier_info, dict) else []:
+            normalized = self._safe_json_dict(nested)
+            if normalized:
+                containers.append(normalized)
+
+        raw_generation_modes: List[str] = []
+        raw_input_formats: List[str] = []
+        for container in containers:
+            for key in ("generation_modes", "generationModes", "supported_generation_modes", "supportedGenerationModes"):
+                raw_generation_modes.extend(self._normalize_str_list(container.get(key)))
+            for key in ("input_formats", "inputFormats", "supported_input_formats", "supportedInputFormats"):
+                raw_input_formats.extend(self._normalize_str_list(container.get(key)))
+
+        normalized_generation_modes = {
+            self._normalize_generation_mode(item)
+            for item in raw_generation_modes
+            if str(item or "").strip().lower() not in {"", "n/a", "na", "none", "unknown", "all", "any"}
+        }
+        if raw_generation_modes:
+            if not normalized_generation_modes:
+                return False
+            if target_mode not in normalized_generation_modes:
+                return False
+
+        required_input_by_mode = {
+            "t2i": "text",
+            "i2i": "image",
+            "t2v": "text",
+            "i2v": "image",
+            "v2v": "video",
+        }
+        normalized_input_formats = {
+            self._normalize_input_format(item)
+            for item in raw_input_formats
+            if str(item or "").strip().lower() not in {"", "n/a", "na", "none", "unknown", "all", "any"}
+        }
+        if self._is_n1n_kling_image_row(row):
+            normalized_input_formats.update({"text", "image"})
+        required_input = required_input_by_mode.get(target_mode)
+        if raw_input_formats and required_input and required_input not in normalized_input_formats:
+            return False
+
+        model_lower = str(getattr(row, "model", "") or "").strip().lower()
+        if target_mode == "i2i":
+            if self._is_n1n_kling_image_row(row):
+                return True
+            if any(token in model_lower for token in ("image-to-image", "/edit", "-edit", "_edit", "i2i")):
+                return True
+            if any(token in model_lower for token in ("text-to-image", "t2i")):
+                return False
+            if model_lower in {"kling_image", "midjourney_image", "replicate_image", "tencent_image_image"}:
+                return False
+
+        return True
 
     def _provider_ci_filter(self, provider: Any):
         provider_norm = str(provider or "").strip().lower()
@@ -261,6 +365,178 @@ class MediaGenerationService:
         ]
         return any(marker in text for marker in markers)
 
+    def _is_n1n_capacity_error(self, payload: Any) -> bool:
+        text = self._flatten_text(payload).lower()
+        markers = [
+            "insufficient_user_quota",
+            "当前分组上游负载已饱和",
+            "负载已饱和",
+            "quota",
+            "429",
+            "too many requests",
+        ]
+        return any(marker in text for marker in markers)
+
+    def _build_n1n_mirror_urls(self, url: str) -> List[str]:
+        primary = str(url or "").strip()
+        if not primary:
+            return []
+
+        candidates: List[str] = [primary]
+        replacements = [
+            ("://api.n1n.ai", "://hk.n1n.ai"),
+            ("://hk.n1n.ai", "://api.n1n.ai"),
+        ]
+        for source, target in replacements:
+            if source in primary:
+                mirror = primary.replace(source, target, 1)
+                if mirror not in candidates:
+                    candidates.append(mirror)
+        return candidates
+
+    def _is_ambiguous_submit_transport_error(self, provider_name: str, log_tag: str, error: Any) -> bool:
+        normalized_provider = str(provider_name or "").strip().lower()
+        normalized_tag = str(log_tag or "").strip().lower()
+        if normalized_provider != "n1n" or normalized_tag != "n1n_image":
+            return False
+
+        text = self._flatten_text(error).lower()
+        markers = [
+            "remotedisconnected",
+            "remote end closed connection without response",
+            "unexpected_eof_while_reading",
+            "ssleoferror",
+            "connection reset by peer",
+            "connection aborted",
+            "read timed out",
+            "readtimeout",
+        ]
+        return any(marker in text for marker in markers)
+
+    def _extract_openai_compatible_image_output(self, data: Any) -> Optional[str]:
+        if isinstance(data, dict):
+            data_items = data.get("data")
+            if isinstance(data_items, list):
+                for item in data_items:
+                    if not isinstance(item, dict):
+                        continue
+                    url_value = str(item.get("url") or "").strip()
+                    if url_value:
+                        return url_value
+                    b64_value = str(item.get("b64_json") or "").strip()
+                    if b64_value:
+                        output_format = str(data.get("output_format") or item.get("output_format") or "png").strip().lower() or "png"
+                        if output_format == "jpg":
+                            output_format = "jpeg"
+                        return f"data:image/{output_format};base64,{b64_value}"
+
+            direct_url = str(data.get("url") or "").strip()
+            if direct_url:
+                return direct_url
+
+        return None
+
+    def _extract_any_image_output(self, value: Any) -> Optional[str]:
+        direct = self._extract_openai_compatible_image_output(value)
+        if direct:
+            return direct
+
+        if isinstance(value, dict):
+            for key in ("url", "image", "image_url", "imageUrl", "result_url", "resultUrl"):
+                candidate = str(value.get(key) or "").strip()
+                if candidate:
+                    return candidate
+            for key in ("content", "result", "output", "outputs", "data", "images", "items", "results", "response"):
+                found = self._extract_any_image_output(value.get(key))
+                if found:
+                    return found
+            for nested in value.values():
+                found = self._extract_any_image_output(nested)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for item in value:
+                found = self._extract_any_image_output(item)
+                if found:
+                    return found
+        elif isinstance(value, str):
+            raw = value.strip()
+            if raw.startswith("data:image/") or raw.lower().startswith(("http://", "https://")):
+                return raw
+
+        return None
+
+    def _resolve_common_post_timeout(self, provider_name: str, log_tag: str, timeout: Optional[int]) -> int:
+        if timeout is not None:
+            try:
+                return max(30, int(timeout))
+            except Exception:
+                pass
+
+        normalized_provider = str(provider_name or "").strip().lower()
+        normalized_tag = str(log_tag or "").strip().lower()
+        if normalized_provider == "n1n" and normalized_tag == "n1n_image":
+            return DEFAULT_N1N_IMAGE_READ_TIMEOUT_SECONDS
+        return 60
+
+    def _should_prefer_no_proxy(self, provider_name: str, log_tag: str) -> bool:
+        normalized_provider = str(provider_name or "").strip().lower()
+        normalized_tag = str(log_tag or "").strip().lower()
+        return normalized_provider == "n1n" and normalized_tag in {"n1n_image", "n1n_gemini_image"}
+
+    def _build_transport_headers(self, provider_name: str, log_tag: str, api_key: str, payload: Any) -> Dict[str, Any]:
+        headers: Dict[str, Any] = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        normalized_provider = str(provider_name or "").strip().lower()
+        normalized_tag = str(log_tag or "").strip().lower()
+        if normalized_provider == "n1n" and normalized_tag in {"n1n_image", "n1n_gemini_image"}:
+            try:
+                payload_text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            except Exception:
+                payload_text = str(payload)
+            payload_digest = hashlib.sha256(payload_text.encode("utf-8", errors="ignore")).hexdigest()[:32]
+            headers["Connection"] = "close"
+            headers["Accept-Encoding"] = "identity"
+            headers["X-Request-Id"] = f"{normalized_provider}-{normalized_tag}-{payload_digest}"
+            headers["Idempotency-Key"] = payload_digest
+
+        return headers
+
+    def _build_ambiguous_submit_result(self, provider_name: str, log_tag: str, error: Any, submit_url: str, extra_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        normalized_provider = str(provider_name or "").strip().lower()
+        normalized_tag = str(log_tag or "").strip().lower()
+        details = str(error or "").strip()
+        if normalized_provider == "n1n" and normalized_tag == "n1n_image":
+            user_error = "n1n 图像请求在上游响应前断开，接口无法确认结果；上游可能已经受理并扣费，系统未自动重试以避免重复生图"
+        else:
+            user_error = "Upstream request status unknown; provider may have accepted the request"
+
+        metadata = {
+            **(extra_metadata or {}),
+            "submit_url": submit_url,
+            "ambiguous_submit": True,
+        }
+        return {
+            "error": user_error,
+            "details": details,
+            "submit_failed": False,
+            "ambiguous_submit": True,
+            "retry_safe": False,
+            "failure_reason": "ambiguous_submit_transport",
+            "metadata": metadata,
+        }
+
+    def _post_json_request(self, target_url: str, payload: Any, headers: Dict[str, Any], timeout_pair: Any, verify: bool = False, use_proxy: bool = True):
+        if use_proxy:
+            return requests.post(target_url, json=payload, headers=headers, timeout=timeout_pair, verify=verify)
+
+        with requests.Session() as session:
+            session.trust_env = False
+            return session.post(target_url, json=payload, headers=headers, timeout=timeout_pair, verify=verify)
+
     def _normalize_doubao_size(self, width: Any, height: Any) -> Optional[str]:
         try:
             w = int(width)
@@ -326,6 +602,108 @@ class MediaGenerationService:
         if raw in {"1K", "2K", "4K"}:
             return raw
         return None
+
+    def _resolve_openai_compatible_image_size(
+        self,
+        model: Any,
+        explicit_size: Any,
+        normalized_image_size: Optional[str],
+        aspect_ratio: Optional[str],
+    ) -> str:
+        model_lower = str(model or "").strip().lower()
+        ratio_value = self._normalize_aspect_ratio_value(aspect_ratio)
+        explicit_text = str(explicit_size or "").strip()
+        explicit_lower = explicit_text.lower()
+
+        if model_lower == "gpt-image-1":
+            allowed_sizes = {"1024x1024", "1536x1024", "1024x1536", "auto"}
+            ratio_map = {
+                "1:1": "1024x1024",
+                "16:9": "1536x1024",
+                "9:16": "1024x1536",
+                "adaptive": "auto",
+            }
+
+            if explicit_text and explicit_text in allowed_sizes:
+                return explicit_text
+            if explicit_lower == "auto":
+                return "auto"
+            mapped_from_ratio = ratio_map.get(str(ratio_value or "").strip())
+            if mapped_from_ratio:
+                return mapped_from_ratio
+            return "1024x1024"
+
+        size_value = normalized_image_size or "1024x1024"
+        if ratio_value and not normalized_image_size:
+            ratio_map = {
+                "1:1": "1024x1024",
+                "16:9": "1536x1024",
+                "9:16": "1024x1536",
+            }
+            size_value = ratio_map.get(str(ratio_value).strip(), size_value)
+        return explicit_text or size_value
+
+    def _get_runninghub_image_resolution_allowed_values(self, endpoint: Any, fallback_values: Any = None) -> List[str]:
+        endpoint_lower = str(endpoint or "").strip().lower()
+        if not endpoint_lower:
+            return self._normalize_str_list(fallback_values)
+
+        endpoint_rules = [
+            ("/openapi/v2/rhart-image-n-pro-official/text-to-image-ultra", ["4k", "8k"]),
+            ("/openapi/v2/rhart-image-n-pro-official/edit-ultra", ["4k", "8k"]),
+            ("/openapi/v2/seedream-v4.5/text-to-image", ["2k", "4k"]),
+            ("/openapi/v2/seedream-v4.5/image-to-image", ["2k", "4k"]),
+            ("/openapi/v2/seedream-v5-lite/text-to-image", ["2k", "3k"]),
+            ("/openapi/v2/seedream-v5-lite/image-to-image", ["2k", "3k"]),
+            ("/openapi/v2/seedream-v4/text-to-image", ["1k", "2k", "4k"]),
+            ("/openapi/v2/seedream-v4/image-to-image", ["1k", "2k", "4k"]),
+            ("/openapi/v2/rhart-image-n-pro-official/text-to-image", ["1k", "2k", "4k"]),
+            ("/openapi/v2/rhart-image-n-pro-official/edit", ["1k", "2k", "4k"]),
+            ("/openapi/v2/rhart-image-n-pro/text-to-image", ["1k", "2k", "4k"]),
+            ("/openapi/v2/rhart-image-n-pro/edit", ["1k", "2k", "4k"]),
+            ("/openapi/v2/rhart-image-n-g31-flash-official/text-to-image", ["1k", "2k", "4k"]),
+            ("/openapi/v2/rhart-image-n-g31-flash-official/image-to-image", ["1k", "2k", "4k"]),
+            ("/openapi/v2/rhart-image-n-g31-flash/text-to-image", ["1k", "2k", "4k"]),
+            ("/openapi/v2/rhart-image-n-g31-flash/image-to-image", ["1k", "2k", "4k"]),
+        ]
+
+        for endpoint_token, values in endpoint_rules:
+            if endpoint_token in endpoint_lower:
+                return self._normalize_str_list(values)
+
+        return self._normalize_str_list(fallback_values)
+
+    def _get_runninghub_image_aspect_ratio_allowed_values(self, endpoint: Any, fallback_values: Any = None) -> List[str]:
+        endpoint_lower = str(endpoint or "").strip().lower()
+        if not endpoint_lower:
+            return self._normalize_str_list(fallback_values)
+
+        endpoint_rules = [
+            ("/openapi/v2/rhart-image-g/text-to-image", ["960x960", "720x1280", "1280x720", "1168x784", "784x1168"]),
+            ("/openapi/v2/rhart-image-g-1.5/text-to-image", ["auto", "1:1", "3:2", "2:3"]),
+            ("/openapi/v2/rhart-image-g-1.5/edit", ["auto", "1:1", "3:2", "2:3"]),
+            ("/openapi/v2/rhart-image-v1-official/text-to-image", ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]),
+            ("/openapi/v2/rhart-image-v1-official/edit", ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]),
+            ("/openapi/v2/rhart-image-v1/text-to-image", ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]),
+            ("/openapi/v2/rhart-image-v1/edit", ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]),
+            ("/openapi/v2/rhart-image-n-pro-official/text-to-image-ultra", ["1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]),
+            ("/openapi/v2/rhart-image-n-pro-official/edit-ultra", ["1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]),
+            ("/openapi/v2/rhart-image-n-pro-official/text-to-image", ["1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]),
+            ("/openapi/v2/rhart-image-n-pro-official/edit", ["1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]),
+            ("/openapi/v2/rhart-image-n-pro/text-to-image", ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]),
+            ("/openapi/v2/rhart-image-n-pro/edit", ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]),
+            ("/openapi/v2/rhart-image-n-g31-flash-official/text-to-image", ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "1:4", "4:1", "1:8", "8:1"]),
+            ("/openapi/v2/rhart-image-n-g31-flash-official/image-to-image", ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "1:4", "4:1", "1:8", "8:1"]),
+            ("/openapi/v2/rhart-image-n-g31-flash/text-to-image", ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "1:4", "4:1", "1:8", "8:1"]),
+            ("/openapi/v2/rhart-image-n-g31-flash/image-to-image", ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "1:4", "4:1", "1:8", "8:1"]),
+            ("/openapi/v2/youchuan/text-to-image", ["1:1", "4:3", "3:2", "16:9", "3:4", "2:3", "9:16"]),
+        ]
+
+        for endpoint_token, values in endpoint_rules:
+            if endpoint_token in endpoint_lower:
+                return self._normalize_str_list(values)
+
+        return self._normalize_str_list(fallback_values)
 
     def _sanitize_sora_prompt_mentions(self, prompt: Any) -> str:
         text = str(prompt or "")
@@ -506,7 +884,7 @@ class MediaGenerationService:
                 out.append(num)
         return sorted(set(out))
 
-    def _map_duration_nearest_lower(self, requested: Any, allowed_values: Any) -> Optional[int]:
+    def _map_duration_nearest(self, requested: Any, allowed_values: Any) -> Optional[int]:
         allowed = self._normalize_duration_enum_values(allowed_values)
         if not allowed:
             return None
@@ -515,10 +893,7 @@ class MediaGenerationService:
         except Exception:
             requested_num = float(allowed[0])
 
-        lower_or_equal = [x for x in allowed if float(x) <= requested_num]
-        if lower_or_equal:
-            return max(lower_or_equal)
-        return allowed[0]
+        return min(allowed, key=lambda item: (abs(float(item) - requested_num), float(item)))
 
     def _normalize_enum_token(self, value: Any) -> str:
         text = str(value or "").strip().lower()
@@ -545,6 +920,16 @@ class MediaGenerationService:
                 return None
 
         m = re.match(r"^(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)$", text)
+        if m:
+            try:
+                a = float(m.group(1))
+                b = float(m.group(2))
+                if a > 0 and b > 0:
+                    return a / b
+            except Exception:
+                return None
+
+        m = re.match(r"^(\d+(?:\.\d+)?)[x\*](\d+(?:\.\d+)?)$", text)
         if m:
             try:
                 a = float(m.group(1))
@@ -743,6 +1128,29 @@ class MediaGenerationService:
     def _map_resolution_to_allowed(self, requested: Any, allowed_values: Any) -> Optional[str]:
         return self._map_numeric_enum_nearest_lower(requested, allowed_values, self._parse_resolution_tier)
 
+    def _map_text_value_to_allowed(self, requested: Any, allowed_values: Any) -> Optional[str]:
+        allowed = self._normalize_str_list(allowed_values)
+        if not allowed:
+            return None
+
+        req_text = str(requested or "").strip()
+        if not req_text:
+            return None
+
+        exact_map = {item.lower(): item for item in allowed}
+        req_lower = req_text.lower()
+        if req_lower in exact_map:
+            return exact_map[req_lower]
+
+        req_token = self._normalize_enum_token(req_text)
+        if req_token:
+            token_map = {self._normalize_enum_token(item): item for item in allowed}
+            mapped = token_map.get(req_token)
+            if mapped:
+                return mapped
+
+        return allowed[0]
+
     def _load_system_api_runtime_enum_catalog(self, setting_id: Any) -> Dict[str, Any]:
         try:
             sid = int(setting_id or 0)
@@ -758,6 +1166,9 @@ class MediaGenerationService:
 
             cfg = self._safe_json_dict(getattr(row, "config", None))
             enum_catalog = cfg.get("enum_catalog") if isinstance(cfg.get("enum_catalog"), dict) else {}
+            modality = self._safe_json_dict(getattr(row, "modality", None))
+            capability_flags = self._safe_json_dict(modality.get("capability_flags"))
+            voice_capabilities = self._safe_json_dict(modality.get("voice_capabilities"))
 
             mode_values = self._normalize_str_list(getattr(row, "mode_values", None))
             if not mode_values:
@@ -803,6 +1214,27 @@ class MediaGenerationService:
             if multi_shots_supported is not None:
                 multi_shots_supported = bool(multi_shots_supported)
 
+            voice_values = self._normalize_str_list(
+                voice_capabilities.get("voice_values")
+                or voice_capabilities.get("voices")
+                or voice_capabilities.get("allowed_voices")
+                or voice_capabilities.get("supported_voices")
+                or capability_flags.get("voice_values")
+                or enum_catalog.get("voice")
+                or enum_catalog.get("voice_values")
+            )
+
+            language_code_values = self._normalize_str_list(
+                voice_capabilities.get("language_code_values")
+                or voice_capabilities.get("language_values")
+                or voice_capabilities.get("languages")
+                or voice_capabilities.get("allowed_languages")
+                or capability_flags.get("language_code_values")
+                or enum_catalog.get("language_code")
+                or enum_catalog.get("language_code_values")
+                or enum_catalog.get("languages")
+            )
+
             return {
                 "mode": mode_values,
                 "aspect_ratio": aspect_ratios,
@@ -812,6 +1244,8 @@ class MediaGenerationService:
                 "max_duration": max_duration,
                 "sound_supported": sound_supported,
                 "multi_shots_supported": multi_shots_supported,
+                "voice": voice_values,
+                "language_code": language_code_values,
             }
 
     def _apply_runtime_enum_constraints(
@@ -866,7 +1300,7 @@ class MediaGenerationService:
         if category in {"Video", "Voice"}:
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
             if isinstance(allowed_durations, list) and allowed_durations and effective_duration is not None:
-                mapped_duration = self._map_duration_nearest_lower(effective_duration, allowed_durations)
+                mapped_duration = self._map_duration_nearest(effective_duration, allowed_durations)
                 if mapped_duration is not None:
                     effective_duration = int(mapped_duration)
             max_duration = runtime_enum_catalog.get("max_duration")
@@ -1007,6 +1441,96 @@ class MediaGenerationService:
 
         return None
 
+    async def _submit_and_poll_image_task(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+        _debug_log(f"[{log_tag}] Submitting to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
+
+        def _post(use_proxy=True, connection_close: bool = False, connect_timeout=None):
+            request_headers = dict(headers)
+            if connection_close:
+                request_headers["Connection"] = "close"
+            c_timeout = connect_timeout or 60
+            kwargs = {"json": payload, "headers": request_headers, "timeout": (c_timeout, 60), "verify": False}
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.post(url, **kwargs)
+
+        def _poll(use_proxy=True, task_id=None):
+            kwargs = {"headers": headers, "timeout": 30, "verify": False}
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.get(f"{url}/{task_id}", **kwargs)
+
+        try:
+            try:
+                resp = await asyncio.to_thread(_post, True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                _debug_log(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy (connect_timeout=15s)...", "warning")
+                try:
+                    resp = await asyncio.to_thread(_post, False, False, 15)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
+                    _debug_log(f"[{log_tag}] Submit retry without proxy failed ({str(e2)[:120]}), retrying with connection close...", "warning")
+                    resp = await asyncio.to_thread(_post, False, True, 15)
+
+            if resp.status_code not in [200, 201]:
+                return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
+
+            data = resp.json()
+            task_id = data.get("id") or data.get("task_id") or data.get("taskId")
+            if not task_id and isinstance(data.get("data"), dict):
+                task_id = data.get("data", {}).get("id") or data.get("data", {}).get("task_id") or data.get("data", {}).get("taskId")
+            if not task_id:
+                resolved_output = self._extract_any_image_output(data)
+                if resolved_output:
+                    metadata = {"raw": data}
+                    if extra_metadata:
+                        metadata.update(extra_metadata)
+                    return {"url": resolved_output, "metadata": metadata}
+                return {"error": "No Task ID", "submit_failed": True}
+
+            max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+            for _ in range(max_attempts):
+                await asyncio.sleep(poll_interval_seconds)
+                try:
+                    p_resp = await asyncio.to_thread(_poll, True, task_id)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    p_resp = await asyncio.to_thread(_poll, False, task_id)
+                except requests.exceptions.Timeout:
+                    continue
+
+                if p_resp.status_code != 200:
+                    continue
+
+                p_data = p_resp.json()
+                status = str(p_data.get("status") or p_data.get("state") or p_data.get("task_status") or "").strip()
+                status_l = status.lower()
+                image_url = self._extract_any_image_output(p_data)
+                if status_l in ["succeeded", "success", "completed", "done"] or (not status_l and image_url):
+                    if not image_url:
+                        return {
+                            "error": "Generation completed without image URL",
+                            "details": f"task_id={task_id} status={status or '<empty>'}",
+                            "raw": p_data,
+                        }
+                    metadata = {"raw": p_data, "submit_raw": data, "task_id": task_id, "taskId": task_id}
+                    if extra_metadata:
+                        metadata.update(extra_metadata)
+                    return {"url": image_url, "metadata": metadata}
+                if status_l in ["failed", "error", "canceled", "cancelled"]:
+                    return {"error": "Generation Failed", "details": p_data.get("error") or p_data}
+
+            return {"error": f"Timeout after {poll_timeout_seconds}s"}
+        except requests.exceptions.Timeout as e:
+            return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
+        except requests.exceptions.RequestException as e:
+            details = str(e)
+            if "10054" in details or "ConnectionResetError" in details:
+                details = f"{details}. Possible network middlebox/proxy reset on large request body; retried with no-proxy once."
+            return {"error": "Upstream request failed", "details": details, "submit_failed": True}
+        except Exception as e:
+            return {"error": str(e), "submit_failed": True}
+
     def _resolve_kie_standardized_runtime_inputs(
         self,
         model_key: str,
@@ -1108,16 +1632,59 @@ class MediaGenerationService:
 
     def _is_deprecated_system_config(self, config_value: Any, deprecated_flag: Any = None) -> bool:
         if isinstance(deprecated_flag, bool):
-            if deprecated_flag:
-                return True
-        elif deprecated_flag is not None and str(deprecated_flag).strip().lower() in {"1", "true", "yes", "y", "on"}:
-            return True
+            return deprecated_flag
+        return deprecated_flag is not None and str(deprecated_flag).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _extract_nested_runtime_flag(self, config_value: Any, key_paths: List[Any]) -> bool:
         cfg = self._safe_json_dict(config_value)
-        return bool(
-            cfg.get("deprecated")
-            or cfg.get("is_deprecated")
-            or cfg.get("disable_api")
+        for path in key_paths:
+            if isinstance(path, str):
+                candidate = cfg.get(path)
+            elif isinstance(path, (list, tuple)):
+                candidate = cfg
+                for segment in path:
+                    if not isinstance(candidate, dict):
+                        candidate = None
+                        break
+                    candidate = candidate.get(segment)
+            else:
+                candidate = None
+            if candidate is None:
+                continue
+            if isinstance(candidate, bool):
+                return candidate
+            if str(candidate).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                return True
+        return False
+
+    def _is_runtime_runnable_system_setting(self, category: str, system_row: Optional[SystemAPISetting]) -> bool:
+        if system_row is None:
+            return False
+        resolved_category = str(category or "").strip()
+        resolved_provider = self._normalize_provider_name(getattr(system_row, "provider", None), resolved_category)
+        if not self._is_supported_provider(resolved_category, resolved_provider):
+            return False
+
+        runtime_config = self._promote_runtime_endpoint(
+            resolved_category,
+            resolved_provider,
+            getattr(system_row, "config", None),
+            system_row=system_row,
         )
+        runtime_ready = self._extract_nested_runtime_flag(runtime_config, ["runtime_ready", resolved_provider, "runtime_ready"])
+        endpoint = str(runtime_config.get("endpoint") or "").strip()
+        runtime_activation = str(runtime_config.get("runtime_activation") or "").strip()
+        cat = resolved_category.lower()
+
+        if cat in {"image", "video", "voice"}:
+            if runtime_ready:
+                return True
+            if endpoint or runtime_activation:
+                return True
+            if resolved_provider in {"apiyi", "n1n"}:
+                return False
+
+        return True
 
     def _normalize_api_keys(self, value: Any) -> List[str]:
         if value is None:
@@ -1287,11 +1854,29 @@ class MediaGenerationService:
         return query
 
     def _setting_to_config(self, setting: Any, provider: str, defaults: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+        resolved_category = str(getattr(setting, "category", "") or "").strip()
+        runtime_config = self._promote_runtime_endpoint(
+            resolved_category,
+            provider,
+            getattr(setting, "config", None),
+            system_row=setting,
+        )
+        runtime_model = str(
+            runtime_config.get("runtime_model")
+            or runtime_config.get("upstream_model")
+            or runtime_config.get("model_override")
+            or getattr(setting, "model", None)
+            or defaults.get(provider, {}).get("model")
+            or ""
+        ).strip()
         return {
-            "api_key": "",
-            "base_url": defaults.get(provider, {}).get("base_url"),
-            "model": defaults.get(provider, {}).get("model"),
-            "config": {},
+            "api_key": self._pick_runtime_api_key(runtime_config, getattr(setting, "api_key", None)),
+            "base_url": getattr(setting, "base_url", None) or defaults.get(provider, {}).get("base_url"),
+            "model": runtime_model,
+            "base_model": getattr(setting, "base_model", None),
+            "modality": getattr(setting, "modality", None),
+            "supplier_info": getattr(setting, "supplier_info", None),
+            "config": runtime_config,
         }
 
     def _get_active_user_setting(self, session, user_id: int, category: str) -> Optional[APISetting]:
@@ -1378,30 +1963,77 @@ class MediaGenerationService:
         if cat in {"llm", "vision", "tools", "digitalhuman", "music"}:
             return bool(normalized)
         if cat == "image":
-            return normalized in {"doubao", "grsai", "kie", "tencent", "stability", "apiyi"}
+              return normalized in {"doubao", "grsai", "kie", "tencent", "stability", "runninghub", "apiyi", "n1n"}
         if cat == "video":
             return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi"}
         if cat == "voice":
-            return normalized in {"kie"}
+              return normalized in {"kie", "runninghub"}
         return bool(normalized)
 
-    def _promote_runtime_endpoint(self, category: str, provider: Optional[str], config_value: Any) -> Dict[str, Any]:
+    def _infer_n1n_runtime_model(self, system_row: Optional[SystemAPISetting], cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        cfg_dict = cfg if isinstance(cfg, dict) else self._safe_json_dict(cfg)
+        for key in ("runtime_model", "upstream_model", "model_override"):
+            value = str(cfg_dict.get(key) or "").strip()
+            if value:
+                return value
+
+        supplier_info = getattr(system_row, "supplier_info", None) if system_row is not None else None
+        n1n_info = (supplier_info or {}).get("n1n") if isinstance(supplier_info, dict) else {}
+        model_hints = n1n_info.get("model_hints") if isinstance(n1n_info, dict) else None
+        if isinstance(model_hints, list):
+            for item in model_hints:
+                candidate = str(item or "").strip()
+                if not candidate or candidate.lower().startswith(("http://", "https://")):
+                    continue
+                if any(ch.isspace() for ch in candidate):
+                    continue
+                return candidate
+
+        fallback_model = str(getattr(system_row, "model", "") or "").strip() if system_row is not None else ""
+        return fallback_model or None
+
+    def _promote_runtime_endpoint(self, category: str, provider: Optional[str], config_value: Any, system_row: Optional[SystemAPISetting] = None) -> Dict[str, Any]:
         cfg = self._safe_json_dict(config_value)
         resolved_category = str(category or "").strip()
         resolved_provider = self._normalize_provider_name(provider, resolved_category)
-        if resolved_provider != "apiyi":
-            return cfg
-
         endpoint = str(cfg.get("endpoint") or "").strip()
         endpoint_hint = str(cfg.get("endpoint_hint") or "").strip()
+
+        if resolved_provider == "n1n" and resolved_category == "Image":
+            supplier_info = getattr(system_row, "supplier_info", None) if system_row is not None else None
+            n1n_supplier = (supplier_info or {}).get("n1n") if isinstance(supplier_info, dict) else {}
+            n1n_cfg = cfg.get("n1n") if isinstance(cfg.get("n1n"), dict) else {}
+            api_style = str((n1n_supplier or {}).get("api_style") or n1n_cfg.get("api_style") or "").strip().lower()
+            supplier_endpoint_hint = str((n1n_supplier or {}).get("endpoint_hint") or "").strip()
+            protocol_key = str((n1n_supplier or {}).get("protocol_key") or "").strip().lower()
+            family_key = str((n1n_supplier or {}).get("family_key") or n1n_cfg.get("family_key") or "").strip().lower()
+
+            if not endpoint_hint and (protocol_key == "kling_image" or family_key == "kling"):
+                endpoint_hint = "/kling/v1/images/generations"
+
+            if not endpoint_hint and supplier_endpoint_hint:
+                endpoint_hint = supplier_endpoint_hint
+
+            if not endpoint_hint and api_style in {"async_task", "openai_compatible", "chat_compatible"}:
+                endpoint_hint = "/v1/images/generations"
+
         if endpoint or not endpoint_hint:
             return cfg
         endpoint_hint_lower = endpoint_hint.lower()
         runtime_activation = None
-        if resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
+        if resolved_category == "Image" and "generatecontent" in endpoint_hint_lower:
+            runtime_activation = "image_gemini_native"
+        elif resolved_category == "Image" and "/kling/v1/images/generations" in endpoint_hint_lower:
+            runtime_activation = "image_n1n_kling_native"
+        elif resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
             runtime_activation = "image_openai_compatible"
         elif resolved_category == "Video" and ("/v1/videos" in endpoint_hint_lower or "/v1/chat/completions" in endpoint_hint_lower):
             runtime_activation = "video_openai_compatible"
+        elif resolved_category == "Voice" and "voice-clone" in endpoint_hint_lower:
+            runtime_activation = "audio_runninghub_compatible"
+        elif resolved_category == "Voice" and any(token in endpoint_hint_lower for token in ("tts", "text-to-speech", "voice", "/audio")):
+            normalized_voice_provider = self._normalize_provider_name(provider, "Voice")
+            runtime_activation = "audio_kie_compatible" if normalized_voice_provider == "kie" else "audio_runninghub_compatible"
         elif resolved_category == "LLM" and "/v1/chat/completions" in endpoint_hint_lower:
             runtime_activation = "llm_openai_compatible"
         if not runtime_activation:
@@ -1410,7 +2042,327 @@ class MediaGenerationService:
         promoted = dict(cfg)
         promoted["endpoint"] = endpoint_hint
         promoted.setdefault("runtime_activation", runtime_activation)
+        if resolved_provider == "n1n":
+            inferred_runtime_model = self._infer_n1n_runtime_model(system_row, promoted)
+            if inferred_runtime_model:
+                promoted.setdefault("runtime_model", inferred_runtime_model)
         return promoted
+
+    def _get_runtime_activation(self, api_config: Optional[Dict[str, Any]]) -> str:
+        outer = api_config if isinstance(api_config, dict) else {}
+        tool_conf = self._safe_json_dict(outer.get("config"))
+        activation = tool_conf.get("runtime_activation")
+        if activation is None:
+            activation = outer.get("runtime_activation")
+        return str(activation or "").strip().lower()
+
+    def _coerce_optional_bool(self, value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return None
+
+    def _iter_runtime_capability_containers(self, api_config: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        outer = api_config if isinstance(api_config, dict) else {}
+        modality = self._safe_json_dict(outer.get("modality"))
+        containers: List[Dict[str, Any]] = []
+        for raw in (
+            modality.get("capability_flags"),
+            modality.get("image_capabilities"),
+            modality.get("video_capabilities"),
+            modality.get("text_capabilities"),
+            modality.get("digital_human_capabilities"),
+            modality.get("voice_capabilities"),
+            modality.get("music_capabilities"),
+            modality,
+        ):
+            container = self._safe_json_dict(raw)
+            if container:
+                containers.append(container)
+        return containers
+
+    def _get_runtime_capability_flag(self, api_config: Optional[Dict[str, Any]], *keys: str) -> Optional[bool]:
+        normalized_keys = [str(key or "").strip() for key in keys if str(key or "").strip()]
+        if not normalized_keys:
+            return None
+        for container in self._iter_runtime_capability_containers(api_config):
+            for key in normalized_keys:
+                value = self._coerce_optional_bool(container.get(key))
+                if value is not None:
+                    return value
+        return None
+
+    def _get_runtime_capability_int(self, api_config: Optional[Dict[str, Any]], *keys: str) -> Optional[int]:
+        normalized_keys = [str(key or "").strip() for key in keys if str(key or "").strip()]
+        if not normalized_keys:
+            return None
+        for container in self._iter_runtime_capability_containers(api_config):
+            for key in normalized_keys:
+                value = container.get(key)
+                if value is None or str(value).strip() == "":
+                    continue
+                try:
+                    parsed = int(float(value))
+                except Exception:
+                    continue
+                if parsed >= 0:
+                    return parsed
+        return None
+
+    def _get_runtime_capability_number(self, api_config: Optional[Dict[str, Any]], *keys: str) -> Optional[float]:
+        normalized_keys = [str(key or "").strip() for key in keys if str(key or "").strip()]
+        if not normalized_keys:
+            return None
+        for container in self._iter_runtime_capability_containers(api_config):
+            for key in normalized_keys:
+                value = container.get(key)
+                if value is None or str(value).strip() == "":
+                    continue
+                try:
+                    return float(value)
+                except Exception:
+                    continue
+        return None
+
+    def _get_runtime_capability_list(self, api_config: Optional[Dict[str, Any]], *keys: str) -> List[str]:
+        normalized_keys = [str(key or "").strip() for key in keys if str(key or "").strip()]
+        if not normalized_keys:
+            return []
+        for container in self._iter_runtime_capability_containers(api_config):
+            for key in normalized_keys:
+                values = self._normalize_str_list(container.get(key))
+                if values:
+                    return values
+        return []
+
+    def _limit_reference_input(self, value: Any, limit: Optional[int]) -> Any:
+        if limit is None:
+            return value
+        if limit <= 0:
+            return [] if isinstance(value, list) else None
+        if isinstance(value, list):
+            refs = [str(item).strip() for item in value if str(item).strip()]
+            return refs[:limit]
+        text = str(value or "").strip()
+        if not text:
+            return value
+        return text if limit >= 1 else None
+
+    def _apply_runtime_capability_constraints(
+        self,
+        *,
+        category: str,
+        api_config: Optional[Dict[str, Any]],
+        reference_image_url: Optional[Union[str, List[str]]] = None,
+        last_frame_url: Optional[str] = None,
+        keyframes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        runtime_config = dict(api_config or {})
+        tool_conf = self._safe_json_dict(runtime_config.get("config"))
+        runtime_config["config"] = tool_conf
+        resolved_category = str(category or "").strip()
+
+        image_ref_limit = self._get_runtime_capability_int(
+            runtime_config,
+            "reference_image_limit",
+            "max_reference_images",
+            "max_image_refs",
+        )
+        video_ref_limit = self._get_runtime_capability_int(
+            runtime_config,
+            "reference_video_limit",
+            "max_reference_videos",
+            "max_video_refs",
+        )
+
+        if resolved_category == "Image":
+            supports_mask = self._get_runtime_capability_flag(runtime_config, "supports_mask", "mask_supported")
+            if supports_mask is False:
+                tool_conf.pop("maskUrl", None)
+                tool_conf.pop("mask_url", None)
+
+            if image_ref_limit is not None:
+                reference_image_url = self._limit_reference_input(reference_image_url, image_ref_limit)
+                for key in ("filesUrl", "image_urls", "imageUrls"):
+                    raw = tool_conf.get(key)
+                    if isinstance(raw, list):
+                        tool_conf[key] = raw[:image_ref_limit]
+
+        if resolved_category == "Video":
+            supports_first_frame = self._get_runtime_capability_flag(
+                runtime_config,
+                "supports_first_frame",
+                "supports_start_frame",
+                "first_frame_supported",
+                "start_frame_supported",
+            )
+            if supports_first_frame is False:
+                reference_image_url = None if not isinstance(reference_image_url, list) else []
+
+            supports_last_frame = self._get_runtime_capability_flag(
+                runtime_config,
+                "supports_last_frame",
+                "supports_last_frame_mode",
+                "last_frame_supported",
+            )
+            if supports_last_frame is False:
+                last_frame_url = None
+                tool_conf.pop("last_frame_url", None)
+                tool_conf.pop("lastFrameUrl", None)
+
+            sound_supported = self._get_runtime_capability_flag(
+                runtime_config,
+                "sound_supported",
+                "has_audio",
+                "audio_supported",
+                "supports_audio",
+            )
+            if sound_supported is False:
+                tool_conf["sound"] = False
+
+            multi_shots_supported = self._get_runtime_capability_flag(
+                runtime_config,
+                "multi_shots_supported",
+                "supports_multi_shots",
+                "supports_multi_shot",
+            )
+            if multi_shots_supported is False:
+                tool_conf["multi_shots"] = False
+                tool_conf.pop("multi_prompt", None)
+
+            supports_keyframes = self._get_runtime_capability_flag(
+                runtime_config,
+                "supports_keyframes",
+                "keyframes_supported",
+                "supports_multi_keyframes",
+            )
+            max_keyframes = self._get_runtime_capability_int(
+                runtime_config,
+                "max_keyframes",
+                "keyframe_limit",
+            )
+            if supports_keyframes is False:
+                keyframes = None
+            elif isinstance(keyframes, list) and max_keyframes is not None:
+                normalized_keyframes = [str(item).strip() for item in keyframes if str(item).strip()]
+                keyframes = normalized_keyframes[:max_keyframes] if max_keyframes > 0 else []
+
+            if image_ref_limit is not None:
+                reference_image_url = self._limit_reference_input(reference_image_url, image_ref_limit)
+                for key in ("image_urls", "imageUrls"):
+                    raw = tool_conf.get(key)
+                    if isinstance(raw, list):
+                        tool_conf[key] = raw[:image_ref_limit]
+
+            if video_ref_limit is not None:
+                for key in ("reference_video_urls", "ref_video_urls"):
+                    raw = tool_conf.get(key)
+                    if isinstance(raw, list):
+                        tool_conf[key] = raw[:video_ref_limit]
+
+        if resolved_category == "Voice":
+            timestamps_supported = self._get_runtime_capability_flag(
+                runtime_config,
+                "supports_timestamps",
+                "timestamps_supported",
+            )
+            previous_text_supported = self._get_runtime_capability_flag(
+                runtime_config,
+                "supports_previous_text",
+                "previous_text_supported",
+                "supports_context_text",
+                "context_text_supported",
+            )
+            next_text_supported = self._get_runtime_capability_flag(
+                runtime_config,
+                "supports_next_text",
+                "next_text_supported",
+                "supports_context_text",
+                "context_text_supported",
+            )
+            if timestamps_supported is False:
+                tool_conf.pop("timestamps", None)
+            if previous_text_supported is False:
+                tool_conf.pop("previous_text", None)
+            if next_text_supported is False:
+                tool_conf.pop("next_text", None)
+
+        return {
+            "api_config": runtime_config,
+            "reference_image_url": reference_image_url,
+            "last_frame_url": last_frame_url,
+            "keyframes": keyframes,
+        }
+
+    async def _dispatch_image_generation(
+        self,
+        provider: str,
+        prompt: str,
+        active_config: Dict[str, Any],
+        reference_image_url: Optional[Union[str, List[str]]],
+        aspect_ratio: Optional[str],
+        negative_prompt: Optional[str],
+        image_size: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        runtime_activation = self._get_runtime_activation(active_config)
+        if runtime_activation == "image_gemini_native":
+            return await self._handle_n1n_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=image_size)
+        if runtime_activation == "image_n1n_kling_native":
+            return await self._handle_n1n_kling_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=image_size)
+        if runtime_activation == "image_openai_compatible":
+            return await self._handle_apiyi_generation("image", prompt, active_config, reference_image_url, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt, image_size=image_size)
+        return None
+
+    async def _dispatch_video_generation(
+        self,
+        provider: str,
+        prompt: str,
+        active_config: Dict[str, Any],
+        reference_image_url: Optional[Union[str, List[str]]],
+        last_frame_url: Optional[str],
+        duration: int,
+        aspect_ratio: Optional[str],
+        keyframes: Optional[List[str]],
+        negative_prompt: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        runtime_activation = self._get_runtime_activation(active_config)
+        if runtime_activation == "video_openai_compatible":
+            return await self._handle_apiyi_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio, negative_prompt=negative_prompt)
+        return None
+
+    async def _dispatch_voice_generation(
+        self,
+        provider: str,
+        prompt: str,
+        active_config: Dict[str, Any],
+        duration: int,
+        negative_prompt: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        runtime_activation = self._get_runtime_activation(active_config)
+        if runtime_activation == "audio_kie_compatible":
+            return await self._handle_kie_generation(
+                "audio",
+                prompt,
+                active_config,
+                None,
+                duration=duration,
+                negative_prompt=negative_prompt,
+            )
+        if runtime_activation == "audio_runninghub_compatible":
+            return await self._handle_runninghub_generation(
+                "audio",
+                prompt,
+                active_config,
+                duration=duration,
+                negative_prompt=negative_prompt,
+            )
+        return None
 
     def _pick_system_setting_fallback(self, session, category: str, provider: Optional[str] = None) -> Optional[SystemAPISetting]:
         # Prefer task-default system setting when no provider is pinned.
@@ -1418,15 +2370,13 @@ class MediaGenerationService:
             default_row = get_task_default_system_setting(session, category)
             if default_row:
                 deprecated_default = self._is_deprecated_system_config(getattr(default_row, "config", None), getattr(default_row, "deprecated", None))
-                row_provider = self._normalize_provider_name(getattr(default_row, "provider", None), category)
-                supported_default = self._is_supported_provider(category, row_provider)
-                if not deprecated_default and supported_default:
+                if not deprecated_default:
                     _debug_log(
                         f"API_FALLBACK_TRACE picker category={category} provider={provider or '<none>'} selected=task_default setting_id={getattr(default_row, 'id', None)} mapped_provider={getattr(default_row, 'provider', None)} mapped_model={getattr(default_row, 'model', None)}"
                     )
                     return default_row
                 _debug_log(
-                    f"API_FALLBACK_TRACE picker category={category} provider={provider or '<none>'} skip_task_default setting_id={getattr(default_row, 'id', None)} deprecated={deprecated_default} supported={supported_default} mapped_provider={getattr(default_row, 'provider', None)} mapped_model={getattr(default_row, 'model', None)}",
+                    f"API_FALLBACK_TRACE picker category={category} provider={provider or '<none>'} skip_task_default setting_id={getattr(default_row, 'id', None)} deprecated={deprecated_default} mapped_provider={getattr(default_row, 'provider', None)} mapped_model={getattr(default_row, 'model', None)}",
                     "warning",
                 )
 
@@ -1436,9 +2386,6 @@ class MediaGenerationService:
         rows = query.order_by(SystemAPISetting.id.desc()).all()
         for row in rows:
             if self._is_deprecated_system_config(getattr(row, "config", None), getattr(row, "deprecated", None)):
-                continue
-            row_provider = self._normalize_provider_name(getattr(row, "provider", None), category)
-            if not self._is_supported_provider(category, row_provider):
                 continue
             _debug_log(
                 f"API_FALLBACK_TRACE picker category={category} provider={provider or '<none>'} selected=category_fallback setting_id={getattr(row, 'id', None)} selected_provider={getattr(row, 'provider', None)} selected_model={getattr(row, 'model', None)}"
@@ -1506,6 +2453,8 @@ class MediaGenerationService:
                 if not modality_matches(getattr(row, "modality", None), modality):
                     continue
             cfg = self._safe_json_dict(row.config)
+            if target_generation_mode and not self._system_row_supports_generation_mode(row, target_generation_mode, cfg):
+                continue
 
             if provider not in provider_bundle_cache:
                 provider_bundle_cache[provider] = self._collect_provider_key_pool_bundle(session, category, provider)
@@ -1531,10 +2480,11 @@ class MediaGenerationService:
                 retry_limit = int(retry_raw) if retry_raw is not None else None
             except Exception:
                 retry_limit = None
+            candidate_config = self._setting_to_config(row, provider, defaults)
             candidates.append({
                 "id": row.id,
                 "provider": provider,
-                "model": row.model,
+                "model": candidate_config.get("model") or row.model,
                 "priority": priority,
                 "retry_limit": retry_limit,
                 "is_multi_ref_default": bool(cfg.get("smart_multi_ref_default")),
@@ -1544,8 +2494,9 @@ class MediaGenerationService:
                     generation_mode=target_generation_mode,
                 ) or {}).get("average_cost") or 0),
                 "config": {
-                    **self._setting_to_config(row, provider, defaults),
+                    **candidate_config,
                     "config": {
+                        **candidate_config.get("config", {}),
                         **merged_config,
                         "__resolved_source": f"smart_candidate:{provider}/{row.model}",
                         "__resolved_setting_id": row.id,
@@ -1607,6 +2558,18 @@ class MediaGenerationService:
             return any(token in merged for token in markers)
 
         async def _dispatch_with_config(active_config: Dict[str, Any]) -> Dict[str, Any]:
+            constrained_inputs = self._apply_runtime_capability_constraints(
+                category=category,
+                api_config=active_config,
+                reference_image_url=reference_image_url,
+                last_frame_url=last_frame_url,
+                keyframes=keyframes,
+            )
+            active_config = constrained_inputs.get("api_config") or active_config
+            effective_reference_image_url = constrained_inputs.get("reference_image_url")
+            effective_last_frame_url = constrained_inputs.get("last_frame_url")
+            effective_keyframes = constrained_inputs.get("keyframes")
+
             normalized_inputs = self._apply_runtime_enum_constraints(
                 runtime_config=active_config,
                 category=category,
@@ -1632,36 +2595,58 @@ class MediaGenerationService:
                         active_config["config"] = {}
                     active_config["config"]["image_size"] = normalized_image_size
 
+                runtime_result = await self._dispatch_image_generation(
+                    provider,
+                    prompt,
+                    active_config,
+                    effective_reference_image_url,
+                    effective_aspect_ratio,
+                    negative_prompt,
+                    normalized_image_size,
+                )
+                if runtime_result is not None:
+                    return runtime_result
+
                 if provider in ["doubao", "ark"]:
                     return await self._handle_doubao_generation(
                         "image",
                         prompt,
                         active_config,
-                        reference_image_url,
+                        effective_reference_image_url,
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
                 if provider == "grsai":
-                    return await self._handle_grsai_generation("image", prompt, active_config, reference_image_url, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
+                    return await self._handle_grsai_generation("image", prompt, active_config, effective_reference_image_url, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
                 if provider == "kie":
                     return await self._handle_kie_generation(
                         "image",
                         prompt,
                         active_config,
-                        reference_image_url,
+                        effective_reference_image_url,
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
                 if provider == "tencent":
-                    return await self._handle_tencent_generation("image", prompt, active_config, reference_image_url, negative_prompt=negative_prompt)
+                    return await self._handle_tencent_generation("image", prompt, active_config, effective_reference_image_url, negative_prompt=negative_prompt)
+                if provider == "n1n":
+                    return await self._handle_n1n_generation(
+                        "image",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                        image_size=normalized_image_size,
+                    )
                 if provider == "apiyi":
                     return await self._handle_apiyi_generation(
                         "image",
                         prompt,
                         active_config,
-                        reference_image_url,
+                        effective_reference_image_url,
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
@@ -1671,13 +2656,13 @@ class MediaGenerationService:
                         "image",
                         prompt,
                         active_config,
-                        reference_image_url,
+                        effective_reference_image_url,
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
                 if provider in ["stability", "stable diffusion"]:
-                    return await self._handle_stability_generation("image", prompt, active_config, reference_image_url, negative_prompt=negative_prompt)
+                    return await self._handle_stability_generation("image", prompt, active_config, effective_reference_image_url, negative_prompt=negative_prompt)
 
                 _debug_log(f"Unsupported Image provider: {provider}", "warning")
                 return {
@@ -1691,36 +2676,50 @@ class MediaGenerationService:
                 }
 
             if category == "Video":
+                runtime_result = await self._dispatch_video_generation(
+                    provider,
+                    prompt,
+                    active_config,
+                    effective_reference_image_url,
+                    effective_last_frame_url,
+                    effective_duration,
+                    effective_aspect_ratio,
+                    effective_keyframes,
+                    negative_prompt,
+                )
+                if runtime_result is not None:
+                    return runtime_result
+
                 if provider in ["doubao", "ark"]:
-                    return await self._handle_doubao_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_doubao_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if provider == "grsai":
-                    return await self._handle_grsai_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_grsai_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if provider == "kie":
                     return await self._handle_kie_generation(
                         "video",
                         prompt,
                         active_config,
-                        reference_image_url,
-                        last_frame_url=last_frame_url,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
                         duration=effective_duration,
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                     )
                 if provider == "tencent":
-                    return await self._handle_tencent_generation("video", prompt, active_config, reference_image_url, duration=effective_duration, negative_prompt=negative_prompt)
+                    return await self._handle_tencent_generation("video", prompt, active_config, effective_reference_image_url, duration=effective_duration, negative_prompt=negative_prompt)
                 if provider in ["wanxiang", "wanx"]:
-                    return await self._handle_wanxiang_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_wanxiang_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if provider == "vidu":
-                    return await self._handle_vidu_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, keyframes=keyframes, negative_prompt=negative_prompt)
+                    return await self._handle_vidu_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, keyframes=effective_keyframes, negative_prompt=negative_prompt)
                 if provider == "runninghub":
-                    return await self._handle_runninghub_generation("video", prompt, active_config, reference_image_url, last_frame_url=last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_runninghub_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if provider == "apiyi":
                     return await self._handle_apiyi_generation(
                         "video",
                         prompt,
                         active_config,
-                        reference_image_url,
-                        last_frame_url=last_frame_url,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
                         duration=effective_duration,
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
@@ -1739,6 +2738,16 @@ class MediaGenerationService:
                 }
 
             if category == "Voice":
+                runtime_result = await self._dispatch_voice_generation(
+                    provider,
+                    prompt,
+                    active_config,
+                    effective_duration,
+                    negative_prompt,
+                )
+                if runtime_result is not None:
+                    return runtime_result
+
                 if provider == "kie":
                     return await self._handle_kie_generation(
                         "audio",
@@ -1861,6 +2870,28 @@ class MediaGenerationService:
         baseline_config = dict(api_config or {})
         if requested_model:
             baseline_config["model"] = requested_model
+
+        target_generation_mode = self._normalize_generation_mode(modality)
+        if target_generation_mode and candidates:
+            baseline_matches_candidate = any(
+                c.get("provider") == effective_provider
+                and str(c.get("model") or "") == str(baseline_config.get("model") or "")
+                for c in candidates
+            )
+            if not baseline_matches_candidate:
+                replacement_candidate = next((c for c in candidates if c.get("provider") == effective_provider), None)
+                if replacement_candidate:
+                    logger.info(
+                        "Smart routing baseline remapped by modality | category=%s user_id=%s modality=%s provider=%s from_model=%s to_model=%s",
+                        category,
+                        user_id,
+                        target_generation_mode,
+                        effective_provider,
+                        baseline_config.get("model"),
+                        replacement_candidate.get("model"),
+                    )
+                    baseline_config = dict(replacement_candidate.get("config") or {})
+                    effective_provider = self._normalize_provider_name(replacement_candidate.get("provider"), category)
 
         fallback_candidates: List[Dict[str, Any]] = []
         if strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
@@ -2066,9 +3097,12 @@ class MediaGenerationService:
             has_error = bool((result or {}).get("error"))
             has_output = bool((result or {}).get("url")) or bool((result or {}).get("video_url"))
             submit_failed = bool((result or {}).get("submit_failed"))
+            ambiguous_submit = bool((result or {}).get("ambiguous_submit"))
             fallback_reason = ""
             fallback_triggered_now = submit_failed
-            if has_error or not has_output:
+            if ambiguous_submit:
+                fallback_triggered_now = False
+            elif has_error or not has_output:
                 fallback_triggered_now = True
 
             if fallback_triggered_now:
@@ -2213,30 +3247,23 @@ class MediaGenerationService:
                         return cached
 
                     rows = self._system_setting_query(session, category=resolved_category).order_by(SystemAPISetting.id.desc()).all()
-                    active_supported = []
+                    available_rows = []
                     skipped = []
                     for row in rows:
                         row_id = getattr(row, "id", None)
                         row_provider = getattr(row, "provider", None) or "<none>"
                         row_model = getattr(row, "model", None) or "<none>"
-                        row_provider_norm = self._normalize_provider_name(row_provider, resolved_category)
                         row_deprecated = self._is_deprecated_system_config(row.config, getattr(row, "deprecated", None))
-                        row_supported = self._is_supported_provider(resolved_category, row_provider_norm)
                         summary = f"{row_id}:{row_provider}/{row_model}"
-                        if (not row_deprecated) and row_supported:
-                            active_supported.append(summary)
+                        if not row_deprecated:
+                            available_rows.append(summary)
                             continue
-                        reasons = []
-                        if row_deprecated:
-                            reasons.append("deprecated")
-                        if not row_supported:
-                            reasons.append("unsupported")
-                        skipped.append(f"{summary}[{'/'.join(reasons) or 'skipped'}]")
+                        skipped.append(f"{summary}[deprecated]")
 
                     cached = {
                         "category_total": len(rows),
-                        "active_supported_total": len(active_supported),
-                        "active_supported_sample": "|".join(active_supported[:5]) or "<none>",
+                        "available_total": len(available_rows),
+                        "available_sample": "|".join(available_rows[:5]) or "<none>",
                         "skipped_sample": "|".join(skipped[:5]) or "<none>",
                     }
                     fallback_debug_cache["pool"] = cached
@@ -2247,15 +3274,10 @@ class MediaGenerationService:
                     mapped_provider = getattr(task_default_row, "provider", None)
                     mapped_model = getattr(task_default_row, "model", None)
                     mapped_deprecated = None
-                    mapped_supported = None
                     if task_default_row:
                         mapped_deprecated = self._is_deprecated_system_config(
                             getattr(task_default_row, "config", None),
                             getattr(task_default_row, "deprecated", None),
-                        )
-                        mapped_supported = self._is_supported_provider(
-                            resolved_category,
-                            self._normalize_provider_name(mapped_provider, resolved_category),
                         )
 
                     selected_id = getattr(selected_row, "id", None) if selected_row else None
@@ -2273,8 +3295,8 @@ class MediaGenerationService:
                         pool_debug = _collect_fallback_pool_debug()
                         extra_parts.extend([
                             f"category_total={pool_debug['category_total']}",
-                            f"active_supported_total={pool_debug['active_supported_total']}",
-                            f"active_supported_sample={pool_debug['active_supported_sample']}",
+                            f"available_total={pool_debug['available_total']}",
+                            f"available_sample={pool_debug['available_sample']}",
                             f"skipped_sample={pool_debug['skipped_sample']}",
                         ])
 
@@ -2283,7 +3305,7 @@ class MediaGenerationService:
                         f"stage={stage} user_id={user_id} category={resolved_category} requested_provider={requested_provider or '<none>'} "
                         f"requested_model={requested_model_value or '<none>'} strict_provider={strict_provider} "
                         f"mapped_id={mapped_id} mapped_provider={mapped_provider or '<none>'} mapped_model={mapped_model or '<none>'} "
-                        f"mapped_deprecated={mapped_deprecated} mapped_supported={mapped_supported} "
+                        f"mapped_deprecated={mapped_deprecated} "
                         f"selected_id={selected_id} selected_provider={selected_provider or '<none>'} selected_model={selected_model or '<none>'} "
                         f"selected_source={selected_source or '<none>'} mismatch={mismatch} note={note or '<none>'} "
                         + " ".join(extra_parts),
@@ -2301,6 +3323,7 @@ class MediaGenerationService:
                         resolved_category,
                         resolved_provider,
                         system_row.config,
+                        system_row=system_row,
                     )
                     merged_runtime_config = {
                         **runtime_config,
@@ -2321,11 +3344,23 @@ class MediaGenerationService:
                             merged_runtime_config.setdefault("mode", user_mode)
                             merged_runtime_config["__user_selected_mode"] = user_mode
 
+                    runtime_model = str(
+                        merged_runtime_config.get("runtime_model")
+                        or merged_runtime_config.get("upstream_model")
+                        or merged_runtime_config.get("model_override")
+                        or system_row.model
+                        or defaults.get(resolved_provider, {}).get("model")
+                        or ""
+                    ).strip()
+
                     return {
                         "provider": system_row.provider,
                         "api_key": self._pick_runtime_api_key(merged_runtime_config, system_row.api_key),
                         "base_url": system_row.base_url or defaults.get(resolved_provider, {}).get("base_url"),
-                        "model": system_row.model or defaults.get(resolved_provider, {}).get("model"),
+                        "model": runtime_model,
+                        "base_model": getattr(system_row, "base_model", None),
+                        "modality": getattr(system_row, "modality", None),
+                        "supplier_info": getattr(system_row, "supplier_info", None),
                         "config": {
                             **runtime_config,
                             "__selection_source": "system_only",
@@ -2337,9 +3372,9 @@ class MediaGenerationService:
 
                 # Strict mode: explicit provider/model request must resolve from system_api_settings directly.
                 if strict_provider:
-                    if not requested_provider or not self._is_supported_provider(resolved_category, requested_provider):
+                    if not requested_provider:
                         logger.warning(
-                            "Explicit provider unsupported/missing in media service | user_id=%s category=%s provider=%s",
+                            "Explicit provider missing in media service | user_id=%s category=%s provider=%s",
                             user_id,
                             resolved_category,
                             provider,
@@ -2380,7 +3415,6 @@ class MediaGenerationService:
                     selected_system_setting_id = int(getattr(user_setting, "system_api_id", 0) or 0)
                     if selected_system_setting_id > 0:
                         selected_binding_deprecated = False
-                        selected_binding_supported = False
                         selected_by_id = self._system_setting_query(session, category=resolved_category).filter(
                             SystemAPISetting.id == selected_system_setting_id,
                         ).first()
@@ -2395,9 +3429,7 @@ class MediaGenerationService:
                                 selected_binding_deprecated = True
                                 user_binding_status = "deprecated"
                                 user_binding_detail = f"{getattr(selected_by_id, 'provider', None) or '<none>'}/{getattr(selected_by_id, 'model', None) or '<none>'}"
-                            selected_provider = self._normalize_provider_name(selected_by_id.provider, resolved_category)
-                            selected_binding_supported = self._is_supported_provider(resolved_category, selected_provider)
-                            if (not selected_binding_deprecated) and selected_binding_supported:
+                            if not selected_binding_deprecated:
                                 resolved_source = f"system_by_user_setting_id:{selected_system_setting_id}"
                                 user_binding_status = "resolved"
                                 user_binding_detail = f"{getattr(selected_by_id, 'provider', None) or '<none>'}/{getattr(selected_by_id, 'model', None) or '<none>'}"
@@ -2408,62 +3440,47 @@ class MediaGenerationService:
                                     selected_user_strategy,
                                 )
                         if not selected_binding_deprecated:
-                            if selected_by_id and not selected_binding_supported:
-                                user_binding_status = "unsupported_provider"
-                                user_binding_detail = f"{getattr(selected_by_id, 'provider', None) or '<none>'}/{getattr(selected_by_id, 'model', None) or '<none>'}"
+                            selected_any_category = self._system_setting_query(session).filter(
+                                SystemAPISetting.id == selected_system_setting_id,
+                            ).first()
+                            if selected_any_category:
+                                user_binding_status = "cross_category"
+                                user_binding_detail = (
+                                    f"actual_category={getattr(selected_any_category, 'category', None) or '<none>'};"
+                                    f"provider={getattr(selected_any_category, 'provider', None) or '<none>'};"
+                                    f"model={getattr(selected_any_category, 'model', None) or '<none>'}"
+                                )
                                 logger.warning(
-                                    "Unsupported provider in user system_api_id binding in media service | user_id=%s category=%s user_setting_id=%s system_api_id=%s provider=%s model=%s",
+                                    "Cross-category user system_api_id binding in media service | user_id=%s category=%s user_setting_id=%s system_api_id=%s actual_category=%s provider=%s model=%s",
                                     user_id,
                                     resolved_category,
                                     getattr(user_setting, "id", None),
                                     selected_system_setting_id,
-                                    getattr(selected_by_id, "provider", None),
-                                    getattr(selected_by_id, "model", None),
+                                    getattr(selected_any_category, "category", None),
+                                    getattr(selected_any_category, "provider", None),
+                                    getattr(selected_any_category, "model", None),
                                 )
                             else:
-                                selected_any_category = self._system_setting_query(session).filter(
-                                    SystemAPISetting.id == selected_system_setting_id,
-                                ).first()
-                                if selected_any_category:
-                                    user_binding_status = "cross_category"
-                                    user_binding_detail = (
-                                        f"actual_category={getattr(selected_any_category, 'category', None) or '<none>'};"
-                                        f"provider={getattr(selected_any_category, 'provider', None) or '<none>'};"
-                                        f"model={getattr(selected_any_category, 'model', None) or '<none>'}"
-                                    )
-                                    logger.warning(
-                                        "Cross-category user system_api_id binding in media service | user_id=%s category=%s user_setting_id=%s system_api_id=%s actual_category=%s provider=%s model=%s",
-                                        user_id,
-                                        resolved_category,
-                                        getattr(user_setting, "id", None),
-                                        selected_system_setting_id,
-                                        getattr(selected_any_category, "category", None),
-                                        getattr(selected_any_category, "provider", None),
-                                        getattr(selected_any_category, "model", None),
-                                    )
-                                else:
-                                    user_binding_status = "missing_system_api_id"
-                                    user_binding_detail = f"system_api_id={selected_system_setting_id}"
-                                    logger.warning(
-                                        "Missing user system_api_id binding in media service | user_id=%s category=%s user_setting_id=%s system_api_id=%s",
-                                        user_id,
-                                        resolved_category,
-                                        getattr(user_setting, "id", None),
-                                        selected_system_setting_id,
-                                    )
+                                user_binding_status = "missing_system_api_id"
+                                user_binding_detail = f"system_api_id={selected_system_setting_id}"
+                                logger.warning(
+                                    "Missing user system_api_id binding in media service | user_id=%s category=%s user_setting_id=%s system_api_id=%s",
+                                    user_id,
+                                    resolved_category,
+                                    getattr(user_setting, "id", None),
+                                    selected_system_setting_id,
+                                )
 
                 # Fallback 1: category task default system setting.
                 default_row = task_default_row
                 if default_row and not self._is_deprecated_system_config(default_row.config, getattr(default_row, "deprecated", None)):
-                    default_provider = self._normalize_provider_name(default_row.provider, resolved_category)
-                    if self._is_supported_provider(resolved_category, default_provider):
-                        resolved_source = f"task_default_system_setting:{default_row.provider}/{default_row.model}"
-                        _trace_default_vs_selected("task_default", default_row, resolved_source, "select_task_default")
-                        return _build_runtime_from_system_row(
-                            default_row,
-                            resolved_source,
-                            selected_user_strategy,
-                        )
+                    resolved_source = f"task_default_system_setting:{default_row.provider}/{default_row.model}"
+                    _trace_default_vs_selected("task_default", default_row, resolved_source, "select_task_default")
+                    return _build_runtime_from_system_row(
+                        default_row,
+                        resolved_source,
+                        selected_user_strategy,
+                    )
 
                 # Fallback 2: any non-deprecated system setting in category.
                 fallback_any = self._pick_system_setting_fallback(session, resolved_category, None)
@@ -2902,13 +3919,26 @@ class MediaGenerationService:
         elif gen_type == "video":
             raw_endpoint = tool_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
             endpoint = self._normalize_doubao_video_tasks_endpoint(raw_endpoint)
-            callback_url = str(
+            raw_callback_url = str(
                 tool_conf.get("callback_url")
                 or tool_conf.get("callbackUrl")
                 or tool_conf.get("callBackUrl")
                 or tool_conf.get("webHook")
                 or ""
             ).strip()
+            callback_ticket = f"doubao-{gen_type}"
+            callback_tool_conf = dict(tool_conf or {})
+            if raw_callback_url:
+                callback_tool_conf.setdefault("callback_url", raw_callback_url)
+            callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+            if callback_url and callback_url != raw_callback_url:
+                logger.info(
+                    "Doubao callback auto-assigned | gen_type=%s ticket=%s callback_url=%s raw_callback=%s",
+                    gen_type,
+                    callback_ticket,
+                    callback_url,
+                    raw_callback_url or None,
+                )
             
             # Auto-correct model if user passed an Image model for a Video task
             if model and "seedream" in model:
@@ -2989,7 +4019,7 @@ class MediaGenerationService:
             try:
                 d_int = int(final_duration)
                 if is_seedance_model:
-                    mapped_duration = self._map_duration_nearest_lower(d_int, [4, 8])
+                    mapped_duration = self._map_duration_nearest(d_int, [4, 8])
                     if mapped_duration is not None:
                         final_duration = int(mapped_duration)
                     elif d_int <= 0:
@@ -3222,45 +4252,46 @@ class MediaGenerationService:
         }
         
         try:
-             # Submit
-             resp = requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120))
-             if resp.status_code not in [200, 201]:
-                  return {"error": f"Vidu Error {resp.status_code}", "details": resp.text}
-             
-             data = resp.json()
-             task_id = data.get("id")
-             if not task_id: return {"error": "No Task ID returned", "details": resp.text}
-             
-             # Poll
-             poll_url = f"{endpoint}/{task_id}"
-             for _ in range(60):
-                  await asyncio.sleep(3)
-                  p_resp = requests.get(poll_url, headers=headers, timeout=30)
-                  if p_resp.status_code == 200:
-                       p_data = p_resp.json()
-                       status = p_data.get("state") or p_data.get("status") 
-                       
-                       if status == "success" or status == "SUCCESS":
-                            vid_url = p_data.get("valid_video_url") or p_data.get("video_url") or p_data.get("url")
-                            if vid_url:
-                                 return {
-                                     "url": vid_url,
-                                     "metadata": {
-                                         "raw": p_data,
-                                         "provider": "vidu",
-                                         "model": model,
-                                         "has_audio": bool(sound_enabled),
-                                         "sound": bool(sound_enabled),
-                                     },
-                                 }
-                       elif status == "failed" or status == "FAILED":
-                            return {"error": "Vidu Generation Failed", "details": str(p_data)}
-             
-             return {"error": "Timeout polling Vidu"}
+            # Submit
+            resp = requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120))
+            if resp.status_code not in [200, 201]:
+                return {"error": f"Vidu Error {resp.status_code}", "details": resp.text}
+
+            data = resp.json()
+            task_id = data.get("id")
+            if not task_id:
+                return {"error": "No Task ID returned", "details": resp.text}
+
+            # Poll
+            poll_url = f"{endpoint}/{task_id}"
+            for _ in range(90):
+                await asyncio.sleep(2)
+                p_resp = requests.get(poll_url, headers=headers, timeout=30)
+                if p_resp.status_code == 200:
+                    p_data = p_resp.json()
+                    status = p_data.get("state") or p_data.get("status")
+
+                    if status == "success" or status == "SUCCESS":
+                        vid_url = p_data.get("valid_video_url") or p_data.get("video_url") or p_data.get("url")
+                        if vid_url:
+                            return {
+                                "url": vid_url,
+                                "metadata": {
+                                    "raw": p_data,
+                                    "provider": "vidu",
+                                    "model": model,
+                                    "has_audio": bool(sound_enabled),
+                                    "sound": bool(sound_enabled),
+                                },
+                            }
+                    elif status == "failed" or status == "FAILED":
+                        return {"error": "Vidu Generation Failed", "details": str(p_data)}
+
+            return {"error": "Timeout polling Vidu"}
 
         except Exception as e:
-             traceback.print_exc()
-             return {"error": f"Vidu Exception: {str(e)}"}
+            traceback.print_exc()
+            return {"error": f"Vidu Exception: {str(e)}"}
              
     async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
@@ -3604,32 +4635,38 @@ class MediaGenerationService:
         try:
             resp = await asyncio.to_thread(_post)
             _debug_log(f"[Grsai Legacy] API Returned: {_strip_base64_from_log(resp.text[:1000])}") # DEBUG USER REQUEST
-            if resp.status_code != 200: return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
-            
+            if resp.status_code != 200:
+                return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
+
             data = resp.json()
             task_id = data.get("data") # Grsai returns task ID directly in data field usually? or data.data?
             # Adjust based on Grsai spec: usually {code: 200, data: "taskId..."}
-            if not task_id: return {"error": "No Task ID"}
-            
+            if not task_id:
+                return {"error": "No Task ID"}
+
             # Poll
-            for _ in range(60):
-                 await asyncio.sleep(3)
-                 def _poll(): return requests.post(result_url, json={"id": task_id}, headers=headers, timeout=30, verify=False)
-                 p_resp = await asyncio.to_thread(_poll)
-                 
-                 if p_resp.status_code == 200:
-                     p_data = p_resp.json()
-                     # Check completion
-                     if "data" in p_data and p_data["data"]:
-                         final = p_data["data"][0].get("imageUrl" if not is_video else "videoUrl")
-                         if final:
-                              metadata = {"raw": p_data}
-                              if extra_metadata: metadata.update(extra_metadata)
-                              return {"url": final, "metadata": metadata}
+            for _ in range(90):
+                await asyncio.sleep(2)
+
+                def _poll():
+                    return requests.post(result_url, json={"id": task_id}, headers=headers, timeout=30, verify=False)
+
+                p_resp = await asyncio.to_thread(_poll)
+
+                if p_resp.status_code == 200:
+                    p_data = p_resp.json()
+                    # Check completion
+                    if "data" in p_data and p_data["data"]:
+                        final = p_data["data"][0].get("imageUrl" if not is_video else "videoUrl")
+                        if final:
+                            metadata = {"raw": p_data}
+                            if extra_metadata:
+                                metadata.update(extra_metadata)
+                            return {"url": final, "metadata": metadata}
             return {"error": "Timeout"}
         except Exception as e:
-             traceback.print_exc()
-             return {"error": f"Grsai Exception: {str(e)}"}
+            traceback.print_exc()
+            return {"error": f"Grsai Exception: {str(e)}"}
 
 
     async def _handle_tencent_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, negative_prompt: Optional[str] = None):
@@ -4080,6 +5117,12 @@ class MediaGenerationService:
         if not endpoint:
             return {"error": "RunningHub endpoint missing from system configuration", "submit_failed": True}
 
+        try:
+            resolved_setting_id = int((tool_conf or {}).get("__resolved_setting_id") or 0)
+        except Exception:
+            resolved_setting_id = 0
+        runtime_enum_catalog = self._load_system_api_runtime_enum_catalog(resolved_setting_id) if resolved_setting_id > 0 else {}
+
         submit_url = endpoint if re.match(r"^https?://", endpoint, flags=re.IGNORECASE) else f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
         query_endpoint = str(tool_conf.get("query_endpoint") or "/openapi/v2/query").strip() or "/openapi/v2/query"
         query_url = query_endpoint if re.match(r"^https?://", query_endpoint, flags=re.IGNORECASE) else f"{base_url}{query_endpoint if query_endpoint.startswith('/') else '/' + query_endpoint}"
@@ -4132,6 +5175,18 @@ class MediaGenerationService:
             except Exception:
                 return str(default)
 
+        def _normalize_duration_int(raw: Any, default: Optional[int] = None) -> Optional[int]:
+            if raw is None:
+                return default
+            text = str(raw).strip().lower()
+            if not text:
+                return default
+            text = re.sub(r"[^0-9.]+$", "", text)
+            try:
+                return int(float(text))
+            except Exception:
+                return default
+
         def _pick_tool_value(*keys: str) -> Any:
             for key in keys:
                 if key in tool_conf and tool_conf.get(key) is not None:
@@ -4166,6 +5221,62 @@ class MediaGenerationService:
 
         def _is_runninghub_vidu_q2_video_endpoint() -> bool:
             return "/vidu/" in endpoint_lower and ("q2-pro" in endpoint_lower or "q2-pro-fast" in endpoint_lower)
+
+        def _runninghub_video_duration_allowed_values() -> List[int]:
+            endpoint_rules = [
+                ("/openapi/v2/kling-video-o1/image-to-video", [5, 10]),
+                ("/openapi/v2/kling-video-o1/start-to-end", [5, 10]),
+                ("/openapi/v2/kling-video-o1/text-to-video", [5, 10]),
+                ("/openapi/v2/kling-video-o1-std/refrence-to-video", [5, 10]),
+                ("/openapi/v2/kling-v2.5-turbo-pro/image-to-video", [5, 10]),
+                ("/openapi/v2/kling-v2.5-turbo-pro/text-to-video", [5, 10]),
+                ("/openapi/v2/kling-v2.5-turbo-std/image-to-video", [5, 10]),
+                ("/openapi/v2/kling-v2.6-pro/image-to-video", [5, 10]),
+                ("/openapi/v2/kling-v2.6-pro/text-to-video", [5, 10]),
+                ("/openapi/v2/kling-v3.0-pro/image-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                ("/openapi/v2/kling-v3.0-pro/text-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                ("/openapi/v2/kling-v3.0-std/image-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                ("/openapi/v2/kling-v3.0-std/text-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+            ]
+
+            for endpoint_token, values in endpoint_rules:
+                if endpoint_token in endpoint_lower:
+                    return self._normalize_duration_enum_values(values)
+
+            return self._normalize_duration_enum_values(
+                runtime_enum_catalog.get("durations_seconds") if isinstance(runtime_enum_catalog, dict) else None
+            )
+
+        def _runninghub_video_primary_image_field() -> str:
+            first_image_field_endpoints = [
+                "/openapi/v2/kling-video-o1/image-to-video",
+                "/openapi/v2/kling-v2.5-turbo-pro/image-to-video",
+                "/openapi/v2/kling-v2.5-turbo-std/image-to-video",
+                "/openapi/v2/kling-video-o3-std/image-to-video",
+                "/openapi/v2/kling-video-o3-pro/image-to-video",
+                "/openapi/v2/kling-v3.0-std/image-to-video",
+                "/openapi/v2/kling-v3.0-pro/image-to-video",
+            ]
+            for endpoint_token in first_image_field_endpoints:
+                if endpoint_token in endpoint_lower:
+                    return "firstImageUrl"
+            return "imageUrl"
+
+        def _normalize_runninghub_video_duration(raw_value: Any, default_value: Any = 5) -> Optional[str]:
+            requested_duration = _normalize_duration_int(raw_value, None)
+            if requested_duration is None:
+                requested_duration = _normalize_duration_int(default_value, 5)
+
+            allowed_values = _runninghub_video_duration_allowed_values()
+            if requested_duration is None:
+                requested_duration = allowed_values[0] if allowed_values else 5
+
+            if allowed_values:
+                mapped_duration = self._map_duration_nearest(requested_duration, allowed_values)
+                if mapped_duration is not None:
+                    return str(int(mapped_duration))
+
+            return _normalize_duration_value(requested_duration, 5)
 
         def _runninghub_video_resolution_allowed_values() -> List[str]:
             if "/vidu/" not in endpoint_lower:
@@ -4213,6 +5324,36 @@ class MediaGenerationService:
             if _pick_tool_value("keepOriginalSound") is not None:
                 payload_obj["keepOriginalSound"] = _normalize_bool(_pick_tool_value("keepOriginalSound"), True)
 
+        raw_callback_url = str(
+            tool_conf.get("webhookUrl")
+            or tool_conf.get("webHook")
+            or tool_conf.get("webhook")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or ""
+        ).strip()
+        callback_ticket = f"runninghub-{gen_type}"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("webhookUrl", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        if callback_url and callback_url != raw_callback_url:
+            logger.info(
+                "RunningHub callback auto-assigned | gen_type=%s ticket=%s callback_url=%s raw_callback=%s",
+                gen_type,
+                callback_ticket,
+                callback_url,
+                raw_callback_url or None,
+            )
+        elif callback_url == "-1":
+            logger.info(
+                "RunningHub callback disabled | gen_type=%s raw_callback=%s public_hint=%s",
+                gen_type,
+                raw_callback_url or None,
+                self._is_public_deployment_hint(),
+            )
+
         base_metadata = {
             "provider": "runninghub",
             "model": config.get("model") or "runninghub-model",
@@ -4224,7 +5365,10 @@ class MediaGenerationService:
 
         if gen_type == "image":
             payload: Dict[str, Any] = {"prompt": prompt}
+            if callback_url and callback_url != "-1":
+                payload["webhookUrl"] = callback_url
             is_image_edit = any(token in endpoint_lower for token in ("image-to-image", "/edit", "image-edit"))
+
             if is_image_edit:
                 if not image_refs:
                     return {"error": "RunningHub image edit requires at least one reference image input", "submit_failed": True}
@@ -4237,25 +5381,57 @@ class MediaGenerationService:
             normalized_image_size = self._normalize_image_size_value(image_size or _pick_tool_value("image_size", "imageSize"))
             explicit_size = _pick_tool_value("size")
             explicit_resolution = _pick_tool_value("resolution")
-            explicit_aspect_ratio = _pick_tool_value("aspectRatio", "aspect_ratio") or aspect_ratio
+            explicit_aspect_ratio = self._normalize_aspect_ratio_value(_pick_tool_value("aspectRatio", "aspect_ratio") or aspect_ratio)
+            allowed_resolution_values = self._get_runninghub_image_resolution_allowed_values(
+                endpoint_lower,
+                runtime_enum_catalog.get("resolution") if isinstance(runtime_enum_catalog, dict) else None,
+            )
+            allowed_aspect_ratio_values = self._get_runninghub_image_aspect_ratio_allowed_values(
+                endpoint_lower,
+                runtime_enum_catalog.get("aspect_ratio") if isinstance(runtime_enum_catalog, dict) else None,
+            )
 
             if explicit_size is not None:
                 payload["size"] = str(explicit_size).strip()
             elif normalized_image_size and any(token in endpoint_lower for token in ("qwen-image", "rhart-image-g-1.5", "rhart-image-g/")):
                 payload["size"] = normalized_image_size
             if explicit_resolution is not None:
-                payload["resolution"] = str(explicit_resolution).strip()
-            elif normalized_image_size and normalized_image_size.lower() in {"1k", "2k", "3k", "4k"}:
-                payload["resolution"] = normalized_image_size.lower()
-            if explicit_aspect_ratio and "size" not in payload:
-                payload["aspectRatio"] = str(explicit_aspect_ratio).strip()
+                requested_resolution = str(explicit_resolution).strip()
+                if allowed_resolution_values:
+                    mapped_resolution = self._map_resolution_to_allowed(requested_resolution, allowed_resolution_values)
+                    if mapped_resolution:
+                        payload["resolution"] = str(mapped_resolution).strip().lower()
+                elif requested_resolution:
+                    payload["resolution"] = requested_resolution
+            elif normalized_image_size and normalized_image_size.lower() in {"1k", "2k", "3k", "4k", "8k"} and allowed_resolution_values:
+                mapped_resolution = self._map_resolution_to_allowed(normalized_image_size.lower(), allowed_resolution_values)
+                if mapped_resolution:
+                    payload["resolution"] = str(mapped_resolution).strip().lower()
+            if explicit_aspect_ratio and "size" not in payload and allowed_aspect_ratio_values:
+                mapped_aspect_ratio = self._map_aspect_ratio_to_allowed(explicit_aspect_ratio, allowed_aspect_ratio_values)
+                if mapped_aspect_ratio:
+                    payload["aspectRatio"] = str(mapped_aspect_ratio).strip()
 
             for key in ["quality", "inputFidelity", "imageNum", "promptExtend", "sequentialImageGeneration", "maxImages", "toolsType", "chaos", "stylize", "weird", "raw", "iw", "sw", "sv", "model"]:
                 _set_if_present(payload, key, _pick_tool_value(key))
+
+            if "model" not in payload:
+                supplier_runninghub = ((config.get("supplier_info") or {}).get("runninghub") or {}) if isinstance(config.get("supplier_info"), dict) else {}
+                configured_base_model = str(config.get("base_model") or supplier_runninghub.get("base_model") or "").strip().lower()
+                configured_model_slug = str(config.get("model") or supplier_runninghub.get("model_slug") or "").strip().lower()
+                if "/rhart-image-g/" in endpoint_lower or configured_base_model == "rhart-image-g" or configured_model_slug.startswith("rhart-image-g-"):
+                    payload["model"] = "g-4.2"
+
             if _pick_tool_value("sref") is not None:
                 _set_if_present(payload, "sref", _pick_tool_value("sref"))
             elif len(image_refs) > 1:
                 payload["sref"] = image_refs[1]
+
+            base_metadata.update({
+                "resolution": payload.get("resolution"),
+                "aspectRatio": payload.get("aspectRatio"),
+                "size": payload.get("size"),
+            })
 
             _debug_log(f"[RunningHub] Image Payload: {json.dumps(_strip_base64_from_log(payload), ensure_ascii=False)}")
             return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHubImage", extra_metadata=base_metadata)
@@ -4265,6 +5441,8 @@ class MediaGenerationService:
                 return {"error": "RunningHub voice-clone requires a reference audio sample; current voice entrypoint does not provide one", "submit_failed": True}
 
             payload = {"text": prompt}
+            if callback_url and callback_url != "-1":
+                payload["webhookUrl"] = callback_url
             _set_if_present(payload, "voice_id", _pick_tool_value("voice_id", "voiceId", "voice"))
             _set_if_present(payload, "emotion", _pick_tool_value("emotion"))
             _set_if_present(payload, "speed", _pick_tool_value("speed"))
@@ -4285,6 +5463,8 @@ class MediaGenerationService:
         _set_if_present(payload, "prompt", prompt)
         _set_if_present(payload, "negativePrompt", str(negative_prompt or "").strip() or None)
         _set_if_present(payload, "seed", _pick_tool_value("seed", "seeds"))
+        if callback_url and callback_url != "-1":
+            payload["webhookUrl"] = callback_url
 
         explicit_duration = _pick_tool_value("duration")
         explicit_resolution = _pick_tool_value("resolution")
@@ -4293,6 +5473,7 @@ class MediaGenerationService:
         movement_amplitude = str(_pick_tool_value("movementAmplitude", "movement_amplitude", "motion_amplitude") or "").strip() or None
         if not movement_amplitude and _is_runninghub_vidu_q2_video_endpoint():
             movement_amplitude = "auto"
+        normalized_video_duration = _normalize_runninghub_video_duration(explicit_duration, duration)
         normalized_video_resolution = _normalize_runninghub_video_resolution(explicit_resolution, "720p" if _is_runninghub_vidu_q2_video_endpoint() else None)
 
         if "video-edit" in endpoint_lower or "edit-video" in endpoint_lower or "video-extend" in endpoint_lower:
@@ -4321,7 +5502,7 @@ class MediaGenerationService:
                     payload["videoUrls"] = video_refs[:3]
                 else:
                     payload["videoUrl"] = video_refs[0]
-            payload["duration"] = _normalize_duration_value(explicit_duration or duration)
+            payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
@@ -4340,14 +5521,14 @@ class MediaGenerationService:
                 payload["firstImageUrl"] = first_image
                 if last_image:
                     payload["lastImageUrl"] = last_image
-            payload["duration"] = _normalize_duration_value(explicit_duration or duration)
+            payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "mode", _pick_tool_value("mode"))
             _set_if_present(payload, "movementAmplitude", movement_amplitude)
             _set_audio_flags(payload)
         elif "text-to-video" in endpoint_lower:
-            payload["duration"] = _normalize_duration_value(explicit_duration or duration)
+            payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
@@ -4356,10 +5537,10 @@ class MediaGenerationService:
             first_image = image_refs[0] if image_refs else None
             if not first_image:
                 return {"error": "RunningHub image-to-video requires a reference image input", "submit_failed": True}
-            payload["imageUrl"] = first_image
+            payload[_runninghub_video_primary_image_field()] = first_image
             if resolved_last_frame and "/rhart-video-" in endpoint_lower:
                 payload["lastImageUrl"] = resolved_last_frame
-            payload["duration"] = _normalize_duration_value(explicit_duration or duration)
+            payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "movementAmplitude", movement_amplitude)
@@ -4376,57 +5557,70 @@ class MediaGenerationService:
         return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHub", extra_metadata=base_metadata)
 
     async def _handle_apiyi_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+        provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "apiyi")
         api_key = str(config.get("api_key") or "").strip()
         if not api_key:
-            return {"error": "No APIYI API Key", "submit_failed": True}
+            return {"error": f"No {provider_name} API Key", "submit_failed": True}
 
         tool_conf = config.get("config", {}) or {}
         base_url = str(config.get("base_url") or "https://api.apiyi.com").strip().rstrip("/")
         endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "").strip()
         model = str(config.get("model") or "").strip()
         if not endpoint:
-            return {"error": "APIYI endpoint missing from system configuration", "submit_failed": True}
+            return {"error": f"{provider_name} endpoint missing from system configuration", "submit_failed": True}
 
         submit_url = endpoint if re.match(r"^https?://", endpoint, flags=re.IGNORECASE) else f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
 
         if gen_type == "image":
             endpoint_lower = endpoint.lower()
             if "/v1/images/generations" not in endpoint_lower:
-                return {"error": f"APIYI image endpoint family not supported yet: {endpoint}", "submit_failed": True}
-            if ref_image:
-                return {"error": "APIYI image generation currently supports text-to-image only for /v1/images/generations", "submit_failed": True}
+                return {"error": f"{provider_name} image endpoint family not supported yet: {endpoint}", "submit_failed": True}
 
             normalized_image_size = self._normalize_image_size_value(
                 image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
             )
-            size_value = normalized_image_size or "1024x1024"
-            if aspect_ratio and not normalized_image_size:
-                ratio_map = {
-                    "1:1": "1024x1024",
-                    "16:9": "1536x1024",
-                    "9:16": "1024x1536",
-                }
-                size_value = ratio_map.get(str(aspect_ratio).strip(), size_value)
+            size_value = self._resolve_openai_compatible_image_size(
+                model=model,
+                explicit_size=tool_conf.get("size"),
+                normalized_image_size=normalized_image_size,
+                aspect_ratio=aspect_ratio,
+            )
 
             payload = {
                 "model": model,
                 "prompt": self._merge_negative_prompt(prompt, negative_prompt),
                 "n": int(tool_conf.get("n") or 1),
-                "size": str(tool_conf.get("size") or size_value),
-                "response_format": str(tool_conf.get("response_format") or "url"),
+                "size": str(size_value),
             }
+            resolved_refs = self._resolve_ref_list_for_api(
+                ref_image,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+                data_uri_profile="n1n_image_ref",
+            ) if ref_image else []
+            if resolved_refs:
+                payload["image_urls"] = resolved_refs
+                payload["imageUrls"] = resolved_refs
+                payload["filesUrl"] = resolved_refs[:5]
+                if len(resolved_refs) == 1:
+                    payload["fileUrl"] = resolved_refs[0]
+                mask_url_candidate = str(tool_conf.get("maskUrl") or tool_conf.get("mask_url") or "").strip()
+                if mask_url_candidate:
+                    payload["maskUrl"] = mask_url_candidate
+            if str(provider_name).strip().lower() != "n1n":
+                payload["response_format"] = str(tool_conf.get("response_format") or "url")
             for optional_key in ["quality", "output_format", "output_compression", "background", "user"]:
                 if tool_conf.get(optional_key) is not None:
                     payload[optional_key] = tool_conf.get(optional_key)
 
             base_metadata = {
-                "provider": "apiyi",
+                "provider": provider_name,
                 "model": model,
                 "prompt": prompt,
                 "submit_url": submit_url,
                 "endpoint_family": "/v1/images/generations",
             }
-            return await self._common_requests_post(submit_url, payload, api_key, "apiyi_image", extra_metadata=base_metadata)
+            return await self._common_requests_post(submit_url, payload, api_key, f"{str(provider_name).lower()}_image", extra_metadata=base_metadata)
 
         if gen_type == "video":
             endpoint_lower = endpoint.lower()
@@ -4437,7 +5631,7 @@ class MediaGenerationService:
                 endpoint = "/v1/videos"
                 submit_url = f"{base_url}/v1/videos"
             elif "/v1/videos" not in endpoint_lower:
-                return {"error": f"APIYI video endpoint family not supported yet: {endpoint}", "submit_failed": True}
+                return {"error": f"{provider_name} video endpoint family not supported yet: {endpoint}", "submit_failed": True}
 
             payload = {
                 "model": model,
@@ -4458,14 +5652,14 @@ class MediaGenerationService:
             model_lower = model.lower()
             is_frame_model = model_lower.endswith("-fl") or "-fl-" in model_lower
             if is_frame_model and (ref_image or last_frame_url):
-                return {"error": "APIYI /v1/videos frame-to-video (multipart upload) is not enabled yet in media service", "submit_failed": True}
+                return {"error": f"{provider_name} /v1/videos frame-to-video (multipart upload) is not enabled yet in media service", "submit_failed": True}
             # For non-fl models, just drop the ref images
             if not is_frame_model:
                 ref_image = None
                 last_frame_url = None
 
             base_metadata = {
-                "provider": "apiyi",
+                "provider": provider_name,
                 "model": model,
                 "prompt": prompt,
                 "submit_url": submit_url,
@@ -4473,9 +5667,268 @@ class MediaGenerationService:
                 "seconds": payload.get("seconds"),
                 "size": payload.get("size"),
             }
-            return await self._submit_and_poll_video(submit_url, payload, api_key, "apiyi_video", extra_metadata=base_metadata)
+            return await self._submit_and_poll_video(submit_url, payload, api_key, f"{str(provider_name).lower()}_video", extra_metadata=base_metadata)
 
-        return {"error": f"APIYI generation type not supported: {gen_type}", "submit_failed": True}
+        return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}
+
+    async def _handle_n1n_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+        provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "n1n")
+        api_key = str(config.get("api_key") or "").strip()
+        if not api_key:
+            return {"error": f"No {provider_name} API Key", "submit_failed": True}
+
+        if gen_type != "image":
+            return {"error": f"{provider_name} generation type not supported yet: {gen_type}", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        base_url = str(config.get("base_url") or "https://api.n1n.ai").strip().rstrip("/")
+        endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "").strip()
+        model = str(config.get("model") or "").strip()
+        if not endpoint:
+            return {"error": f"{provider_name} endpoint missing from system configuration", "submit_failed": True}
+        if not model:
+            return {"error": f"{provider_name} runtime model missing from system configuration", "submit_failed": True}
+
+        endpoint_lower = endpoint.lower()
+        if "generatecontent" not in endpoint_lower:
+            return {"error": f"{provider_name} image endpoint family not supported yet: {endpoint}", "submit_failed": True}
+
+        resolved_endpoint = endpoint.replace("{model}", urllib.parse.quote(model, safe="-._~"))
+        submit_url = resolved_endpoint if re.match(r"^https?://", resolved_endpoint, flags=re.IGNORECASE) else f"{base_url}{resolved_endpoint if resolved_endpoint.startswith('/') else '/' + resolved_endpoint}"
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+        parts: List[Dict[str, Any]] = []
+        if prompt_text:
+            parts.append({"text": prompt_text})
+
+        reference_values = ref_image if isinstance(ref_image, list) else [ref_image]
+        for ref_item in reference_values:
+            raw_ref = str(ref_item or "").strip()
+            if not raw_ref:
+                continue
+            data_uri = self._get_image_base64_for_api(raw_ref, force_data_uri=True)
+            if not isinstance(data_uri, str) or not data_uri.startswith("data:image/"):
+                return {"error": f"{provider_name} Gemini image editing requires resolvable image inputs", "submit_failed": True}
+            marker = ";base64,"
+            idx = data_uri.find(marker)
+            if idx <= 5:
+                return {"error": f"{provider_name} Gemini image input data URI is malformed", "submit_failed": True}
+            mime = data_uri[5:idx].strip().lower() or "image/png"
+            parts.append({
+                "inline_data": {
+                    "mime_type": mime,
+                    "data": data_uri[idx + len(marker):].strip(),
+                }
+            })
+
+        if not parts:
+            return {"error": f"{provider_name} Gemini image generation requires at least one prompt or image input", "submit_failed": True}
+
+        response_modalities = tool_conf.get("responseModalities") or tool_conf.get("response_modalities") or ["TEXT", "IMAGE"]
+        if isinstance(response_modalities, str):
+            response_modalities = [response_modalities]
+        normalized_modalities = []
+        for item in response_modalities if isinstance(response_modalities, list) else []:
+            value = str(item or "").strip().upper()
+            if value and value not in normalized_modalities:
+                normalized_modalities.append(value)
+        if "IMAGE" not in normalized_modalities:
+            normalized_modalities.append("IMAGE")
+
+        payload: Dict[str, Any] = {
+            "contents": [{
+                "role": "user",
+                "parts": parts,
+            }],
+            "generationConfig": {
+                "responseModalities": normalized_modalities,
+            },
+        }
+
+        image_config: Dict[str, Any] = {}
+        normalized_aspect_ratio = self._normalize_aspect_ratio_value(aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("aspectRatio"))
+        if normalized_aspect_ratio and normalized_aspect_ratio != "adaptive":
+            image_config["aspectRatio"] = normalized_aspect_ratio
+
+        normalized_image_size = self._normalize_image_size_value(image_size or tool_conf.get("image_size") or tool_conf.get("imageSize"))
+        if normalized_image_size:
+            model_lower = model.lower()
+            if "gemini-3-pro-image-preview" in model_lower or "gemini-3.1-flash-image-preview" in model_lower:
+                image_config["imageSize"] = normalized_image_size
+
+        if image_config:
+            payload["generationConfig"]["imageConfig"] = image_config
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        prefer_no_proxy = self._should_prefer_no_proxy(provider_name, "n1n_gemini_image")
+
+        def _post(use_proxy=True, connect_timeout=None):
+            c_timeout = connect_timeout or 120
+            return self._post_json_request(submit_url, payload, headers, (c_timeout, 120), verify=False, use_proxy=use_proxy)
+
+        def _extract_generated_image(value: Any) -> Optional[str]:
+            if isinstance(value, dict):
+                for key in ["inline_data", "inlineData"]:
+                    inline_block = value.get(key)
+                    if isinstance(inline_block, dict):
+                        mime = str(inline_block.get("mime_type") or inline_block.get("mimeType") or "").strip().lower()
+                        data = str(inline_block.get("data") or "").strip()
+                        if mime.startswith("image/") and data:
+                            return f"data:{mime};base64,{data}"
+                for key in ["url", "imageUrl", "image_url"]:
+                    candidate = value.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        return candidate.strip()
+                preferred_keys = ["parts", "content", "contents", "candidates", "data", "result", "results", "response"]
+                for key in preferred_keys:
+                    found = _extract_generated_image(value.get(key))
+                    if found:
+                        return found
+                for nested in value.values():
+                    found = _extract_generated_image(nested)
+                    if found:
+                        return found
+            elif isinstance(value, list):
+                for item in value:
+                    found = _extract_generated_image(item)
+                    if found:
+                        return found
+            elif isinstance(value, str):
+                raw = value.strip()
+                if raw.startswith("data:image/") or raw.lower().startswith(("http://", "https://")):
+                    return raw
+            return None
+
+        try:
+            try:
+                resp = await asyncio.to_thread(_post, not prefer_no_proxy)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if prefer_no_proxy:
+                    raise
+                _debug_log(f"[n1n_gemini_image] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy (connect_timeout=15s)...", "warning")
+                resp = await asyncio.to_thread(_post, False, 15)
+
+            if resp.status_code != 200:
+                _debug_log(f"[n1n_gemini_image] Error {resp.status_code}: {resp.text}", "error")
+                return {"error": f"n1n API Error {resp.status_code}", "details": resp.text, "submit_failed": True}
+
+            data = resp.json()
+            _debug_log(f"[n1n_gemini_image] API Response: {_strip_base64_from_log(data)}")
+            generated_image = _extract_generated_image(data)
+            if not generated_image:
+                return {
+                    "error": "n1n Gemini response did not include an image output",
+                    "details": _strip_base64_from_log(data),
+                    "submit_failed": True,
+                }
+
+            metadata = {
+                "raw": data,
+                "provider": "n1n",
+                "model": model,
+                "submit_url": submit_url,
+                "endpoint_family": "/v1beta/models/{model}:generateContent",
+            }
+            return {"url": generated_image, "metadata": metadata}
+        except requests.exceptions.Timeout as e:
+            _debug_log(f"[n1n_gemini_image] Timeout: {e}", "error")
+            return {"error": "n1n upstream request timeout", "details": str(e), "submit_failed": True}
+        except requests.exceptions.RequestException as e:
+            _debug_log(f"[n1n_gemini_image] RequestException: {e}", "error")
+            return {"error": "n1n upstream request failed", "details": str(e), "submit_failed": True}
+        except Exception as e:
+            _debug_log(f"[n1n_gemini_image] Exception: {e}", "error")
+            return {"error": str(e), "submit_failed": True}
+
+    async def _handle_n1n_kling_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+        provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "n1n")
+        api_key = str(config.get("api_key") or "").strip()
+        if not api_key:
+            return {"error": f"No {provider_name} API Key", "submit_failed": True}
+
+        if gen_type != "image":
+            return {"error": f"{provider_name} generation type not supported yet: {gen_type}", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        base_url = str(config.get("base_url") or "https://api.n1n.ai").strip().rstrip("/")
+        endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "/kling/v1/images/generations").strip()
+        submit_url = endpoint if re.match(r"^https?://", endpoint, flags=re.IGNORECASE) else f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
+
+        configured_model_name = str(
+            tool_conf.get("model_name")
+            or tool_conf.get("modelName")
+            or ((tool_conf.get("n1n") or {}).get("model_name") if isinstance(tool_conf.get("n1n"), dict) else "")
+            or ((tool_conf.get("n1n") or {}).get("kling_model_name") if isinstance(tool_conf.get("n1n"), dict) else "")
+            or ""
+        ).strip()
+        has_ref_image = bool(ref_image)
+        model_name = configured_model_name or ("kling-v1-5" if has_ref_image else "kling-v1")
+
+        payload: Dict[str, Any] = {
+            "model_name": model_name,
+            "prompt": str(prompt or "").strip(),
+            "n": int(tool_conf.get("n") or 1),
+        }
+
+        neg_prompt = str(negative_prompt or tool_conf.get("negative_prompt") or tool_conf.get("negativePrompt") or "").strip()
+        if neg_prompt:
+            payload["negative_prompt"] = neg_prompt
+
+        normalized_image_size = self._normalize_image_size_value(
+            image_size or tool_conf.get("image_size") or tool_conf.get("imageSize") or tool_conf.get("resolution")
+        )
+        resolution_value = str(tool_conf.get("resolution") or (normalized_image_size.lower() if normalized_image_size else "")).strip().lower()
+        if resolution_value in {"1k", "2k"}:
+            payload["resolution"] = resolution_value
+
+        normalized_aspect_ratio = self._normalize_aspect_ratio_value(aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("aspectRatio"))
+        if normalized_aspect_ratio and normalized_aspect_ratio != "adaptive":
+            payload["aspect_ratio"] = normalized_aspect_ratio
+
+            resolved_refs = self._resolve_ref_list_for_api(
+                ref_image,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+                data_uri_profile="n1n_image_ref",
+            ) if ref_image else []
+        if resolved_refs:
+            payload["image"] = resolved_refs[0]
+            payload["image_reference"] = str(tool_conf.get("image_reference") or tool_conf.get("imageReference") or "subject").strip() or "subject"
+            image_fidelity = tool_conf.get("image_fidelity") if tool_conf.get("image_fidelity") is not None else tool_conf.get("imageFidelity")
+            human_fidelity = tool_conf.get("human_fidelity") if tool_conf.get("human_fidelity") is not None else tool_conf.get("humanFidelity")
+            if image_fidelity is None:
+                image_fidelity = 0.5
+            payload["image_fidelity"] = image_fidelity
+            if human_fidelity is not None:
+                payload["human_fidelity"] = human_fidelity
+
+        raw_callback_url = str(tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or tool_conf.get("callBackUrl") or "").strip()
+        callback_ticket = "n1n-kling-image"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        if callback_url and callback_url != raw_callback_url:
+            logger.info(
+                "n1n Kling callback auto-assigned | ticket=%s callback_url=%s raw_callback=%s",
+                callback_ticket,
+                callback_url,
+                raw_callback_url or None,
+            )
+        if callback_url:
+            payload["callback_url"] = callback_url
+
+        extra_metadata = {
+            "provider": provider_name,
+            "model": model_name,
+            "prompt": prompt,
+            "submit_url": submit_url,
+            "endpoint_family": "/kling/v1/images/generations",
+        }
+        return await self._submit_and_poll_image_task(submit_url, payload, api_key, f"{str(provider_name).lower()}_kling_image", extra_metadata=extra_metadata)
 
     async def _handle_stability_generation(self, gen_type, prompt, config, ref_image=None, negative_prompt: Optional[str] = None):
         if gen_type != "image": return {"error": "Stability only supports image"}
@@ -4573,31 +6026,56 @@ class MediaGenerationService:
         return {"error": "No artifacts"}
 
     # --- Helper to Common Requests ---
-    async def _common_requests_post(self, url, payload, api_key, log_tag, timeout=60, extra_metadata=None):
+    async def _common_requests_post(self, url, payload, api_key, log_tag, timeout=None, extra_metadata=None):
         # Async wrap for requests
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
+        provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
+        headers = self._build_transport_headers(provider_name, log_tag, api_key, payload)
+        read_timeout = self._resolve_common_post_timeout(provider_name, log_tag, timeout)
+        prefer_no_proxy = self._should_prefer_no_proxy(provider_name, log_tag)
+        upstream_urls = [str(url or "").strip()]
+        if provider_name == "n1n":
+            upstream_urls = self._build_n1n_mirror_urls(url)
         
-        def _post(use_proxy=True, connect_timeout=None):
-            c_timeout = connect_timeout or timeout
-            kwargs = {"json": payload, "headers": headers, "timeout": (c_timeout, timeout), "verify": False}
-            if not use_proxy:
-                kwargs["proxies"] = {"http": None, "https": None}
-            return requests.post(url, **kwargs)
+        def _post(target_url, use_proxy=True, connect_timeout=None):
+            c_timeout = connect_timeout or min(30, read_timeout)
+            return self._post_json_request(target_url, payload, headers, (c_timeout, read_timeout), verify=False, use_proxy=use_proxy)
         
         try:
-            try:
-                resp = await asyncio.to_thread(_post, True)
-            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                # Retry without proxy if connection fails (common for domestic APIs vs Global Proxy)
-                _debug_log(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy (connect_timeout=15s)...", "warning")
+            last_response = None
+            selected_url = upstream_urls[0] if upstream_urls else str(url or "").strip()
+            for index, target_url in enumerate(upstream_urls or [str(url or "").strip()]):
                 try:
-                    resp = await asyncio.to_thread(_post, False, 15)
-                except Exception as e2:
-                    _debug_log(f"[{log_tag}] No-proxy retry also failed: {str(e2)[:120]}", "error")
-                    raise
+                    resp = await asyncio.to_thread(_post, target_url, not prefer_no_proxy)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                    if prefer_no_proxy:
+                        raise
+                    _debug_log(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy (connect_timeout=15s)...", "warning")
+                    try:
+                        resp = await asyncio.to_thread(_post, target_url, False, 15)
+                    except Exception as e2:
+                        _debug_log(f"[{log_tag}] No-proxy retry also failed: {str(e2)[:120]}", "error")
+                        if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e2):
+                            return self._build_ambiguous_submit_result(provider_name, log_tag, e2, target_url, extra_metadata)
+                        raise
+
+                last_response = resp
+                selected_url = target_url
+                if (
+                    provider_name == "n1n"
+                    and resp.status_code == 429
+                    and self._is_n1n_capacity_error(resp.text)
+                    and index < len(upstream_urls) - 1
+                ):
+                    _debug_log(
+                        f"[{log_tag}] Capacity/throttle on {target_url}; retrying mirror {upstream_urls[index + 1]}",
+                        "warning",
+                    )
+                    continue
+                break
+
+            resp = last_response
+            if resp is None:
+                return {"error": "Upstream request failed", "details": "No upstream response", "submit_failed": True}
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -4605,9 +6083,11 @@ class MediaGenerationService:
                 metadata = {"raw": data}
                 if extra_metadata:
                     metadata.update(extra_metadata)
+                metadata["submit_url"] = selected_url
 
-                if "data" in data and len(data["data"]) > 0:
-                    return {"url": data["data"][0]["url"], "metadata": metadata}
+                resolved_output = self._extract_openai_compatible_image_output(data)
+                if resolved_output:
+                    return {"url": resolved_output, "metadata": metadata}
                 return {"url": data.get("url"), "metadata": metadata}
             else:
                 _debug_log(f"[{log_tag}] Error {resp.status_code}: {resp.text}", "error")
@@ -4617,6 +6097,8 @@ class MediaGenerationService:
             return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
         except requests.exceptions.RequestException as e:
             _debug_log(f"[{log_tag}] RequestException: {e}", "error")
+            if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, selected_url, extra_metadata)
             return {"error": "Upstream request failed", "details": str(e), "submit_failed": True}
         except Exception as e:
             _debug_log(f"[{log_tag}] Exception: {e}", "error")
@@ -4624,6 +6106,8 @@ class MediaGenerationService:
 
     async def _submit_and_poll_runninghub(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        retryable_statuses = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
+        max_submit_attempts = 3
 
         _debug_log(f"[{log_tag}] RunningHub submit URL: {submit_url} | Payload: {_strip_base64_from_log(payload)}")
 
@@ -4666,6 +6150,20 @@ class MediaGenerationService:
                     return raw
             return None
 
+        def _extract_runninghub_usage(value: Any) -> Optional[Dict[str, Any]]:
+            if not isinstance(value, dict):
+                return None
+            usage = value.get("usage")
+            if isinstance(usage, dict) and usage:
+                return dict(usage)
+            for nested_key in ["data", "output", "result"]:
+                nested = value.get(nested_key)
+                if isinstance(nested, dict):
+                    nested_usage = nested.get("usage")
+                    if isinstance(nested_usage, dict) and nested_usage:
+                        return dict(nested_usage)
+            return None
+
         def _post_json(url, body, use_proxy=True, connect_timeout=15, read_timeout=120):
             kwargs = {
                 "json": body,
@@ -4678,11 +6176,36 @@ class MediaGenerationService:
             return requests.post(url, **kwargs)
 
         try:
-            try:
-                resp = await asyncio.to_thread(_post_json, submit_url, payload, True, 15, 120)
-            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                _debug_log(f"[{log_tag}] RunningHub submit failed with proxy ({str(e)[:120]}), retrying without proxy...", "warning")
-                resp = await asyncio.to_thread(_post_json, submit_url, payload, False, 15, 120)
+            resp = None
+            for submit_attempt in range(max_submit_attempts):
+                try:
+                    try:
+                        resp = await asyncio.to_thread(_post_json, submit_url, payload, True, 15, 120)
+                    except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                        _debug_log(f"[{log_tag}] RunningHub submit failed with proxy ({str(e)[:120]}), retrying without proxy...", "warning")
+                        resp = await asyncio.to_thread(_post_json, submit_url, payload, False, 15, 120)
+                except requests.exceptions.RequestException as e:
+                    if submit_attempt < max_submit_attempts - 1:
+                        _debug_log(
+                            f"[{log_tag}] RunningHub submit request exception on attempt {submit_attempt + 1}/{max_submit_attempts}: {str(e)[:200]}; retrying...",
+                            "warning",
+                        )
+                        await asyncio.sleep(min(2 * (submit_attempt + 1), 5))
+                        continue
+                    raise
+
+                if resp.status_code in [200, 201]:
+                    break
+
+                if resp.status_code in retryable_statuses and submit_attempt < max_submit_attempts - 1:
+                    _debug_log(
+                        f"[{log_tag}] RunningHub submit transient status {resp.status_code} on attempt {submit_attempt + 1}/{max_submit_attempts}; retrying...",
+                        "warning",
+                    )
+                    await asyncio.sleep(min(2 * (submit_attempt + 1), 5))
+                    continue
+
+                break
 
             if resp.status_code not in [200, 201]:
                 _debug_log(f"[{log_tag}] RunningHub submit error {resp.status_code}: {_strip_base64_from_log(resp.text)}", "error")
@@ -4716,6 +6239,12 @@ class MediaGenerationService:
                     continue
 
                 if p_resp.status_code != 200:
+                    if p_resp.status_code in retryable_statuses:
+                        _debug_log(
+                            f"[{log_tag}] RunningHub poll transient status {p_resp.status_code}; continuing to poll...",
+                            "warning",
+                        )
+                        continue
                     _debug_log(f"[{log_tag}] RunningHub poll error {p_resp.status_code}: {_strip_base64_from_log(p_resp.text[:500])}", "warning")
                     continue
 
@@ -4724,6 +6253,11 @@ class MediaGenerationService:
                 if status in {"SUCCESS", "SUCCEEDED"}:
                     final_url = _extract_runninghub_media_url(p_data)
                     metadata = {"raw": p_data, "submit_raw": data, "taskId": task_id}
+                    provider_usage = _extract_runninghub_usage(p_data)
+                    if provider_usage:
+                        metadata["usage"] = provider_usage
+                        metadata["provider_usage"] = provider_usage
+                        metadata["usage_source"] = "runninghub"
                     if extra_metadata:
                         metadata.update(extra_metadata)
                     if final_url:
@@ -4976,8 +6510,8 @@ class MediaGenerationService:
                         callback_err,
                     )
 
-            for i in range(100):
-                await asyncio.sleep(3)
+            for i in range(150):
+                await asyncio.sleep(2)
 
                 def _poll():
                     return requests.post(poll_url, json={"id": task_id}, headers=headers, timeout=(10, 30), verify=False)
@@ -5390,6 +6924,48 @@ class MediaGenerationService:
             forced_submit_text = str(tool_conf.get("__voice_submit_text") or "").strip()
             strict_text_only = bool(tool_conf.get("__voice_strict_text_only"))
             effective_submit_text = forced_submit_text or str(prompt or "").strip()
+            timestamps_supported = self._get_runtime_capability_flag(
+                config,
+                "supports_timestamps",
+                "timestamps_supported",
+            )
+            previous_text_supported = self._get_runtime_capability_flag(
+                config,
+                "supports_previous_text",
+                "previous_text_supported",
+                "supports_context_text",
+                "context_text_supported",
+            )
+            allowed_voice_values = runtime_enum_catalog.get("voice") or self._get_runtime_capability_list(
+                config,
+                "voice_values",
+                "voices",
+                "allowed_voices",
+                "supported_voices",
+            )
+            allowed_language_values = runtime_enum_catalog.get("language_code") or self._get_runtime_capability_list(
+                config,
+                "language_code_values",
+                "language_values",
+                "languages",
+                "allowed_languages",
+                "supported_languages",
+            )
+            stability_min = self._get_runtime_capability_number(config, "stability_min")
+            stability_max = self._get_runtime_capability_number(config, "stability_max")
+            similarity_min = self._get_runtime_capability_number(config, "similarity_boost_min")
+            similarity_max = self._get_runtime_capability_number(config, "similarity_boost_max")
+            style_min = self._get_runtime_capability_number(config, "style_min")
+            style_max = self._get_runtime_capability_number(config, "style_max")
+            speed_min = self._get_runtime_capability_number(config, "speed_min")
+            speed_max = self._get_runtime_capability_number(config, "speed_max")
+            next_text_supported = self._get_runtime_capability_flag(
+                config,
+                "supports_next_text",
+                "next_text_supported",
+                "supports_context_text",
+                "context_text_supported",
+            )
 
             payload_input["prompt"] = effective_submit_text
             payload_input["text"] = effective_submit_text
@@ -5401,12 +6977,24 @@ class MediaGenerationService:
                 payload_input["prompt"] = str(tool_conf.get("prompt") or "").strip()
 
             for key in ["voice", "language_code", "previous_text", "next_text"]:
+                if key == "previous_text" and previous_text_supported is False:
+                    continue
+                if key == "next_text" and next_text_supported is False:
+                    continue
                 if tool_conf.get(key) is not None and str(tool_conf.get(key)).strip() != "":
                     payload_input[key] = tool_conf.get(key)
 
             # Compatibility alias: if caller passes "language", map to docs field "language_code".
             if tool_conf.get("language") is not None and str(tool_conf.get("language")).strip() != "":
                 payload_input["language_code"] = str(tool_conf.get("language")).strip()
+
+            mapped_voice = self._map_text_value_to_allowed(payload_input.get("voice"), allowed_voice_values)
+            if mapped_voice:
+                payload_input["voice"] = mapped_voice
+
+            mapped_language = self._map_text_value_to_allowed(payload_input.get("language_code"), allowed_language_values)
+            if mapped_language:
+                payload_input["language_code"] = mapped_language
 
             def _set_float(key: str, min_val: float, max_val: float):
                 raw = tool_conf.get(key)
@@ -5419,12 +7007,12 @@ class MediaGenerationService:
                 except Exception:
                     pass
 
-            _set_float("stability", 0.0, 1.0)
-            _set_float("similarity_boost", 0.0, 1.0)
-            _set_float("style", 0.0, 1.0)
-            _set_float("speed", 0.7, 1.2)
+            _set_float("stability", stability_min if stability_min is not None else 0.0, stability_max if stability_max is not None else 1.0)
+            _set_float("similarity_boost", similarity_min if similarity_min is not None else 0.0, similarity_max if similarity_max is not None else 1.0)
+            _set_float("style", style_min if style_min is not None else 0.0, style_max if style_max is not None else 1.0)
+            _set_float("speed", speed_min if speed_min is not None else 0.7, speed_max if speed_max is not None else 1.2)
 
-            if tool_conf.get("timestamps") is not None:
+            if timestamps_supported is not False and tool_conf.get("timestamps") is not None:
                 payload_input["timestamps"] = bool(tool_conf.get("timestamps"))
 
         raw_ar = str(aspect_ratio or "").strip()
@@ -5544,14 +7132,14 @@ class MediaGenerationService:
                 duration_value = 5
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
             if isinstance(allowed_durations, list) and allowed_durations:
-                mapped_duration = self._map_duration_nearest_lower(duration_value, allowed_durations)
+                mapped_duration = self._map_duration_nearest(duration_value, allowed_durations)
                 if mapped_duration is not None:
                     duration_value = int(mapped_duration)
 
             # KIE Seedance models often reject non-enum durations; if runtime enum is missing,
             # apply a conservative fallback aligned with common Seedance options.
             if is_seedance_video_model and (not isinstance(allowed_durations, list) or not allowed_durations):
-                mapped_duration = self._map_duration_nearest_lower(duration_value, [4, 8])
+                mapped_duration = self._map_duration_nearest(duration_value, [4, 8])
                 if mapped_duration is not None:
                     duration_value = int(mapped_duration)
 
@@ -5581,7 +7169,7 @@ class MediaGenerationService:
                 # when runtime enum catalog is missing or incomplete.
                 if not kling_allowed_durations:
                     kling_allowed_durations = [5, 10]
-                mapped_duration = self._map_duration_nearest_lower(duration_value, kling_allowed_durations)
+                mapped_duration = self._map_duration_nearest(duration_value, kling_allowed_durations)
                 if mapped_duration is not None:
                     duration_value = int(mapped_duration)
                 payload_input["duration"] = str(int(duration_value))
@@ -5594,6 +7182,42 @@ class MediaGenerationService:
                 else:
                     payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
 
+            # --- Inject quality/output_format for KIE video ---
+            # quality
+            requested_quality = str(tool_conf.get("quality") or "").strip().lower()
+            allowed_qualities = [str(item or "").strip().lower() for item in (runtime_enum_catalog.get("quality") or []) if str(item or "").strip()]
+            if requested_quality and allowed_qualities:
+                if requested_quality not in allowed_qualities:
+                    fallback_quality = allowed_qualities[0]
+                    logger.warning(
+                        "KIE quality enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                        model,
+                        requested_quality,
+                        allowed_qualities,
+                        fallback_quality,
+                    )
+                    requested_quality = fallback_quality
+                payload_input["quality"] = requested_quality
+            elif requested_quality:
+                payload_input["quality"] = requested_quality
+
+            # output_format
+            requested_output_format = str(tool_conf.get("output_format") or tool_conf.get("outputFormat") or "").strip().lower()
+            allowed_output_formats = [str(item or "").strip().lower() for item in (runtime_enum_catalog.get("output_format") or []) if str(item or "").strip()]
+            if requested_output_format and allowed_output_formats:
+                if requested_output_format not in allowed_output_formats:
+                    fallback_output_format = allowed_output_formats[0]
+                    logger.warning(
+                        "KIE output_format enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                        model,
+                        requested_output_format,
+                        allowed_output_formats,
+                        fallback_output_format,
+                    )
+                    requested_output_format = fallback_output_format
+                payload_input["output_format"] = requested_output_format
+            elif requested_output_format:
+                payload_input["output_format"] = requested_output_format
         if gen_type == "audio":
             payload_input.pop("duration", None)
 
@@ -6419,11 +8043,11 @@ class MediaGenerationService:
                     current_duration_int = int(float(current_duration_text))
                     allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
                     if isinstance(allowed_durations, list) and allowed_durations:
-                        mapped_duration = self._map_duration_nearest_lower(current_duration_int, allowed_durations)
+                        mapped_duration = self._map_duration_nearest(current_duration_int, allowed_durations)
                         if mapped_duration is not None:
                             current_duration_int = int(mapped_duration)
                     elif is_seedance_video_model:
-                        mapped_duration = self._map_duration_nearest_lower(current_duration_int, [4, 8])
+                        mapped_duration = self._map_duration_nearest(current_duration_int, [4, 8])
                         if mapped_duration is not None:
                             current_duration_int = int(mapped_duration)
                     max_duration = runtime_enum_catalog.get("max_duration")
@@ -7013,14 +8637,13 @@ class MediaGenerationService:
             poll_timeout_seconds = 600
 
         # Strategy:
-        # - local deploy: polling-first, slightly tighter interval
-        # - public deploy with callback: keep polling as fallback with lower frequency
-        # - public deploy without callback: normal polling
-        poll_interval_seconds = 3
+        # - keep callback as the preferred completion path when available
+        # - keep polling responsive enough that local state does not lag far behind provider completion
+        poll_interval_seconds = 2
         if callback_enabled and is_public_deploy:
-            poll_interval_seconds = 8
+            poll_interval_seconds = 3
         elif callback_enabled:
-            poll_interval_seconds = 5
+            poll_interval_seconds = 2
         try:
             if tool_conf.get("poll_interval_seconds") is not None:
                 poll_interval_seconds = max(2, int(tool_conf.get("poll_interval_seconds")))
@@ -7251,6 +8874,27 @@ class MediaGenerationService:
 
              if not os.path.exists(USER_DIR): os.makedirs(USER_DIR)
 
+             if url.startswith("data:"):
+                 marker = ";base64,"
+                 idx = url.find(marker)
+                 if idx > 5:
+                     mime = url[5:idx].strip().lower() or "application/octet-stream"
+                     encoded = url[idx + len(marker):].strip()
+                     binary = base64.b64decode(encoded)
+                     ext = mimetypes.guess_extension(mime) or ".bin"
+                     if ext == ".jpe":
+                         ext = ".jpg"
+                     filename = f"gen_{uuid.uuid4().hex[:8]}{ext}"
+                     if filename_base: filename = f"{filename_base}_{filename}"
+                     file_path = os.path.join(USER_DIR, filename)
+                     with open(file_path, 'wb') as f:
+                         f.write(binary)
+                     relative_path = f"/uploads/{user_id}/{filename}"
+                     if settings.RENDER_EXTERNAL_URL:
+                         base = settings.RENDER_EXTERNAL_URL.rstrip('/')
+                         return f"{base}{relative_path}"
+                     return relative_path
+
              if url.startswith("/"): return url
              if "localhost" in url or "127.0.0.1" in url: return url
 
@@ -7436,7 +9080,7 @@ class MediaGenerationService:
         except Exception:
             return False
 
-    def _resolve_ref_for_api(self, url_or_path, force_data_uri_for_local=True):
+    def _resolve_ref_for_api(self, url_or_path, force_data_uri_for_local=True, prefer_public_upload_url=False, data_uri_profile: Optional[str] = None):
         if isinstance(url_or_path, list):
             if not url_or_path:
                 return None
@@ -7449,8 +9093,12 @@ class MediaGenerationService:
             return raw
         if self._is_public_http_url(raw):
             return raw
+        if prefer_public_upload_url:
+            public_url = self._resolve_public_upload_url(raw)
+            if public_url:
+                return public_url
 
-        encoded = self._get_image_base64_for_api(raw, force_data_uri=force_data_uri_for_local)
+        encoded = self._get_image_base64_for_api(raw, force_data_uri=force_data_uri_for_local, data_uri_profile=data_uri_profile)
         if not encoded or encoded == raw:
             return None
         return encoded
@@ -7524,7 +9172,8 @@ class MediaGenerationService:
 
     def _resolve_provider_callback_url(self, tool_conf: Dict[str, Any], callback_ticket: str) -> str:
         callback_url = str(
-            tool_conf.get("webHook")
+            tool_conf.get("webhookUrl")
+            or tool_conf.get("webHook")
             or tool_conf.get("webhook")
             or tool_conf.get("callBackUrl")
             or tool_conf.get("callback_url")
@@ -7813,10 +9462,20 @@ class MediaGenerationService:
             )
         return hosted
 
-    def _optimize_image_bytes_for_data_uri(self, data: bytes, mime: str = "image/png") -> tuple[bytes, str]:
-        # Keep provider compatibility while avoiding very large JSON request payloads.
+    def _resolve_data_uri_optimization_limits(self, profile: Optional[str] = None) -> tuple[int, int]:
+        normalized_profile = str(profile or "").strip().lower()
+        if normalized_profile == "n1n_image_ref":
+            max_bytes = max(256 * 1024, int(os.getenv("N1N_IMAGE_REF_DATA_URI_MAX_BYTES", str(2 * 1024 * 1024))))
+            max_edge = max(512, int(os.getenv("N1N_IMAGE_REF_DATA_URI_MAX_EDGE", "1536")))
+            return max_bytes, max_edge
+
         max_bytes = max(512 * 1024, int(os.getenv("VIDEO_REF_DATA_URI_MAX_BYTES", str(6 * 1024 * 1024))))
         max_edge = max(512, int(os.getenv("VIDEO_REF_DATA_URI_MAX_EDGE", "2048")))
+        return max_bytes, max_edge
+
+    def _optimize_image_bytes_for_data_uri(self, data: bytes, mime: str = "image/png", profile: Optional[str] = None) -> tuple[bytes, str]:
+        # Keep provider compatibility while avoiding very large JSON request payloads.
+        max_bytes, max_edge = self._resolve_data_uri_optimization_limits(profile)
 
         if not data:
             return data, mime
@@ -7856,16 +9515,21 @@ class MediaGenerationService:
 
         return data, mime
 
-    def _resolve_ref_list_for_api(self, refs, force_data_uri_for_local=True):
+    def _resolve_ref_list_for_api(self, refs, force_data_uri_for_local=True, prefer_public_upload_url=False, data_uri_profile: Optional[str] = None):
         source = refs if isinstance(refs, list) else [refs]
         result = []
         for item in source:
-            resolved = self._resolve_ref_for_api(item, force_data_uri_for_local=force_data_uri_for_local)
+            resolved = self._resolve_ref_for_api(
+                item,
+                force_data_uri_for_local=force_data_uri_for_local,
+                prefer_public_upload_url=prefer_public_upload_url,
+                data_uri_profile=data_uri_profile,
+            )
             if resolved:
                 result.append(resolved)
         return result
 
-    def _get_image_base64_for_api(self, url_or_path, force_data_uri=False):
+    def _get_image_base64_for_api(self, url_or_path, force_data_uri=False, data_uri_profile: Optional[str] = None):
         # Helper to get base64 from local or remote
         # NOTE: This only processes ONE image. If list is passed, we take the first.
         # Callers MUST handle lists if they need multiple images.
@@ -7965,7 +9629,7 @@ class MediaGenerationService:
                 )
                 if force_data_uri:
                     before_size = len(data)
-                    data, mime = self._optimize_image_bytes_for_data_uri(data, mime)
+                    data, mime = self._optimize_image_bytes_for_data_uri(data, mime, profile=data_uri_profile)
                     after_size = len(data)
                     if after_size < before_size:
                         _debug_log(f"[MediaService] Ref optimized for data URI: {before_size} -> {after_size} bytes ({mime})")

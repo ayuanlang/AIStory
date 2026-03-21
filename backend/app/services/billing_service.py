@@ -2709,6 +2709,12 @@ class BillingService:
                 phase="settle",
             ),
         })
+        provider_usage = details.get("provider_usage")
+        if isinstance(provider_usage, dict) and provider_usage:
+            res_details["provider_usage"] = BillingService._compact_audit_payload(provider_usage)
+        usage_source = str(details.get("usage_source") or "").strip()
+        if usage_source:
+            res_details["usage_source"] = usage_source
         reservation_tx.details = res_details
         reservation_tx.provider = settle_provider
         reservation_tx.model = settle_model

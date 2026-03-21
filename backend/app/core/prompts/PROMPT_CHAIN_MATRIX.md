@@ -91,6 +91,8 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 - Environment/prop references remain `[Name]` without `@`; `[@Env]` / `[@Prop]` are invalid.
 - Entity typing is explicit and consistent: `CHAR:[@Name]`, `ENV:[Name]`, `PROP:[Name]`.
 - `anchor_description` is English-only for all entity types (Character/Prop/Environment); no Chinese or mixed-language output.
+- Any field suffixed with `_cn` must always be Chinese, and any field suffixed with `_en` must always be English, regardless of project language.
+- `Project Context.Language` controls design context and visible in-frame text/signage/dialogue language, but does not override the fixed language contract of `_cn` / `_en` fields.
 - Any type mismatch (`CHAR` used for env/prop, or `ENV/PROP` used for character) is invalid and must be rewritten.
 
 ## Maintenance Rule

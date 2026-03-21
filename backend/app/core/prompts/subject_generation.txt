@@ -7,11 +7,19 @@
 3. 环境默认审美：未指定风格时，默认优美/大气/现代/优雅；若剧本指定风格，以剧本优先。
 4. 角色与道具默认审美：未限制时，角色镜头友好且可播出，道具精致可复现；必须保留锚定特征。
 5. 语言一致：自然语言默认跟随剧本原始语言；若 `Project Context` 明确给出 `Language`，则项目目标语言优先。仅固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 generation_prompt_cn 与 generation_prompt_en 且语义一致，anchor_description 必须英文短语。
+- 固定双语输出字段契约（Mandatory）：`generation_prompt_cn`、`appearance_cn`、`description_cn` 等带 `_cn` 的字段，始终必须输出中文；`generation_prompt_en`、`negative_prompt_en`、`name_en` 等带 `_en` 的字段，始终必须输出英文；`anchor_description` 始终必须输出英文短语。以上字段语言契约不受项目语言影响。
+- 字段语言与画面内语言区分（Mandatory）：`Project Context.Language` 影响的是设计语境、命名语境与画面中实际会被看见/听见的语言内容，不改变字段本身的中英文职责。即使项目语言为英文，`generation_prompt_cn` 仍必须用中文描述该英文项目；即使项目语言为中文，`generation_prompt_en` 仍必须用英文描述该中文项目。
 6. 文字载荷语言规则（Mandatory）：在 environment / character / prop 的图片提示词中，凡需要写出实际可见文字内容（如招牌、屏幕 UI、按钮文案、手机消息、海报标语、门牌、纸面文字），必须使用“项目目标语言；若未指定则使用剧本原始语言”来填写。禁止为了维持 `generation_prompt_en` 的英文叙述外壳，而把这些实际画面文字生硬改成英文占位。
+7. 项目语言驱动的视觉设计语境（Mandatory）：`Project Context.Language` 不仅约束文字输出语言，也约束角色 / 道具 / 环境的默认视觉设计语境。若剧本未明确给出人物族裔/地域、道具产地/品牌体系、建筑地域/城市语境、标识系统或生活方式线索，则必须优先按项目语言对应的常识性现实语境补全设计基线，而不是套用示例中的人种、服装、道具、建筑或空间风格。
+8. 英文项目默认设计基线（Mandatory）：当项目语言为英文，且剧本没有明确给出相反证据时，角色默认按英语语境下的英美人物与生活系统进行设计基线补全；道具、服装剪裁、室内陈设、街道标识、办公/家居环境、印刷物与 UI 语言也应默认匹配英美语境。禁止在无剧本依据时，把英文项目默认设计成中文语境人物、中国式生活道具/空间，或直接照抄示例中的东亚人物设定。
+9. 中文及其他项目语言设计对齐（Mandatory）：当项目语言为中文或其他明确语言时，同样必须让角色外观基线、服装组织方式、道具系统、环境构造、招牌/文字与日常生活细节优先匹配该语言对应的现实语境；除非剧本已明确指定跨文化/跨地域设定，否则不得混入无依据的异语种生活系统。
+10. 禁止模板抄袭式设计（Hard Rule）：示例、模板、规则中的职业、人种、年龄、服装、道具、环境名、空间结构、镜头话术都只能作为格式参考，不能直接作为真实输出的设计内容。每次生成都必须基于当前剧本重新设计实体形象、材质、空间与细节；若输出仍残留示例里的默认角色类型、默认空间、默认道具或默认视觉组合，判为无效并必须重写。
 7. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
 8. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
 9. 锚点不可变更：anchor_description 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
-10. 零推理泄露：仅输出最终结果；禁止思维链、解释、<think>、代码围栏。若指令冲突，本条优先。
+10. Subjects 视觉舒适度优先（Mandatory）：人物 `description_cn`、`appearance`、`generation_prompt_cn/en` 与相关说明默认必须采用可播出、非血腥、非重口、非强视觉不适的表达；尽量不要使用血浆、喷溅血迹、开放性伤口、暴露组织、残缺肢体、腐烂、脓液、虫噬、尸变、器官外露等描述。若剧情确实要求状态变化，优先改写为非图形化、克制、识别优先的表述，只保留必要且温和的可见结果。
+11. 锚点描述更严格（Mandatory）：anchor_description 只能保留稳定身份识别锚点，如脸型、发型轮廓、体态、服装版型、配色、饰品、鞋履、非图形化的小型识别痕迹；禁止把血迹、伤口细节、瘀伤细节、烧灼创面、残缺、暴露组织、腐烂、体液污渍等任何血腥或视觉不适内容写入锚点。
+12. 零推理泄露：仅输出最终结果；禁止思维链、解释、<think>、代码围栏。若指令冲突，本条优先。
 
 ---
 
@@ -182,13 +190,16 @@
 ### 2) Character Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。
 - 角色模板与规则在本文件内统一维护，避免外部模板漂移。
+- 禁止抽象占位（Mandatory）：角色 `generation_prompt_cn/generation_prompt_en` 不得用“职业状态”“职业气质”“主角感”“判断敏捷感”“平静求证感”这类抽象总结句代替画面信息；必须把 `appearance_cn`、`clothing`、`action_characteristics` 中可被看见的内容直接落成脸部结构、发型整理、肩颈线条、站姿重心、衣物开合、面料轮廓、裤线/裙线、鞋履状态与布光效果。
 - 具体示例（仅示范写法，不可照抄值）：
-  - generation_prompt_en 示例：Realistic contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep every structural panel full-body with shoes fully visible, then transition through Front, Back, Side, 3/4, Close-up, and Detail views while preserving the same body proportion system. Soft key from front-left, balanced fill on camera axis, and a subtle back-right rim keep skin texture natural without waxy smoothing. Use a 50mm baseline with shallower focus reserved for the close-up panel. Wardrobe stays consistent: dark navy trench coat, white shirt, charcoal trousers, black leather ankle boots. Stable anchors include a narrow scar under the right eyebrow, a silver ring on the left index finger, and an asymmetric fringe silhouette. Background pure white, no text, no watermark.
-  - generation_prompt_cn 示例：写实现代剧情风格，林月角色六视图，六个面板必须保持同一身份与服装一致。机位锚点为胸口高度的棚拍机位，固定距离，全身入镜且鞋子完整可见。视角顺序为正面/背面/侧面/四分之三/特写/细节，统一同一套身材比例。布光为左前方柔和主光、机位轴线补光、右后方轻微轮廓光；保留自然皮肤微纹理，禁止磨皮塑料感。镜头与对焦以 50mm 为基准，仅特写面板允许浅景深。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。稳定锚点为右眉下细疤、左手食指银戒、不对称刘海轮廓。纯白背景，无文字无水印。
+  - generation_prompt_en 示例：Photoreal contemporary drama character sheet for Lin Yue with one fixed studio observer position at chest height. Give her tasteful lead-character polish while staying grounded in newsroom realism: tidy asymmetrical fringe skimming the brow line, a defined jawline, visible pores with fine micro-lines intact, and a long clean silhouette rather than beauty-filter softness. She reads as around 28 years old, about 168 cm tall, with an approximately 1:7.2 body proportion, focused eyes, a straight nose bridge, and a composed mouth line. Keep every structural panel full-body with shoes fully visible, then transition through Front, Back, Side, 3/4, Close-up, and Detail views while preserving the same body proportion system. Soft butterfly-leaning key from front-left, balanced fill on camera axis, and a subtle back-right rim keep skin texture natural while flattering her on camera. Use a 50mm baseline with shallower focus reserved for the close-up panel. Wardrobe stays consistent: a dark navy trench worn open with a defined waist, a white shirt with one relaxed open button at the collar, charcoal trousers with a clean straight fall, and black leather ankle boots with slight surface wear. Her shoulders stay level, her center of gravity stays stable, and each pose holds a brief pause-before-motion feel. Stable anchors include a narrow scar under the right eyebrow, a silver ring on the left index finger, and an asymmetric fringe silhouette. Background pure white, no text, no watermark.
+  - generation_prompt_cn 示例：写实现代剧情风格，林月角色六视图，六个面板必须保持同一身份与服装一致。在不改变记者身份与真实感的前提下，让她具备主角级上镜度：脸部轮廓干净，刘海与碎发整理利落，肤质真实但细腻，整体线条修长有精神。她约28岁，身高约168cm，头身比约1:7.2，脸部线条利落，下颌边界清楚，眼神专注，鼻梁笔直。机位锚点为胸口高度的棚拍机位，固定距离，全身入镜且鞋子完整可见。视角顺序为正面/背面/侧面/四分之三/特写/细节，统一同一套身材比例。布光为左前方柔和主光并略带蝶形光修脸效果、机位轴线补光、右后方轻微轮廓光；保留自然皮肤微纹理，禁止磨皮塑料感。镜头与对焦以 50mm 为基准，仅特写面板允许浅景深。服装为深海军蓝收腰风衣并保持前襟自然敞开，白色衬衫自然开一粒扣，炭灰长裤裤线干净，黑色皮质短靴鞋面有轻微磨损。肩线平直，重心稳定，动作前有短暂停顿。稳定锚点为右眉下细疤、左手食指银戒、不对称刘海轮廓。纯白背景，无文字无水印。
 - 全身像硬规则（Mandatory）：角色 generation_prompt_en 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
 - 不合规判定：若角色提示词未明确 full body + shoes visible，或输出画面描述存在脚部/鞋子被遮挡、出框、裁切，判定无效并必须重写。
 - 锚点只读硬规则（Mandatory）：anchor_description 与角色身份锚点是不可变更锚点（immutable anchors）；下游仅允许逐字符继承，不得重写、扩写、弱化、替换同义词或做风格化改写。
+- 视觉舒适度硬规则（Mandatory）：角色 generation_prompt_cn/en、description_cn、appearance 与相关说明默认必须保持克制、可播出、非图形化表达。尽量不要出现血腥、喷溅、开放性伤口、暴露组织、腐烂、残缺、体液污渍等强视觉不适内容；若剧情确实要求人物状态变化，优先使用“疲惫、凌乱、淋湿、沾灰、轻微擦痕、衣物破损但不露创口”等温和且可识别的写法。
+- 锚点内容白名单（Mandatory）：anchor_description 只允许写稳定身份锚点，例如脸型、发型轮廓、体态、服装版型、配色、饰品、鞋履、非图形化小痕迹；不得把受伤细节、血迹位置、瘀伤扩散、创口形态、残缺状态等写成锚点。
 - 锚点冲突处理：若美化/风格化与锚点冲突，必须以锚点优先；宁可降低风格化程度，也不得改变锚点。
 - 时期/状态/换装拆分强制（Mandatory）：同一人物只要出现时期差异、状态差异或明确换装，必须拆分为独立角色资产并生成独立提示词，禁止复用同一 characters 条目硬改字段。
 - 着装优先级强调（Mandatory）：在人物 subject 抽取时，明确换装不属于次要服装修饰，而是与受伤、湿身、年龄态同级的重大状态变化。只要镜头中需要生成不同服装版本，就必须先拆角色实体，再写对应提示词；不得先保留一个角色条目，再靠 prompt 自由改衣服。
@@ -197,12 +208,12 @@
   - 派生时期/状态/换装角色：dependency_strategy.type=Type A/Type B，visual_dependencies 指向基准或上一阶段角色；
   - dependency_strategy.logic 必须明确继承不变锚点 + 允许变化项（时期/状态/服装）；若换装涉及已抽取服饰/装备道具，也必须说明与这些道具的依赖关系。
 - 角色分期依赖合规示例（Mandatory）：
-  - 不合规：仅一个 CHAR:[@Lin]，同时描述青年+中年+换装+受伤。
+  - 不合规：仅一个 CHAR:[@Lin]，同时描述青年+中年+换装+雨淋状态。
   - 合规：
     - CHAR:[@Lin_Young] -> Original, visual_dependencies=[]；
     - CHAR:[@Lin_Adult_Formal] -> Type A, visual_dependencies=["CHAR:[@Lin_Young]"]；
-    - CHAR:[@Lin_Adult_Injured] -> Type B, visual_dependencies=["CHAR:[@Lin_Adult_Formal]"]；
-    - dependency_strategy.logic 写清：继承脸型/体态/稳定锚点，仅改变年龄态、服装、伤痕状态。
+    - CHAR:[@Lin_Adult_RainSoaked] -> Type B, visual_dependencies=["CHAR:[@Lin_Adult_Formal]"]；
+    - dependency_strategy.logic 写清：继承脸型/体态/稳定锚点，仅改变年龄态、服装与非图形化状态表现。
 - 风格驱动映射强制：
   - 真人剧：35-85mm、真实皮肤微纹理、自然高光，禁塑料/CGI感。
   - 风格化作品：可强化色彩轮廓，但光源与焦距必须清晰。
@@ -228,12 +239,12 @@
   - 派生状态道具：dependency_strategy.type=Type A/Type B，visual_dependencies 指向基准或上一状态道具；
   - dependency_strategy.logic 必须明确继承不变锚点 + 仅变化状态项（破损程度/开合/液位/点亮状态等）。
 - 道具状态拆分合规示例（Mandatory）：
-  - 不合规：仅一个 PROP:[Letter]，同时描述未拆封+已拆封+沾血。
+  - 不合规：仅一个 PROP:[Letter]，同时描述未拆封+已拆封+大面积污渍。
   - 合规：
     - PROP:[Letter_Sealed] -> Original, visual_dependencies=[]；
     - PROP:[Letter_Open] -> Type A, visual_dependencies=["PROP:[Letter_Sealed]"]；
-    - PROP:[Letter_Open_BloodStained] -> Type B, visual_dependencies=["PROP:[Letter_Open]"]；
-    - dependency_strategy.logic 写清：继承纸张尺寸、折痕结构、印章位置，仅改变封口状态与污渍状态。
+    - PROP:[Letter_Open_WaterStained] -> Type B, visual_dependencies=["PROP:[Letter_Open]"]；
+    - dependency_strategy.logic 写清：继承纸张尺寸、折痕结构、印章位置，仅改变封口状态与非血腥污渍状态。
 - 抽取前自检：无法回答如何持续影响剧情并在后续发挥作用的物体，不应进入 props。
 
 ---
@@ -324,6 +335,7 @@
 - name/name_en 必须是纯净角色名。
 - 禁止形式：CHAR:[@Name]、[@Name]、[Name]、@Name。
 - CHAR:[@Name] 仅限引用语境；JSON 内一律 Name。
+- 字段语言硬规则（Mandatory）：`appearance_cn`、`clothing`、`generation_prompt_cn` 必须为中文；`name_en`、`generation_prompt_en`、`negative_prompt_en`、`anchor_description` 必须为英文。`name` 是否为中文取决于项目语言与既有命名体系，但 `name_en` 不能缺失。
 ```json
 {
   "characters": [
@@ -335,16 +347,16 @@
       "role": "Investigative Reporter",
       "archetype": "Calm Truth Seeker",
       "appearance_cn": "28岁，东亚女性，身高约168cm，头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
-      "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。其他剧本衣着描述：无。",
+      "clothing": "当前服装：深海军蓝收腰中长款风衣（前襟自然敞开，哑光防泼水面料），白色衬衫（自然开一粒扣），炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。其他剧本衣着描述：无。",
       "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
-      "generation_prompt_cn": "写实现代剧情风格，林月六视图角色设定图，六个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位，完整全身入镜且鞋子清晰可见。视角顺序为正面、背面、侧面、四分之三、面部特写、关键细节。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep every structural panel full-body with shoes fully visible, then move through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
-      "negative_prompt_en": "Style-aware negative prompt for this character (English only)",
-      "anchor_description": "English visual tags only",
+      "generation_prompt_cn": "写实现代剧情风格，林月六视图角色设定图，六个面板保持同一身份与服装一致。在不改变记者身份与真实感的前提下，让她具备自然、可信、好看的主角级上镜度：脸部轮廓干净，刘海与碎发整理利落，肤质真实但细腻，整体线条修长有精神。她约28岁，身高约168cm，头身比约1:7.2，脸部线条利落，下颌边界清楚，眼神专注，鼻梁笔直。机位锚点为棚拍胸口高度固定机位，完整全身入镜且鞋子清晰可见。视角顺序为正面、背面、侧面、四分之三、面部特写、关键细节。布光为左前方柔和主光并略带蝶形光修脸效果、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝收腰风衣并保持前襟自然敞开，白色衬衫自然开一粒扣，炭灰长裤裤线干净，黑色皮质短靴鞋面有轻微磨损。肩线平直，重心稳定，动作前有短暂停顿。背景纯白，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Give her tasteful lead-character polish while staying grounded in newsroom realism: tidy asymmetrical fringe skimming the brow line, a defined jawline, visible pores with fine micro-lines intact, and a long clean silhouette rather than beauty-filter softness. She reads as around 28 years old, about 168 cm tall, with an approximately 1:7.2 body proportion, focused eyes, a straight nose bridge, and a composed mouth line. Keep every structural panel full-body with shoes fully visible, then move through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views while preserving the same body proportion system. Soft butterfly-leaning key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture while flattering her on camera. Her wardrobe stays consistent: a dark navy trench worn open with a defined waist, a white shirt with one relaxed open button at the collar, charcoal trousers with a clean straight fall, and black leather ankle boots with slight surface wear. Her shoulders stay level, her center of gravity stays stable, and each pose holds a brief pause-before-motion feel. Background pure white, no labels, no watermark.",
+      "negative_prompt_en": "beauty-filter skin, cheap glamour styling, pin-up posing, anime proportions, extra limbs, floating hair clumps, oversmoothed pores, text, watermark",
+      "anchor_description": "sharp jawline, asymmetrical fringe, fine scar below right brow, silver ring on left index finger, defined-waist navy trench silhouette, black ankle boots",
       "visual_dependencies": [],
       "dependency_strategy": {
-        "type": "Original/Type A/Type B",
-        "logic": "Dependency Logic"
+        "type": "Original",
+        "logic": "Original baseline character asset; downstream variants may inherit face structure, fringe silhouette, ring anchor, trench outline, and boot profile while changing only scene-specific styling outside these stable anchors."
       }
     }
   ]
@@ -352,6 +364,7 @@
 ```
 
 #### Part 2B — Props
+- 字段语言硬规则（Mandatory）：`description_cn`、`generation_prompt_cn` 必须为中文；`name_en`、`generation_prompt_en`、`negative_prompt_en`、`anchor_description` 必须为英文。`name` 遵循项目语言与既有命名体系。
 ```json
 {
   "props": [
@@ -363,12 +376,12 @@
       "description_cn": "黄铜材质古董怀表，表壳边缘有细小磕碰，镜面有轻微划痕，内盖有雕刻纹路，可开合铰链结构完整。",
       "generation_prompt_cn": "写实道具六视图：古董怀表，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。材质表现为拉丝黄铜与轻微氧化，镜面有细碎划痕，内盖雕刻清晰。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓与阴影细节可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率。",
       "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, rendered as a strict object-only six-view study from a camera centered on the turntable and slightly above the midline. Move cleanly through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views while preserving brushed brass texture, mild oxidation, scratched crystal, and engraved inner lid readability. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep silhouette and material depth clear. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
-      "negative_prompt_en": "Style-aware negative prompt for this prop (English only)",
-      "anchor_description": "English visual tags only",
+      "negative_prompt_en": "plastic material feel, fake miniature look, game-like render, unreal scale, extra duplicate parts, text watermark, human hands in frame",
+      "anchor_description": "brushed brass case, light oxidation bloom, scratched crystal, engraved inner lid, intact hinge arc",
       "visual_dependencies": [],
       "dependency_strategy": {
-        "type": "Original/Type A/Type B",
-        "logic": "Dependency Logic"
+        "type": "Original",
+        "logic": "Original hero prop asset; downstream variants may inherit case silhouette, brass wear pattern, crystal scratch density, and hinge geometry while adjusting only scene-state handling outside these anchors."
       }
     }
   ]
@@ -376,6 +389,7 @@
 ```
 
 #### Part 2C — Environments
+- 字段语言硬规则（Mandatory）：`description_cn`、`generation_prompt_cn` 必须为中文；`name_en`、`generation_prompt_en`、`negative_prompt_en`、`anchor_description` 必须为英文。`name` 遵循项目语言与既有命名体系。
 ```json
 {
   "environments": [
@@ -388,12 +402,12 @@
       "description_cn": "港口办公区夜景，玻璃隔断与桌面灯形成主视觉锚点，空间可达且便于角色进出与机位移动。",
       "generation_prompt_cn": "电影级写实剧情风格。以 HarborOffice_Front_Wide_Night 为基础参考，保持建筑结构与材质锚点不变。环境增量：机位在走廊门槛处，朝内看向主办公桌区域；轴线由左侧切换到右侧；可见背景包含玻璃隔断、台灯、挂钟，排除后部储物架成为主背景；主光来自前右侧台灯，辅以走廊冷色补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市反射光。画面中不得出现人物。",
       "generation_prompt_en": "Cinematic photoreal drama style. Use HarborOffice_Front_Wide_Night as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at corridor threshold facing inward to main desk zone; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock], Excluded Set = [rear storage shelves as dominant backdrop]; Lighting Direction Change: key from front-right practical desk lamp with cool corridor spill fill; Framing Change: medium-wide, primary subject desk cluster, secondary subject window reflection line; Dynamic Parts State: None}. FG: door frame edge and entry mat. MG: desk cluster and practical lamp as composition anchor. BG: rain-streaked city reflections through glass. No humans or characters in frame.",
-      "negative_prompt_en": "Style-aware negative prompt for this environment (English only)",
-      "anchor_description": "English visual tags only",
+      "negative_prompt_en": "people in frame, shoulder silhouette, mirror reflection of a person, plastic material feel, fake miniature look, game-like render, unreal scale, text watermark",
+      "anchor_description": "glass partition grid, warm desk lamp pool, wall clock marker, corridor threshold, rain-streaked window reflections",
       "visual_dependencies": [],
       "dependency_strategy": {
-        "type": "Original/Type A/Type B",
-        "logic": "Dependency Logic"
+        "type": "Original",
+        "logic": "Original base environment asset; downstream view variants may inherit architecture, partition rhythm, lamp placement, clock position, and reflective window behavior while changing only viewpoint delta and scene-safe empty-state details."
       }
     }
   ]
