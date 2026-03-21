@@ -14,14 +14,22 @@
 10. 角色与道具默认审美：未限制时，角色镜头友好且可播出，道具精致可复现；必须保留锚定特征。
 11. 层级编码延续：`Episode ID=EPxx`，`Scene ID=EPxx_SCyy`，下游 `Shot ID=EPxx_SCyy_SHzz`；Scene 内状态必须形成 `Entry -> Exit` 闭环。
 12. 语言一致：自然语言默认跟随剧本原始语言；但若 `Project Context` 中明确给出 `Language`（如 `Language: 中文 / Chinese`、`Language: 英文 / English`），则该项目语言为最高优先级，必须覆盖剧本文本原始语言。仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
+- 固定双语输出字段契约（Mandatory）：`generation_prompt_cn`、`appearance_cn`、`description_cn` 等带 `_cn` 的字段，始终必须输出**中文**；`generation_prompt_en`、`negative_prompt_en`、`name_en` 等带 `_en` 的字段，始终必须输出**英文**；`anchor_description` 始终必须输出英文短语。以上字段语言契约**不受项目语言影响**。
+- 字段语言与画面内语言区分（Mandatory）：`Project Context.Language` 影响的是设计语境、命名语境与画面中**实际会被看见/听见的语言内容**，不改变字段本身的中英文职责。即使项目语言为英文，`generation_prompt_cn` 仍必须用中文描述该英文项目；即使项目语言为中文，`generation_prompt_en` 仍必须用英文描述该中文项目。
 13. 项目语言覆盖翻译（Mandatory）：当 `Project Context` 明确指定目标语言时，剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、口号、书信/消息内容、以及任何“角色正在说某种语言/切换语言”的语言事件，都必须转换并改写为目标语言后再写入分析结果；若 `Project Context` 未指定 `Language`，则上述语言性内容默认保持剧本原始语言。禁止无依据地统一改成英文，除非剧本原文就是英文或项目语言明确要求英文。
 14. 生成提示词语言载荷规则（Mandatory）：在所有图片/视频相关提示词与分析字段中，只要涉及**实际会被看见或听见的语言内容**，包括对白、旁白、OS/V.O.、字幕、屏幕文字、UI 文案、招牌、海报、书信、短信、按钮文案、门牌、涂鸦、广播词等，必须使用“项目目标语言；若未指定则使用剧本原始语言”来填写。禁止为了维持 `generation_prompt_en` 或其它英文描述字段而把这些实际语言内容生硬改写成英文占位句。
-14. 基准环境统一：同一地理场地的变体依托同一 Base Reference；变体仅写 Delta，`REUSE` 必写 `None/No visual delta`。
-15. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
-16. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
-17. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
-18. 锚点不可变更：`anchor_description` 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
-19. 零推理泄露：仅输出最终结果；禁止思维链、解释、`<think>`、代码围栏。若指令冲突，本条优先。
+15. 项目语言驱动的视觉设计语境（Mandatory）：`Project Context.Language` 不仅约束文字输出语言，也约束**角色 / 道具 / 环境** 的默认视觉设计语境。若剧本未明确给出人物族裔/地域、道具产地/品牌体系、建筑地域/城市语境、标识系统或生活方式线索，则必须优先按项目语言对应的常识性现实语境补全设计基线，而不是套用示例中的人种、服装、道具、建筑或空间风格。
+16. 英文项目默认设计基线（Mandatory）：当项目语言为英文，且剧本没有明确给出相反证据时，角色默认按**英语语境下的英美人物与生活系统**进行设计基线补全；道具、服装剪裁、室内陈设、街道标识、办公/家居环境、印刷物与 UI 语言也应默认匹配英美语境。禁止在无剧本依据时，把英文项目默认设计成中文语境人物、中国式生活道具/空间，或直接照抄示例中的东亚人物设定。
+17. 中文及其他项目语言设计对齐（Mandatory）：当项目语言为中文或其他明确语言时，同样必须让角色外观基线、服装组织方式、道具系统、环境构造、招牌/文字与日常生活细节优先匹配该语言对应的现实语境；除非剧本已明确指定跨文化/跨地域设定，否则不得混入无依据的异语种生活系统。
+18. 禁止模板抄袭式设计（Hard Rule）：示例、模板、规则中的职业、人种、年龄、服装、道具、环境名、空间结构、镜头话术都只能作为**格式参考**，不能直接作为真实输出的设计内容。每次生成都必须基于当前剧本重新设计实体形象、材质、空间与细节；若输出仍残留示例里的默认角色类型、默认空间、默认道具或默认视觉组合，判为无效并必须重写。
+19. 基准环境统一：同一地理场地的变体依托同一 Base Reference；变体仅写 Delta，`REUSE` 必写 `None/No visual delta`。
+20. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
+21. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
+22. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
+23. 锚点不可变更：`anchor_description` 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
+24. Subjects 视觉舒适度优先（Mandatory）：人物 `description`、`appearance`、`generation_prompt_cn/en` 与相关说明默认必须采用可播出、非血腥、非重口、非强视觉不适的表达；尽量不要使用血浆、喷溅血迹、开放性伤口、暴露组织、残缺肢体、腐烂、脓液、虫噬、尸变、器官外露等描述。若剧情确实要求“受伤/污染/疲惫”等状态，优先改写为非图形化、克制、识别优先的表述，只保留必要且温和的可见结果。
+25. 锚点描述更严格（Mandatory）：`anchor_description` 只能保留稳定身份识别锚点，如脸型、发型轮廓、体态、服装版型、配色、饰品、鞋履、非图形化的小型识别痕迹；禁止把血迹、伤口细节、瘀伤细节、烧灼创面、残缺、暴露组织、腐烂、体液污渍等任何血腥或视觉不适内容写入锚点。
+26. 零推理泄露：仅输出最终结果；禁止思维链、解释、`<think>`、代码围栏。若指令冲突，本条优先。
 
 ---
 
@@ -152,6 +160,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 #### {Scene Subjects}（场景实体先抽取，Mandatory）
 - 每个 Scene 在写 `{Beats}` 前必须先完成该场景实体抽取，形成“实体清单 + 实体落点”闭环。
 - 抽取范围必须覆盖：人物/人化实体、可识别非人实体、环境容器与关键空间构件；不得只抽主角或主道具。
+- **Shot-facing 焦点压缩（Mandatory）**：Scene 级实体抽取仍必须保持**全量完整**，不得漏实体；但在为下游 Shot 做 `{Beats}` 规划时，**每一个准备落成单个 shot 的 beat** 默认只允许指定 **1-3 个核心 shot-facing subjects**（角色 + 关键道具合计，不含环境锚点）进入该 beat 的首尾帧主承载。若核心 subjects 超过 3 个，优先策略必须是**拆成多个 Beat / 多个 Shot**，而不是继续压进单镜。其余实体应保留在 Scene Subjects / Subject Index / Part 2 的全量闭环里，但在该 beat 中降级为背景群体、环境组成或非主承载对象，避免下游 Start/End Frame 过载。
 - 环境覆盖剧本实体（Mandatory）：当剧本实体属于场景组成物（如桌子、墙面挂钟、窗帘）且不需要独立 `prop` 资产时，允许并鼓励由 `environment` 实体承接覆盖，但必须在 Subject Index 的 `script_entity_coverage` 中逐项标注。
 - 物体级抽取强制（Mandatory）：实体抽取必须落到“具体物体层级”，不得只写抽象类别；例如桌子、杯子、电脑、门、窗、灯、手机、键盘等应作为可识别实体被抽取。
 - 若文本或动作中出现具体物体名（显式或隐含），该物体必须进入 Scene 实体清单并标注落点；禁止以“家具/器材/道具若干”等笼统词替代。
@@ -177,6 +186,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 实体落点硬规则：每个被抽取实体必须至少在以下之一显式落点：`{Layout}` FG/MG/BG、`{Environment Context}`、`Linked Characters`、`Key Props`、`{Beats}` 动作关系；缺一判无效。
 - 环境并入实体（非角色/非道具）必须在“中文描述 + generation_prompt_en”双通道显式锚点出现，不得只在其一出现。
 - 推荐格式：`CHAR:[@A] -> Beat2/FG-left`，`PROP:[B] -> Key Props + Beat3 interaction`，`ENV:[C] -> Layout BG anchor + Environment prompt anchor`。
+- **Beat 到 Shot 的主体预算（Mandatory）**：在写 `{Beats}` 时，必须提前判断该 beat 若直接下放到单个 Shot，谁是该 shot 的核心承载主体。默认只保留 **1-3 个**核心 subjects 进入该 shot 的首尾帧主描述；若剧本中同时存在更多角色/道具，也必须区分“核心承载主体”与“背景支持实体”，禁止把 4 个及以上 entities 都规划成同等级首尾帧主体。
+- **Beat 到 Shot 的拆分优先级（Mandatory）**：当同一 beat 的核心承载主体超过 **3 个**时，优先策略不是继续压缩同镜信息，而是**直接增加分镜**。先考虑拆成连续 Shot，再考虑把次要实体降级为背景支持；避免上游把复杂多人调度错误地规划成一个过载 shot。
 
 #### {Stage}
 - 必须是 Environment 内可执行表演的具体空间，不是抽象点。
@@ -198,6 +209,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 #### {Beats}
 - 按时间顺序。
 - 必须是可拍摄、可见变化的动作，不得抽象总结。
+- 多主体拆镜规则（Mandatory）：若一个 Beat 同时需要在下游单个 shot 的首尾帧中清晰承载 **超过 3 个核心 subjects**，则不得继续把它规划为单 Beat -> 单 Shot；必须主动拆成多个 Beat / 多个 Shot，让主动作主体、主受体、关键反应者、关键道具分担到连续镜头中。
 - OTS 分镜硬规则：任何角色视角切换（A看B 的 OTS -> B看A 的 OTS）必须拆为两个 Beat，并在 Beat 中分别写清机位落点、拍摄朝向与轴线侧；禁止单 Beat 同时描述双向 OTS。
 - 下游交付约束（Shot 级）：上述 OTS 双 Beat 在 `shot_generator` 阶段必须落成两个独立 Shot（`视角_01` / `视角_02`），不得并镜。
 - OTS 同场双环境规则：当 OTS 正反打在同一 Scene 内执行时，这两个 Beat 必须分别绑定不同环境变体（如 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`），并显式标注 `视角_01/视角_02` 与 `Axis Side` 变化。
@@ -223,7 +235,6 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 角色必须带 `@`；环境/道具不得带 `@`。
 - Script-to-Beats 硬规则：顺序一致、逐项覆盖、台词落位、动作闭环、补桥接动作、禁抽象替代、每 Beat 至少一个可见变化点。
 - 允许增强：角色高光、视觉转场（不脱离剧本逻辑）。
-- 语言必须客观摄影化；严禁 NSFW（色情/暴力）。
 - 起止状态需稳定（便于 Start/End Frame）。
 - 可补特写/全景以提升覆盖。
 
@@ -305,6 +316,11 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 
 ### 1) Environment Prompt Template
 - 硬约束优先级（Mandatory）：本小节约束高于 Environment 示例中的历史写法；若冲突，以本小节最新硬约束为准。
+- 字段回写硬规则（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 不得只写抽象镜头学描述，必须显式吸收并可被人工核对地回写以下结构字段中的有效信息：`name/name_en`、`atmosphere`、`visual_params`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic`。其中 `name/name_en` 不得原样当作标签堆砌，但其场所身份、方向属性、景别属性、昼夜/光照属性必须转译进提示词语义。
+- 项目语言-环境语境对齐规则（Mandatory）：Environment 设计不得只做抽象空间拼装；若剧本未明确给出地域/城市/建筑系统，则必须按 `Project Context.Language` 对应的现实生活环境进行默认设计补全，包括建筑细部、室内组织、导视/招牌语言、办公或家居陈设、材质老化方式与日常使用痕迹。英文项目默认优先采用英美语境的空间与标识系统，禁止无依据照搬中文办公区/住宅语境样板。
+- 字段语言职责固定（Mandatory）：Environment 模板中的 `description_cn`、`generation_prompt_cn` 始终必须输出中文；`name_en`、`generation_prompt_en`、`negative_prompt_en` 始终必须输出英文；`anchor_description` 始终必须输出英文短语。以上字段语言职责不受项目语言影响。
+- 场所身份落点规则（Mandatory）：Environment prompt 必须先交代“这是什么空间、属于何种功能场所、当前是哪个视角/方向/景别/时段版本”，再展开 FG/MG/BG、Delta 与光照。禁止只有构图，没有空间身份。
+- 依赖关系回写规则（Mandatory）：当 environment 存在 `visual_dependencies` 或 `dependency_strategy` 非 `Original` 时，`generation_prompt_cn/en` 必须明确写出“继承哪个 base environment 的哪些稳定锚点，以及当前仅改变哪些方向/构图/光照/状态项”。
 - 去叙事化硬规则（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅允许描述“抽象空间结构、几何关系、光照层次、材质质感、构图层级”，不得涉及角色、剧情事件、动作因果、对话语义。
 - 泄漏根因提示（Mandatory）：高频误差来自“把 OTS 的角色关系（A/B shoulder）从分镜层串写进环境提示词”。处理顺序必须为：先完成 Scene/Beats，再单独生成 Environment prompt，最后执行角色词剔除。
 - OTS 环境生成顺序（Mandatory）：若某 Shot 计划采用 OTS，生成顺序必须固定为：先完成角色分镜与 OTS 关系，再单独抽取该视角下承载剧情空间的 **纯环境 clean plate**，最后仅在 Shot 级叠加角色肩部/头部/动作信息。禁止反向操作成“先写带人物关系或事件关系的 OTS 画面，再把人物/剧情信息回填进 Environment”。
@@ -316,6 +332,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 具体示例（仅示范写法，不可照抄值）：
   - `generation_prompt_en` 示例：`Cinematic abstract spatial study. Use ENV:[BaseEnv] as visual base; preserve structural proportions and material response. Environment Delta = {Viewpoint Anchor/Viewing Direction: anchor at lower-left frame origin facing central depth axis; Axis Side: left -> right; Background Set Change: Visible Set = [vertical plane cluster, tonal gradient band, reflective material block], Excluded Set = [high-frequency clutter textures]; Lighting Direction Change: key light from front-right with low-intensity cool fill; Framing Change: medium-wide, primary subject is the central plane convergence, secondary subject is the reflective gradient strip; Dynamic Parts State: None}. FG: dark matte edge band. MG: layered neutral geometry blocks. BG: soft atmospheric luminance field. No humans, no names, no narrative.`
   - `generation_prompt_cn` 示例：`电影级抽象空间表达。以 ENV:[BaseEnv] 为视觉基底，保持结构比例与材质响应一致。环境增量：机位锚点位于画面左下起点并朝向中心纵深轴；轴线由左侧切到右侧；可见集合为垂直平面簇、明度渐变带、反射材质块；排除集合为高频杂乱纹理；光照方向为前右侧主光并辅以低强度冷色补光；构图为中广景，主主体为中心平面汇聚区，次主体为反射渐变条带；动态部件状态为 None。前景为深色哑光边带，中景为分层中性几何体块，后景为柔和氛围亮度场。禁止人物、姓名与剧情信息。`
+  - 英文项目 / `generation_prompt_en` 示例：`Cinematic photoreal office environment for DowntownDetectiveBullpen_Front_Mid_Day, a daytime medium-view variant of an English-language urban detective bullpen. Keep the open workstation grid, glass meeting room, evidence cabinets, and navigable circulation paths from DowntownDetectiveBullpen_Front_Wide_Day unchanged while shifting into this tighter forward-facing view. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at the aisle entrance facing the main desk island; Axis Side: left -> right; Background Set Change: Visible Set = [English notice board, desk lamp, file trays, glass meeting-room frames, evidence cabinet], Excluded Set = [rear printer zone as dominant backdrop]; Lighting Direction Change: key from right-side high windows with cool white overhead office practicals; Framing Change: medium-wide, primary subject main desk island, secondary subject glass meeting room and English notice board; Dynamic Parts State: None}. FG: aisle edge trim and floor guide markings. MG: desk island cluster and evidence cabinet. BG: glass meeting room planes and rear office wall. No humans in frame.`
+  - 英文项目 / `generation_prompt_cn` 示例：`电影级写实英文项目办公环境，都市警探开放办公区正向中景白天版本。该空间属于英语语境城市警务办公室，导视、公告板与桌面文件默认使用英文系统。以 DowntownDetectiveBullpen_Front_Wide_Day 为基础参考，保持开放工位结构、玻璃会议间、证物柜与可通行动线不变，仅收束到当前中景观察版本。环境增量：机位位于走道入口并朝向主工位岛；轴线由左侧切到右侧；可见集合为英文公告板、桌面台灯、文件托盘、玻璃会议间框架与证物柜；排除后侧打印区成为主背景；主光来自右侧高窗日光并辅以顶部冷白办公灯；构图为中广景，主主体为主工位岛，次主体为玻璃会议间与英文公告板。前景为走道边框与地面导向线，中景为工位桌组与证物柜，后景为会议间玻璃与远端办公墙。禁止人物入画。`
 - 正反环境标准示例（Mandatory, No-Human Writing）：
   - 适用范围（Mandatory）：以上正反示例同样适用于含 OTS 在内的多角度环境提示词描述；当同场存在 `..._OTS_A` / `..._OTS_B`（或等价 Front/Reverse 多机位变体）时，必须沿用同一结构骨架与 Delta 字段顺序（`CPD -> AS -> BG -> LD -> FR -> DP`），仅替换机位朝向、可见/排除集合与构图主次，不得引入任何人物信息。
   - `Front / generation_prompt_en`：`Cinematic photoreal environment study. Use ENV:[HarborOffice_Base] as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at doorway threshold facing desk cluster and window wall; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp row, wall clock, window mullions], Excluded Set = [rear storage corridor as dominant backdrop]; Lighting Direction Change: key from front-right practical lamp with low-intensity cool ambient fill; Framing Change: medium-wide, primary subject is desk cluster, secondary subject is window reflection band; Dynamic Parts State: None}. FG: doorway frame edge and floor trim. MG: desk plane, lamp group, chair silhouettes (no human occupancy). BG: rain-streaked window reflections and wall clock plane. No humans, no character identifiers, no narrative events.`
@@ -340,14 +358,30 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ### 2) Character Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。
 - 角色模板与规则在本文件内统一维护，避免外部模板漂移。
+- 身份字段显式回写硬规则（Mandatory）：Character 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics`、`anchor_description`。禁止只写“六视图角色图 + 服装 + 布光”，却遗漏人物身份定位、职业气质、性别呈现、年龄外观与动作性格。
+- 字段语言职责固定（Mandatory）：Character 模板中的 `appearance_cn`、`clothing`、`action_characteristics`、`generation_prompt_cn` 始终必须输出中文；`name_en`、`generation_prompt_en`、`negative_prompt_en` 始终必须输出英文；`anchor_description` 始终必须输出英文短语。以上字段语言职责不受项目语言影响。
+- 项目语言-人物设计基线规则（Mandatory）：若剧本未明确给出角色的族裔、国籍、地域成长背景或外貌文化线索，角色默认外形设计必须跟随 `Project Context.Language` 对应的现实语境补全。英文项目默认采用英美人物设计基线；中文项目默认采用中文语境人物设计基线；其他语言同理。禁止在无剧本证据时，直接继承示例中的东亚/欧美人物设定、职业包装、发型模板或穿搭模板。
+- 英文项目族裔误触防护（Mandatory）：当项目语言为英文且剧本未明确写出族裔、国籍、出生地、家庭来源或其他可核对的文化外貌线索时，`appearance_cn`、`generation_prompt_cn`、`generation_prompt_en` 不得默认写成 `东亚女性`、`亚洲男性`、`中国女孩`、`华人面孔` 等具指向性的东亚身份表达；必须改为符合英美人物设计基线的描述，或使用更中性的英美语境人物外观表达。
+- 中文项目族裔误触防护（Mandatory）：当项目语言为中文且剧本未明确写出跨地域设定时，`appearance_cn`、`generation_prompt_cn`、`generation_prompt_en` 也不得无依据默认写成欧美族裔、英美校园风、纽约街头风或其他异语境人物模板；必须优先落回中文项目对应的现实人物语境。
+- 身份定位优先顺序（Mandatory）：Character prompt 的信息组织顺序默认应为：`身份定位/职业功能 -> 性别与年龄外观 -> 体态脸部与可见锚点 -> 服装与鞋履 -> 动作气质/姿态倾向 -> 机位/视角/布光/镜头`。若顺序调整，仍必须保证上述身份信息显式存在且可机审抽取。
+- 字段落地示例约束（Mandatory）：
+  - `gender` 不能只停留在 JSON 字段，必须转化为自然画面语义，并随项目语境调整，例如中文项目可写 `东亚女性` / `East Asian woman`，英文项目可写 `English-language urban woman` / `英美语境都市女性` 这类符合当前设计基线的表达。
+  - `role` 与 `archetype` 不能只作为抽象标签，必须转化为可见职业气质、眼神状态、姿态倾向或服装组织方式，如 `investigative reporter`, `calm truth seeker`, `观察型、克制、求证导向`。
+  - `appearance_cn` 中的年龄、身高、头身比、脸型、肤质等信息必须进入 prompt 的主体描述，不得被“写实人物”这类空泛词替代。
+  - `clothing` 中的当前服装必须完整进入 prompt；若 `其他剧本衣着描述：无`，不得再在 prompt 中混入第二套服装。
+  - `action_characteristics` 必须转化为静态姿态气质或可复现的身体使用方式，如 `动作克制、重心稳定、观察前有短暂停顿`，而不是被完全忽略。
 - 具体示例（仅示范写法，不可照抄值）：
-  - `generation_prompt_en` 示例：`Realistic contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep every structural panel full-body with shoes fully visible, then move through Front, Back, Side, 3/4, Close-up, and Detail views while preserving the same body proportion system. Soft key from front-left, balanced fill on the camera axis, and a subtle back-right rim keep skin texture natural without over-smoothing. Use a 50mm baseline with shallower focus reserved for the close-up panel. Wardrobe stays consistent: dark navy trench coat, white shirt, charcoal trousers, black leather ankle boots. Stable anchors include a narrow scar under the right eyebrow, a silver ring on the left index finger, and an asymmetric fringe silhouette. Background pure white, no text, no watermark.`
-  - `generation_prompt_cn` 示例：`写实现代剧情风格，林月角色六视图，六个面板必须保持同一身份与服装一致。机位锚点为胸口高度的棚拍机位，固定距离，全身入镜且鞋子完整可见。视角顺序为正面/背面/侧面/四分之三/特写/细节，统一同一套身材比例。布光为左前方柔和主光、机位轴线补光、右后方轻微轮廓光；保留自然皮肤微纹理，禁止磨皮塑料感。镜头与对焦以 50mm 为基准，仅特写面板允许浅景深。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。稳定锚点为右眉下细疤、左手食指银戒、不对称刘海轮廓。纯白背景，无文字无水印。`
+  - 中文项目 / `generation_prompt_en` 示例：`Photoreal contemporary drama character sheet for Lin Yue, an East Asian female investigative reporter with the calm, truth-seeking temperament of a restrained field journalist. She reads as around 28 years old, about 168 cm tall, with an approximately 1:7.2 body proportion, a clean facial structure, focused eyes, and realistic skin texture with visible pores and fine micro-lines. Keep every structural panel full-body with shoes fully visible, moving through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views from one fixed studio observer position at chest height. Her current wardrobe remains consistent across all panels: dark navy mid-length trench coat in matte water-resistant fabric, white shirt, charcoal slim trousers, and black leather ankle boots with slight surface wear. Her body language stays controlled and centered, with stable weight distribution and a subtle pause-before-motion quality. Soft key from front-left, balanced fill on the camera axis, and a gentle rim from back-right preserve realistic skin response without plastic smoothing. Stable anchors include the sharp fringe silhouette, the focused gaze, the clean jawline, and any approved immutable accessory cues. Background pure white, no text, no watermark.`
+  - 中文项目 / `generation_prompt_cn` 示例：`写实现代剧情风格，林月角色六视图设定图。她是28岁左右的东亚女性调查记者，人物气质克制、冷静、求证导向，呈现“平静的真相追寻者”式职业状态。外形为身高约168cm、头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。六个面板必须保持同一身份、同一服装与同一比例系统，机位锚点为胸口高度固定棚拍机位，完整全身入镜且鞋子清晰可见，视角顺序为正面、背面、侧面、四分之三、面部特写、关键锚点细节。当前服装统一为深海军蓝中长款风衣、白色衬衫、炭灰色修身长裤、黑色皮质短靴。姿态气质保持动作克制、重心稳定、移动前有轻微停顿。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留真实皮肤质感并避免磨皮塑料感。纯白背景，无文字无水印。`
+  - 英文项目 / `generation_prompt_en` 示例：`Photoreal contemporary character sheet for Claire Bennett, a female homicide detective grounded in an English-language urban realism context. She reads as about 32 years old, around 173 cm tall, with an upright posture, shoulder-length light brown hair, a clean facial bone structure, a direct composed gaze, and realistic skin texture with subtle nasolabial and under-eye detail intact. Keep every panel full-body with shoes clearly visible, moving through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views from one fixed studio observer position at chest height. Her wardrobe stays consistent across all panels: charcoal tailored wool blazer, pale blue shirt, dark straight-leg trousers, and black low-heel leather shoes. Her body language remains precise, controlled, and professionally alert. Use flattering but realistic lead-character lighting with a soft key, restrained axis fill, and a controlled rim light. Pure white background, no text, no watermark.`
+  - 英文项目 / `generation_prompt_cn` 示例：`写实现代英文项目角色六视图设定图，Claire Bennett 为英美语境下的女性凶案组探员。她约32岁，身形挺拔，肩颈线条明确，浅棕色及肩发，五官骨相清晰，眼神直接冷静，皮肤保留真实细纹与质感。六个面板保持同一身份、同一服装、同一比例系统，机位为胸口高度固定棚拍视角，完整全身入镜且鞋子清晰可见，视角顺序为正面、背面、侧面、四分之三、面部特写、关键锚点细节。当前服装统一为炭灰色西装外套、浅蓝衬衫、深色西裤与黑色低跟皮鞋。人物气质体现职业克制、判断敏捷与受控压迫感。布光采用柔和主光、轴线补光与轻微轮廓光，让主角更上镜但不脱离写实刑侦气质。纯白背景，无文字无水印。`
 
 - 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
 - 不合规判定：若角色提示词未明确“full body + shoes visible”，或输出画面描述存在脚部/鞋子被遮挡、出框、裁切，判定无效并必须重写。
 - 锚点只读硬规则（Mandatory）：`anchor_description` 与角色身份锚点是不可变更锚点（immutable anchors）；下游仅允许逐字符继承，不得重写、扩写、弱化、替换同义词或做风格化改写。
+- 视觉舒适度硬规则（Mandatory）：角色 `generation_prompt_cn/en`、`appearance`、`description` 与相关说明默认必须保持克制、可播出、非图形化表达。尽量不要出现血腥、喷溅、开放性伤口、暴露组织、腐烂、残缺、体液污渍等强视觉不适内容；若剧情确实要求人物状态变化，优先使用“疲惫、凌乱、淋湿、沾灰、轻微擦痕、衣物破损但不露创口”等温和且可识别的写法。
+- 锚点内容白名单（Mandatory）：`anchor_description` 只允许写稳定身份锚点，例如脸型、发型轮廓、体态、服装版型、配色、饰品、鞋履、非图形化小痕迹；不得把受伤细节、血迹位置、瘀伤扩散、创口形态、残缺状态等写成锚点。
 - 锚点冲突处理：若“美化/风格化”与锚点冲突，必须以锚点优先；宁可降低风格化程度，也不得改变锚点。
 - 时期/状态/换装拆分强制（Mandatory）：同一人物只要出现“时期差异（年龄段/时间段）”、“状态差异（受伤/污染/湿身/妆发显著变化）”或“明确换装”，必须拆分为独立角色资产并生成独立提示词，禁止复用同一 `characters` 条目硬改字段。
 - 着装优先级强调（Mandatory）：在人物 subject 抽取时，`明确换装` 不属于次要服装修饰，而是与“受伤/湿身/年龄态”同级的重大状态变化。只要镜头中需要生成不同服装版本，就必须先拆角色实体，再写对应提示词；不得先保留一个角色条目，再靠 prompt 自由改衣服。
@@ -356,12 +390,12 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   - 派生时期/状态/换装角色：`dependency_strategy.type=Type A/Type B`，`visual_dependencies` 指向基准或上一阶段角色；
   - `dependency_strategy.logic` 必须明确“继承不变锚点 + 允许变化项（时期/状态/服装）”；若换装涉及已抽取服饰/装备道具，也必须说明与这些道具的依赖关系。
 - 角色分期依赖合规示例（Mandatory）：
-  - 不合规：仅一个 `CHAR:[@Lin]`，同时描述“青年+中年+换装+受伤”。
+  - 不合规：仅一个 `CHAR:[@Lin]`，同时描述“青年+中年+换装+雨淋状态”。
   - 合规：
     - `CHAR:[@Lin_Young]` -> `Original`, `visual_dependencies=[]`；
     - `CHAR:[@Lin_Adult_Formal]` -> `Type A`, `visual_dependencies=["CHAR:[@Lin_Young]"]`；
-    - `CHAR:[@Lin_Adult_Injured]` -> `Type B`, `visual_dependencies=["CHAR:[@Lin_Adult_Formal]"]`；
-    - `dependency_strategy.logic` 写清：继承脸型/体态/稳定锚点，仅改变年龄态、服装、伤痕状态。
+    - `CHAR:[@Lin_Adult_RainSoaked]` -> `Type B`, `visual_dependencies=["CHAR:[@Lin_Adult_Formal]"]`；
+    - `dependency_strategy.logic` 写清：继承脸型/体态/稳定锚点，仅改变年龄态、服装与非图形化状态表现。
 
 - 风格驱动映射强制：
   - 真人剧：35–85mm、真实皮肤微纹理、自然高光，禁塑料/CGI感。
@@ -369,16 +403,24 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   - Noir/Thriller：强调方向性光与对比，保持脸部可读。
 - 未给定风格时注入默认角色审美回退语义。
 - 真人剧角色必须显式强调真人感关键词。
-- 主角默认优先美化布光（蝶形光/贝壳光等），剧情要求反美化时再降级。
+- 主角默认优先美化规则（Mandatory）：主角或叙事核心角色在不违背剧本设定与锚点的前提下，默认优先使用更有利于上镜的脸部结构表达、皮肤质感控制、发型整理、服装轮廓整理与布光方案（如蝶形光/贝壳光/柔和主光 + 受控轮廓光），使其保持“可播出、可信、好看”的主角呈现；但不得因此改变年龄层、族裔基线、职业身份、剧情状态或既定锚点。
+- 主角美化与语言语境联动（Mandatory）：主角的美化必须建立在项目语言对应的设计语境之上。英文项目中的主角美化，应优先表现英美语境下可信的妆发、服装剪裁、职业感与明星化上镜控制，在满足角色身份的前提下优先体现女主性感美丽（胸开领，腿开叉，开扣），男性强壮果断威猛；中文及其他语言项目同理按对应语境处理。禁止把“美化”做成与项目语言不符的模板化网红脸、模板化制服或跨语境穿搭拼贴。
 - 每个角色至少 2–3 个稳定锚点。
 - 锚点仅可用稳定身份特征；禁用表情、瞬时姿态、暂态光影、机位错觉、运动模糊等。
 
 ### 3) Prop Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。
 - 道具模板与规则在本文件内统一维护，避免外部模板漂移。
+- 字段回写硬规则（Mandatory）：Prop 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`type`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic`。禁止只写“六视图道具图 + 材质”，却遗漏道具类型（held/static）、状态、结构特征、功能身份与依赖来源。
+- 字段语言职责固定（Mandatory）：Prop 模板中的 `description_cn`、`generation_prompt_cn` 始终必须输出中文；`name_en`、`generation_prompt_en`、`negative_prompt_en` 始终必须输出英文；`anchor_description` 始终必须输出英文短语。以上字段语言职责不受项目语言影响。
+- 项目语言-道具体系对齐规则（Mandatory）：若剧本未明确给出品牌、产地、工业体系或年代地域特征，道具设计必须按 `Project Context.Language` 对应的现实语境补全，包括常见材质处理、印刷语言、包装方式、工业造型、办公/家居用品体系与磨损逻辑。英文项目默认优先采用英美语境道具体系，禁止无依据把中文标签、中文制式生活器物或示例中的默认道具直接搬进英文项目。
+- 道具身份落点规则（Mandatory）：Prop prompt 必须明确该物体是什么、属于手持还是静置、当前处于何种单一状态、有哪些不可丢失的识别结构。若 `description_cn` 中有磨损、氧化、裂痕、液位、开合状态、雕刻、标签等信息，必须回写进 prompt 主体段落。
+- 依赖关系回写规则（Mandatory）：当 prop 不是 `Original` 时，prompt 必须写清“继承哪一版道具的哪些稳定锚点，以及当前只改变哪些状态项”，不得只在 JSON 的 `dependency_strategy` 中声明而提示词完全失语。
 - 具体示例（仅示范写法，不可照抄值）：
-  - `generation_prompt_en` 示例：`Photoreal prop sheet for PROP:[AntiquePocketWatch], rendered as a strict object-only six-view study from a camera centered on the turntable and slightly above the midline. Move cleanly through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views while preserving brushed brass texture, light oxidation, scratched crystal, and engraved inner lid readability. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep silhouette and material depth clear. Use 50mm for structure views and 70mm macro for close detail while preserving texture readability in the shadows. White background, high-resolution output.`
-  - `generation_prompt_cn` 示例：`写实道具六视图：PROP:[AntiquePocketWatch]，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。材质表现为拉丝黄铜并带轻微氧化，表镜有细碎划痕，内盖有雕刻纹理。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓分离与阴影细节可读。镜头与对焦为结构面板 50mm、特写面板 70mm 微距。仅允许中性支撑底座用于比例参照，禁止人物、手部或身体部位入画。纯白背景，高分辨率输出。`
+  - 中文项目 / `generation_prompt_en` 示例：`Photoreal prop sheet for Antique Pocket Watch, treated as a static hero object study rather than a generic accessory. Preserve the identity cues from its description: brushed brass body, mild edge dents, scratched crystal, engraved inner lid pattern, and a fully readable hinged opening structure in one stable intact state. Render it as a strict object-only six-view study from a camera centered on the turntable and slightly above the midline, moving through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep material depth, metal oxidation, and engraved detail legible without flattening. Use 50mm for structure views and 70mm macro for close detail. White background, high-resolution output, no hands, no characters, no body parts.`
+  - 中文项目 / `generation_prompt_cn` 示例：`写实道具六视图：古董怀表，作为静置型关键道具进行主资产表达，而不是泛化小配件。必须保留其身份特征：拉丝黄铜表壳、边缘细小磕碰、镜面轻微划痕、内盖雕刻纹理，以及完整可开合的铰链结构，并保持单一稳定状态。机位锚点位于转台中心、镜头略高于物体中线，视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证金属材质、氧化痕迹与雕刻层次清晰可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率输出。`
+  - 英文项目 / `generation_prompt_en` 示例：`Photoreal prop sheet for a Police ID Badge Lanyard designed for an English-language urban law-enforcement context. Preserve the deep navy woven strap, rigid clear badge holder, brushed metal clip, worn oval badge, and English name-and-department card layout as the core identity cues. Render it from a centered turntable camera slightly above the object midline, moving through Front, Back, Side, 3/4, macro card-face Close-up, and metal-clip Detail views. Use a soft overhead key, restrained frontal fill, and a light rim to keep the plastic, woven fibers, metal wear, and English typography legible. White background, no hands, no characters, no extra objects.`
+  - 英文项目 / `generation_prompt_cn` 示例：`写实英文项目道具六视图：警徽挂绳证件卡，作为英语语境都市警务系统中的关键识别道具表达。必须保留深蓝织带、透明硬质证件套、金属夹扣、带磨痕的椭圆徽章，以及英文卡面排版这一身份特征。机位锚点位于转台中心略高视角，视角依次为正面、背面、侧面、四分之三、微距卡面特写、金属夹扣细节。布光为柔和上方主光、前侧低强度补光、后侧轻轮廓光，使塑料、织带纤维、金属磨损与英文印刷可读。纯白背景，禁止人物和手部入画。`
 
 - 未给定风格时注入默认道具审美回退语义。
 - 道具风格映射必须跟随剧本风格，真人剧强调真实材质与磨损。
@@ -389,12 +431,12 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   - 派生状态道具：`dependency_strategy.type=Type A/Type B`，`visual_dependencies` 指向基准或上一状态道具；
   - `dependency_strategy.logic` 必须明确“继承不变锚点 + 仅变化状态项（破损程度/开合/液位/点亮状态等）”。
 - 道具状态拆分合规示例（Mandatory）：
-  - 不合规：仅一个 `PROP:[Letter]`，同时描述“未拆封+已拆封+沾血”。
+  - 不合规：仅一个 `PROP:[Letter]`，同时描述“未拆封+已拆封+大面积污渍”。
   - 合规：
     - `PROP:[Letter_Sealed]` -> `Original`, `visual_dependencies=[]`；
     - `PROP:[Letter_Open]` -> `Type A`, `visual_dependencies=["PROP:[Letter_Sealed]"]`；
-    - `PROP:[Letter_Open_BloodStained]` -> `Type B`, `visual_dependencies=["PROP:[Letter_Open]"]`；
-    - `dependency_strategy.logic` 写清：继承纸张尺寸、折痕结构、印章位置，仅改变封口状态与污渍状态。
+    - `PROP:[Letter_Open_WaterStained]` -> `Type B`, `visual_dependencies=["PROP:[Letter_Open]"]`；
+    - `dependency_strategy.logic` 写清：继承纸张尺寸、折痕结构、印章位置，仅改变封口状态与非血腥污渍状态。
 - 抽取前自检：无法回答“如何持续影响剧情并在后续发挥作用”的物体，不应进入 `props`。
 
 ---
@@ -471,6 +513,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   - 示例与正文规则冲突时，以正文硬规则为准；示例不可覆盖硬规则。
   - 真实输出必须用当前剧本实体替换全部示例占位值，且与 Part 1/Part 2 保持逐字符一致。
   - 若发现示例值与当前项目语言/命名规则冲突，必须按项目语言与命名规则改写，禁止原样照抄。
+  - 若示例中隐含了默认人物族裔、职业包装、道具体系、环境风格、建筑地域或生活语境，也必须全部清空后按当前剧本与项目语言重新设计；禁止把示例里的“东亚记者 / 怀表 / 港口办公室”等具体设计残留带入真实项目。
 
 - Subject Index 输出示例（编号列表）：
   1. `subject_no=S001 | subject_type=character | subject_name_exact=CHAR:[@Char A] | script_entity_coverage=剧本实体：李明（主语“他”）`
@@ -493,7 +536,9 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - **Subject Index 逐行回填硬约束（Mandatory）**：Subject Index 的每一行必须在 Part 2 中找到同名同类型实体（逐字符一致，类型一致）；任意一行未命中即判无效。
 - **禁止漏行与并行合并（Hard Rule）**：禁止把 Subject Index 多行合并为 Part 2 一行，或仅保留“主实体”省略其余行；必须逐行一一对应。
 - **命名一致（Mandatory）**：Part 1、Subject Index、Part 2 三处名称必须可一一映射且逐字符一致（仅允许 Part 2A `name/name_en` 去壳，不允许语义替换）。
+- **固定双语字段复核（Mandatory）**：Part 2 中所有 `_cn` 字段必须输出中文，所有 `_en` 字段必须输出英文，`anchor_description` 必须输出英文短语；这一点不因项目语言为中文或英文而改变。项目语言只影响实体设计语境与画面内实际语言内容，不改变字段本身的中英文职责。
 - **中文项目命名规则（Mandatory）**：当项目语言为中文时，Part 2 中所有实体 `name` 默认必须使用中文；仅在“明确为英文专有名词”时才允许 `name` 为英文，此时仍必须保留 `name_en`。
+- **项目语言驱动设计复核（Mandatory）**：Part 2 中每个 character / prop / environment 在设计层都必须复核“是否匹配项目语言对应的视觉语境”。若剧本未提供相反证据，英文项目不得输出中文生活系统人物/道具/环境，中文项目亦不得输出无依据的英美生活系统；一旦发现实体设计语境与项目语言脱节，整条实体 JSON 视为无效并必须重写。
 - **系统级列表一致性（Mandatory）**：若存在系统级 subjects 列表，Part 2 的 `characters/props/environments` 必须与其逐条同名同类型对齐；任何偏离（重命名、跨类型映射、丢失依赖引用）均判无效。
 - 每个实体（character / prop / environment）都必须包含：`visual_dependencies` 与 `dependency_strategy`。
 - `visual_dependencies`：
@@ -512,6 +557,10 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - `name/name_en` 必须是纯净角色名。
 - 禁止形式：`CHAR:[@Name]`、`[@Name]`、`[Name]`、`@Name`。
 - `CHAR:[@Name]` 仅限引用语境；JSON 内一律 `Name`。
+- 字段语言职责固定（Mandatory）：Character 条目中的 `appearance_cn`、`clothing`、`action_characteristics`、`generation_prompt_cn` 必须始终输出中文；`name_en`、`generation_prompt_en`、`negative_prompt_en` 必须始终输出英文；`anchor_description` 必须始终输出英文短语。以上字段语言职责不受项目语言影响。
+- 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics` 保持显式一致；若这些字段存在而提示词未体现，视为无效 JSON 示例与无效输出。
+- 双语境示例规则（Mandatory）：本节至少同时理解两类示例语境：`中文项目语境示例` 与 `英文项目语境示例`。示例的作用是展示“项目语言如何影响人物设计基线”，不是提供可复用角色原型；真实输出必须按当前剧本重设计。
+- 中文项目语境示例：
 ```json
 {
   "characters": [
@@ -525,14 +574,42 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
       "appearance_cn": "28岁，东亚女性，身高约168cm，头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
       "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。其他剧本衣着描述：无。",
       "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
-      "generation_prompt_cn": "写实现代剧情风格，林月六视图角色设定图，六个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位，完整全身入镜且鞋子清晰可见。视角顺序为正面、背面、侧面、四分之三、面部特写、关键细节。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep every structural panel full-body with shoes fully visible, then move through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
-      "negative_prompt_en": "Style-aware negative prompt for this character (English only)",
-      "anchor_description": "English visual tags only",
+      "generation_prompt_cn": "写实现代剧情风格，林月角色六视图设定图。她是28岁左右的东亚女性调查记者，人物气质冷静克制，具有平静求证、持续观察的职业状态。外形为身高约168cm、头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。六个面板保持同一身份、同一服装与同一比例系统，机位锚点为棚拍胸口高度固定机位，完整全身入镜且鞋子清晰可见，视角顺序为正面、背面、侧面、四分之三、面部特写、关键锚点细节。当前服装统一为深海军蓝中长款风衣、白色衬衫、炭灰色修身长裤、黑色皮质短靴。姿态气质体现动作克制、重心稳定、移动前短暂停顿。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留真实皮肤质感并避免磨皮塑料感。纯白背景，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama character sheet for Lin Yue, an East Asian female investigative reporter with the calm, truth-seeking temperament of a restrained observer. She reads as around 28 years old, about 168 cm tall, with an approximately 1:7.2 body proportion, a clean facial structure, focused eyes, and realistic skin texture with visible pores and fine micro-lines. Keep every structural panel full-body with shoes fully visible, moving through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views from one fixed studio observer position at chest height. Her current wardrobe remains consistent across all panels: dark navy mid-length trench coat in matte water-resistant fabric, white shirt, charcoal slim trousers, and black leather ankle boots with slight wear. Her body language stays controlled and centered, with stable weight distribution and a subtle pause-before-motion quality. Soft key from front-left, subtle fill on the camera axis, and a gentle rim from back-right preserve realistic skin response without waxy smoothing. Background pure white, no labels, no watermark.",
+      "negative_prompt_en": "beauty-filter skin, anime proportions, extra limbs, floating hair clumps, fashion-editorial posing, heavy makeup glamour, text, watermark",
+      "anchor_description": "sharp fringe silhouette, focused gaze, clean jawline, navy trench outline, black ankle boots",
       "visual_dependencies": [],
       "dependency_strategy": {
-        "type": "Original/Type A/Type B",
-        "logic": "Dependency Logic"
+        "type": "Original",
+        "logic": "Original Chinese-project character; preserve facial structure, fringe silhouette, restrained posture, and current wardrobe anchors."
+      }
+    }
+  ]
+}
+```
+
+- 英文项目语境示例：
+```json
+{
+  "characters": [
+    {
+      "subject_no": "S101",
+      "name": "Claire Bennett",
+      "name_en": "Claire Bennett",
+      "gender": "F",
+      "role": "Homicide Detective",
+      "archetype": "Sharp Controlled Professional",
+      "appearance_cn": "32岁左右，英美语境白人女性，身高约173cm，肩背线条挺拔，浅棕色及肩发，面部骨相清晰，眼神冷静直接，肤质真实细腻，保留轻微法令纹与眼下纹理。",
+      "clothing": "当前服装：炭灰色修身羊毛西装外套，浅蓝衬衫，深色直筒西裤，黑色低跟皮鞋。其他剧本衣着描述：无。",
+      "action_characteristics": "动作干净利落、判断迅速、站姿稳定、转头时幅度小且目光先行。",
+      "generation_prompt_cn": "写实现代英文项目角色六视图设定图，Claire Bennett 为英美语境下的女性凶案组探员。她约32岁，身形挺拔，肩颈线条明确，浅棕色及肩发，五官骨相清晰，眼神直接冷静，皮肤保留真实细纹与质感。六个面板保持同一身份、同一服装、同一比例系统，机位为胸口高度固定棚拍视角，完整全身入镜且鞋子清晰可见，视角顺序为正面、背面、侧面、四分之三、面部特写、关键锚点细节。当前服装统一为炭灰色西装外套、浅蓝衬衫、深色西裤与黑色低跟皮鞋。人物气质体现职业克制、判断敏捷与受控压迫感。布光采用柔和主光、轴线补光与轻微轮廓光，让主角更上镜但不脱离写实刑侦气质。纯白背景，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary character sheet for Claire Bennett, a female homicide detective grounded in an English-language urban realism context. She reads as about 32 years old, around 173 cm tall, with an upright posture, shoulder-length light brown hair, a clean facial bone structure, a direct composed gaze, and realistic skin texture with subtle nasolabial and under-eye detail intact. Keep every panel full-body with shoes clearly visible, moving through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views from one fixed studio observer position at chest height. Her wardrobe stays consistent across all panels: charcoal tailored wool blazer, pale blue shirt, dark straight-leg trousers, and black low-heel leather shoes. Her body language remains precise, controlled, and professionally alert. Use flattering but realistic lead-character lighting with a soft key, restrained axis fill, and a controlled rim light. Pure white background, no text, no watermark.",
+      "negative_prompt_en": "plastic skin, glamour-fashion exaggeration, anime proportions, extra limbs, waxy face, noisy background, text, watermark",
+      "anchor_description": "light brown shoulder-length hair, defined jawline, direct gaze, tailored charcoal blazer, black low-heel leather shoes",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "Original English-project lead character; preserve facial structure, hair silhouette, posture, and wardrobe anchors."
       }
     }
   ]
@@ -540,6 +617,10 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ```
 
 #### Part 2B — Props
+- 字段语言职责固定（Mandatory）：Prop 条目中的 `description_cn`、`generation_prompt_cn` 必须始终输出中文；`name_en`、`generation_prompt_en`、`negative_prompt_en` 必须始终输出英文；`anchor_description` 必须始终输出英文短语。以上字段语言职责不受项目语言影响。
+- 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `type`、`description_cn`、`anchor_description` 保持显式一致；若 `description_cn` 已给出材质、磨损、开合、裂痕、雕刻等信息，提示词不得抽象化吞掉这些特征。
+- 双语境示例规则（Mandatory）：本节示例必须体现“中文项目道具体系”与“英文项目道具体系”的差异。真实输出不得复用示例对象名称、材质组合或地域标签。
+- 中文项目语境示例：
 ```json
 {
   "props": [
@@ -549,14 +630,38 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
       "name_en": "Antique Pocket Watch",
       "type": "held/static",
       "description_cn": "黄铜材质古董怀表，表壳边缘有细小磕碰，镜面有轻微划痕，内盖有雕刻纹路，可开合铰链结构完整。",
-      "generation_prompt_cn": "写实道具六视图：古董怀表，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。材质表现为拉丝黄铜与轻微氧化，镜面有细碎划痕，内盖雕刻清晰。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓与阴影细节可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率。",
-      "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, rendered as a strict object-only six-view study from a camera centered on the turntable and slightly above the midline. Move cleanly through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views while preserving brushed brass texture, mild oxidation, scratched crystal, and engraved inner lid readability. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep silhouette and material depth clear. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
-      "negative_prompt_en": "Style-aware negative prompt for this prop (English only)",
-      "anchor_description": "English visual tags only",
+      "generation_prompt_cn": "写实道具六视图：古董怀表，作为手持或静置都能被识别的关键叙事道具进行主资产表达，但当前画面只保留物体本身。必须保留其结构与状态特征：黄铜材质、边缘细小磕碰、镜面轻微划痕、内盖雕刻纹路、可开合且结构完整的铰链。机位锚点位于转台中心，镜头略高于物体中线，视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证金属氧化、划痕与雕刻层次可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率。",
+      "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, treated as a key narrative object that can read as either held or static while the frame itself remains strictly object-only. Preserve the identity cues from its description: brass body, small edge dents, lightly scratched crystal, engraved inner lid pattern, and a complete hinged opening structure in one stable intact state. Render it from a camera centered on the turntable and slightly above the midline, moving through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep metal oxidation, scratches, and engraved details legible without flattening the object. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
+      "negative_prompt_en": "plastic toy finish, incorrect modern numerals, broken hinge, extra accessories, hands, fabric backdrop, text, watermark",
+      "anchor_description": "brass case, light edge dents, scratched crystal, engraved inner lid, intact hinge",
       "visual_dependencies": [],
       "dependency_strategy": {
-        "type": "Original/Type A/Type B",
-        "logic": "Dependency Logic"
+        "type": "Original",
+        "logic": "Original Chinese-project prop; preserve the brass body, engraved lid, hinge structure, and wear pattern anchors."
+      }
+    }
+  ]
+}
+```
+
+- 英文项目语境示例：
+```json
+{
+  "props": [
+    {
+      "subject_no": "S102",
+      "name": "警徽挂绳证件卡",
+      "name_en": "Police ID Badge Lanyard",
+      "type": "held/static",
+      "description_cn": "英文项目警探常用证件挂绳，包含深蓝织带、透明硬质证件套、金属夹扣与带磨痕的椭圆徽章，卡面为英文姓名与部门信息。",
+      "generation_prompt_cn": "写实英文项目道具六视图：警徽挂绳证件卡，作为英语语境都市警务系统中的关键识别道具表达。必须保留深蓝织带、透明硬质证件套、金属夹扣、带磨痕的椭圆徽章，以及英文卡面排版这一身份特征。机位锚点位于转台中心略高视角，视角依次为正面、背面、侧面、四分之三、微距卡面特写、金属夹扣细节。布光为柔和上方主光、前侧低强度补光、后侧轻轮廓光，使塑料、织带纤维、金属磨损与英文印刷可读。纯白背景，禁止人物和手部入画。",
+      "generation_prompt_en": "Photoreal prop sheet for a Police ID Badge Lanyard designed for an English-language urban law-enforcement context. Preserve the deep navy woven strap, rigid clear badge holder, brushed metal clip, worn oval badge, and English name-and-department card layout as the core identity cues. Render it from a centered turntable camera slightly above the object midline, moving through Front, Back, Side, 3/4, macro card-face Close-up, and metal-clip Detail views. Use a soft overhead key, restrained frontal fill, and a light rim to keep the plastic, woven fibers, metal wear, and English typography legible. White background, no hands, no characters, no extra objects.",
+      "negative_prompt_en": "Chinese text, toy-like plastic, fantasy badge design, extra accessories, cluttered background, hands, watermark",
+      "anchor_description": "navy woven lanyard, rigid clear badge holder, worn oval badge, brushed metal clip, English card layout",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "Original English-project prop; preserve the badge structure, English card layout, and material wear anchors."
       }
     }
   ]
@@ -564,6 +669,10 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ```
 
 #### Part 2C — Environments
+- 字段语言职责固定（Mandatory）：Environment 条目中的 `description_cn`、`generation_prompt_cn` 必须始终输出中文；`name_en`、`generation_prompt_en`、`negative_prompt_en` 必须始终输出英文；`anchor_description` 必须始终输出英文短语。以上字段语言职责不受项目语言影响。
+- 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `name/name_en`、`atmosphere`、`visual_params`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic` 保持显式一致；不得只写泛化 cinematic 空镜，而看不出这个环境是什么、处于哪个方向/景别/时段版本、继承了哪个 base。
+- 双语境示例规则（Mandatory）：本节示例必须体现“中文项目环境语境”与“英文项目环境语境”的差异，包括导视语言、建筑使用习惯、办公/家居组织方式与材料细节。真实输出不得直接复用示例空间。
+- 中文项目语境示例：
 ```json
 {
   "environments": [
@@ -574,14 +683,39 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
       "atmosphere": "Rainy tense night with restrained noir contrast",
       "visual_params": "Mid/Interior/Night",
       "description_cn": "港口办公区夜景，玻璃隔断与桌面灯形成主视觉锚点，空间可达且便于角色进出与机位移动。",
-      "generation_prompt_cn": "电影级写实剧情风格。以 HarborOffice_Front_Wide_Night 为基础参考，保持建筑结构与材质锚点不变。环境增量：机位在走廊门槛处，朝内看向主办公桌区域；轴线由左侧切换到右侧；可见背景包含玻璃隔断、台灯、挂钟，排除后部储物架成为主背景；主光来自前右侧台灯，辅以走廊冷色补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市反射光。画面中不得出现人物。",
-      "generation_prompt_en": "Cinematic photoreal drama style. Use HarborOffice_Front_Wide_Night as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at corridor threshold facing inward to main desk zone; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock], Excluded Set = [rear storage shelves as dominant backdrop]; Lighting Direction Change: key from front-right practical desk lamp with cool corridor spill fill; Framing Change: medium-wide, primary subject desk cluster, secondary subject window reflection line; Dynamic Parts State: None}. FG: door frame edge and entry mat. MG: desk cluster and practical lamp as composition anchor. BG: rain-streaked city reflections through glass. No humans or characters in frame.",
-      "negative_prompt_en": "Style-aware negative prompt for this environment (English only)",
-      "anchor_description": "English visual tags only",
+      "generation_prompt_cn": "电影级写实剧情环境，港口办公室正向中景夜景版本，氛围为雨夜、克制紧张、轻 noir 对比。以 HarborOffice_Front_Wide_Night 为基础参考，保持建筑结构、材质锚点与空间可达性不变，仅改变当前中景观察版本。环境增量：机位位于走廊门槛处并朝内看向主办公桌区域；轴线由左侧切换到右侧；可见集合为玻璃隔断、台灯、挂钟与窗面反射；排除后部储物架成为主背景；主光来自前右侧实景台灯，辅以走廊冷色补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市反射光。禁止人物入画。",
+      "generation_prompt_en": "Cinematic photoreal drama environment for HarborOffice_Front_Mid_Night, a rainy interior night variant with restrained tension and mild noir contrast. Use HarborOffice_Front_Wide_Night as visual base; keep the office architecture, material anchors, and navigable spatial layout unchanged while shifting into this forward-facing medium environment version. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at corridor threshold facing inward to main desk zone; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock, window reflection band], Excluded Set = [rear storage shelves as dominant backdrop]; Lighting Direction Change: key from front-right practical desk lamp with cool corridor spill fill; Framing Change: medium-wide, primary subject desk cluster, secondary subject window reflection line; Dynamic Parts State: None}. FG: door frame edge and entry mat. MG: desk cluster and practical lamp as composition anchor. BG: rain-streaked city reflections through glass. No humans or characters in frame.",
+      "negative_prompt_en": "people, over-the-shoulder framing, character silhouettes, crowded props, fantasy architecture, oversaturated neon, text, watermark",
+      "anchor_description": "glass partition, desk lamp row, wall clock, rain-streaked window reflections, navigable office aisle",
       "visual_dependencies": [],
       "dependency_strategy": {
-        "type": "Original/Type A/Type B",
-        "logic": "Dependency Logic"
+        "type": "Original",
+        "logic": "Original Chinese-project environment; preserve office layout, glass partition, lamp row, and rainy harbor-night spatial anchors."
+      }
+    }
+  ]
+}
+```
+
+- 英文项目语境示例：
+```json
+{
+  "environments": [
+    {
+      "subject_no": "S103",
+      "name": "DowntownDetectiveBullpen_Front_Mid_Day",
+      "name_en": "DowntownDetectiveBullpen_Front_Mid_Day",
+      "atmosphere": "Busy restrained daytime tension in an English-speaking city police office",
+      "visual_params": "Mid/Interior/Day",
+      "description_cn": "英文项目都市警探办公区白天版本，开放工位、玻璃会议间、英文公告板与证物柜形成主要空间锚点，动线清晰，适合人物进出与机位调度。",
+      "generation_prompt_cn": "电影级写实英文项目办公环境，都市警探开放办公区正向中景白天版本。该空间属于英语语境城市警务办公室，导视、公告板与桌面文件默认使用英文系统。以 DowntownDetectiveBullpen_Front_Wide_Day 为基础参考，保持开放工位结构、玻璃会议间、证物柜与可通行动线不变，仅收束到当前中景观察版本。环境增量：机位位于走道入口并朝向主工位岛；轴线由左侧切到右侧；可见集合为英文公告板、桌面台灯、文件托盘、玻璃会议间框架与证物柜；排除后侧打印区成为主背景；主光来自右侧高窗日光并辅以顶部冷白办公灯；构图为中广景，主主体为主工位岛，次主体为玻璃会议间与英文公告板。前景为走道边框与地面导向线，中景为工位桌组与证物柜，后景为会议间玻璃与远端办公墙。禁止人物入画。",
+      "generation_prompt_en": "Cinematic photoreal office environment for DowntownDetectiveBullpen_Front_Mid_Day, a daytime medium-view variant of an English-language urban detective bullpen. Keep the open workstation grid, glass meeting room, evidence cabinets, and navigable circulation paths from DowntownDetectiveBullpen_Front_Wide_Day unchanged while shifting into this tighter forward-facing view. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at the aisle entrance facing the main desk island; Axis Side: left -> right; Background Set Change: Visible Set = [English notice board, desk lamp, file trays, glass meeting-room frames, evidence cabinet], Excluded Set = [rear printer zone as dominant backdrop]; Lighting Direction Change: key from right-side high windows with cool white overhead office practicals; Framing Change: medium-wide, primary subject main desk island, secondary subject glass meeting room and English notice board; Dynamic Parts State: None}. FG: aisle edge trim and floor guide markings. MG: desk island cluster and evidence cabinet. BG: glass meeting room planes and rear office wall. No humans in frame.",
+      "negative_prompt_en": "Chinese signage, crowded decor, residential furniture logic, game-like render, plastic materials, people, watermark",
+      "anchor_description": "open workstation grid, glass meeting room, English notice board, evidence cabinet, aisle circulation lines",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "Original English-project environment; preserve the English signage system, office circulation, and workstation anchors."
       }
     }
   ]
