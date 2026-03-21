@@ -29,6 +29,7 @@
   - 两个 OTS Shot 必须在 `Shot Logic (CN)` 中显式标注对应关系：`视角_01: Front`、`视角_02: Reverse`。
 - **OTS 分场触发器 (OTS Scene-Split Trigger, 强制)**：若 OTS 切换伴随背景主集合变化、轴线跨越/反转、观察方向重构、镜位由门内看外↔门外看内，必须新起 Scene 并绑定对应 Environment 变体；禁止在原 Scene 内硬写“反打重构”。
 - **禁止新造实体 (No New Entity Creation, 强制)**：Shot 生成阶段绝不能新增角色/环境/道具实体名；`Associated Entities` 仅能由 Start/Video/End 中已出现且属于上游实体清单的名称组成。
+- **首尾帧主体数量护栏 (Start/End Subject Count Guard, 强制)**：`Start Frame` 与 `End Frame` 中，除 `[Environment Anchor]` 外，优先只保留 **1-3 个核心 subjects**（角色/关键道具合计）。默认不得超过 3 个；若场面调度确实需要更多实体，**第一选择必须是增加 Shot 数量进行拆解**，把信息分摊到连续镜头中，而不是继续往单镜里塞。只有当额外实体本质上只是背景支持、并非该 shot 的核心承载时，才允许将其降级为不单独点名的背景人群/环境组成。
 - **默认审美基调 (Default Aesthetic Bias, 强制)**：当输入未指定特殊风格时，所有镜头默认追求“高审美 + 现代 + 精致 + 电影级视觉享受”：
   - 角色：优先呈现有吸引力、上镜、气质鲜明的形象（可有性感张力但必须 non-explicit，禁止露骨化）。
   - 道具：优先呈现精致工艺、清晰材质、现代设计感，避免廉价或模糊质感。
@@ -93,17 +94,18 @@
 - **主角美化布光优先 (Protagonist Beauty-Light Priority, 强制)**：主角镜头（尤其 Medium Close-up / Close-up）默认优先采用 `butterfly light` / `clamshell` / 软正面主光 + 温和补光 + 清晰眼神光（catchlight）；仅当剧情明确要求反美化时才降级。
 - **环境剧场空间合理性 (Environment Stage-Space Rationality, 强制)**：涉及环境与调度描述时，必须显式保证：可进出路径、可站位区、机位移动走廊、双侧视线可读性、障碍安全间隙，且与当前 Beat 动作物理可达。
 - **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 可以拆分为多个 Shot，根据视觉需要按Beat为单位拆分或合并，长度符合时长限制。
-- **时长限制 (Duration Management: The 4-10s Control)**：
-  - **主流模型适配 (Mainstream Adaptation)**：针对主流视频生成模型，**最佳生成质感时长为 5s - 8s**。时长过短（<4s）可能导致生成失败或连贯性差。
+- **多主体优先加分镜 (Multi-Subject Relief by Extra Shots, 强制优先于尽量合并)**：当同一时刻/同一 beat 若要清晰承载的核心 subjects 超过 **3 个**时，优先通过增加 Shot 数量来拆解信息，让主动作主体、主受体、关键反应者、关键道具分布到连续镜头中；不得为了少切镜而把 4 个及以上核心 subjects 强压进同一个 Start/End Frame。
+**时长限制 (Duration Management: The 4-10s Control)**：
+  - **通用生成适配 (General Generation Baseline)**：在需要更强动作连续性与情绪展开时，**最佳生成质感时长为 6s - 9s**。时长过短（<4s）容易导致生成失败、动作断裂或情绪铺垫不足。
   - **标准时长建议 (Standard Recommendations)**：
-    - **Default Duration (常规)**: **5.0s**。这是最安全的默认值，适用于绝大多数常规叙事镜头。
-    - **Short Burst (快节奏)**: **4.0s**。仅用于极快的蒙太奇或瞬间反应。**严禁设置低于 4.0s 的时长**。
-    - **Extended Shot (长镜头)**: **6s - 10s**。用于展示宏大环境、复杂调度或细腻的情感流露。
-  - **密度匹配原则 (Density-Match for >5s)**：
+    - **Default Duration (常规)**: **6.0s**。这是新的默认值，适用于绝大多数常规叙事镜头，可为动作起势、接触/反应、落稳留出更完整的连续展开。
+    - **Short Burst (快节奏)**: **4.0s - 5.0s**。仅用于极快的蒙太奇、瞬时反应或明确要求短促爆发的镜头。**严禁设置低于 4.0s 的时长**。
+    - **Extended Shot (长镜头)**: **7s - 10s**。用于展示宏大环境、复杂调度、持续压迫或细腻的情感流露。
+  - **密度匹配原则 (Density-Match for 6s+)**：
     - 当 Duration 设定为 **6s - 10s** 时，Video Content **不等于必须新增更多事件**。长时长优先通过**延展已有动作阶段**来消化时长：如 anticipation 延长、接触后的 recovery 延长、视线停留、呼吸重置、重心回收、运镜减速与落稳。
     - **Long Duration != More Plot Rule (长时长不等于更多剧情动作, 强制)**：即使时长为 8s，也不得为了“填满时长”而凭空新增新的打击、额外位移、夸张环境反应或第二个剧情事件。允许的是**同一事件的更长展开**，不允许的是**事件数量膨胀**。
     - **Empty Shot Warning**: 严禁设定 8s 时长却只有一个简单的 "Eye blink" 动作；但若主动作本身具备持续张力（如对峙、蓄力、缓慢逼近、受击后的回稳），则允许只保留 **1-2 个主节拍**，其余时长由持续态与镜头稳定过渡承担。
-    - **Veo-Class Minimum Duration Note (Veo 类最小时长说明, 强制兼容)**：对于最小时长为 **8s** 的模型（如 Veo 系），默认采用**低事件密度、长动作展开**策略：1-2 个主节拍 + 1 个落稳/凝视/余势保持段即可合规，禁止为了凑满 8s 自动补成 3-4 个事件。
+    - **Long-Minimum Duration Note (长最小时长兼容, 强制)**：若执行环境要求更长最小时长（如 8s），默认采用**低事件密度、长动作展开**策略：1-2 个主节拍 + 1 个落稳/凝视/余势保持段即可合规，禁止为了凑满时长自动补成 3-4 个事件。
   - **细节填充 (Content Filling)**：
     - 若必须生成长镜头（>6s）但原剧本动作稀缺，优先补充**同一事件内部的可见延续**（如：呼吸、眼神停留、手部张力、受力后的站稳、衣摆余动、镜头减速停住），确保画面在 10s 内保持鲜活。
     - **禁止自动补剧情 (No Auto-Invented Event, 强制)**：不得因为时长较长就自动补充新的攻击、防守回合、额外击退、额外转身、额外道具互动、额外 VFX 或新的环境事件。
@@ -129,14 +131,21 @@
   - **Micro-Beats (微节拍)**: 连贯的过渡动作（如“抬手”、“瞄准”、“深呼吸”）。-> **必须合并**在同一个镜头内连续发生，利用时长(Duration)来消化细节。
 - **合并原则 (Merging Logic)**
   - **Consolidation Mandate (尽量合并原则)**：分镜规划的核心策略是**尽可能将连贯的 Beat 合并**。只要 Beat 之间在物理时空上连续，且无需剧烈的景别跳跃，就**必须合并**为一个镜头，利用运镜来引导视线，而非频繁切镜。
+  - **合并例外：主体超载即拆分 (Overloaded-Subject Exception, 强制)**：若合并后会导致单个 shot 的首尾帧需要同时清晰承载 **超过 3 个核心 subjects**，则“尽量合并原则”立即失效，必须拆成更多 Shot；不得为了少切镜而牺牲主体可读性。
   - **Stability Merging (稳定性合并)**：若按 Beat 拆分导致 End Frame 处于不稳定状态（如半空、动作中途），必须强制合并下一 Beat或给予特写等特殊切换手段，直到捕捉到自然稳定点。
   - **Flow Merging (流畅性合并)**：若 Beat A 到 Beat B 是连贯的物理流（Flow），且环境机位无需突变，强制合并。
   - **Hold Mandate (禁止切断)**：情绪延续、动作未完成、对话中的倾听状态。在此类时刻严禁切断镜头，必须保持连贯。
   - **Combat Cut Exception (打斗切分例外, 强制)**：当场景类型为 `Action & Chase` 且存在近身交互（挥击/格挡/摔投/冲撞/夺取）时，允许为“冲击节拍”提前切镜，不受“必须合并到稳定点”的默认约束。该例外仅用于保留动势与打击重拍，不得破坏空间可读性与轴线连续性。
 - **拆分规则 (The Cut Triggers)**
   - **Must Cut**: 时间跳跃、空间瞬移、视角剧烈反转 (Reverse Angle)。
+  - **Must Cut (Subject Overload)**：当一个 beat 同时包含 **4 个及以上**需要被清晰点名、清晰承接动作结果、清晰进入首尾帧的核心 subjects 时，必须切镜或增设额外 Shot，把信息拆开承载。优先拆成“主动作/受体 shot”、“反应 shot”、“关键道具或第三主体补充 shot”，而不是做拥挤多人说明书式单镜。
   - **Must Cut (OTS)**: 任何 OTS 主体切换（A→B 或 B→A）都必须切镜；其拆分、分场触发与审计字段要求统一以后文已定义的 **OTS Split Mandate** 与 **OTS Scene-Split Trigger** 为唯一权威，禁止在此处另立口径。
-- **景别递进**：同一 Scene 内遵循 Master → Medium → Close/Detail → Insert 的视觉呼吸感，避免单调重复。
+- **景别递进**：同一 Scene 内遵循 `Master/Full → Medium → Medium Close-up / Close-up → Detail / Insert` 的视觉呼吸感，避免单调重复。
+- **景别变化强制 (Shot-Scale Variety Mandate, 强制)**：分镜序列必须有明确的景别起伏，不能连续多镜停留在同一景别层级做机械平铺。
+  - **默认节奏**：优先让 Scene 在“空间交代镜头、人物关系镜头、情绪/结果镜头、细节补充镜头”之间形成景别变化，而不是全程都用 Medium Shot。
+  - **连续限制**：若无明确长镜头理由，**不得连续 3 个 Shot 使用同一主景别层级**（例如连续 3 个 Full Shot，或连续 3 个 Medium Shot）。若发生，必须至少调整其中 1 个 Shot 为更宽或更近的景别。
+  - **功能分工**：Wide / Full 负责空间关系与调度，全景中的动作路径要清楚；Medium 负责人物互动与动作可读性；Medium Close-up / Close-up 负责情绪、反应、结果定格；Detail / Insert 负责关键手部、道具、视线落点或局部证据。
+  - **切换理由**：每次景别变化都必须服务于信息重心变化，例如“从空间关系切到人物反应”“从交互切到关键道具”“从压迫对峙切到结果特写”，禁止无理由随机变焦。
 - **人物塑造与景变 (Character Shaping & Scale Rules)**
   - **强制特写 (Mandatory Character Shot)**: 每个 Scene 的分镜序列中，**必须至少包含一次**针对主要人物 (Lead Character) 的 Close-up 或 Medium Close-up 级别分镜，以强化人物形象与面部细节。
 - **轴线规则**：恪守 180° 规则，破轴需有回位镜头或明确运镜意图。
@@ -209,12 +218,14 @@
   - **Logical Continuity**: Shot N 的 `Start Frame` 状态必须逻辑上紧接 Shot N-1 的 `End Frame` (除非是时间/空间跳跃)。例如：Shot 1 结束时角色刚举起水杯，Shot 2 开始时杯子必须已经在嘴边或被打翻，不能莫名其妙回到桌上。
   - **Momentum Consistency (动势连续)**：若 Shot A 结束时摄影机向右摇，Shot B 最好接续向右的动势或静止，避免无理由的反向运动（除非是为了制造冲突感）。
   - **Eyeline Match (视线匹配)**：确保相邻镜头间的人物视线方向符合空间逻辑（A看右，B看左）。
+  - **Scale Alternation (景别交替, 强制)**：相邻镜头之间应尽量形成“宽→中→近”或“近→中→宽”的可感知变化。若连续两镜保留同级景别，则第三镜原则上必须改变景别功能，除非该段明确被规划为单一长镜头延续。
+  - **Movement Alternation (运镜交替, 推荐)**：相邻镜头不要机械重复同一种 `{Viewpoint Movement}`。若上一镜已经使用 push-in / handheld pressure，下一镜优先考虑 hold、lateral follow、reverse OTS、pull-back 或 reveal 型机位，形成镜头间节奏差。
   - **Face Anchor Frequency (人脸锚点频率, 强制)**：为防止长段打斗中身份漂移或人脸崩溃，同一 Scene 内必须满足“每 2-3 个 Shot 至少 1 个以 `Medium Close-up` 或 `Close-up` 收尾”的频率约束（主角优先）。若连续 3 个 Shot 均为 Full/Wide 收尾，判定为不合规并必须重排。
   - **Face Safety in Wide End (宽景人脸安全, 强制)**：当 End Frame 因 `Combat Override` 采用 Full/Wide 收尾时，必须显式补充“主角面部朝向与轮廓可读”约束（例如眼线方向清晰、面部轮廓不被重度模糊吞没）。
   - **Snapshot Reconciliation (快照对齐，强制)**：当该 Scene 存在 `{State Snapshot}` 时，你必须在生成完所有 Shots 后进行一次对齐检查：最后一镜 End Frame 是否与快照一致；若不一致，必须通过合并/调整最后 1-2 镜的动作演化来达成快照，而不是修改快照或忽略。
 
 ## 二、场景类型规则 (Scene-Type Rules)
-按剧情类型细化的镜头逻辑，指导分镜节奏与光影风格。**Guideline**: 当剧情需要或能提升信息表达时，优先选用下述的 "Advanced FX" 或 "Perspective & Traversal"；若会破坏可生成稳定性或不符合剧情，则允许全部采用基础运镜与经典正反打。
+按剧情类型细化镜头逻辑，统一指导**景别分配、镜头间变化、运镜优先级与光影风格**。**Guideline**: 当剧情需要或能提升信息表达时，优先选用下述的 `Advanced FX` 或 `Perspective & Traversal`；若会破坏生成稳定性、主体可读性或空间逻辑，则降级为基础运镜与经典切换。
 
 ### Advanced FX / Perspective & Traversal 参考清单（优先但按稳定性裁剪）
 - **360 Orbit (360环绕)**：镜头围绕主体做完整一圈环绕，用于强化压迫感、关系包围或空间揭示；需保持主体锚定与轴线可追踪。
@@ -230,14 +241,54 @@
 - **Match Cut / Object Wipe (匹配切/前景擦切)**：用于视觉转场连续性。
 - **Stability Guard (稳定性护栏)**：若上述高级运镜会导致主体漂移、环境变形或动作不可生成，则降级为标准运镜（Dolly/Pan/Truck/OTS）。
 
-### 场景类型→运镜优先映射（执行级）
-- **Dialogue & Emotion**：`Rack Focus` / `Slow Dolly In` / `OTS Reverse`（优先稳定情绪传递）。
-- **Action & Chase**：`Low-Mode Tracking` / `Whip Pan` / `Handheld Shake`（优先速度与冲击）。
-- **Suspense & Thriller**：`Dolly Zoom` / `360 Orbit` / `POV Traversal with Reveal`（优先信息控制与压迫）。
-- **Epic & Scale**：`Crane/Jib` / `Wide-to-Mid Push` / `Z-axis Traverse`（优先规模与纵深）。
-- **Montage & Psychological**：`Snorricam` / `Graphic Match` / `Double Exposure`（优先心理失真与节奏）。
-- **Complex Blocking**：`Orbit + Push Hybrid` / `Long-Take Follow`（优先调度代剪辑）。
-- **Visual Transition Focus**：`Match Cut` / `Object Wipe` / `Whip Pan`（优先转场无缝衔接）。
+### 场景类型→景别 / 运镜优先映射（执行级）
+- **Dialogue & Emotion**：
+  - **景别优先**：`Medium Shot / OTS Two-shot -> Medium Close-up / Close-up reaction`。
+  - **运镜优先**：`Slow Dolly In` / `OTS Reverse` / `Rack Focus`。
+  - **Advanced FX 使用点**：仅在情绪主次切换或心理压迫显著升级时启用 `Rack Focus`，避免整段对话镜头都静止在同一中景。
+- **Action & Chase**：
+  - **景别优先**：`Full / Wide path clarity -> Medium impact readability -> Close-up aftermath or insert`。
+  - **运镜优先**：`Low-Mode Tracking` / `Lateral Follow` / `Whip Pan` / `Handheld Pressure`。
+  - **Advanced FX 使用点**：`Whip Pan` 只用于撞击重拍、方向切换或转场；不能每镜都甩镜。动作序列中至少应穿插 1 个相对稳定的 Full/Medium shot 维持空间可读性。
+- **Suspense & Thriller**：
+  - **景别优先**：`Medium hold -> Close-up suspicion detail -> Reveal wide or distorted close`。
+  - **运镜优先**：`POV Traversal with Reveal` / `Slow Creep In` / `Dolly Zoom` / `360 Orbit`。
+  - **Advanced FX 使用点**：`Dolly Zoom` 或 `Orbit` 只在认知反转、被包围感、信息揭示节点使用，其余镜头应回到更克制的 creeping move 或静态 hold。
+- **Epic & Scale**：
+  - **景别优先**：`Wide / Extreme Wide establish -> Full / Medium human scale anchor -> Close reaction accent`。
+  - **运镜优先**：`Crane/Jib` / `Wide-to-Mid Push` / `Z-axis Traverse`。
+  - **Advanced FX 使用点**：先用宽景建立规模，再切近景给人物作为尺度锚点，禁止连续多镜只停留在宏大全景。
+- **Montage & Psychological**：
+  - **景别优先**：`Close / Detail fragments <-> Medium reset`。
+  - **运镜优先**：`Snorricam` / `Graphic Match` / `Whip Pan` / `Abrupt Hold`。
+  - **Advanced FX 使用点**：允许更大胆的镜头变换，但仍需保证单镜目的清晰，不能把多种失真技法叠满同一镜。
+- **Complex Blocking**：
+  - **景别优先**：`Wide or Full relationship map -> Medium re-prioritization -> Close result anchor`。
+  - **运镜优先**：`Orbit + Push Hybrid` / `Long-Take Follow` / `Pan with reveal`。
+  - **Advanced FX 使用点**：优先把复杂调度交给长镜头和空间穿越，不足时再切补充近景/细节镜头，避免整场都只靠一套跟拍。
+- **Visual Transition Focus**：
+  - **景别优先**：根据前后镜衔接需求在 `Detail / Medium / Wide` 间切换，但必须让转场本身可读。
+  - **运镜优先**：`Match Cut` / `Object Wipe` / `Whip Pan`。
+  - **Advanced FX 使用点**：转场型技法应服务于上下镜连接，不可抢走主体动作信息。
+
+### 镜头间变化执行规则（Sequence Variation Enforcement）
+- **至少两级景别覆盖 (Minimum Two-Scale Coverage, 强制)**：每个 Scene 至少覆盖两级以上主景别；中长 Scene 应尽量覆盖三类以上景别（例如 Full + Medium + Close-up）。
+- **近景锚点要求 (Close-Up / Detail Anchor, 强制)**：凡一个 Scene 包含 **3 镜及以上**，默认必须至少包含 **1 个 Medium Close-up / Close-up / Insert** 作为情绪锚点、结果锚点或细节锚点；禁止整段只停留在 Full/Medium 的功能镜头而缺少近景落点。对话场景优先给 `情绪特写 / 手部或视线细节`，动作场景优先给 `受力反应 / 接触点 / 结果细节`。
+- **优先映射再变化 (Priority-Mapped Variation, 强制)**：先根据场景类型选择 1 个主景别策略和 1 个主运镜策略，再在相邻镜头里做扩张或反差变化，禁止无依据随机切换。
+- **Advanced FX 配额 (Advanced FX Quota, 推荐)**：每个 Scene 优先配置 `0-2` 个真正服务叙事的 Advanced FX / Perspective 镜头，其余镜头使用基础运镜承接，保证变化感与稳定性并存。
+- **反单调检查 (Anti-Monotony Check, 强制)**：输出前必须自检：是否出现“连续多镜同景别 + 同运镜 + 同构图功能”的单调段落；若出现，至少改掉其中一个维度。
+
+### 多镜示例（Sequence Mini Examples）
+- **Dialogue Sequence Example（四镜）**：
+  - `Shot 1`: `Medium Two-shot + slight hold`，先交代两人的站位、距离、门与桌面的关系。
+  - `Shot 2`: `OTS on Speaker A + slow push-in`，让发问或施压变得更直接。
+  - `Shot 3`: `Reverse OTS on Listener B + rack focus or held reaction`，把信息重心转到听者反应，不重复上一镜构图功能。
+  - `Shot 4`: `Medium Close-up / Close-up + brief settle`，锁定沉默、眼神、嘴角、手部停顿或关键台词后的结果状态。
+- **Action Sequence Example（三到四镜）**：
+  - `Shot 1`: `Full / Wide geography shot + lateral follow`，先看清追逐路径、前后距离、障碍与逃跑方向。
+  - `Shot 2`: `Medium impact shot + controlled handheld pressure`，承接碰撞、抓取、挥击或变向。
+  - `Shot 3`: `Close-up / insert reaction shot + short settle`，**优先作为反应近景或冲击细节镜**，锁定脚步打滑、武器接触、面部受力、手部失衡或关键道具脱手，避免第三镜继续重复中景功能。
+  - `Shot 4`（可选）: `Re-establishing Full or aftermath Medium`，重新交代结果站位、双方距离与下一动作方向。
 
 ### 高级运镜冲突组合规则（同镜禁配）
 - **单镜主技法原则 (Primary-Tech Rule)**：每个 Shot 默认仅允许 1 个主高级技法；若叠加第 2 个技法，必须属于“允许组合”，且不破坏可生成稳定性。
@@ -286,7 +337,10 @@
   - 对话镜头中，听者**反应**往往比说话者更重要（Core Logic 的直接体现），须确保听者反应在台词同一或紧邻主节拍内可见。
 - **Sequence Logic (Revised)**:
   - **Prioritize OTS (Over-the-Shoulder)**: 对于对话场景（尤其是带有肢体动作或物体交互时），**必须优先采用过肩镜头 (Over-the-Shoulder Shot)** 及其正反打 (Reverse Shot) 结构。相比于单人特写，OTS 能更好呈现角色间的空间关系与动作互动。
-  - **Structure**: Establishing (Optional) -> Master/shared-space two-character frame -> **OTS Pattern (A over B's shoulder -> B over A's shoulder)** -> ECU (Climax).
+  - **Structure**: Establishing (Optional) -> Master/shared-space two-character frame -> **OTS Pattern (A over B's shoulder -> B over A's shoulder)** -> Medium Close-up / Close-up climax.
+  - **Scale Rhythm (景别节奏, 强制)**：对话序列默认要形成“共享空间关系 -> 交替发言/倾听 -> 情绪近景收束”的层次，禁止整段对话只用同构图 OTS 中景来回切。
+  - **Close Reaction Requirement (近景反应要求, 强制)**：凡对话 Scene 达到 **3 镜及以上**，默认至少安排 **1 镜** 为 `Medium Close-up / Close-up / Insert`，锁定说话后的听者反应、眼神压力、嘴角变化、呼吸停顿或手部道具细节；除非剧情明确要求始终维持客观疏离观察，否则不得整段都停留在中景正反打。
+  - **Variation Trigger**：当情绪升级、信息反转、角色逼近/后退、手部接触道具或沉默压迫出现时，必须触发至少一项变化：`景别推进`、`运镜推进`、`焦点转移` 或 `插入细节镜头`。
 - **Advanced Technical Planning (高级规划)**:
   - **Rack Focus (Advanced FX)**: 用于多人对话。Start Frame 聚焦前景角色 A (Blur B)，Video Content 描述焦点平滑滑向后景角色 B (Blur A)，End Frame 聚焦角色 B。有效引导注意力转移。
   - **Slow Dolly In (Standard)**: 情绪高潮时刻。Start Frame 为 Medium Shot，Video Content 描述 "Viewpoint slowly pushes in by about an arm's length over several seconds" 压缩空间，End Frame 变为 Close-up，以此强化心理压迫或亲密感。
@@ -295,10 +349,13 @@
 
 ### 2. 动作追逐 (Action & Chase)
 - **Core Logic**: "Geography & Impact". 观众必须清楚 A 和 B 的空间关系 (Geography)，以及动作的力量感 (Impact)。
+- **Sequence Rhythm (动作序列节奏, 强制)**：动作序列默认遵循 `地理关系建立 -> 冲击主体镜头 -> 反应/后果镜头 -> 必要时补充细节或反打`。禁止连续多镜都只给冲击镜头而缺少空间校准或结果承接。
+- **Scale Mapping (景别映射)**：优先使用 `Wide/Full` 交代路径与站位，`Medium` 承接碰撞与交互，`Medium Close-up / Close-up / Insert` 锁定受力反应、武器接触点、脚步失衡或结果定格。
 - **Advanced Technical Planning (高级规划)**:
   - **Whip Pan (Advanced FX)**: 用于极速转场或模拟撞击。Video Content 描述 "Viewpoint whips pan about a quarter-turn, strictly syncing with impact" -> Resulting in Motion Blur.
   - **Low-Mode Tracking (Perspective)**: 追逐戏。Start Frame 为低角度 (Low Angle) 捕捉脚步，Video Content 描述相机贴地（ankle-level / near ground）快速后退 (Truck Back) 或跟随。
   - **Shaky Cam (Handheld)**: 必须配合 "Quantification" (e.g., "Violent shake simulating explosion shockwave").
+  - **Variation Guard (变化护栏)**：若上一镜已经使用高强度 `Whip Pan` / `Handheld Shake` / 冲击推进，下一镜优先回到 `Full/Medium + clearer hold/follow` 来重新建立空间与受力关系，避免整段都处于失控晃动。
 - **Combat Override (打斗优先覆盖规则, 强制)**：当该镜头属于近身打斗/高冲击交互时，以下规则优先于通用默认：
   - **Dynamic End Allowed**：End Frame 可为“可承接的动态态”（如收势中、重心回收中、受力后短暂失衡），不强制每镜完全落定；但必须可被下一镜稳定继承。
   - **Close-Range Convergence Relaxed**：可在 Full Shot / Wide Shot 收尾以保留双方空间关系，不强制收束到 Medium/Close-up。
@@ -324,11 +381,12 @@
   - 禁止“只是后退几步/踉跄失衡”的动作，却搭配 `flight path` 一类会暗示击飞事件的机位描述。
 - **Space Destruction**: 仅在剧情/动作本身需要冲击或破坏时才加入（例如撞击造成翻倒、追逐带起水花、开枪后烟雾）。不要为了“看起来更刺激”而凭空打碎环境物体，避免引入未定义道具与连续性错误。
 - **Action & Chase Copy-Ready Examples (可复制示例)**：
+  - **使用说明**：以下示例是**单镜内部写法模板**，用于教会当前 Shot 如何写清 Geography / Impact / Aftermath；真实 Scene 生成时，应与上文的 `Wide/Full -> Medium -> Close/Insert` 序列节奏搭配使用，不能把整场动作都写成同一类单镜模板重复堆叠。
   - **Example A: Close-Combat Punch Chain (4.0s)**
     - `Start Frame`: `[Global Style]. From a waist-height observer position along the corridor side of Environment Anchor, looking front-left across both fighters, the frame settles into a medium full 35mm eye-level handheld view. Hard side spill cuts across the corridor floor from frame-left, shadows stay readable with clean digital clarity and low shadow noise, and one continuous floor plane ties both figures to the same depth map. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] guarded stance facing CHAR:[@B]; CHAR:[@B] shoulders tight, weight on rear leg. {Background} ENV:[Environment Anchor].`
     - `Video Content`: `**{Viewpoint Movement}**: short lateral follow, micro-acceleration at contact, then brief hold. **Action**: (P1) CHAR:[@A] shifts weight to the rear foot, coils shoulders and hips, then surges one explosive step toward CHAR:[@B] with a committed straight punch driving through centerline; (P2) contact lands with a sharp torso jolt on CHAR:[@B], forcing half-step to one-step recovery while guard opens briefly — CHAR:[@A] retracts into structure and CHAR:[@B] struggles to reset balance -> resulting in a heavy stagger, not a launch.`
     - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same lane, slightly closer by a short push. **{Viewing Direction}**: right 3/4 toward both fighters. **{Viewpoint Setup}**: Medium Shot, 35mm. **Layers**: {Foreground} brief dust lift near planted feet. {Midground} CHAR:[@A] guard re-formed, chest heaving; CHAR:[@B] staggered with guard reopening during recovery. {Background} ENV:[Environment Anchor].`
-  - **Example B: Weapon Clash and Carry-Over (5.0s)**
+  - **Example B: Weapon Clash and Carry-Over (6.0s)**
     - `Start Frame`: `[Global Style]. From a shoulder-height observer near the center path of Environment Anchor, looking side-on across both fighters, the full-shot 35mm handheld frame holds crisp subject edges, fine film grain, and one uninterrupted background depth so the clash reads inside a single shared combat space. A narrow motivated key from frame-left rakes across the weapon line while the darker far wall stays controlled rather than crushed. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] blade lifted chest-to-eye line; CHAR:[@B] compact guard. {Background} ENV:[Environment Anchor].`
     - `Video Content`: `**{Viewpoint Movement}**: low-to-mid tracking with slight push at the clash, then stabilize to preserve spacing. **Action**: (P1) CHAR:[@A] advances one step with urgent forward pressure, diagonal blade line accelerating from shoulder rotation into a committed cut; (P2) CHAR:[@B] meets the strike with a hard parry, wrists recoiling on contact as a short spark burst and tight debris flick register at the weapon edge — both bodies rebound only enough to reopen guard structure, with CHAR:[@B] quarter-turning into counter-ready alignment while CHAR:[@A] slips outward to keep silhouettes clear -> resulting in controlled carry-over, not a chaotic flurry.`
     - `End Frame`: `[Global Style]. **{Viewpoint Anchor}**: same axis side, slight pull-back to preserve distance map. **{Viewing Direction}**: profile-right on both subjects. **{Viewpoint Setup}**: Full Shot, 35mm. **Layers**: {Foreground} minor spark fade and dust fleck. {Midground} CHAR:[@A] defensive lane reset with blade recovered; CHAR:[@B] counter-ready posture stabilized. {Background} ENV:[Environment Anchor].`
@@ -494,6 +552,7 @@
   - **包含规则**：凡在 `Start Frame` / `Video Content` / `End Frame` 英文描述中出现过的任何方括号实体（`[ ... ]`），都必须出现在 `Associated Entities` 中。
   - **排除规则**：`Associated Entities` 中列出的实体，必须至少在 Start/Video/End 三者之一里出现（作为画面锚点/参与动作/最终状态）。禁止把“本镜头没出现”的实体塞进清单。
   - **环境强制**：每一行 `Associated Entities` 必须包含 `[Environment Anchor]`。
+  - **subjects 数量上限 (Subject Count Cap, 强制)**：`Associated Entities` 中除 `[Environment Anchor]` 外，优先只保留 **不超过 3 个 subjects**。若镜头内确有更多实体参与，仍只列对首尾帧构图与动作承接真正关键的 1-3 个核心 subjects；背景群众、非关键陪体、纯氛围陪衬不得一并塞入清单。
   - **一致性**：实体名必须与输入实体（Linked Characters/Key Props/Environment Anchor）大小写与括号内容完全一致。
   - **逐字符继承**：`Associated Entities` 中每个实体名必须与上游权威实体名逐字符一致（含大小写与分隔符）；禁止等价改写（如大小写变化、`_`/`-`/空格互换、简写或翻译变体）。
 
@@ -579,6 +638,7 @@
   - **{Shot Description}**: 必须包含 **Focal Length** (焦距), **Framing** (景别) 和 **Angle** (角度)。
   - **{Image Fidelity}**: 必须包含 **Noise/Grain 控制** 与 **Anti-Copy 约束**（继承 reference 的身份锚点，但重构构图/光线/姿态，禁止复制粘贴参考图构图）。
   - **{Single-Canvas Guard}**: 必须显式或等效表达“single-canvas + one continuous scene plane + one uninterrupted background depth”；若为双人/多人同框，还需补充 `shared floor/light/perspective` 中至少一项，不能只写否定词。
+  - **首帧核心主体压缩 (Start Frame Core Subject Compression, 强制)**：`Layers` 中被显式点名并作为核心画面主体展开描述的 subjects，默认上限为 **3 个**（不含环境锚点）。优先保留主动作角色、主受体角色、关键道具；超过 3 个时，必须合并为背景群体或环境信息，禁止把 4 个及以上 subjects 都写成同等级主体块。
   - **主体引用单一性 (Subject Reference Singularity, 强制 — 防二宫格核心规则)**：每个实体的 `CHAR:[@Name]` / `ENV:[Name]` / `PROP:[Name]` 在同一个生图提示词（Start Frame / End Frame / Keyframe）中只能出现一次方括号引用，且必须放在 **Layers** 区；`{Viewpoint Anchor}` 与 `{Viewing Direction}` 中提及实体时必须使用纯文本名称，不加方括号或类型前缀。唯一例外是 `[Global Style]`。
   - **{Style Mapping Note}**：必须声明该镜头采用的风格映射（至少 1 句），说明为何使用当前光照/焦距/颗粒组合；真人剧需强调写实质感控制。
   - **标签密度上限 (Label Density Cap, 强制)**：除 `Layers` 外，单条 Start/End/Keyframe 提示词中不应连续堆叠 5 个以上独立栏目标签。优先把 `{Single-Canvas Guard}`、`{Style Mapping Note}`、部分 `{Image Fidelity}` 约束吸收到构图、光照或画质句中，避免输出成版式说明书。
@@ -677,7 +737,7 @@
           - **Adverbs**: Slowly, Rapidly, Gradually, Abruptly, Smoothly.
           - **Example**: "Viewpoint **slowly** pushes in...", "**Abrupt** whip pan to..."
       *   **视频质感连续性 (Video Lighting/Lens/Grain Continuity, 强制)**：Video Content 必须明确说明光照变化趋势（是否变化/为何变化）、焦段策略是否切换、颗粒/噪点控制是否保持一致，避免“首尾帧参数断裂”。
-        *   **多样性 (Variety, Recommended)**：尽量在一个 Scene 内引入 1 种能服务叙事的高级技法（Advanced FX / Perspective），但**不得**为了满足术语而牺牲动作可生成性与物理连贯。
+        *   **多样性 (Variety, Recommended)**：尽量在一个 Scene 内引入 1 种能服务叙事的高级技法（Advanced FX / Perspective），并让其与基础镜头形成变化，但**不得**为了满足术语而牺牲动作可生成性、主体可读性与物理连贯。
 
   2.  **动作流与拆解 (Action Flow & Decomposition)**：
       *   **Standard Action Syntax — Primary Beat Format (标准动作句式 — 主节拍格式)**：Video Content 的主节拍 `(Pn)` 必须包含方向、速率、量化，并在**关键状态转换点**写出结果。
@@ -705,6 +765,7 @@
       *   **Writing Strategy (写作策略)**:
           - **Anticipation & Release**: Use primary beats to build cycles: `(P1) Prep phase with embedded tension details -> resulting in loaded state; (P2) Execute with micro-detail overlay -> resulting in impact/change; (P3) Recover/settle`.
           - **Natural Embedding**: Weave micro-beats as participial/subordinate clauses within primary beats instead of separate numbered items.
+          - **Beat Timing Expression (节拍时长表达, 强制)**：`Video Content` 默认**不要**给主节拍逐个标注精确秒数（如 `P1 0.0-1.4s / P2 1.4-3.2s`）。应以**镜头总时长 + 自然语言节奏词**来控制流畅性，例如 `brief hold`、`slow settle`、`after a short hesitation`、`over several beats`。只有在 `Keyframes` 镜头、明确音画同步点或必须命中的精确转场节点时，才允许引入显式时间锚点。
           - **Impact Entry Constraint (命中切入约束, 强制)**：允许某个 Shot 以 `at the moment of impact / on contact / as the strike lands` 作为主节拍开端，但不能只写结果本身；必须在同一 Shot 内补齐“接触前最后半拍的动势来源”与“接触后承接/回收/落稳”。
           - 若以命中瞬间切入，后文必须同时覆盖：谁的力量仍在穿透或收束、谁在吸收/后撤/防御、以及双方如何进入新的稳定或可承接状态。
           - 禁止“从命中瞬间直接跳到结果”，中间没有施力延续与受力承接。
@@ -718,9 +779,10 @@
           - `{Bad}: "(1) A approaches chair -> (2) A grabs armrests -> (3) A lowers body -> (4) A settles -> (5) A smooths coat."` (5 个独立编号，模型无法逐条执行)
           - `{Good}: "(P1) CHAR:[@A] approaches the wooden chair and grips the armrests, weight shifting forward; (P2) CHAR:[@A] lowers steadily with knees bending, settling into the cushion as coat laps smooth flat -> resulting in seated pose, hands resting on armrests."`
       *   **Pause & Texture Beats — Conditional Trigger (停顿与质感节拍 — 条件触发)**：
+        - **景别与停顿拆分 (Close-up != Mandatory Pause, 强制理解)**：镜头里**应该有一定比例的 Medium Close-up / Close-up / Insert** 来保证镜头感与情绪落点；`Duration ≥ 6s` 的门槛只用于判断是否**强制**写入显式停顿/呼吸/面部微动作细节，**不是**限制特写出现。4s-5s 的特写镜头完全允许，且在对话、反应、插入细节、情绪收束中通常是推荐选择；只是当镜头较短且不属于强情绪场景时，停顿质感细节可写得更克制。
         - **触发条件**：仅在以下情况下强制嵌入显式停顿/呼吸/面部微动作细节：
           1. 景别为 **Medium Close-up 或更近**（Close-up / Extreme Close-up）；
-          2. 且 Duration **≥ 5s**；
+          2. 且 Duration **≥ 6s**；
           3. 或场景类型为 **Dialogue & Emotion / Suspense & Thriller**。
         - **非触发时**（Full Shot / Wide Shot / 短时长动作镜头）：停顿细节仅作为可选润色，不强制要求。避免在模型渲染不可见的景别上浪费 token。
         - 停顿不得改变主叙事动作方向，不得引入新剧情事件；其作用是"节奏缓冲 + 情绪显影 + 动作蓄力/回收"。
@@ -739,16 +801,15 @@
       *   **Primary Sustain Action (核心维持动作)**: **Critical**.
       *   **Continuous Flow**: 确保 `Start` 到 `End` 之间没有时间真空。
         *   **Density Guideline — Two-Tier Beat Budget (密度建议 — 双层节拍预算, 强制)**：
-          - **核心认知**：当前主流视频生成模型（Kling / Runway / MiniMax / Sora 等）在 5s 内实际能可靠区分的**独立动作阶段**为 **2-3 个**。模型对全文做整体语义理解后在首尾帧间做插值，**不是按编号逐条精确执行**。因此必须采用"主节拍优先 + 微节拍补充"的双层预算。
+          - **核心认知**：当前视频生成在 **4s - 6s 的常规镜头**内通常只能稳定承载 **2-3 个独立动作阶段**；当时长被拉长到 **7s - 10s** 时，优先增加的是动作展开、停顿、回稳与镜头减速，而不是新增第 4 个剧情动作。生成过程会对全文做整体语义理解并在首尾帧间插值，**不是按编号逐条精确执行**。因此必须采用"主节拍优先 + 微节拍补充"的双层预算。
           - **Tier 1 — Primary Beats (主节拍, 必达)**：每个 Shot 的 Video Content 必须且仅需 **2-3 个主节拍**（核心叙事动作阶段）。这是模型能可靠执行的上限。主节拍负责"故事推进"，用 `(P1)(P2)(P3)` 标注。
           - **Tier 2 — Micro-Beats (微节拍, 补充)**：在主节拍之间或之内，通过微节拍丰富画面质感（姿态过渡、表情变化、环境响应、呼吸节奏）。微节拍用自然语言串联在主节拍描述中，不需要独立编号。
           - **总密度上限**：Video Content 的总 token 数应控制在 **80-150 tokens**（不含运镜声明），避免注意力分散导致主动作丢失。
-          - **模型适配参考 (Model Adaptation Reference)**：
-            - **Kling 2.0+ / MiniMax Hailuo**：支持较长 prompt（~200 tokens），语义解析能力强，可使用 3 个主节拍 + 较丰富微节拍，支持 TTS 对白。
-            - **Runway Gen-3 / Luma**：prompt 敏感度高，建议 2 个主节拍 + 精简微节拍，总量控向 80-120 tokens，对白文本可能被忽略。
-            - **Veo / Veo-class (8s minimum)**：更容易把“填充性细节”误判为新增动作。建议 **1-2 个主节拍 + 明确的 hold/recovery/settle 段**，总量控向 **60-110 tokens**，避免夸张后效与额外剧情动作。
-            - **Sora / 通用模型**：遵循默认 2-3 主节拍 + 80-150 tokens 基线。
-            - **原则**：当模型具体能力未知时，一律按保守策略（2 主节拍 + 100 tokens 以内）生成，确保核心动作不丢失。
+          - **统一生成策略 (Unified Generation Strategy)**：在未提供具体模型信息时，一律采用保守而通用的写法：
+            - 默认使用 **2-3 个主节拍 + 80-150 tokens** 的基线。
+            - 若时长超过 6s，优先把额外时长用于 hold / settle / reaction / recovery，而不是新增剧情动作。
+            - 若镜头含重特效、多人调度或快速转场，优先压缩修饰性微节拍，保留核心动作、主体关系与结果状态。
+            - 若生成稳定性存在风险，优先降级为更清晰的基础运镜、更少的主节拍和更明确的首尾状态。
           - **场景类型密度映射**：
             - **Action & Chase（近身/重击）**：2 个主节拍（蓄力→冲击/接触→后效），微节拍嵌入力度与反馈。
             - **Action & Chase（追逐/走位）**：2-3 个主节拍（路线段），微节拍嵌入速度变化与环境响应。
@@ -756,7 +817,7 @@
             - **Atmosphere/Establishing**：1-2 个主节拍（空间揭示），微节拍嵌入光影与环境动态。
             - **8s 打斗/对峙镜头特例**：允许采用 `P1 接触或压迫建立 -> P2 受力/回稳 -> hold` 的三段式，其中 `hold` 只负责延续余势与落稳，不得再发明新冲突。
           - 严禁为了凑数制造会改变剧情的无意义抽搐/乱动。
-          - **双层示例 (5s Dialogue Shot)**：
+          - **双层示例 (6s Dialogue Shot)**：
             - 主节拍承担故事推进，面部/呼吸/手势等微节拍作为自然语言嵌入其中，不再拆成独立编号。
           - **超限裁剪优先级 (Over-Budget Trim Priority, 强制)**：当 Video Content 超过 150 tokens 或模型 token 上限时，按以下优先级**从底部开始裁剪**（序号越大越先删除）：
             1. **Core Action (核心动作)** — 主节拍的核心动词 + 主体 → **永不裁剪**
@@ -778,13 +839,13 @@
       *   **道具交互**: 明确道具的物理转移过程（Who holds it? Where does it move?）。
 
   5.  **对白与声音 (Audio & Dialogue)**：
-      *   **台词保留在 Video Content 中 (强制)**：台词文本是视频生成模型驱动口型同步（Lip Sync）的核心输入。支持 TTS 的模型（Kling / MiniMax / Hailuo 等）会自动根据台词驱动角色口型动画；即使不支持 TTS 的模型，台词也帮助其理解"角色在说话"的语义。因此台词**必须保留在 Video Content 中**。
+      *   **台词保留在 Video Content 中 (强制)**：台词文本是角色说话状态、口型节奏与听者反应的核心语义输入。因此台词**必须保留在 Video Content 中**，不要为了简化镜头描述而删除对白内容。
       *   **紧凑一体化写法 (Compact Inline Format, 强制)**：台词嵌入主节拍 `(Pn)` 内部，与说话时的肢体/表情动作及听者反应写在同一段自然语言里。不再为每句台词单独编号或写独立的 `-> resulting in` 口型分解。
         - **格式模板**：`(Pn) {说话者动作/姿态} — Dialogue/OS/V.O. ({@Speaker}) (tone): "{完整台词}" — {听者可见反应}`
         - 类型标签：`Dialogue` (画内) / `OS` (画外声) / `V.O.` (旁白) / `On-screen Text` (画面文字)
         - 说话主体 `{@Speaker}` 必须是输入实体之一（来自 `Linked Characters`），严禁虚构新角色。
       *   **口型同步策略 (Lip Sync Strategy)**：
-        - **模型自动驱动**：台词文本写入后，支持 TTS 的模型自动驱动口型。**不需要额外写口型微动作**（如 "lips part"、"jaw tightens"）。
+        - **默认策略**：台词文本写入后，不需要额外拆写口型微动作（如 "lips part"、"jaw tightens"），除非剧本明确要求夸张口部细节本身成为视觉重点。
         - **仅补充非口型视觉**：只需写出模型无法从台词推导的信息——说话时的**肢体动作、表情变化、手势、听者反应**。
         - **听者反应 (必写)**：若存在听者，必须在台词同一主节拍或紧邻主节拍内写出听者可见反应。
       *   **语气明确 (强制)**：tone 用 1-3 个词即可（如 calm / urgent / angry / whispering / shaky），与同一主节拍的表情/肢体描述协调。
@@ -810,6 +871,7 @@
   2.  **{Viewpoint Anchor} + {Viewing Direction} + {Viewpoint Setup} (Final State)**：分别明确动作结束时的最终观察位置、观察方向与景别/角度。若 Video Content 包含运镜（如 Dolly In），End Frame 的景别与角度必须体现运动后的结果（如从 Medium 变 Close-up）。
     3.  **{Layers & Subject Recalculation} (Full Recursion)**：
         - **Full Structure**: 必须重新构建 `{Foreground}`, `{Midground}`, `{Background}` 层级。
+        - **终帧核心主体压缩 (End Frame Core Subject Compression, 强制)**：End Frame 中被显式点名并完整展开的核心 subjects 默认上限也为 **3 个**（不含环境锚点）。若结尾场面涉及更多人/物，必须只保留承接动作结果最关键的 1-3 个主体，其余退为未点名背景信息。
         - **Subject Info Update**: 针对核心角色，必须按 Start Frame「Standard Static Syntax」公式完整重绘最终状态（各字段反映动作执行后结果）。
           - **Facing Mandatory Check**：`New Facing` 必须是可判定枚举值（同 Start Frame 枚举）；若 Video Content 存在转身动作，End Frame 朝向必须与动作结果一致。
         - **State Recalculation (状态重算)**:
@@ -866,6 +928,9 @@
 
 | Shot ID | Shot Name | Scene ID | Shot Logic (CN) | Start Frame | Video Content | Duration (s) | Keyframes | End Frame | Start Frame (CN) | Video Content (CN) | Keyframes (CN) | End Frame (CN) | Associated Entities |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01_SC03_SH01 | 逼近质问 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，核心是压问与听者反应。<br>预估：时长 5s，主节拍 2 个。<br>动态：slow push in，towards lens，one short step。<br>首帧：A 在门内压近，B 贴门把防守。<br>过程：(P1) A 前压发问，B 移开视线并握紧门把；(P2) B 半身后倾回应，A 不退，走廊张力锁住。<br>尾帧：两人近距对峙落稳；稳定态：是，近景收束：是。<br>校验：实体完整性通过。 | [Global Style]. From a chest-height observer position one short stride inside the doorway lane of Environment Anchor, looking screen-right along the tightening line between Character A and Character B, the frame holds a medium 50mm eye-level composition with controlled fine grain, low shadow noise, and a single uninterrupted doorway depth. Soft window spill from screen-left shapes both figures while preserving one shared floor plane and one continuous corridor perspective. **Layers**: {Foreground} Empty. {Midground} CHAR:[@Character A] Medium Shot, Rule of Thirds Left, 3/4 View Right, shoulders angled forward, jaw tight; standing face-to-face with CHAR:[@Character B] Medium Shot, Rule of Thirds Right, 3/4 View Left, back near the doorframe, fingers resting on PROP:[Door] handle, lips pressed thin. {Background} ENV:[Environment Anchor] narrow corridor wall and dim doorway depth. | **{Viewpoint Movement}**: Starting from the doorway-side medium setup, slowly pushing in one short step while facing direction remains unchanged. **Action**: (P1) As the viewpoint pushes in, CHAR:[@Character A] leans forward **firmly** **towards CHAR:[@Character B]** **one short step**, chin lowered — Dialogue (CHAR:[@Character A]) (low, controlled): "You knew the key was missing before anyone opened the drawer." — CHAR:[@Character B] gaze breaks screen-right, fingers tighten on PROP:[Door], shoulders drawing back -> resulting in pressure closing the gap; (P2) CHAR:[@Character B] inhales **sharply** **away from viewer** **half a body lean**, grip fixed on PROP:[Door] handle as if choosing between retreat and denial — Dialogue (CHAR:[@Character B]) (tight, unsteady): "I heard the latch move, nothing more." — CHAR:[@Character A] holds position without retreat, coat edge settling as tension locks the space in ENV:[Environment Anchor] -> resulting in a contained standoff, not a physical clash. | 5 | NO | [Global Style]. From a chest-height observer now one short step closer inside the doorway lane of Environment Anchor, looking screen-right at the compressed confrontation line, the medium close-up 50mm frame keeps fine grain controlled, low-key contrast stable, and both figures locked inside one continuous doorway space rather than two separated visual zones. **Layers**: {Foreground} faint coat edge blur near frame-left. {Midground} CHAR:[@Character A] Medium Close-up, Rule of Thirds Left, 3/4 View Right, weight settled forward, eyes fixed and unblinking; standing close to CHAR:[@Character B] Medium Close-up, Rule of Thirds Right, 3/4 View Left, shoulders compressed toward the doorframe, hand still locked on PROP:[Door] handle, breath held after speaking. {Background} ENV:[Environment Anchor] dim corridor wall and narrowed doorway depth with still air. | [Global Style]. 从 Environment Anchor 门道内一小步的胸口高度观察位置出发，视线沿着 Character A 与 Character B 之间收紧的对峙线朝画面右侧推进，画面保持中景 50mm 平视构图，细颗粒受控、阴影噪点低，并明确两人处在同一条门道纵深与同一块地面关系里。来自画面左侧的柔和窗光同时塑形两人，空间保持单一连续。 **Layers**: {Foreground} 空。 {Midground} CHAR:[@Character A] 中景，位于左三分，3/4 View Right，肩线前压，下颌绷紧；与 CHAR:[@Character B] 正面对峙，后者为中景，位于右三分，3/4 View Left，背靠门框，手指搭在 PROP:[Door] 把手上，嘴唇紧抿。 {Background} ENV:[Environment Anchor] 狭窄走廊墙面与昏暗门道纵深。 | **{Viewpoint Movement}**: 从门侧中景机位开始，缓慢推进一小步，观察方向保持不变。 **Action**: (P1) 随着机位推进，CHAR:[@Character A] 稳定地向 CHAR:[@Character B] 前压一小步，下巴压低 —— Dialogue (CHAR:[@Character A]) (低声，克制): "你在任何人打开抽屉之前，就知道钥匙不见了。" —— CHAR:[@Character B] 视线偏向画面右侧，握住 PROP:[Door] 的手指收紧，肩线后缩 -> resulting in 压迫距离收紧；(P2) CHAR:[@Character B] 急促吸气，半个身位向后倾，把手仍锁在 PROP:[Door] 上，像是在撤退与否认之间选择 —— Dialogue (CHAR:[@Character B]) (紧绷，发虚): "我只听见门闩响了一下，仅此而已。" —— CHAR:[@Character A] 保持原位不退，衣摆边缘回落，ENV:[Environment Anchor] 内的张力被锁住 -> resulting in 受控对峙，而非肢体冲突。 | NO | [Global Style]. 从更近一小步的门道内观察位置出发，视线继续沿已收紧的对峙线朝画面右侧保持，中近景 50mm 平视构图将两人压缩在同一连续门道空间里，而不是分成两个独立版面。画面延续低调反差与柔和窗光，背景纵深保持单一不被切裂。 **Layers**: {Foreground} 画面左侧近处有轻微衣摆虚化。 {Midground} CHAR:[@Character A] 中近景，位于左三分，3/4 View Right，重心前落，目光固定不眨；贴近 CHAR:[@Character B]，后者为中近景，位于右三分，3/4 View Left，肩线压向门框，手仍锁在 PROP:[Door] 把手上，说话后屏住呼吸。 {Background} ENV:[Environment Anchor] 昏暗走廊墙面与被压窄的门道纵深，空气静止。 | [@Character A], [@Character B], [Environment Anchor], [Door] |
+| EP01_SC03_SH01 | 路上对峙建立 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，先交代路上的人物关系与站位。<br>预估：时长 4s，主节拍 2 个。<br>动态：slight hold，subtle lateral settle。<br>首帧：A 横切到 B 的行进线前，B 在路边收住脚步。<br>过程：功能=共享空间建立镜。(P1) A 卡住前路不让继续走；(P2) B 视线闪躲并收紧包带。<br>尾帧：共享街道空间关系明确；稳定态：是，近景收束：否。<br>校验：实体完整性通过。 | [Global Style]. From a chest-height observer position near the roadside curb of Environment Anchor, looking screen-right across the wet street lane between Character A and Character B, the frame holds a medium full 40mm eye-level two-person composition with controlled fine grain, cool streetlamp spill, and one uninterrupted shared asphalt plane. **Layers**: {Foreground} faint curb-edge blur near frame-left. {Midground} CHAR:[@Character A] Medium Full Shot, Rule of Thirds Left, 3/4 View Right, shoulders angled forward, one foot planted across the walking line; CHAR:[@Character B] Medium Full Shot, Rule of Thirds Right, 3/4 View Left, halted beside the curb, one hand gripping PROP:[Bag] strap across the chest, chin slightly tucked. {Background} ENV:[Environment Anchor] night road surface, dim streetlights, and a soft line of parked-car silhouettes. | **{Viewpoint Movement}**: Holding the shared roadside two-person frame with a subtle lateral settle to keep both figures grounded in one street space. **Action**: (P1) CHAR:[@Character A] remains planted **firmly** **towards CHAR:[@Character B]** **half a step across the walking line**, shoulders closing the path without touching — CHAR:[@Character B] checks forward momentum and stays near the curb; (P2) CHAR:[@Character B] shifts weight **slightly** **away from CHAR:[@Character A]** **half a body lean**, gaze breaking for an instant as fingers tighten on PROP:[Bag] -> resulting in the roadside defensive relationship becoming clear before the verbal pressure begins. | 4 | NO | [Global Style]. From the same chest-height roadside observer position, still looking screen-right through the shared street lane, the medium full 40mm frame keeps both figures readable with low shadow noise, wet-road reflections, and stable curb depth. **Layers**: {Foreground} soft curb-edge blur remains near frame-left. {Midground} CHAR:[@Character A] Medium Full Shot, Rule of Thirds Left, 3/4 View Right, weight settled into the blocking stance; CHAR:[@Character B] Medium Full Shot, Rule of Thirds Right, 3/4 View Left, shoulders tighter around PROP:[Bag], grip firmer on the strap, lips pressed thinner. {Background} ENV:[Environment Anchor] dim roadside, reflective asphalt, and softened parked-car shapes. | [Global Style]. 从 Environment Anchor 路边路沿附近的胸口高度观察位置出发，视线朝画面右侧越过 Character A 与 Character B 之间的湿路面通道，画面保持中全景 40mm 平视双人构图，细颗粒受控，冷色路灯把两人锁在同一块柏油路面上。 **Layers**: {Foreground} 左侧近处有轻微路沿虚化。 {Midground} CHAR:[@Character A] 中全景，位于左三分，3/4 View Right，肩线前压，一只脚横卡在行进线上；CHAR:[@Character B] 中全景，位于右三分，3/4 View Left，停在路边，一只手抓着胸前的 PROP:[Bag] 包带，下巴微收。 {Background} ENV:[Environment Anchor] 夜路地面、昏暗路灯与一排柔化的停车轮廓。 | **{Viewpoint Movement}**: 保持共享路面双人构图，仅做极轻微横向落稳，让两人都稳固地处在同一街道空间里。 **Action**: (P1) CHAR:[@Character A] 稳定地朝 CHAR:[@Character B] 卡住前路，横切进对方的行进线但不接触 —— CHAR:[@Character B] 在路边收住前冲势头；(P2) CHAR:[@Character B] 轻微后倾半个身位，视线短暂移开，抓住 PROP:[Bag] 的手指收紧 -> resulting in 路上的防守关系先被清楚建立，再进入言语压迫。 | NO | [Global Style]. 从同一胸口高度的路边观察位置出发，视线仍沿着共享街道空间朝画面右侧保持，中全景 40mm 构图让两人都清晰可读，阴影噪点低，湿路反光稳定。 **Layers**: {Foreground} 左侧路沿虚化仍在。 {Midground} CHAR:[@Character A] 中全景，位于左三分，3/4 View Right，重心压进封路站姿；CHAR:[@Character B] 中全景，位于右三分，3/4 View Left，肩线更紧地裹住 PROP:[Bag]，包带抓得更牢，嘴唇压得更薄。 {Background} ENV:[Environment Anchor] 昏暗路面、反光柏油与柔化的车身轮廓。 | [@Character A], [@Character B], [Environment Anchor], [Bag] |
+| EP01_SC03_SH02 | 路边压问 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，主讲者施压。<br>预估：时长 5s，主节拍 2 个。<br>动态：slow push in，OTS。<br>首帧：从 A 肩后看 B，被压在路边。<br>过程：功能=施压推进镜。(P1) A 低声质问；(P2) B 不敢正视，只收紧包带。<br>尾帧：压力集中到 B 脸部；稳定态：是，近景收束：是。<br>校验：实体完整性通过。 | [Global Style]. From a shoulder-height observer tucked just behind Character A's left shoulder at the roadside edge of Environment Anchor, looking screen-right toward Character B, the frame holds an over-the-shoulder medium 50mm composition with controlled fine grain, soft streetlamp spill shaping Character B's face, and one continuous night-road background. **Layers**: {Foreground} blurred shoulder and collar edge of CHAR:[@Character A]. {Midground} CHAR:[@Character B] Medium Shot, Rule of Thirds Right, 3/4 View Left, back angled toward the curb, hand fixed on PROP:[Bag], jaw tense. {Background} ENV:[Environment Anchor] dim road surface, roadside glow, and softened vehicle silhouettes. | **{Viewpoint Movement}**: Slow push in from the over-the-shoulder roadside setup by about an arm's length, then brief settle. **Action**: (P1) CHAR:[@Character A] leans in **firmly** **towards CHAR:[@Character B]** **one short step of pressure** — Dialogue (CHAR:[@Character A]) (low, controlled): "You started clutching that bag before I even reached this side of the road." — CHAR:[@Character B] avoids direct eye contact, shoulders drawing tighter; (P2) CHAR:[@Character B] grips PROP:[Bag] **harder** **downward** **one visible finger-tightening**, breath shortening as the gaze slips screen-right -> resulting in the verbal pressure landing on Character B rather than the street around them. | 5 | NO | [Global Style]. From a shoulder-height observer now slightly closer behind Character A's shoulder, still looking screen-right toward Character B, the over-the-shoulder medium close-up 50mm frame compresses the roadside space with stable low-key contrast and a clear catchlight on Character B's eyes. **Layers**: {Foreground} soft blurred shoulder line of CHAR:[@Character A] near frame-left. {Midground} CHAR:[@Character B] Medium Close-up, Rule of Thirds Right, 3/4 View Left, throat tight, hand still locked on PROP:[Bag], eyes no longer meeting Character A directly. {Background} ENV:[Environment Anchor] dim road glow and shallow curb depth. | [Global Style]. 从 Character A 左肩后方的肩口高度观察位置出发，机位停在 Environment Anchor 路边，视线朝画面右侧压向 Character B，画面保持过肩中景 50mm 构图，细颗粒受控，柔和路灯光塑出 Character B 的脸部，并保持同一条夜路背景。 **Layers**: {Foreground} CHAR:[@Character A] 虚化的肩线与衣领边。 {Midground} CHAR:[@Character B] 中景，位于右三分，3/4 View Left，身体朝路沿收紧，一只手锁在 PROP:[Bag] 包带上，下颌绷紧。 {Background} ENV:[Environment Anchor] 昏暗路面、路边光晕与柔化的车辆轮廓。 | **{Viewpoint Movement}**: 从过肩路边机位缓慢推进约一臂距离，随后短暂停住。 **Action**: (P1) CHAR:[@Character A] 稳定地向 CHAR:[@Character B] 压近一小步 —— Dialogue (CHAR:[@Character A]) (低声，克制): "我还没走到这边路口，你就先把那个包抓紧了。" —— CHAR:[@Character B] 不再直视，肩线继续收紧；(P2) CHAR:[@Character B] 更用力地扣住 PROP:[Bag] 包带，呼吸缩短，视线滑向画面右侧 -> resulting in 言语压力被集中压到 Character B 的面部与手部反应上，而不是周围街景。 | NO | [Global Style]. 从更近一点的 Character A 肩后位置出发，视线仍朝画面右侧压向 Character B，过肩中近景 50mm 构图压缩了路边空间，低调反差稳定，Character B 眼内有清晰眼神光。 **Layers**: {Foreground} 左侧近处有 CHAR:[@Character A] 的柔焦肩线。 {Midground} CHAR:[@Character B] 中近景，位于右三分，3/4 View Left，喉结与下颌绷紧，手仍锁在 PROP:[Bag] 包带上，目光已不再正视 Character A。 {Background} ENV:[Environment Anchor] 昏暗路面与浅路沿纵深。 | [@Character A], [@Character B], [Environment Anchor], [Bag] |
+| EP01_SC03_SH03 | 路边辩解反打 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，听者反应转主导。<br>预估：时长 5s，主节拍 2 个。<br>动态：reverse OTS，held reaction。<br>首帧：从 B 肩后看 A，焦点先落在 A。<br>过程：功能=听者反应反打镜。(P1) B 急促辩解；(P2) A 不退，只以凝视压住回应。<br>尾帧：A 的压迫表情被锁定；稳定态：是，近景收束：是。<br>校验：实体完整性通过。 | [Global Style]. From a shoulder-height observer tucked behind Character B's right shoulder near the curb line of Environment Anchor, looking screen-left toward Character A in the roadside lane, the frame holds a reverse over-the-shoulder medium 50mm composition with stable fine grain, soft frontal spill on Character A, and one unbroken street depth. **Layers**: {Foreground} blurred cheek and shoulder edge of CHAR:[@Character B]. {Midground} CHAR:[@Character A] Medium Shot, Rule of Thirds Left, 3/4 View Right, body still blocking the walking line, chin lowered. {Background} ENV:[Environment Anchor] damp road surface, dim light pool, and softened car silhouettes. | **{Viewpoint Movement}**: Holding the reverse over-the-shoulder frame with a slight breathing settle, no aggressive move. **Action**: (P1) CHAR:[@Character B] speaks **sharply** **towards CHAR:[@Character A]** **without leaving the curb line** — Dialogue (CHAR:[@Character B]) (tight, unsteady): "I held it because you cut me off out here, that's all." — the shoulder in foreground rises with the breath; (P2) CHAR:[@Character A] remains still **firmly** **towards CHAR:[@Character B]** **no retreat**, eyes fixed and jaw set as the silence after the reply stretches -> resulting in Character A absorbing the line without releasing pressure. | 5 | NO | [Global Style]. From the same reverse over-the-shoulder position, still looking screen-left toward Character A, the frame settles into a medium close-up 50mm composition with clear facial definition, controlled shadow detail, and one continuous roadside depth behind him. **Layers**: {Foreground} soft blurred shoulder shape of CHAR:[@Character B]. {Midground} CHAR:[@Character A] Medium Close-up, Rule of Thirds Left, 3/4 View Right, eyes unwavering, mouth held in a thin line, shoulders firm across the walking lane. {Background} ENV:[Environment Anchor] dim road plane and softened curb depth. | [Global Style]. 从靠近路沿的 Character B 右肩后方出发，机位朝画面左侧看向站在路上挡住去路的 Character A，画面保持反打过肩中景 50mm 构图，细颗粒稳定，柔和正面光落在 Character A 脸上，背景仍是同一条夜路纵深。 **Layers**: {Foreground} CHAR:[@Character B] 虚化的脸颊与肩线。 {Midground} CHAR:[@Character A] 中景，位于左三分，3/4 View Right，身体仍挡住行进线，下巴压低。 {Background} ENV:[Environment Anchor] 潮湿路面、昏暗光池与柔化的车影。 | **{Viewpoint Movement}**: 保持反打过肩机位，只做轻微呼吸式落稳，不做强推进。 **Action**: (P1) CHAR:[@Character B] 沿着路边急促辩解 —— Dialogue (CHAR:[@Character B]) (紧绷，发虚): "我抓紧它，只是因为你在这儿拦住了我，仅此而已。" —— 前景肩线随着呼吸提起；(P2) CHAR:[@Character A] 仍稳定地朝 CHAR:[@Character B] 压住，不后退，目光固定、下颌收紧，回应后的沉默被拉长 -> resulting in Character A 吸收这句辩解却没有松开压迫。 | NO | [Global Style]. 从同一反打过肩位置出发，视线仍朝画面左侧看向 Character A，画面收为中近景 50mm 构图，面部细节清楚，阴影层次受控，身后道路纵深连续。 **Layers**: {Foreground} CHAR:[@Character B] 柔焦肩线仍在。 {Midground} CHAR:[@Character A] 中近景，位于左三分，3/4 View Right，目光不移，嘴线压薄，肩线稳固地横在行进线前。 {Background} ENV:[Environment Anchor] 昏暗路面与柔化后的路沿纵深。 | [@Character A], [@Character B], [Environment Anchor], [Bag] |
+| EP01_SC03_SH04 | 包带与眼神收束 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，结果细节收束。<br>预估：时长 4s，主节拍 2 个。<br>动态：detail to close，brief hold。<br>首帧：包带上的手与紧绷呼吸先入画。<br>过程：功能=细节特写收束镜。(P1) B 手指继续发白；(P2) 视线抬回 A，却仍不稳。<br>尾帧：近景锁定脆弱防守；稳定态：是，近景收束：是。<br>校验：实体完整性通过。 | [Global Style]. From a close observer position near Character B's hand line over PROP:[Bag] at the roadside edge of Environment Anchor, looking slightly upward screen-left, the frame begins as a tight detail-oriented 65mm composition with controlled fine grain, soft spill catching knuckles and the lower cheek line, and one continuous dark street plane behind. **Layers**: {Foreground} PROP:[Bag] strap and CHAR:[@Character B]'s tightened fingers in sharp focus. {Midground} lower jaw and throat line of CHAR:[@Character B] entering the upper frame edge. {Background} ENV:[Environment Anchor] dim roadside surface and blurred streetlight glow. | **{Viewpoint Movement}**: A very short rise from the bag-strap detail into a close facial hold, then complete settle. **Action**: (P1) CHAR:[@Character B]'s fingers tighten **visibly** **around PROP:[Bag]** **one final whitening squeeze**, breath catching in the throat; (P2) the viewpoint lifts just enough to catch CHAR:[@Character B] looking back **carefully** **towards CHAR:[@Character A]** **with an unstable half-raise of the eyes**, mouth parting before the body fully follows -> resulting in a fragile defensive state rather than regained control. | 4 | NO | [Global Style]. From a close observer position now slightly above the hand line over PROP:[Bag], looking screen-left across Character B's face toward the blocked roadside space, the frame settles into a close-up 65mm composition with soft beauty-preserving spill, clean eye highlight, and stable low-noise shadows. **Layers**: {Foreground} faint blurred road-edge bokeh near frame-right. {Midground} CHAR:[@Character B] Close-up, Rule of Thirds Right, 3/4 View Left, eyes lifted but uncertain, lips parted slightly, one hand still clamped on PROP:[Bag]. {Background} ENV:[Environment Anchor] dark road plane and a hint of streetlight depth. | [Global Style]. 从靠近 PROP:[Bag] 包带的位置出发，机位贴近 Character B 的手部线，沿 Environment Anchor 路边微微抬头朝画面左侧看，画面先是 65mm 的细节近景，细颗粒受控，柔和侧光照亮发白的指节与下颌线，背景只保留一整块连续暗路面与路灯光晕。 **Layers**: {Foreground} PROP:[Bag] 包带与 CHAR:[@Character B] 收紧的手指清晰对焦。 {Midground} CHAR:[@Character B] 的下颌与喉线切入上方画面。 {Background} ENV:[Environment Anchor] 昏暗路边地面与柔化光晕。 | **{Viewpoint Movement}**: 从包带细节做极短距离上抬，进入面部近景后停稳。 **Action**: (P1) CHAR:[@Character B] 的手指沿着 PROP:[Bag] 包带再次明显收紧，指节发白，喉间呼吸一顿；(P2) 机位只抬到足够接住视线，CHAR:[@Character B] 小心地把目光抬回 CHAR:[@Character A]，但眼神仍不稳，嘴唇先张开而身体没有真正跟上 -> resulting in 脆弱防守被锁定，而不是重新取得控制。 | NO | [Global Style]. 从比包带略高的位置出发，机位朝画面左侧越过 Character B 的脸看向被封住的路边空间，画面落为 65mm 近景构图，柔和美化光保住眼神光，阴影低噪点且稳定。 **Layers**: {Foreground} 右侧近处有轻微路边虚化光斑。 {Midground} CHAR:[@Character B] 近景，位于右三分，3/4 View Left，眼睛抬起却不稳定，嘴唇微张，一只手仍死扣 PROP:[Bag] 包带。 {Background} ENV:[Environment Anchor] 暗路面与一丝路灯纵深。 | [@Character A], [@Character B], [Environment Anchor], [Bag] |
 
 *******************请按以上规则，对以下完整剧本分析，要完整分析：
