@@ -66,7 +66,7 @@ def _ensure_missing_table_columns(table_name: str, model, *, is_postgres: bool) 
     )
 
 
-def _ensure_review_workflow_schema(*, is_postgres: bool) -> None:
+def _ensure_review_workflow_schema(*, is_postgres: bool, apply_backfills: bool = True) -> None:
     if not _REVIEW_MODELS_AVAILABLE:
         logger.warning("Skipping project asset review table bootstrap because review models are unavailable")
         return
@@ -91,57 +91,60 @@ def _ensure_review_workflow_schema(*, is_postgres: bool) -> None:
         _ensure_missing_table_columns("project_asset_review_rounds", ProjectAssetReviewRound, is_postgres=is_postgres)
         _ensure_missing_table_columns("project_asset_review_messages", ProjectAssetReviewMessage, is_postgres=is_postgres)
 
-        with engine.begin() as conn:
-            if is_postgres:
-                conn.execute(text("UPDATE project_asset_review_threads SET title = COALESCE(title, '')"))
-                conn.execute(text("UPDATE project_asset_review_threads SET status = COALESCE(NULLIF(status, ''), 'open')"))
-                conn.execute(text("UPDATE project_asset_review_threads SET latest_round_no = COALESCE(latest_round_no, 0)"))
-                conn.execute(text("UPDATE project_asset_review_threads SET latest_activity_at = COALESCE(latest_activity_at, updated_at, created_at)"))
-                conn.execute(text("UPDATE project_asset_review_threads SET created_at = COALESCE(created_at, updated_at, latest_activity_at, '')"))
-                conn.execute(text("UPDATE project_asset_review_threads SET updated_at = COALESCE(updated_at, latest_activity_at, created_at, '')"))
-                conn.execute(text("UPDATE project_asset_review_threads SET requester_last_read_at = COALESCE(requester_last_read_at, created_at, updated_at, latest_activity_at)"))
+        if apply_backfills:
+            with engine.begin() as conn:
+                if is_postgres:
+                    conn.execute(text("UPDATE project_asset_review_threads SET title = COALESCE(title, '')"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET status = COALESCE(NULLIF(status, ''), 'open')"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET latest_round_no = COALESCE(latest_round_no, 0)"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET latest_activity_at = COALESCE(latest_activity_at, updated_at, created_at)"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET created_at = COALESCE(created_at, updated_at, latest_activity_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET updated_at = COALESCE(updated_at, latest_activity_at, created_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET requester_last_read_at = COALESCE(requester_last_read_at, created_at, updated_at, latest_activity_at)"))
 
-                conn.execute(text("UPDATE project_asset_review_rounds SET round_no = COALESCE(round_no, 1)"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET scope_type = COALESCE(NULLIF(scope_type, ''), 'all_current')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET entity_required = COALESCE(entity_required, TRUE)"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET shot_required = COALESCE(shot_required, TRUE)"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET entity_decision = COALESCE(NULLIF(entity_decision, ''), 'pending')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET shot_decision = COALESCE(NULLIF(shot_decision, ''), 'pending')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET overall_status = COALESCE(NULLIF(overall_status, ''), 'pending_reviewer')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET selected_entity_ids = COALESCE(selected_entity_ids, '[]'::json)"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET selected_shot_ids = COALESCE(selected_shot_ids, '[]'::json)"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET created_at = COALESCE(created_at, updated_at, '')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET updated_at = COALESCE(updated_at, created_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET round_no = COALESCE(round_no, 1)"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET scope_type = COALESCE(NULLIF(scope_type, ''), 'all_current')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET entity_required = COALESCE(entity_required, TRUE)"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET shot_required = COALESCE(shot_required, TRUE)"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET entity_decision = COALESCE(NULLIF(entity_decision, ''), 'pending')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET shot_decision = COALESCE(NULLIF(shot_decision, ''), 'pending')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET overall_status = COALESCE(NULLIF(overall_status, ''), 'pending_reviewer')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET selected_entity_ids = COALESCE(selected_entity_ids, '[]'::json)"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET selected_shot_ids = COALESCE(selected_shot_ids, '[]'::json)"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET created_at = COALESCE(created_at, updated_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET updated_at = COALESCE(updated_at, created_at, '')"))
 
-                conn.execute(text("UPDATE project_asset_review_messages SET sender_role = COALESCE(NULLIF(sender_role, ''), 'requester')"))
-                conn.execute(text("UPDATE project_asset_review_messages SET message_type = COALESCE(NULLIF(message_type, ''), 'message')"))
-                conn.execute(text("UPDATE project_asset_review_messages SET created_at = COALESCE(created_at, '')"))
-            else:
-                conn.execute(text("UPDATE project_asset_review_threads SET title = COALESCE(title, '')"))
-                conn.execute(text("UPDATE project_asset_review_threads SET status = COALESCE(NULLIF(status, ''), 'open')"))
-                conn.execute(text("UPDATE project_asset_review_threads SET latest_round_no = COALESCE(latest_round_no, 0)"))
-                conn.execute(text("UPDATE project_asset_review_threads SET latest_activity_at = COALESCE(latest_activity_at, updated_at, created_at)"))
-                conn.execute(text("UPDATE project_asset_review_threads SET created_at = COALESCE(created_at, updated_at, latest_activity_at, '')"))
-                conn.execute(text("UPDATE project_asset_review_threads SET updated_at = COALESCE(updated_at, latest_activity_at, created_at, '')"))
-                conn.execute(text("UPDATE project_asset_review_threads SET requester_last_read_at = COALESCE(requester_last_read_at, created_at, updated_at, latest_activity_at)"))
+                    conn.execute(text("UPDATE project_asset_review_messages SET sender_role = COALESCE(NULLIF(sender_role, ''), 'requester')"))
+                    conn.execute(text("UPDATE project_asset_review_messages SET message_type = COALESCE(NULLIF(message_type, ''), 'message')"))
+                    conn.execute(text("UPDATE project_asset_review_messages SET created_at = COALESCE(created_at, '')"))
+                else:
+                    conn.execute(text("UPDATE project_asset_review_threads SET title = COALESCE(title, '')"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET status = COALESCE(NULLIF(status, ''), 'open')"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET latest_round_no = COALESCE(latest_round_no, 0)"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET latest_activity_at = COALESCE(latest_activity_at, updated_at, created_at)"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET created_at = COALESCE(created_at, updated_at, latest_activity_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET updated_at = COALESCE(updated_at, latest_activity_at, created_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_threads SET requester_last_read_at = COALESCE(requester_last_read_at, created_at, updated_at, latest_activity_at)"))
 
-                conn.execute(text("UPDATE project_asset_review_rounds SET round_no = COALESCE(round_no, 1)"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET scope_type = COALESCE(NULLIF(scope_type, ''), 'all_current')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET entity_required = COALESCE(entity_required, 1)"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET shot_required = COALESCE(shot_required, 1)"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET entity_decision = COALESCE(NULLIF(entity_decision, ''), 'pending')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET shot_decision = COALESCE(NULLIF(shot_decision, ''), 'pending')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET overall_status = COALESCE(NULLIF(overall_status, ''), 'pending_reviewer')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET selected_entity_ids = COALESCE(selected_entity_ids, '[]')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET selected_shot_ids = COALESCE(selected_shot_ids, '[]')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET created_at = COALESCE(created_at, updated_at, '')"))
-                conn.execute(text("UPDATE project_asset_review_rounds SET updated_at = COALESCE(updated_at, created_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET round_no = COALESCE(round_no, 1)"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET scope_type = COALESCE(NULLIF(scope_type, ''), 'all_current')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET entity_required = COALESCE(entity_required, 1)"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET shot_required = COALESCE(shot_required, 1)"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET entity_decision = COALESCE(NULLIF(entity_decision, ''), 'pending')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET shot_decision = COALESCE(NULLIF(shot_decision, ''), 'pending')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET overall_status = COALESCE(NULLIF(overall_status, ''), 'pending_reviewer')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET selected_entity_ids = COALESCE(selected_entity_ids, '[]')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET selected_shot_ids = COALESCE(selected_shot_ids, '[]')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET created_at = COALESCE(created_at, updated_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_rounds SET updated_at = COALESCE(updated_at, created_at, '')"))
 
-                conn.execute(text("UPDATE project_asset_review_messages SET sender_role = COALESCE(NULLIF(sender_role, ''), 'requester')"))
-                conn.execute(text("UPDATE project_asset_review_messages SET message_type = COALESCE(NULLIF(message_type, ''), 'message')"))
-                conn.execute(text("UPDATE project_asset_review_messages SET created_at = COALESCE(created_at, '')"))
+                    conn.execute(text("UPDATE project_asset_review_messages SET sender_role = COALESCE(NULLIF(sender_role, ''), 'requester')"))
+                    conn.execute(text("UPDATE project_asset_review_messages SET message_type = COALESCE(NULLIF(message_type, ''), 'message')"))
+                    conn.execute(text("UPDATE project_asset_review_messages SET created_at = COALESCE(created_at, '')"))
 
-        logger.info("Ensured project asset review workflow schema compatibility")
+            logger.info("Ensured project asset review workflow schema compatibility with backfills")
+        else:
+            logger.info("Ensured project asset review workflow schema structure without startup backfills")
     except Exception as exc:
         logger.error(f"Failed to ensure project asset review workflow schema compatibility: {exc}")
 
@@ -360,10 +363,8 @@ def _ensure_minimum_runtime_schema(*, is_postgres: bool) -> None:
                 with engine.begin() as conn:
                     if is_postgres:
                         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSON"))
-                        conn.execute(text("UPDATE users SET preferences = '{}'::json WHERE preferences IS NULL"))
                     else:
                         conn.execute(text("ALTER TABLE users ADD COLUMN preferences JSON"))
-                        conn.execute(text("UPDATE users SET preferences = '{}' WHERE preferences IS NULL"))
                 logger.info("Ensured users.preferences column")
     except Exception as e:
         logger.error(f"Failed to ensure users.preferences column: {e}")
@@ -384,17 +385,12 @@ def _ensure_minimum_runtime_schema(*, is_postgres: bool) -> None:
                     else:
                         conn.execute(text("ALTER TABLE project_shares ADD COLUMN permissions JSON"))
                 if is_postgres:
-                    conn.execute(text("UPDATE project_shares SET role = 'editor' WHERE role IS NULL OR role = ''"))
-                    conn.execute(text("UPDATE project_shares SET permissions = '{}'::json WHERE permissions IS NULL"))
                     conn.execute(text("ALTER TABLE project_shares ALTER COLUMN role SET DEFAULT 'editor'"))
-                else:
-                    conn.execute(text("UPDATE project_shares SET role = 'editor' WHERE role IS NULL OR role = ''"))
-                    conn.execute(text("UPDATE project_shares SET permissions = '{}' WHERE permissions IS NULL"))
             logger.info("Ensured project_shares.role and project_shares.permissions columns")
     except Exception as e:
         logger.error(f"Failed to ensure project_shares review columns: {e}")
 
-    _ensure_review_workflow_schema(is_postgres=is_postgres)
+    _ensure_review_workflow_schema(is_postgres=is_postgres, apply_backfills=False)
     _ensure_user_runtime_schema(is_postgres=is_postgres)
 
     logger.info("Critical schema migration: complete")
