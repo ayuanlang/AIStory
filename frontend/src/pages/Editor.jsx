@@ -632,7 +632,9 @@ function getEpisodePreferredAspectRatio(episodeInfoLike) {
 function buildShotDiptychPlan(aspectRatio) {
     const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
     const ratioValue = parts.widthPart / parts.heightPart;
-    const layout = ratioValue >= 1 ? 'horizontal' : 'vertical';
+    // Keep the two-panel canvas close to square after a single split:
+    // wide targets stack top-bottom, tall targets sit left-right.
+    const layout = ratioValue >= 1 ? 'vertical' : 'horizontal';
     const exactCombinedAspectRatio = layout === 'horizontal'
         ? buildAspectRatioString(parts.widthPart * 2, parts.heightPart)
         : buildAspectRatioString(parts.widthPart, parts.heightPart * 2);
@@ -660,30 +662,33 @@ function collectSupportedAspectRatioOptions(values) {
 
 function selectBestShotDiptychRequestAspectRatio({ diptychPlan, allowedAspectRatios }) {
     const fallback = normalizeAspectRatioOption(diptychPlan?.targetAspectRatio)
-        || (diptychPlan?.layout === 'vertical' ? '9:16' : '16:9');
+        || (diptychPlan?.layout === 'vertical' ? '16:9' : '9:16');
     const supported = collectSupportedAspectRatioOptions(allowedAspectRatios);
     if (supported.length === 0) return fallback;
 
-    const exactRatio = parseAspectRatioValue(diptychPlan?.exactCombinedAspectRatio);
     const targetRatio = parseAspectRatioValue(diptychPlan?.targetAspectRatio);
-    const preferVertical = diptychPlan?.layout === 'vertical';
-    const oriented = supported.filter((value) => {
-        const ratio = parseAspectRatioValue(value);
-        if (ratio == null) return false;
-        return preferVertical ? ratio < 1 : ratio >= 1;
-    });
-    const candidates = oriented.length > 0 ? oriented : supported;
+    const preferHorizontalSplit = diptychPlan?.layout === 'horizontal';
+    const exactRatio = parseAspectRatioValue(diptychPlan?.exactCombinedAspectRatio);
 
     const scoreAspect = (value) => {
-        const ratio = parseAspectRatioValue(value);
-        if (ratio == null) return Number.POSITIVE_INFINITY;
-        const primary = exactRatio != null ? Math.abs(ratio - exactRatio) : Number.POSITIVE_INFINITY;
-        const secondary = targetRatio != null ? Math.abs(ratio - targetRatio) : Number.POSITIVE_INFINITY;
-        const orientationPenalty = preferVertical ? (ratio >= 1 ? 1000 : 0) : (ratio < 1 ? 1000 : 0);
-        return orientationPenalty + (primary * 10) + secondary;
+        const overallRatio = parseAspectRatioValue(value);
+        if (overallRatio == null) return Number.POSITIVE_INFINITY;
+        const derivedPanelRatio = preferHorizontalSplit
+            ? (overallRatio / 2)
+            : (overallRatio * 2);
+        const panelCloseness = targetRatio != null
+            ? Math.abs(derivedPanelRatio - targetRatio)
+            : Number.POSITIVE_INFINITY;
+        const combinedCloseness = exactRatio != null
+            ? Math.abs(overallRatio - exactRatio)
+            : Number.POSITIVE_INFINITY;
+        const orientationPenalty = preferHorizontalSplit
+            ? (overallRatio < 1 ? 100 : 0)
+            : (overallRatio > 1 ? 100 : 0);
+        return orientationPenalty + (panelCloseness * 10) + combinedCloseness;
     };
 
-    return [...candidates].sort((left, right) => scoreAspect(left) - scoreAspect(right))[0] || fallback;
+    return [...supported].sort((left, right) => scoreAspect(left) - scoreAspect(right))[0] || fallback;
 }
 
 function resolveShotPanelExportResolution(aspectRatio, imageSize) {
