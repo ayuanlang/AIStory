@@ -71,6 +71,12 @@ const isBrokenSceneImageUrl = (url) => {
     return brokenSceneImageUrls.has(String(url || '').trim());
 };
 
+const normalizeBatchParallelLimit = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 3;
+    return Math.min(12, Math.max(1, Math.trunc(parsed)));
+};
+
 const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps }) => {
     const rawSrc = String(src || '').trim();
     const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
@@ -1417,7 +1423,6 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const [isReviewPanelLoading, setIsReviewPanelLoading] = useState(false);
     const [isReviewPanelSubmitting, setIsReviewPanelSubmitting] = useState(false);
     const [currentUserId, setCurrentUserId] = useState(null);
-    const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [selectedQuickReviewThreadId, setSelectedQuickReviewThreadId] = useState(null);
     const [selectedQuickReviewRounds, setSelectedQuickReviewRounds] = useState([]);
     const [selectedQuickReviewRoundId, setSelectedQuickReviewRoundId] = useState(null);
@@ -1532,20 +1537,12 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     }, [id, mode, loadProjectReviewPanel]);
 
     useEffect(() => {
-        const normalizeBatchParallelLimit = (value) => {
-            const parsed = Number(value);
-            if (!Number.isFinite(parsed)) return 3;
-            return Math.min(12, Math.max(1, Math.trunc(parsed)));
-        };
-
         fetchMe()
             .then((user) => {
                 setCurrentUserId(Number(user?.id || 0) || null);
-                setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
             })
             .catch(() => {
                 setCurrentUserId(null);
-                setUserBatchParallelLimit(3);
             });
     }, []);
 
@@ -26449,6 +26446,7 @@ const Editor = ({
     const [jobPoolData, setJobPoolData] = useState({ total: 0, status_counts: {}, items: [] });
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [currentUserId, setCurrentUserId] = useState(null);
+    const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
@@ -26475,10 +26473,12 @@ const Editor = ({
             .then((user) => {
                 setIsSuperuser(!!user?.is_superuser);
                 setCurrentUserId(Number(user?.id || 0) || null);
+                setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
             })
             .catch(() => {
                 setIsSuperuser(false);
                 setCurrentUserId(null);
+                setUserBatchParallelLimit(3);
             });
     }, []);
 
