@@ -26,15 +26,36 @@ const shouldRetryWithFallback = (error) => {
     return message.includes('network error');
 };
 
+const RETRYABLE_LOGIN_PATHS = ['/login', '/login/access-token'];
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableNetworkRequest = (config = {}) => {
+    const method = String(config?.method || 'get').trim().toLowerCase();
+    if (['get', 'head', 'options'].includes(method)) return true;
+
+    const url = String(config?.url || '').trim().toLowerCase();
+    if (!url) return false;
+    return RETRYABLE_LOGIN_PATHS.some((path) => url.endsWith(path));
+};
+
 api.interceptors.response.use(
     (response) => response,
     async (error) => {
         const originalConfig = error?.config || {};
-        if (!FALLBACK_API_URL || originalConfig.__fallbackRetried) {
+        if (!shouldRetryWithFallback(error)) {
             return Promise.reject(error);
         }
 
-        if (!shouldRetryWithFallback(error)) {
+        if (!originalConfig.__networkRetried && isRetryableNetworkRequest(originalConfig)) {
+            await delay(350);
+            return api.request({
+                ...originalConfig,
+                __networkRetried: true,
+            });
+        }
+
+        if (!FALLBACK_API_URL || originalConfig.__fallbackRetried) {
             return Promise.reject(error);
         }
 
