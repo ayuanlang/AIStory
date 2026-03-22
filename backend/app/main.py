@@ -45,6 +45,8 @@ def _run_critical_db_bootstrap_steps() -> None:
     Base.metadata.create_all(bind=engine)
     logger.info("DB bootstrap: critical schema migration start")
     check_and_migrate_tables(critical_only=True)
+    if not _is_minimum_schema_ready():
+        raise RuntimeError("Critical DB schema bootstrap finished but readiness probe still failed")
     logger.info("DB bootstrap: default superuser check start")
     create_default_superuser()
 

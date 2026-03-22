@@ -299,19 +299,50 @@ def _ensure_user_runtime_schema(*, is_postgres: bool) -> None:
             is_active_type_name = str(is_active_col.get('type') or '').lower()
             with engine.begin() as conn:
                 if 'bool' in is_active_type_name:
-                    conn.execute(text("""
-                        ALTER TABLE users
-                        ALTER COLUMN is_active TYPE INTEGER
-                        USING CASE
-                            WHEN is_active IS TRUE THEN 1
-                            WHEN is_active IS FALSE OR is_active IS NULL THEN 0
-                            ELSE 0
-                        END
-                    """))
+                    try:
+                        conn.execute(text("""
+                            ALTER TABLE users
+                            ALTER COLUMN is_active TYPE INTEGER
+                            USING CASE
+                                WHEN is_active IS TRUE THEN 1
+                                WHEN is_active IS FALSE OR is_active IS NULL THEN 0
+                                ELSE 0
+                            END
+                        """))
+                        logger.info("Normalized users.is_active from boolean to integer via ALTER COLUMN TYPE")
+                    except Exception as alter_exc:
+                        logger.warning(
+                            "ALTER COLUMN TYPE for users.is_active failed, rebuilding column instead: %s",
+                            alter_exc,
+                        )
+                        temp_col = "is_active_int_migrated"
+                        existing_user_cols_meta = {c['name']: c for c in inspect(engine).get_columns('users')}
+                        if temp_col in existing_user_cols_meta:
+                            conn.execute(text(f"ALTER TABLE users DROP COLUMN IF EXISTS {temp_col} CASCADE"))
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {temp_col} INTEGER"))
+                        conn.execute(text(f"""
+                            UPDATE users
+                            SET {temp_col} = CASE
+                                WHEN is_active IS TRUE THEN 1
+                                WHEN is_active IS FALSE OR is_active IS NULL THEN 0
+                                ELSE 0
+                            END
+                        """))
+                        conn.execute(text(f"ALTER TABLE users ALTER COLUMN {temp_col} SET DEFAULT 1"))
+                        conn.execute(text("ALTER TABLE users DROP COLUMN is_active CASCADE"))
+                        conn.execute(text(f"ALTER TABLE users RENAME COLUMN {temp_col} TO is_active"))
+                        logger.info("Normalized users.is_active from boolean to integer via column rebuild")
+
                 conn.execute(text("ALTER TABLE users ALTER COLUMN is_active SET DEFAULT 1"))
                 conn.execute(text("UPDATE users SET is_active = 0 WHERE is_active IS NULL"))
+
+            final_user_cols_meta = {c['name']: c for c in inspect(engine).get_columns('users')}
+            final_type_name = str((final_user_cols_meta.get('is_active') or {}).get('type') or '').lower()
+            if 'bool' in final_type_name:
+                raise RuntimeError(f"users.is_active remains non-integer after migration: {final_type_name}")
         except Exception as e:
             logger.warning(f"Failed to normalize users.is_active to integer semantics: {e}")
+            raise
 
     inspector = inspect(engine)
     existing_columns = [c['name'] for c in inspector.get_columns('users')]

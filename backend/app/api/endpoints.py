@@ -19796,64 +19796,63 @@ def update_user(
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
 
-    if user_in.username is not None:
-        next_username = (user_in.username or "").strip()
-        if not next_username:
-            raise HTTPException(status_code=400, detail="Username cannot be empty")
-        dup = db.query(User).filter(User.username == next_username, User.id != user_id).first()
-        if dup:
-            raise HTTPException(status_code=400, detail="Username already registered")
-        user.username = next_username
+    def _persist_update():
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
 
-    if user_in.email is not None:
-        next_email = (user_in.email or "").strip().lower()
-        if not _is_valid_email_format(next_email):
-            raise HTTPException(status_code=400, detail="Invalid email format")
-        dup = db.query(User).filter(User.email == next_email, User.id != user_id).first()
-        if dup:
-            raise HTTPException(status_code=400, detail="Email already registered")
-        user.email = next_email
+        if user_in.username is not None:
+            next_username = (user_in.username or "").strip()
+            if not next_username:
+                raise HTTPException(status_code=400, detail="Username cannot be empty")
+            dup = db.query(User).filter(User.username == next_username, User.id != user_id).first()
+            if dup:
+                raise HTTPException(status_code=400, detail="Username already registered")
+            user.username = next_username
 
-    if user_in.full_name is not None:
-        user.full_name = (user_in.full_name or "").strip() or None
-        
-    if user_in.is_active is not None:
-        user.is_active = _normalize_user_active_level(user_in.is_active, USER_ACTIVE_LEVEL_DEFAULT)
-    if user_in.account_status is not None:
-        user.account_status = int(user_in.account_status)
-        if user.account_status == -1:
-            user.is_active = 0
-            user.email_verified = False
-    if user_in.email_verified is not None:
-        user.email_verified = bool(user_in.email_verified)
-        if user.email_verified and user.account_status == -1:
-            user.account_status = 1
-            if not _is_user_enabled(user.is_active):
-                user.is_active = USER_ACTIVE_LEVEL_DEFAULT
-    if user_in.is_authorized is not None:
-        user.is_authorized = user_in.is_authorized
-    if user_in.is_superuser is not None:
-        user.is_superuser = user_in.is_superuser
-    if user_in.is_system is not None:
-        # Ensure only one system user if we want strict uniqueness, but user asked for "System user unique" logic potentially
-        # For now, let's just allow marking. 
-        # If we need strict 1 system user, we can unset others.
-        if user_in.is_system:
-             # Unset others? Or just trust admin. Let's unset others to be safe as per "system user unique" hint.
-             db.query(User).filter(User.id != user_id).update({"is_system": False})
-        user.is_system = user_in.is_system
-        
-    if user_in.password:
-        user.hashed_password = get_password_hash(user_in.password)
-        
-    db.commit()
-    db.refresh(user)
-    return user
+        if user_in.email is not None:
+            next_email = (user_in.email or "").strip().lower()
+            if not _is_valid_email_format(next_email):
+                raise HTTPException(status_code=400, detail="Invalid email format")
+            dup = db.query(User).filter(User.email == next_email, User.id != user_id).first()
+            if dup:
+                raise HTTPException(status_code=400, detail="Email already registered")
+            user.email = next_email
+
+        if user_in.full_name is not None:
+            user.full_name = (user_in.full_name or "").strip() or None
+
+        if user_in.is_active is not None:
+            user.is_active = _normalize_user_active_level(user_in.is_active, USER_ACTIVE_LEVEL_DEFAULT)
+        if user_in.account_status is not None:
+            user.account_status = int(user_in.account_status)
+            if user.account_status == -1:
+                user.is_active = 0
+                user.email_verified = False
+        if user_in.email_verified is not None:
+            user.email_verified = bool(user_in.email_verified)
+            if user.email_verified and user.account_status == -1:
+                user.account_status = 1
+                if not _is_user_enabled(user.is_active):
+                    user.is_active = USER_ACTIVE_LEVEL_DEFAULT
+        if user_in.is_authorized is not None:
+            user.is_authorized = user_in.is_authorized
+        if user_in.is_superuser is not None:
+            user.is_superuser = user_in.is_superuser
+        if user_in.is_system is not None:
+            if user_in.is_system:
+                db.query(User).filter(User.id != user_id).update({"is_system": False})
+            user.is_system = user_in.is_system
+
+        if user_in.password:
+            user.hashed_password = get_password_hash(user_in.password)
+
+        db.commit()
+        db.refresh(user)
+        return user
+
+    return _run_with_schema_self_heal(db, _persist_update, context="update_user")
 
 
 @router.post("/generate/video")
