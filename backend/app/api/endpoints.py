@@ -17,7 +17,7 @@ from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_re
 from app.services.llm_service import llm_service
 from app.services.payment_service import payment_service
 from app.services.task_manager import submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async, cancel as _cancel_task
-from app.services.system_default_api_service import get_task_default_system_setting
+from app.services.system_default_api_service import get_task_default_system_setting, list_task_default_system_settings
 from app.services.system_api_runtime_cache import resolve_system_api_cached
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
@@ -1889,59 +1889,33 @@ def get_effective_api_setting(db: Session, user: User, provider: str = None, cat
 
 
 def _seed_default_system_settings_for_user(db: Session, user_id: int) -> None:
-    existing_count = db.query(APISetting).filter(APISetting.user_id == user_id).count()
-    if existing_count > 0:
+    existing_row = db.query(APISetting.id).filter(APISetting.user_id == user_id).order_by(APISetting.id.asc()).first()
+    if existing_row:
         return
 
-    active_system_rows: List[SystemAPISetting] = []
-    for category in ["LLM", "Image", "Video", "Vision", "Tools", "DigitalHuman", "Voice", "Music"]:
-        row = get_task_default_system_setting(db, category)
-        if not row:
-            continue
-        active_system_rows.append(row)
-
-    if not active_system_rows:
+    task_default_rows = list_task_default_system_settings(db)
+    if not task_default_rows:
         return
 
-    chosen_by_category: Dict[str, SystemAPISetting] = {}
-    for row in active_system_rows:
+    new_settings: List[APISetting] = []
+    seen_categories: set[str] = set()
+    for row in task_default_rows.values():
         if _is_system_setting_deprecated(row.config, row.deprecated):
             continue
         category = str(row.category or "").strip()
-        if not category or category in chosen_by_category:
+        if not category or category in seen_categories:
             continue
-        chosen_by_category[category] = row
+        seen_categories.add(category)
+        new_settings.append(APISetting(
+            user_id=user_id,
+            category=category,
+            system_api_id=int(row.id),
+            api_strategy="smart_default",
+            mode=None,
+        ))
 
-    for category, system_setting in chosen_by_category.items():
-        selected_setting_id: Optional[int] = None
-
-        user_setting = db.query(APISetting).filter(
-            APISetting.user_id == user_id,
-            APISetting.category == category,
-        ).order_by(APISetting.id.desc()).first()
-
-        if user_setting:
-            user_setting.system_api_id = int(system_setting.id)
-            user_setting.api_strategy = str(getattr(user_setting, "api_strategy", None) or "smart_default").strip().lower() or "smart_default"
-            user_setting.mode = None
-            selected_setting_id = user_setting.id
-        else:
-            new_setting = APISetting(
-                user_id=user_id,
-                category=system_setting.category,
-                system_api_id=int(system_setting.id),
-                api_strategy="smart_default",
-                mode=None,
-            )
-            db.add(new_setting)
-            db.flush()
-            selected_setting_id = new_setting.id
-
-        db.query(APISetting).filter(
-            APISetting.user_id == user_id,
-            APISetting.category == category,
-            APISetting.id != selected_setting_id,
-        ).delete(synchronize_session=False)
+    if new_settings:
+        db.add_all(new_settings)
 
 
 @router.get("/settings/effective")
