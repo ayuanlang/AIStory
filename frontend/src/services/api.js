@@ -1989,9 +1989,15 @@ export const confirmEmailVerificationCode = async (email, code) => {
 }
 
 export const apiLogin = async (username, password) => {
-    const response = await api.post('/login', {
-        username,
-        password
+    const payload = new URLSearchParams();
+    payload.set('username', String(username || ''));
+    payload.set('password', String(password || ''));
+
+    const response = await api.post('/login/access-token', payload, {
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        timeout: 45000,
     });
     return response.data;
 }
