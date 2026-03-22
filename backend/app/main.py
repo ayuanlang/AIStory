@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.api import endpoints, settings as settings_api
 from app.db.session import engine, SessionLocal
 from app.models.all_models import Base, User
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from app.core.logging import LoggingMiddleware, logger, configure_uvicorn_logging_noise_reduction
 from app.db.init_db import check_and_migrate_tables, create_default_superuser, init_initial_data
 from app.api.deps import warm_user_auth_cache_from_db
@@ -35,16 +35,121 @@ import re
 # ---------------------------------------------------------------------------
 _DB_BOOT_MAX_RETRIES = 5
 _DB_BOOT_RETRY_DELAY = 2  # seconds
+_DB_BOOT_LOCK_KEY = int(os.getenv("DB_BOOT_LOCK_KEY", "481516234"))
+_DB_BOOT_LOCK_WAIT_TIMEOUT = int(os.getenv("DB_BOOT_LOCK_WAIT_TIMEOUT", "240"))
+_DB_BOOT_LOCK_POLL_DELAY = max(1, int(os.getenv("DB_BOOT_LOCK_POLL_DELAY", "2")))
 
 
-def _bootstrap_db_schema() -> bool:
-    """Run blocking schema/bootstrap work before serving requests."""
-    for _attempt in range(1, _DB_BOOT_MAX_RETRIES + 1):
+def _run_critical_db_bootstrap_steps() -> None:
+    logger.info("DB bootstrap: create_all start")
+    Base.metadata.create_all(bind=engine)
+    logger.info("DB bootstrap: schema migration start")
+    check_and_migrate_tables()
+    logger.info("DB bootstrap: default superuser check start")
+    create_default_superuser()
+
+
+def _is_minimum_schema_ready() -> bool:
+    try:
+        inspector = inspect(engine)
+        if not inspector.has_table("users"):
+            return False
+        user_cols = {col["name"]: col for col in inspector.get_columns("users")}
+        is_active_col = user_cols.get("is_active")
+        if not is_active_col:
+            return False
+        is_active_type = str(is_active_col.get("type") or "").lower()
+        if "bool" in is_active_type:
+            return False
+
+        if inspector.has_table("project_shares"):
+            share_cols = {col["name"] for col in inspector.get_columns("project_shares")}
+            if "role" not in share_cols or "permissions" not in share_cols:
+                return False
+
+        required_review_tables = (
+            "project_asset_review_threads",
+            "project_asset_review_rounds",
+            "project_asset_review_messages",
+        )
+        if any(not inspector.has_table(table_name) for table_name in required_review_tables):
+            return False
+        return True
+    except Exception as exc:
+        logger.warning("DB bootstrap readiness probe failed: %s", exc)
+        return False
+
+
+def _wait_for_postgres_bootstrap_slot():
+    deadline = time.monotonic() + _DB_BOOT_LOCK_WAIT_TIMEOUT
+    waited = False
+
+    while time.monotonic() < deadline:
+        conn = None
         try:
-            Base.metadata.create_all(bind=engine)
-            check_and_migrate_tables()
-            create_default_superuser()
-            return True
+            conn = engine.connect()
+            acquired = bool(
+                conn.execute(
+                    text("SELECT pg_try_advisory_lock(:key)"),
+                    {"key": _DB_BOOT_LOCK_KEY},
+                ).scalar()
+            )
+            if acquired:
+                if waited and _is_minimum_schema_ready():
+                    conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _DB_BOOT_LOCK_KEY})
+                    conn.close()
+                    logger.info("DB bootstrap: another worker completed schema bootstrap")
+                    return "ready", None
+
+                logger.info(
+                    "DB bootstrap: advisory lock acquired%s",
+                    " after wait" if waited else "",
+                )
+                return "run", conn
+        except Exception:
+            if conn is not None:
+                conn.close()
+            raise
+
+        if conn is not None:
+            conn.close()
+
+        if not waited:
+            logger.info("DB bootstrap: another worker is running migrations; waiting for advisory lock")
+            waited = True
+        time.sleep(_DB_BOOT_LOCK_POLL_DELAY)
+
+    return "timeout", None
+
+
+def _release_postgres_bootstrap_lock(conn) -> None:
+    if conn is None:
+        return
+    try:
+        conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _DB_BOOT_LOCK_KEY})
+    except Exception as exc:
+        logger.warning("DB bootstrap: failed to release advisory lock cleanly: %s", exc)
+    finally:
+        conn.close()
+
+
+def _bootstrap_db_schema() -> tuple[bool, bool]:
+    """Run blocking schema/bootstrap work before serving requests."""
+    is_postgres = engine.dialect.name == "postgresql"
+    for _attempt in range(1, _DB_BOOT_MAX_RETRIES + 1):
+        bootstrap_lock_conn = None
+        try:
+            if is_postgres:
+                mode, bootstrap_lock_conn = _wait_for_postgres_bootstrap_slot()
+                if mode == "ready":
+                    return True, False
+                if mode == "timeout":
+                    raise TimeoutError(
+                        f"timed out waiting {_DB_BOOT_LOCK_WAIT_TIMEOUT}s for DB bootstrap advisory lock"
+                    )
+
+            _run_critical_db_bootstrap_steps()
+            return True, True
         except Exception as exc:
             if _attempt < _DB_BOOT_MAX_RETRIES:
                 logger.warning(
@@ -55,7 +160,10 @@ def _bootstrap_db_schema() -> bool:
             else:
                 logger.error("Critical DB bootstrap failed after %d attempts: %s",
                              _DB_BOOT_MAX_RETRIES, exc)
-    return False
+        finally:
+            if is_postgres:
+                _release_postgres_bootstrap_lock(bootstrap_lock_conn)
+    return False, False
 
 
 def _bootstrap_db_post_init() -> None:
@@ -120,12 +228,14 @@ class SelectiveGZipMiddleware(GZipMiddleware):
 async def lifespan(app: FastAPI):
     configure_uvicorn_logging_noise_reduction()
     if _RUN_DB_BOOTSTRAP_ON_START:
-        schema_ready = await asyncio.to_thread(_bootstrap_db_schema)
+        logger.info("Application startup: critical DB bootstrap enabled")
+        schema_ready, should_run_post_init = await asyncio.to_thread(_bootstrap_db_schema)
         if not schema_ready:
             logger.error("Critical DB schema bootstrap did not complete successfully before serving requests")
             raise RuntimeError("Critical DB schema bootstrap failed")
-        else:
+        if should_run_post_init:
             asyncio.create_task(asyncio.to_thread(_bootstrap_db_post_init))
+        logger.info("Application startup: critical DB bootstrap complete")
     else:
         logger.warning("RUN_DB_BOOTSTRAP_ON_START is disabled; skipping startup DB bootstrap")
     yield
