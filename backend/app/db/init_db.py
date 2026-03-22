@@ -1169,6 +1169,8 @@ def check_and_migrate_tables(*, critical_only: bool = False):
         
     except Exception as e:
         logger.critical(f"Migration CRITICAL FAILURE: {e}")
+        if critical_only:
+            raise
 
 def init_api_settings(db):
     # No-op: user api_settings rows are now lightweight bindings to system_api_settings.

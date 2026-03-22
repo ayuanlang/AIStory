@@ -45,41 +45,47 @@ def _run_critical_db_bootstrap_steps() -> None:
     Base.metadata.create_all(bind=engine)
     logger.info("DB bootstrap: critical schema migration start")
     check_and_migrate_tables(critical_only=True)
-    if not _is_minimum_schema_ready():
-        raise RuntimeError("Critical DB schema bootstrap finished but readiness probe still failed")
+    readiness_issue = _get_minimum_schema_readiness_issue()
+    if readiness_issue:
+        raise RuntimeError(f"Critical DB schema bootstrap finished but readiness probe still failed: {readiness_issue}")
     logger.info("DB bootstrap: default superuser check start")
     create_default_superuser()
 
 
-def _is_minimum_schema_ready() -> bool:
+def _get_minimum_schema_readiness_issue() -> str | None:
     try:
         inspector = inspect(engine)
         if not inspector.has_table("users"):
-            return False
+            return "users table missing"
         user_cols = {col["name"]: col for col in inspector.get_columns("users")}
         is_active_col = user_cols.get("is_active")
         if not is_active_col:
-            return False
+            return "users.is_active column missing"
         is_active_type = str(is_active_col.get("type") or "").lower()
         if "bool" in is_active_type:
-            return False
+            return f"users.is_active still boolean ({is_active_type})"
 
         if inspector.has_table("project_shares"):
             share_cols = {col["name"] for col in inspector.get_columns("project_shares")}
             if "role" not in share_cols or "permissions" not in share_cols:
-                return False
+                return "project_shares.role or project_shares.permissions missing"
 
         required_review_tables = (
             "project_asset_review_threads",
             "project_asset_review_rounds",
             "project_asset_review_messages",
         )
-        if any(not inspector.has_table(table_name) for table_name in required_review_tables):
-            return False
-        return True
+        for table_name in required_review_tables:
+            if not inspector.has_table(table_name):
+                return f"{table_name} table missing"
+        return None
     except Exception as exc:
         logger.warning("DB bootstrap readiness probe failed: %s", exc)
-        return False
+        return str(exc)
+
+
+def _is_minimum_schema_ready() -> bool:
+    return _get_minimum_schema_readiness_issue() is None
 
 
 def _wait_for_postgres_bootstrap_slot():
