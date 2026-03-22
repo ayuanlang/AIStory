@@ -30,6 +30,13 @@ const RETRYABLE_LOGIN_PATHS = ['/login', '/login/access-token'];
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const getRetryLimit = (config = {}) => {
+    if (!isRetryableNetworkRequest(config)) return 0;
+    const method = String(config?.method || 'get').trim().toLowerCase();
+    if (['get', 'head', 'options'].includes(method)) return 1;
+    return 2;
+};
+
 const isRetryableNetworkRequest = (config = {}) => {
     const method = String(config?.method || 'get').trim().toLowerCase();
     if (['get', 'head', 'options'].includes(method)) return true;
@@ -47,11 +54,14 @@ api.interceptors.response.use(
             return Promise.reject(error);
         }
 
-        if (!originalConfig.__networkRetried && isRetryableNetworkRequest(originalConfig)) {
-            await delay(350);
+        const retryLimit = getRetryLimit(originalConfig);
+        const retryCount = Number(originalConfig.__networkRetryCount || 0);
+        if (retryCount < retryLimit) {
+            const nextRetryCount = retryCount + 1;
+            await delay(300 * nextRetryCount);
             return api.request({
                 ...originalConfig,
-                __networkRetried: true,
+                __networkRetryCount: nextRetryCount,
             });
         }
 
