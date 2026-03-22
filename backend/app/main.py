@@ -43,8 +43,8 @@ _DB_BOOT_LOCK_POLL_DELAY = max(1, int(os.getenv("DB_BOOT_LOCK_POLL_DELAY", "2"))
 def _run_critical_db_bootstrap_steps() -> None:
     logger.info("DB bootstrap: create_all start")
     Base.metadata.create_all(bind=engine)
-    logger.info("DB bootstrap: schema migration start")
-    check_and_migrate_tables()
+    logger.info("DB bootstrap: critical schema migration start")
+    check_and_migrate_tables(critical_only=True)
     logger.info("DB bootstrap: default superuser check start")
     create_default_superuser()
 
@@ -168,6 +168,13 @@ def _bootstrap_db_schema() -> tuple[bool, bool]:
 
 def _bootstrap_db_post_init() -> None:
     """Run non-critical seed/cache work after schema is ready."""
+    try:
+        logger.info("Post-init bootstrap: full schema migration start")
+        check_and_migrate_tables()
+        logger.info("Post-init bootstrap: full schema migration complete")
+    except Exception as exc:
+        logger.warning("Post-init full schema migration failed: %s", exc)
+
     try:
         init_initial_data()
     except Exception as exc:

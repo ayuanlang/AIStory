@@ -267,7 +267,139 @@ def create_default_superuser():
     except Exception as e:
         logger.error(f"Failed to create default superuser: {e}")
 
-def check_and_migrate_tables():
+
+def _ensure_user_runtime_schema(*, is_postgres: bool) -> None:
+    if is_postgres:
+        user_columns_pg = [
+            ("is_active", "INTEGER DEFAULT 1"),
+            ("account_status", "INTEGER DEFAULT 1"),
+            ("email_verified", "BOOLEAN DEFAULT FALSE"),
+            ("email_verification_code", "VARCHAR"),
+            ("email_verification_expires_at", "VARCHAR"),
+            ("is_superuser", "BOOLEAN DEFAULT FALSE"),
+            ("is_authorized", "BOOLEAN DEFAULT FALSE"),
+            ("is_system", "BOOLEAN DEFAULT FALSE"),
+            ("credits", "INTEGER DEFAULT 0"),
+            ("avatar_url", "VARCHAR")
+        ]
+        with engine.begin() as conn:
+            for col_name, col_type in user_columns_pg:
+                try:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                except Exception as e:
+                    logger.error(f"Failed to ensure users.{col_name}: {e}")
+
+        try:
+            inspector = inspect(engine)
+            existing_user_cols_meta = {c['name']: c for c in inspector.get_columns('users')}
+            is_active_col = existing_user_cols_meta.get('is_active') or {}
+            is_active_type_name = str(is_active_col.get('type') or '').lower()
+            with engine.begin() as conn:
+                if 'bool' in is_active_type_name:
+                    conn.execute(text("""
+                        ALTER TABLE users
+                        ALTER COLUMN is_active TYPE INTEGER
+                        USING CASE
+                            WHEN is_active IS TRUE THEN 1
+                            WHEN is_active IS FALSE OR is_active IS NULL THEN 0
+                            ELSE 0
+                        END
+                    """))
+                conn.execute(text("ALTER TABLE users ALTER COLUMN is_active SET DEFAULT 1"))
+                conn.execute(text("UPDATE users SET is_active = 0 WHERE is_active IS NULL"))
+        except Exception as e:
+            logger.warning(f"Failed to normalize users.is_active to integer semantics: {e}")
+
+    inspector = inspect(engine)
+    existing_columns = [c['name'] for c in inspector.get_columns('users')]
+
+    columns_to_check = [
+        ("is_active", "INTEGER DEFAULT 1"),
+        ("account_status", "INTEGER DEFAULT 1"),
+        ("email_verified", "BOOLEAN DEFAULT FALSE"),
+        ("email_verification_code", "VARCHAR"),
+        ("email_verification_expires_at", "VARCHAR"),
+        ("is_superuser", "BOOLEAN DEFAULT FALSE"),
+        ("is_authorized", "BOOLEAN DEFAULT FALSE"),
+        ("is_system", "BOOLEAN DEFAULT FALSE"),
+        ("credits", "INTEGER DEFAULT 0"),
+        ("avatar_url", "VARCHAR")
+    ]
+
+    columns_to_add = []
+    for col_name, col_def in columns_to_check:
+        if col_name not in existing_columns:
+            columns_to_add.append((col_name, col_def))
+
+    if columns_to_add:
+        with engine.begin() as conn:
+            for col_name, col_type in columns_to_add:
+                logger.info(f"Adding column {col_name}...")
+                try:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"))
+                    logger.info(f"Successfully added {col_name} (Standard SQL)")
+                except Exception as e_pg:
+                    logger.warning(f"Standard ADD COLUMN failed ({e_pg}). Trying SQLite syntax...")
+                    try:
+                        sqlite_type = col_type.replace("FALSE", "0").replace("TRUE", "1")
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {sqlite_type}"))
+                        logger.info(f"Successfully added {col_name} (SQLite fallback)")
+                    except Exception as e_sqlite:
+                        logger.error(f"Failed to add {col_name} with SQLite syntax: {e_sqlite}")
+                        raise e_sqlite
+
+
+def _ensure_minimum_runtime_schema(*, is_postgres: bool) -> None:
+    logger.info("Critical schema migration: start")
+
+    try:
+        inspector = inspect(engine)
+        if inspector.has_table("users"):
+            existing_user_cols = {c['name'] for c in inspector.get_columns('users')}
+            if 'preferences' not in existing_user_cols:
+                with engine.begin() as conn:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSON"))
+                        conn.execute(text("UPDATE users SET preferences = '{}'::json WHERE preferences IS NULL"))
+                    else:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN preferences JSON"))
+                        conn.execute(text("UPDATE users SET preferences = '{}' WHERE preferences IS NULL"))
+                logger.info("Ensured users.preferences column")
+    except Exception as e:
+        logger.error(f"Failed to ensure users.preferences column: {e}")
+
+    try:
+        inspector = inspect(engine)
+        if inspector.has_table("project_shares"):
+            share_cols = {c['name'] for c in inspector.get_columns('project_shares')}
+            with engine.begin() as conn:
+                if 'role' not in share_cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE project_shares ADD COLUMN IF NOT EXISTS role VARCHAR"))
+                    else:
+                        conn.execute(text("ALTER TABLE project_shares ADD COLUMN role VARCHAR"))
+                if 'permissions' not in share_cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE project_shares ADD COLUMN IF NOT EXISTS permissions JSON"))
+                    else:
+                        conn.execute(text("ALTER TABLE project_shares ADD COLUMN permissions JSON"))
+                if is_postgres:
+                    conn.execute(text("UPDATE project_shares SET role = 'editor' WHERE role IS NULL OR role = ''"))
+                    conn.execute(text("UPDATE project_shares SET permissions = '{}'::json WHERE permissions IS NULL"))
+                    conn.execute(text("ALTER TABLE project_shares ALTER COLUMN role SET DEFAULT 'editor'"))
+                else:
+                    conn.execute(text("UPDATE project_shares SET role = 'editor' WHERE role IS NULL OR role = ''"))
+                    conn.execute(text("UPDATE project_shares SET permissions = '{}' WHERE permissions IS NULL"))
+            logger.info("Ensured project_shares.role and project_shares.permissions columns")
+    except Exception as e:
+        logger.error(f"Failed to ensure project_shares review columns: {e}")
+
+    _ensure_review_workflow_schema(is_postgres=is_postgres)
+    _ensure_user_runtime_schema(is_postgres=is_postgres)
+
+    logger.info("Critical schema migration: complete")
+
+def check_and_migrate_tables(*, critical_only: bool = False):
     # logger.info(f"Starting migration check. Dialect: {engine.dialect.name}")
     
     try:
@@ -282,50 +414,11 @@ def check_and_migrate_tables():
         except Exception as e:
             logger.error(f"Failed to ensure system_api_settings table: {e}")
 
-        # Ensure users.preferences exists for per-user non-API settings persistence.
-        try:
-            if inspector.has_table("users"):
-                existing_user_cols = {c['name'] for c in inspector.get_columns('users')}
-                if 'preferences' not in existing_user_cols:
-                    with engine.begin() as conn:
-                        if is_postgres:
-                            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSON"))
-                            conn.execute(text("UPDATE users SET preferences = '{}'::json WHERE preferences IS NULL"))
-                        else:
-                            conn.execute(text("ALTER TABLE users ADD COLUMN preferences JSON"))
-                            conn.execute(text("UPDATE users SET preferences = '{}' WHERE preferences IS NULL"))
-                    logger.info("Ensured users.preferences column")
-        except Exception as e:
-            logger.error(f"Failed to ensure users.preferences column: {e}")
+        _ensure_minimum_runtime_schema(is_postgres=is_postgres)
 
-        # Ensure share-role compatibility for legacy project_shares rows.
-        try:
-            inspector = inspect(engine)
-            if inspector.has_table("project_shares"):
-                share_cols = {c['name'] for c in inspector.get_columns('project_shares')}
-                with engine.begin() as conn:
-                    if 'role' not in share_cols:
-                        if is_postgres:
-                            conn.execute(text("ALTER TABLE project_shares ADD COLUMN IF NOT EXISTS role VARCHAR"))
-                        else:
-                            conn.execute(text("ALTER TABLE project_shares ADD COLUMN role VARCHAR"))
-                    if 'permissions' not in share_cols:
-                        if is_postgres:
-                            conn.execute(text("ALTER TABLE project_shares ADD COLUMN IF NOT EXISTS permissions JSON"))
-                        else:
-                            conn.execute(text("ALTER TABLE project_shares ADD COLUMN permissions JSON"))
-                    if is_postgres:
-                        conn.execute(text("UPDATE project_shares SET role = 'editor' WHERE role IS NULL OR role = ''"))
-                        conn.execute(text("UPDATE project_shares SET permissions = '{}'::json WHERE permissions IS NULL"))
-                        conn.execute(text("ALTER TABLE project_shares ALTER COLUMN role SET DEFAULT 'editor'"))
-                    else:
-                        conn.execute(text("UPDATE project_shares SET role = 'editor' WHERE role IS NULL OR role = ''"))
-                        conn.execute(text("UPDATE project_shares SET permissions = '{}' WHERE permissions IS NULL"))
-                logger.info("Ensured project_shares.role and project_shares.permissions columns")
-        except Exception as e:
-            logger.error(f"Failed to ensure project_shares review columns: {e}")
-
-        _ensure_review_workflow_schema(is_postgres=is_postgres)
+        if critical_only:
+            logger.info("Skipping non-critical legacy migrations during startup bootstrap")
+            return
 
         # Ensure provider_key_pool table exists
         try:
@@ -915,102 +1008,7 @@ def check_and_migrate_tables():
         else:
             logger.info("Skip legacy API settings migration on init (AISTORY_MANAGE_API_SETTINGS_ON_INIT is disabled)")
 
-        if is_postgres:
-            # Robust Postgres Strategy
-            user_columns_pg = [
-                ("is_active", "INTEGER DEFAULT 1"),
-                ("account_status", "INTEGER DEFAULT 1"),
-                ("email_verified", "BOOLEAN DEFAULT FALSE"),
-                ("email_verification_code", "VARCHAR"),
-                ("email_verification_expires_at", "VARCHAR"),
-                ("is_superuser", "BOOLEAN DEFAULT FALSE"),
-                ("is_authorized", "BOOLEAN DEFAULT FALSE"),
-                ("is_system", "BOOLEAN DEFAULT FALSE"),
-                ("credits", "INTEGER DEFAULT 0"),
-                ("avatar_url", "VARCHAR")
-            ]
-            with engine.begin() as conn:
-                 for col_name, col_type in user_columns_pg:
-                     try:
-                        conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
-                        # logger.info(f"Ensured users.{col_name} exists")
-                     except Exception as e:
-                        logger.error(f"Failed to ensure users.{col_name}: {e}")
-
-            try:
-                inspector = inspect(engine)
-                existing_user_cols_meta = {c['name']: c for c in inspector.get_columns('users')}
-                is_active_col = existing_user_cols_meta.get('is_active') or {}
-                is_active_type_name = str(is_active_col.get('type') or '').lower()
-                with engine.begin() as conn:
-                    if 'bool' in is_active_type_name:
-                        conn.execute(text("""
-                            ALTER TABLE users
-                            ALTER COLUMN is_active TYPE INTEGER
-                            USING CASE
-                                WHEN is_active IS TRUE THEN 1
-                                WHEN is_active IS FALSE OR is_active IS NULL THEN 0
-                                ELSE 0
-                            END
-                        """))
-                    conn.execute(text("ALTER TABLE users ALTER COLUMN is_active SET DEFAULT 1"))
-                    conn.execute(text("UPDATE users SET is_active = 0 WHERE is_active IS NULL"))
-            except Exception as e:
-                logger.warning(f"Failed to normalize users.is_active to integer semantics: {e}")
-        
-        # Fallback / Original logic for non-postgres or extra checks
-        # 1. Get current columns using Inspector (works for both)
-        inspector = inspect(engine)
-        existing_columns = [c['name'] for c in inspector.get_columns('users')]
-        # logger.info(f"Existing columns in 'users': {existing_columns}")
-
-        # format: (column_name, sql_type_and_default)
-        columns_to_check = [
-            ("is_active", "INTEGER DEFAULT 1"),
-            ("account_status", "INTEGER DEFAULT 1"),
-            ("email_verified", "BOOLEAN DEFAULT FALSE"),
-            ("email_verification_code", "VARCHAR"),
-            ("email_verification_expires_at", "VARCHAR"),
-            ("is_superuser", "BOOLEAN DEFAULT FALSE"),
-            ("is_authorized", "BOOLEAN DEFAULT FALSE"),
-            ("is_system", "BOOLEAN DEFAULT FALSE"),
-            ("credits", "INTEGER DEFAULT 0"),
-            ("avatar_url", "VARCHAR")
-        ]
-
-        columns_to_add = []
-        for col_name, col_def in columns_to_check:
-            if col_name not in existing_columns:
-                columns_to_add.append((col_name, col_def))
-
-        if not columns_to_add:
-            pass
-            # logger.info("No user-table migrations needed. Columns exist.")
-
-        if columns_to_add:
-            # 2. Apply Changes
-            with engine.begin() as conn: # Transactional
-                for col_name, col_type in columns_to_add:
-                    logger.info(f"Adding column {col_name}...")
-                    
-                    # Try Postgres Syntax first (most likely for Render)
-                    try:
-                        # Note: Postgres supports 'IF NOT EXISTS' in recent versions, but standard ADD works if we checked existence
-                        # We use simple ADD COLUMN logic since we verified it's missing
-                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"))
-                        logger.info(f"Successfully added {col_name} (Standard SQL)")
-                    except Exception as e_pg:
-                        logger.warning(f"Standard ADD COLUMN failed ({e_pg}). Trying SQLite syntax...")
-                        # Fallback for SQLite (if 'FALSE' literals cause issues, though usually mapped)
-                        # SQLite doesn't strictly have boolean, but SQLAlchemy handles it. 
-                        # Raw SQL might need 0/1 for SQLite default
-                        try:
-                            sqlite_type = col_type.replace("FALSE", "0").replace("TRUE", "1")
-                            conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {sqlite_type}"))
-                            logger.info(f"Successfully added {col_name} (SQLite fallback)")
-                        except Exception as e_sqlite:
-                            logger.error(f"Failed to add {col_name} with SQLite syntax: {e_sqlite}")
-                            raise e_sqlite # Re-raise if both fail
+        _ensure_user_runtime_schema(is_postgres=is_postgres)
 
         # --- Episodes table migrations ---
         try:
