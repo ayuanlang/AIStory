@@ -633,16 +633,57 @@ function buildShotDiptychPlan(aspectRatio) {
     const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
     const ratioValue = parts.widthPart / parts.heightPart;
     const layout = ratioValue >= 1 ? 'horizontal' : 'vertical';
-    const combinedAspectRatio = layout === 'horizontal'
+    const exactCombinedAspectRatio = layout === 'horizontal'
         ? buildAspectRatioString(parts.widthPart * 2, parts.heightPart)
         : buildAspectRatioString(parts.widthPart, parts.heightPart * 2);
 
     return {
         layout,
         targetAspectRatio: buildAspectRatioString(parts.widthPart, parts.heightPart) || '16:9',
-        combinedAspectRatio: combinedAspectRatio || (layout === 'horizontal' ? '32:9' : '9:32'),
+        exactCombinedAspectRatio: exactCombinedAspectRatio || (layout === 'horizontal' ? '32:9' : '9:32'),
         ratioValue,
     };
+}
+
+function collectSupportedAspectRatioOptions(values) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(values) ? values : []).forEach((value) => {
+        const normalized = normalizeAspectRatioOption(value);
+        if (!normalized) return;
+        if (seen.has(normalized)) return;
+        seen.add(normalized);
+        out.push(normalized);
+    });
+    return out;
+}
+
+function selectBestShotDiptychRequestAspectRatio({ diptychPlan, allowedAspectRatios }) {
+    const fallback = normalizeAspectRatioOption(diptychPlan?.targetAspectRatio)
+        || (diptychPlan?.layout === 'vertical' ? '9:16' : '16:9');
+    const supported = collectSupportedAspectRatioOptions(allowedAspectRatios);
+    if (supported.length === 0) return fallback;
+
+    const exactRatio = parseAspectRatioValue(diptychPlan?.exactCombinedAspectRatio);
+    const targetRatio = parseAspectRatioValue(diptychPlan?.targetAspectRatio);
+    const preferVertical = diptychPlan?.layout === 'vertical';
+    const oriented = supported.filter((value) => {
+        const ratio = parseAspectRatioValue(value);
+        if (ratio == null) return false;
+        return preferVertical ? ratio < 1 : ratio >= 1;
+    });
+    const candidates = oriented.length > 0 ? oriented : supported;
+
+    const scoreAspect = (value) => {
+        const ratio = parseAspectRatioValue(value);
+        if (ratio == null) return Number.POSITIVE_INFINITY;
+        const primary = exactRatio != null ? Math.abs(ratio - exactRatio) : Number.POSITIVE_INFINITY;
+        const secondary = targetRatio != null ? Math.abs(ratio - targetRatio) : Number.POSITIVE_INFINITY;
+        const orientationPenalty = preferVertical ? (ratio >= 1 ? 1000 : 0) : (ratio < 1 ? 1000 : 0);
+        return orientationPenalty + (primary * 10) + secondary;
+    };
+
+    return [...candidates].sort((left, right) => scoreAspect(left) - scoreAspect(right))[0] || fallback;
 }
 
 function resolveShotPanelExportResolution(aspectRatio, imageSize) {
@@ -979,6 +1020,7 @@ import {
     createAsset,
     uploadAsset,
     getSettings,
+    getSystemSettings,
     getPromptSubmitLanguagePreference,
     resolvePromptSubmitLanguage,
     translateText,
@@ -18644,6 +18686,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const editingShotRef = useRef(null);
     const generatingStateByShotRef = useRef({});
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
+    const [activeImageCapabilityProfile, setActiveImageCapabilityProfile] = useState(null);
     const [localKeyframes, setLocalKeyframes] = useState([]);
     const generationStateStorageKey = useMemo(() => {
         if (!activeEpisode?.id) return '';
@@ -19896,13 +19939,56 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const refreshActiveSources = useCallback(async () => {
         try {
-            const settings = await getSettings();
+            const [settings, systemSettings] = await Promise.all([
+                getSettings(),
+                getSystemSettings(),
+            ]);
             setActiveSources({
                 Image: getSettingSourceByCategory(settings, 'Image'),
                 Video: getSettingSourceByCategory(settings, 'Video'),
             });
+
+            const activeImageSetting = (Array.isArray(settings) ? settings : [])
+                .filter((item) => item?.category === 'Image' && item?.is_active)
+                .sort((left, right) => Number(left?.id || 0) - Number(right?.id || 0))
+                .pop();
+            const activeImageSystemApiId = Number(
+                activeImageSetting?.system_api_id
+                || activeImageSetting?.config?.use_system_setting_id
+                || 0
+            );
+
+            let activeImageModel = null;
+            for (const group of (Array.isArray(systemSettings) ? systemSettings : [])) {
+                if (String(group?.category || '').trim() !== 'Image') continue;
+                for (const row of (Array.isArray(group?.models) ? group.models : [])) {
+                    const rowId = Number(row?.id || 0);
+                    if (activeImageSystemApiId > 0) {
+                        if (rowId === activeImageSystemApiId) {
+                            activeImageModel = row;
+                            break;
+                        }
+                        continue;
+                    }
+                    if (row?.is_active) {
+                        activeImageModel = row;
+                        break;
+                    }
+                }
+                if (activeImageModel) break;
+            }
+
+            setActiveImageCapabilityProfile(activeImageModel ? {
+                id: Number(activeImageModel?.id || 0) || null,
+                provider: String(activeImageModel?.provider || '').trim(),
+                model: String(activeImageModel?.model || '').trim(),
+                aspectRatios: collectSupportedAspectRatioOptions(
+                    activeImageModel?.modality?.aspect_ratios || activeImageModel?.aspect_ratios || []
+                ),
+            } : null);
         } catch (e) {
             console.error('Failed to load active setting sources in ShotsView', e);
+            setActiveImageCapabilityProfile(null);
         }
     }, []);
 
@@ -20215,6 +20301,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info) || '16:9';
             const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
             const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
+            const requestAspectRatio = selectBestShotDiptychRequestAspectRatio({
+                diptychPlan,
+                allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
+            });
             const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
             const combinedRefs = resolveShotStartFrameRefs(shotSnapshot, rawStartPrompt, resolvedEntities);
 
@@ -20250,7 +20340,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_name: shotSnapshot.shot_name,
                 prompt_language: resolvedPromptSubmitLang,
                 asset_type: 'start_frame',
-                aspect_ratio: diptychPlan.combinedAspectRatio,
+                aspect_ratio: requestAspectRatio,
                 ...(cfgOverride ? { cfg: cfgOverride } : {}),
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                 negative_prompt: jointNegativePrompt,
