@@ -17,6 +17,7 @@ from datetime import datetime, timezone, timedelta
 import math
 from types import SimpleNamespace
 from pathlib import Path
+from threading import Lock
 from typing import List, Dict, Tuple, Any, Optional
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
@@ -38,6 +39,7 @@ from app.models.all_models import (
 from app.services.system_default_api_service import (
     get_task_default_system_setting,
     is_task_default_system_setting,
+    list_task_default_system_setting_ids,
     upsert_task_default_system_setting,
     clear_task_default_for_category,
     clear_task_defaults_for_system_api_ids,
@@ -137,6 +139,8 @@ _provider_pool_cache = {
 }
 _settings_system_indexes_ensured = False
 _api_settings_binding_columns_ensured = False
+_kie_standard_tables_ensured = False
+_kie_standard_tables_ensure_lock = Lock()
 
 _AGENT_POLICY_CATEGORY = "System_Payment"
 _AGENT_POLICY_PROVIDER = "agent_policy"
@@ -2101,101 +2105,118 @@ def _extract_rule_match_signature(rule: SystemAPIBillingRule) -> Dict[str, Any]:
 
 
 def _ensure_kie_standard_tables_for_admin(db: Session) -> None:
-    dialect_name = str(getattr(getattr(db, "bind", None), "dialect", None).name if getattr(getattr(db, "bind", None), "dialect", None) else "").lower()
+    global _kie_standard_tables_ensured
+    if _kie_standard_tables_ensured:
+        return
 
-    if dialect_name == "postgresql":
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS kie_system_data_standard_values (
-                id BIGSERIAL PRIMARY KEY,
-                standard_dimension TEXT NOT NULL,
-                standard_value TEXT NOT NULL,
-                value_type TEXT NOT NULL,
-                definition TEXT,
-                alias_values TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT (now()::text),
-                updated_at TEXT NOT NULL DEFAULT (now()::text),
-                UNIQUE(standard_dimension, standard_value)
-            )
-        """))
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
-                id BIGSERIAL PRIMARY KEY,
-                provider TEXT NOT NULL,
-                model_key_inferred TEXT,
-                model_title TEXT,
-                model_url TEXT,
-                source_field TEXT NOT NULL,
-                source_enum_value TEXT NOT NULL,
-                standard_dimension TEXT NOT NULL,
-                standard_value TEXT NOT NULL,
-                confidence TEXT,
-                note TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                is_billing_related INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (now()::text),
-                updated_at TEXT NOT NULL DEFAULT (now()::text),
-                UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
-            )
-        """))
-    else:
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS kie_system_data_standard_values (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                standard_dimension TEXT NOT NULL,
-                standard_value TEXT NOT NULL,
-                value_type TEXT NOT NULL,
-                definition TEXT,
-                alias_values TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                UNIQUE(standard_dimension, standard_value)
-            )
-        """))
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                provider TEXT NOT NULL,
-                model_key_inferred TEXT,
-                model_title TEXT,
-                model_url TEXT,
-                source_field TEXT NOT NULL,
-                source_enum_value TEXT NOT NULL,
-                standard_dimension TEXT NOT NULL,
-                standard_value TEXT NOT NULL,
-                confidence TEXT,
-                note TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                is_billing_related INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
-            )
-        """))
+    with _kie_standard_tables_ensure_lock:
+        if _kie_standard_tables_ensured:
+            return
 
-    if dialect_name == "postgresql":
-        db.execute(text("""
-            ALTER TABLE kie_system_data_standard_mappings
-            ADD COLUMN IF NOT EXISTS is_billing_related INTEGER NOT NULL DEFAULT 0
-        """))
-    else:
-        # Reflect on the current transactional connection so newly created tables are visible.
-        cols = {
-            str(col.get("name") or "").strip().lower()
-            for col in inspect(db.connection()).get_columns("kie_system_data_standard_mappings")
-        }
-        if "is_billing_related" not in cols:
-            db.execute(text("ALTER TABLE kie_system_data_standard_mappings ADD COLUMN is_billing_related INTEGER NOT NULL DEFAULT 0"))
+        dialect_name = str(getattr(getattr(db, "bind", None), "dialect", None).name if getattr(getattr(db, "bind", None), "dialect", None) else "").lower()
 
-    db.execute(text("""
-        CREATE INDEX IF NOT EXISTS ix_kie_std_values_dim
-        ON kie_system_data_standard_values(standard_dimension, is_active)
-    """))
-    db.execute(text("""
-        CREATE INDEX IF NOT EXISTS ix_kie_std_mappings_lookup
-        ON kie_system_data_standard_mappings(provider, model_key_inferred, standard_dimension, source_field, is_active)
-    """))
+        try:
+            if dialect_name == "postgresql":
+                db.execute(text("""
+                    CREATE TABLE IF NOT EXISTS kie_system_data_standard_values (
+                        id BIGSERIAL PRIMARY KEY,
+                        standard_dimension TEXT NOT NULL,
+                        standard_value TEXT NOT NULL,
+                        value_type TEXT NOT NULL,
+                        definition TEXT,
+                        alias_values TEXT,
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL DEFAULT (now()::text),
+                        updated_at TEXT NOT NULL DEFAULT (now()::text),
+                        UNIQUE(standard_dimension, standard_value)
+                    )
+                """))
+                db.execute(text("""
+                    CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
+                        id BIGSERIAL PRIMARY KEY,
+                        provider TEXT NOT NULL,
+                        model_key_inferred TEXT,
+                        model_title TEXT,
+                        model_url TEXT,
+                        source_field TEXT NOT NULL,
+                        source_enum_value TEXT NOT NULL,
+                        standard_dimension TEXT NOT NULL,
+                        standard_value TEXT NOT NULL,
+                        confidence TEXT,
+                        note TEXT,
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        is_billing_related INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT (now()::text),
+                        updated_at TEXT NOT NULL DEFAULT (now()::text),
+                        UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
+                    )
+                """))
+            else:
+                db.execute(text("""
+                    CREATE TABLE IF NOT EXISTS kie_system_data_standard_values (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        standard_dimension TEXT NOT NULL,
+                        standard_value TEXT NOT NULL,
+                        value_type TEXT NOT NULL,
+                        definition TEXT,
+                        alias_values TEXT,
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        UNIQUE(standard_dimension, standard_value)
+                    )
+                """))
+                db.execute(text("""
+                    CREATE TABLE IF NOT EXISTS kie_system_data_standard_mappings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        provider TEXT NOT NULL,
+                        model_key_inferred TEXT,
+                        model_title TEXT,
+                        model_url TEXT,
+                        source_field TEXT NOT NULL,
+                        source_enum_value TEXT NOT NULL,
+                        standard_dimension TEXT NOT NULL,
+                        standard_value TEXT NOT NULL,
+                        confidence TEXT,
+                        note TEXT,
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        is_billing_related INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        UNIQUE(provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value)
+                    )
+                """))
+
+            if dialect_name == "postgresql":
+                db.execute(text("""
+                    ALTER TABLE kie_system_data_standard_mappings
+                    ADD COLUMN IF NOT EXISTS is_billing_related INTEGER NOT NULL DEFAULT 0
+                """))
+            else:
+                cols = {
+                    str(col.get("name") or "").strip().lower()
+                    for col in inspect(db.connection()).get_columns("kie_system_data_standard_mappings")
+                }
+                if "is_billing_related" not in cols:
+                    db.execute(text("ALTER TABLE kie_system_data_standard_mappings ADD COLUMN is_billing_related INTEGER NOT NULL DEFAULT 0"))
+
+            db.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_kie_std_values_dim
+                ON kie_system_data_standard_values(standard_dimension, is_active)
+            """))
+            db.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_kie_std_mappings_lookup
+                ON kie_system_data_standard_mappings(provider, model_key_inferred, standard_dimension, source_field, is_active)
+            """))
+            db.commit()
+            _kie_standard_tables_ensured = True
+            logger.info("settings.kie.standard_tables ensured")
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
 
 
 _KIE_ENUM_FACT_CSV = Path(__file__).resolve().parents[3] / "_kie_input_param_enum_values_for_db.csv"
@@ -2675,6 +2696,73 @@ def _resolve_system_setting_billing(db: Session, row: SystemAPISetting) -> Dict[
     if base_rule:
         return _rule_to_billing(base_rule)
     return _extract_billing_from_config(row.config)
+
+
+def _collect_manage_setting_billing_state(db: Session, system_api_ids: List[int]) -> Tuple[Dict[int, Dict[str, Any]], set[int]]:
+    ids = sorted({int(sid) for sid in (system_api_ids or []) if int(sid or 0) > 0})
+    if not ids:
+        return {}, set()
+
+    rows = db.query(SystemAPIBillingRule).filter(
+        SystemAPIBillingRule.system_api_id.in_(ids),
+        SystemAPIBillingRule.is_active == True,
+    ).order_by(
+        SystemAPIBillingRule.system_api_id.asc(),
+        SystemAPIBillingRule.id.desc(),
+    ).all()
+
+    billing_by_id: Dict[int, Dict[str, Any]] = {}
+    granular_rule_ids: set[int] = set()
+    for rule in rows:
+        sid = int(getattr(rule, "system_api_id", 0) or 0)
+        if sid <= 0:
+            continue
+        if _is_base_billing_rule(rule):
+            billing_by_id.setdefault(sid, _rule_to_billing(rule))
+            continue
+        granular_rule_ids.add(sid)
+
+    return billing_by_id, granular_rule_ids
+
+
+def _setting_row_to_out_prefetched(
+    row: SystemAPISetting,
+    *,
+    billing_by_id: Dict[int, Dict[str, Any]],
+    granular_rule_ids: set[int],
+    task_default_setting_ids: Dict[str, int],
+) -> SystemAPISettingOut:
+    row_id = int(getattr(row, "id", 0) or 0)
+    billing = billing_by_id.get(row_id) or _extract_billing_from_config(row.config)
+    out_cfg = _sync_model_mode_defaults_config(_strip_billing_from_config(row.config))
+    model_mode_defaults = _extract_model_mode_defaults(out_cfg)
+    base_model = _resolve_base_model(getattr(row, "base_model", None), getattr(row, "model", None))
+    modality_fields = _extract_modality_manage_fields(getattr(row, "modality", None))
+    category_key = normalize_task_category(getattr(row, "category", None))
+    task_default_id = int(task_default_setting_ids.get(category_key) or 0)
+    return SystemAPISettingOut(
+        id=row.id,
+        name=row.name,
+        category=row.category,
+        provider=row.provider,
+        api_key=row.api_key,
+        base_url=row.base_url,
+        model=row.model,
+        base_model=base_model,
+        modality=getattr(row, "modality", None),
+        tags=getattr(row, "tags", None),
+        supplier_info=getattr(row, "supplier_info", None),
+        model_mode_defaults=(model_mode_defaults or None),
+        config=out_cfg,
+        billing_unit_type=billing["unit_type"],
+        billing_cost=billing["cost"],
+        billing_cost_input=billing["cost_input"],
+        billing_cost_output=billing["cost_output"],
+        has_granular_billing_rules=row_id in granular_rule_ids,
+        deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
+        is_active=(task_default_id == row_id and row_id > 0),
+        **modality_fields,
+    )
 
 
 def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
@@ -4486,7 +4574,18 @@ def list_system_settings_for_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     rows = _query_system_settings_manage_rows(db)
-    return [_setting_to_out(db, row) for row in rows]
+    row_ids = [int(getattr(row, "id", 0) or 0) for row in rows if int(getattr(row, "id", 0) or 0) > 0]
+    billing_by_id, granular_rule_ids = _collect_manage_setting_billing_state(db, row_ids)
+    task_default_setting_ids = list_task_default_system_setting_ids(db)
+    return [
+        _setting_row_to_out_prefetched(
+            row,
+            billing_by_id=billing_by_id,
+            granular_rule_ids=granular_rule_ids,
+            task_default_setting_ids=task_default_setting_ids,
+        )
+        for row in rows
+    ]
 
 
 @router.get("/settings/system/manage/missing-billing-rules", response_model=List[SystemAPIMissingBillingRuleOut])
