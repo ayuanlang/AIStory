@@ -531,6 +531,66 @@ function normalizeImageSizeOption(value) {
     return '';
 }
 
+function normalizeAspectRatioOption(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (['16:9', '9:16', '4:3', '2.35:1', '1:1'].includes(raw)) return raw;
+    return '';
+}
+
+function parseAspectRatioParts(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    const matched = raw.match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+    if (!matched) return null;
+    const widthPart = Number(matched[1]);
+    const heightPart = Number(matched[2]);
+    if (!Number.isFinite(widthPart) || !Number.isFinite(heightPart) || widthPart <= 0 || heightPart <= 0) {
+        return null;
+    }
+    return { widthPart, heightPart };
+}
+
+function parseAspectRatioValue(value) {
+    const parts = parseAspectRatioParts(value);
+    if (!parts) return null;
+    return parts.widthPart / parts.heightPart;
+}
+
+function reduceAspectRatioParts(widthPart, heightPart) {
+    const widthNum = Number(widthPart);
+    const heightNum = Number(heightPart);
+    if (!Number.isFinite(widthNum) || !Number.isFinite(heightNum) || widthNum <= 0 || heightNum <= 0) {
+        return null;
+    }
+
+    const scale = 1000;
+    let scaledWidth = Math.round(widthNum * scale);
+    let scaledHeight = Math.round(heightNum * scale);
+
+    const gcd = (a, b) => {
+        let x = Math.abs(Math.round(a));
+        let y = Math.abs(Math.round(b));
+        while (y) {
+            const temp = y;
+            y = x % y;
+            x = temp;
+        }
+        return x || 1;
+    };
+
+    const divisor = gcd(scaledWidth, scaledHeight);
+    scaledWidth = Math.max(1, Math.round(scaledWidth / divisor));
+    scaledHeight = Math.max(1, Math.round(scaledHeight / divisor));
+    return { widthPart: scaledWidth, heightPart: scaledHeight };
+}
+
+function buildAspectRatioString(widthPart, heightPart) {
+    const reduced = reduceAspectRatioParts(widthPart, heightPart);
+    if (!reduced) return '';
+    return `${reduced.widthPart}:${reduced.heightPart}`;
+}
+
 function inferImageSizeFromResolution(width, height) {
     const w = Number(width);
     const h = Number(height);
@@ -556,6 +616,42 @@ function getEpisodePreferredImageSize(episodeInfoLike) {
     const width = visual?.horizontal_resolution || visual?.h_resolution || visual?.width;
     const height = visual?.vertical_resolution || visual?.v_resolution || visual?.height;
     return inferImageSizeFromResolution(width, height);
+}
+
+function getEpisodePreferredAspectRatio(episodeInfoLike) {
+    const root = (episodeInfoLike && typeof episodeInfoLike === 'object' && episodeInfoLike.e_global_info)
+        ? episodeInfoLike.e_global_info
+        : (episodeInfoLike || {});
+    const visual = root?.tech_params?.visual_standard || {};
+
+    return normalizeAspectRatioOption(
+        visual?.aspect_ratio || visual?.aspectRatio || root?.aspect_ratio || root?.aspectRatio
+    );
+}
+
+function buildShotDiptychPlan(aspectRatio) {
+    const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
+    const ratioValue = parts.widthPart / parts.heightPart;
+    const layout = ratioValue >= 1 ? 'horizontal' : 'vertical';
+    const combinedAspectRatio = layout === 'horizontal'
+        ? buildAspectRatioString(parts.widthPart * 2, parts.heightPart)
+        : buildAspectRatioString(parts.widthPart, parts.heightPart * 2);
+
+    return {
+        layout,
+        targetAspectRatio: buildAspectRatioString(parts.widthPart, parts.heightPart) || '16:9',
+        combinedAspectRatio: combinedAspectRatio || (layout === 'horizontal' ? '32:9' : '9:32'),
+        ratioValue,
+    };
+}
+
+function resolveShotPanelExportResolution(aspectRatio, imageSize) {
+    const preset = getResolutionByAspectAndImageSize(aspectRatio, imageSize);
+    if (!preset) return null;
+    const width = Number(preset.width);
+    const height = Number(preset.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+    return { width, height };
 }
 
 function getResolutionByAspectAndImageSize(aspectRatio, imageSize) {
@@ -18567,6 +18663,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const generationMediaBaselineRef = useRef({});
     const startFrameAutoInheritRef = useRef('');
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
+    const SHOT_MEDIA_STARTUP_GRACE_MS = 15000;
     const IMAGE_JOB_STATE_TTL_MS = 1000 * 60 * 60;
     const VIDEO_JOB_STATE_TTL_MS = 1000 * 60 * 60;
     const shotsRefreshRequestSeqRef = useRef(0);
@@ -18882,6 +18979,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 kind: stableKind,
                 jobId: stableJobId,
                 startedAt: startedAt || now,
+                mode: payload?.mode === 'joint_diptych' ? 'joint_diptych' : 'single',
             };
         });
         return cleaned;
@@ -19040,6 +19138,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return String(all?.[key]?.jobId || '').trim();
     }, [readImageJobStateStorage]);
 
+    const getPendingImageJobPayload = useCallback((shotId, kind) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableKind = kind === 'end' ? 'end' : 'start';
+        if (!stableShotId) return null;
+        const key = `${stableShotId}:${stableKind}`;
+        const inMemory = pendingImageJobsRef.current[key];
+        if (inMemory && typeof inMemory === 'object') {
+            return inMemory;
+        }
+        const all = readImageJobStateStorage();
+        return all?.[key] || null;
+    }, [readImageJobStateStorage]);
+
     const clearPendingImageJob = useCallback((shotId, kind) => {
         const stableShotId = String(shotId || '').trim();
         const stableKind = kind === 'end' ? 'end' : 'start';
@@ -19054,6 +19165,39 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         delete next[key];
         writeImageJobStateStorage(next);
     }, [readImageJobStateStorage, writeImageJobStateStorage]);
+
+    const setPendingJointDiptychImageJob = useCallback((shotId, jobId) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableJobId = String(jobId || '').trim();
+        if (!stableShotId || !stableJobId) return;
+        const prev = readImageJobStateStorage();
+        const startedAt = Date.now();
+        const next = {
+            ...prev,
+            [`${stableShotId}:start`]: {
+                shotId: stableShotId,
+                kind: 'start',
+                jobId: stableJobId,
+                startedAt,
+                mode: 'joint_diptych',
+            },
+            [`${stableShotId}:end`]: {
+                shotId: stableShotId,
+                kind: 'end',
+                jobId: stableJobId,
+                startedAt,
+                mode: 'joint_diptych',
+            },
+        };
+        writeImageJobStateStorage(next);
+    }, [readImageJobStateStorage, writeImageJobStateStorage]);
+
+    const clearPendingJointDiptychImageJob = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        clearPendingImageJob(stableShotId, 'start');
+        clearPendingImageJob(stableShotId, 'end');
+    }, [clearPendingImageJob]);
 
     const clearPendingImageJobsByJobId = useCallback((jobId) => {
         const stableJobId = String(jobId || '').trim();
@@ -19082,6 +19226,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(stableShotId, stableKind, false);
     }, [clearPendingImageJob, setShotGeneratingState]);
 
+    const releaseShotJointDiptychUiByShotId = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        clearPendingJointDiptychImageJob(stableShotId);
+        setShotGeneratingState(stableShotId, 'start', false);
+        setShotGeneratingState(stableShotId, 'end', false);
+    }, [clearPendingJointDiptychImageJob, setShotGeneratingState]);
+
     const releaseShotImageUiByJobId = useCallback((jobId) => {
         const stableJobId = String(jobId || '').trim();
         if (!stableJobId) return;
@@ -19099,6 +19251,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const isMissingJobError = useCallback((error) => {
         const detail = String(error?.response?.data?.detail || error?.message || '').trim().toLowerCase();
         return detail.includes('job not found') || detail.includes('not found');
+    }, []);
+
+    const isClientInterruptionError = useCallback((error) => {
+        const detail = String(
+            error?.code || error?.name || error?.message || error?.response?.data?.detail || ''
+        ).trim().toLowerCase();
+        return (
+            detail.includes('canceled')
+            || detail.includes('cancelled')
+            || detail.includes('aborted')
+            || detail.includes('econnaborted')
+            || detail.includes('network error')
+            || detail.includes('timeout')
+        );
     }, []);
 
     const findMatchingShotMediaJobInPool = useCallback(async ({ shotId, kind, assetType = '' }) => {
@@ -19143,6 +19309,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const assetType = stableMediaKey === 'end' ? 'end_frame' : (stableMediaKey === 'start' ? 'start_frame' : '');
         const shotState = generatingStateByShotRef.current[String(stableShotId)] || { start: false, end: false, video: false };
         const hasGeneratingFlag = Boolean(shotState?.[stableMediaKey]);
+        const startedAtMs = Number(shotState?.[`${stableMediaKey}At`] || 0);
+        const withinStartupGrace = Boolean(
+            hasGeneratingFlag
+            && startedAtMs > 0
+            && (Date.now() - startedAtMs) < SHOT_MEDIA_STARTUP_GRACE_MS
+        );
 
         const getJobId = () => (
             isVideo
@@ -19223,6 +19395,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return { state: 'unknown', jobId: localJobId, source: 'pool', error };
         }
 
+        if (withinStartupGrace) {
+            setShotGeneratingState(stableShotId, stableMediaKey, true);
+            return { state: 'running', jobId: localJobId, source: 'bootstrap' };
+        }
+
         if (releaseIfMissing && (hasGeneratingFlag || localJobId)) {
             releaseUi();
         }
@@ -19238,7 +19415,37 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setPendingImageJob,
         setPendingVideoJob,
         setShotGeneratingState,
+        SHOT_MEDIA_STARTUP_GRACE_MS,
     ]);
+
+    const tryRecoverShotMediaAfterInterruption = useCallback(async ({ shotId, mediaKey }) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableMediaKey = mediaKey === 'video' ? 'video' : (mediaKey === 'end' ? 'end' : 'start');
+        if (!stableShotId) return false;
+
+        const resolved = await syncShotMediaRuntimeState({
+            shotId: stableShotId,
+            mediaKey: stableMediaKey,
+            preferPoolLookup: true,
+            releaseIfMissing: false,
+        });
+
+        if (resolved?.state !== 'running') return false;
+
+        const mediaLabel = stableMediaKey === 'video'
+            ? t('视频', 'Video')
+            : stableMediaKey === 'end'
+                ? t('结束帧', 'End Frame')
+                : t('起始帧', 'Start Frame');
+        const jobSuffix = resolved?.jobId ? ` job_id=${resolved.jobId}` : '';
+
+        onLog?.(
+            `${mediaLabel}${t('提交响应中断，但已恢复后端运行任务。', ' submit response was interrupted, but the backend running task was recovered.')}${jobSuffix}`,
+            'warning'
+        );
+        showNotification(t('已恢复后台运行任务', 'Recovered background running task'), 'info');
+        return true;
+    }, [onLog, showNotification, syncShotMediaRuntimeState, t]);
 
     useEffect(() => {
         pendingImageJobsRef.current = readImageJobStateStorage();
@@ -19758,6 +19965,334 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         await onUpdateShot(editingShot.id, updates);
     };
 
+    const resolveShotStartFrameRefs = (shotSnapshot, rawPrompt, resolvedEntities) => {
+        let refs = [];
+        try {
+            const noteStr = shotSnapshot?.technical_notes || '{}';
+            const tech = JSON.parse(noteStr);
+            const isManualMode = Array.isArray(tech.ref_image_urls);
+            const isUserEdited = Boolean(tech.ref_image_urls_user_edited);
+            const isLockedManual = isManualMode && isUserEdited;
+            const autoMatches = getSuggestedRefImages(shotSnapshot, rawPrompt, true, resolvedEntities);
+
+            if (isLockedManual) {
+                refs = [...tech.ref_image_urls];
+            } else if (isManualMode) {
+                const deletedRefs = tech.deleted_ref_urls || [];
+                refs = autoMatches.filter(url => !deletedRefs.includes(url));
+            } else {
+                refs = [...new Set(autoMatches)];
+            }
+        } catch (e) {
+            console.error('Error determining start frame refs:', e);
+        }
+
+        return refs.filter(Boolean);
+    };
+
+    const loadImageElementFromBlob = useCallback((blob) => {
+        return new Promise((resolve, reject) => {
+            const objectUrl = URL.createObjectURL(blob);
+            const image = new Image();
+
+            const cleanup = () => {
+                URL.revokeObjectURL(objectUrl);
+            };
+
+            image.onload = () => {
+                cleanup();
+                resolve(image);
+            };
+            image.onerror = () => {
+                cleanup();
+                reject(new Error('failed to load generated image for splitting'));
+            };
+            image.src = objectUrl;
+        });
+    }, []);
+
+    const cropGeneratedPanelToBlob = useCallback(async ({
+        image,
+        layout,
+        panelIndex,
+        targetAspectRatio,
+        exportSize,
+    }) => {
+        const sourceWidth = Number(image?.naturalWidth || image?.width || 0);
+        const sourceHeight = Number(image?.naturalHeight || image?.height || 0);
+        const targetRatio = parseAspectRatioValue(targetAspectRatio);
+
+        if (!sourceWidth || !sourceHeight || !targetRatio) {
+            throw new Error('invalid generated image dimensions for split crop');
+        }
+
+        let panelX = 0;
+        let panelY = 0;
+        let panelWidth = sourceWidth;
+        let panelHeight = sourceHeight;
+
+        if (layout === 'horizontal') {
+            panelWidth = sourceWidth / 2;
+            panelX = panelIndex === 0 ? 0 : panelWidth;
+        } else {
+            panelHeight = sourceHeight / 2;
+            panelY = panelIndex === 0 ? 0 : panelHeight;
+        }
+
+        const panelRatio = panelWidth / panelHeight;
+        let cropWidth = panelWidth;
+        let cropHeight = panelHeight;
+        let cropX = panelX;
+        let cropY = panelY;
+
+        if (panelRatio > targetRatio) {
+            cropWidth = panelHeight * targetRatio;
+            cropX = panelX + ((panelWidth - cropWidth) / 2);
+        } else if (panelRatio < targetRatio) {
+            cropHeight = panelWidth / targetRatio;
+            cropY = panelY + ((panelHeight - cropHeight) / 2);
+        }
+
+        const outputWidth = Number(exportSize?.width) > 0 ? Number(exportSize.width) : Math.max(1, Math.round(cropWidth));
+        const outputHeight = Number(exportSize?.height) > 0 ? Number(exportSize.height) : Math.max(1, Math.round(cropHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = outputWidth;
+        canvas.height = outputHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            throw new Error('canvas context unavailable during split crop');
+        }
+
+        ctx.drawImage(
+            image,
+            cropX,
+            cropY,
+            cropWidth,
+            cropHeight,
+            0,
+            0,
+            outputWidth,
+            outputHeight,
+        );
+
+        return new Promise((resolve, reject) => {
+            canvas.toBlob((blob) => {
+                if (!blob) {
+                    reject(new Error('failed to encode split image'));
+                    return;
+                }
+                resolve(blob);
+            }, 'image/jpeg', 0.94);
+        });
+    }, []);
+
+    const applyJointShotDiptychResult = useCallback(async ({ shotRecord, compositeUrl }) => {
+        const stableShot = shotRecord || null;
+        const targetShotId = String(stableShot?.id || '').trim();
+        if (!targetShotId) {
+            throw new Error('Missing shot context for joint diptych result');
+        }
+
+        const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info) || '16:9';
+        const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+        const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
+        const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
+
+        const compositeResp = await fetch(getFullUrl(compositeUrl));
+        if (!compositeResp.ok) {
+            throw new Error(`Failed to download composite image (${compositeResp.status})`);
+        }
+        const compositeBlob = await compositeResp.blob();
+        const compositeImage = await loadImageElementFromBlob(compositeBlob);
+
+        const startBlob = await cropGeneratedPanelToBlob({
+            image: compositeImage,
+            layout: diptychPlan.layout,
+            panelIndex: 0,
+            targetAspectRatio: diptychPlan.targetAspectRatio,
+            exportSize,
+        });
+        const endBlob = await cropGeneratedPanelToBlob({
+            image: compositeImage,
+            layout: diptychPlan.layout,
+            panelIndex: 1,
+            targetAspectRatio: diptychPlan.targetAspectRatio,
+            exportSize,
+        });
+
+        const startUpload = await uploadAsset(
+            new File([startBlob], `shot_${targetShotId}_start_diptych_${Date.now()}.jpg`, { type: 'image/jpeg' }),
+            {
+                project_id: projectId,
+                episode_id: activeEpisode?.id,
+                shot_id: targetShotId,
+                shot_number: stableShot?.shot_id,
+                shot_name: stableShot?.shot_name,
+                asset_type: 'start_frame',
+            }
+        );
+        const endUpload = await uploadAsset(
+            new File([endBlob], `shot_${targetShotId}_end_diptych_${Date.now()}.jpg`, { type: 'image/jpeg' }),
+            {
+                project_id: projectId,
+                episode_id: activeEpisode?.id,
+                shot_id: targetShotId,
+                shot_number: stableShot?.shot_id,
+                shot_name: stableShot?.shot_name,
+                asset_type: 'end_frame',
+            }
+        );
+
+        const startUrl = String(startUpload?.url || '').trim();
+        const endUrl = String(endUpload?.url || '').trim();
+        if (!startUrl || !endUrl) {
+            throw new Error('Failed to upload split start/end frame assets');
+        }
+
+        let techNotes = {};
+        try {
+            techNotes = JSON.parse(stableShot?.technical_notes || '{}');
+        } catch {
+            techNotes = {};
+        }
+        techNotes.end_frame_url = endUrl;
+        techNotes.video_gen_mode = 'start_end';
+        techNotes.end_frame_reused_from_start = false;
+
+        const nextData = {
+            image_url: startUrl,
+            start_frame: stableShot?.start_frame || '',
+            end_frame: stableShot?.end_frame || '',
+            technical_notes: JSON.stringify(techNotes),
+        };
+
+        await onUpdateShot(targetShotId, nextData);
+        setEditingShot(prev => (prev && String(prev.id) === targetShotId ? { ...prev, ...nextData } : prev));
+        refreshShotAssetsMeta();
+        return nextData;
+    }, [activeEpisode?.episode_info, onUpdateShot, projectId, cropGeneratedPanelToBlob, loadImageElementFromBlob, refreshShotAssetsMeta]);
+
+    const handleGenerateShotDiptychFrames = async (cfgOverride = null) => {
+        if (!editingShot) return;
+
+        const shotSnapshot = editingShot;
+        const targetShotId = shotSnapshot.id;
+        if (!targetShotId) return;
+        let createdImageJobId = '';
+
+        const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
+        const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
+        const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
+        const rawStartPrompt = resolvedPromptSubmitLang === 'cn'
+            ? (cnStartPrompt || shotSnapshot.start_frame || shotSnapshot.video_content || 'A cinematic shot')
+            : (shotSnapshot.start_frame || cnStartPrompt || shotSnapshot.video_content || 'A cinematic shot');
+        const rawEndPrompt = resolvedPromptSubmitLang === 'cn'
+            ? (cnEndPrompt || shotSnapshot.end_frame || 'End frame')
+            : (shotSnapshot.end_frame || cnEndPrompt || 'End frame');
+
+        const normalizedEndPrompt = String(rawEndPrompt || '').trim().toUpperCase();
+        if (['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt)) {
+            showNotification(
+                t('当前结束帧被配置为复用起始帧，无法执行首尾联合生图。', 'End frame is configured to reuse the start frame, so joint start/end generation is unavailable.'),
+                'warning'
+            );
+            return;
+        }
+
+        setShotGeneratingState(targetShotId, 'start', true);
+        setShotGeneratingState(targetShotId, 'end', true);
+        abortGenerationRef.current = false;
+
+        try {
+            const resolvedEntities = await awaitShotGenerationEntities();
+            if (abortGenerationRef.current) return;
+
+            const isManualStart = techNotes.manual_start_frame === true;
+            const isManualEnd = techNotes.manual_end_frame === true;
+            const { text: startSubmitPrompt } = injectEntityFeatures(rawStartPrompt, isManualStart, resolvedEntities);
+            const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, resolvedEntities);
+
+            const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info) || '16:9';
+            const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+            const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
+            const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
+            const combinedRefs = resolveShotStartFrameRefs(shotSnapshot, rawStartPrompt, resolvedEntities);
+
+            const combinedPrompt = resolvedPromptSubmitLang === 'cn'
+                ? [
+                    `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
+                    `第一格（起始帧）：${startSubmitPrompt}`,
+                    `第二格（结束帧）：${endSubmitPrompt}`,
+                ].join('\n\n')
+                : [
+                    `Create one single-canvas two-panel diptych for later post-split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels arranged ${diptychPlan.layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom'} with a narrow clean divider. The final single-frame delivery target is ${diptychPlan.targetAspectRatio}, so compose each panel with extra bleed and crop-safe margin so it can be split and lightly center-cropped into an independent ${diptychPlan.targetAspectRatio} frame. Keep faces, hands, props, and key action away from the seam and outer edges. Do not add a third panel, text labels, numbering, speech bubbles, or collage elements. Maintain identity, environment continuity, lighting continuity, and scene geography across both panels. Panel A is the shot start frame. Panel B is the shot end frame.`,
+                    `Panel A (Start Frame): ${startSubmitPrompt}`,
+                    `Panel B (End Frame): ${endSubmitPrompt}`,
+                ].join('\n\n');
+
+            const shouldApplyGlobalCtx = !(isManualStart && isManualEnd);
+            const globalCtx = shouldApplyGlobalCtx
+                ? getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(combinedPrompt) })
+                : '';
+            const finalPrompt = shouldApplyGlobalCtx ? `${combinedPrompt}${globalCtx}` : combinedPrompt;
+            const jointNegativePrompt = [
+                buildEntityNegativePrompt(`${rawStartPrompt}\n${rawEndPrompt}`, null, resolvedEntities),
+                'more than two panels, extra frame, uneven split, contact sheet, text label, numbering, caption, comic bubble',
+            ].filter(Boolean).join(', ');
+
+            onLog?.(t('正在联合生成首尾帧两宫格...', 'Generating joint start/end diptych...'), 'info');
+
+            const res = await generateImage(finalPrompt, null, combinedRefs.length > 0 ? combinedRefs : null, {
+                project_id: projectId,
+                episode_id: activeEpisode?.id,
+                shot_id: targetShotId,
+                shot_number: shotSnapshot.shot_id,
+                shot_name: shotSnapshot.shot_name,
+                prompt_language: resolvedPromptSubmitLang,
+                asset_type: 'start_frame',
+                aspect_ratio: diptychPlan.combinedAspectRatio,
+                ...(cfgOverride ? { cfg: cfgOverride } : {}),
+                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                negative_prompt: jointNegativePrompt,
+                on_job_created: (jobId) => {
+                    createdImageJobId = String(jobId || '').trim();
+                    if (!createdImageJobId) return;
+                    setPendingJointDiptychImageJob(targetShotId, createdImageJobId);
+                    setShotGeneratingState(targetShotId, 'start', true);
+                    setShotGeneratingState(targetShotId, 'end', true);
+                },
+            });
+
+            if (!res?.url) {
+                throw new Error('No composite image URL returned');
+            }
+            clearPendingJointDiptychImageJob(targetShotId);
+            if (abortGenerationRef.current) return;
+            await applyJointShotDiptychResult({
+                shotRecord: {
+                    ...shotSnapshot,
+                    start_frame: rawStartPrompt,
+                    end_frame: rawEndPrompt,
+                },
+                compositeUrl: res.url,
+            });
+            onLog?.(t('首尾帧两宫格已生成并拆分回填。', 'Joint start/end diptych generated, split, and applied.'), 'success');
+            showNotification(t('已生成并拆分回填首尾帧', 'Start/end frames generated and split successfully'), 'success');
+        } catch (e) {
+            console.error('Joint shot diptych generation failed:', e);
+            if (createdImageJobId) {
+                clearPendingJointDiptychImageJob(targetShotId);
+                createdImageJobId = '';
+            }
+            onLog?.(`${t('首尾联生失败', 'Joint start/end generation failed')}: ${e?.message || 'Unknown error'}`, 'error');
+            showNotification(`${t('首尾联生失败', 'Joint start/end generation failed')}: ${e?.message || 'Unknown error'}`, 'error');
+        } finally {
+            clearPendingJointDiptychImageJob(targetShotId);
+            setShotGeneratingState(targetShotId, 'start', false);
+            setShotGeneratingState(targetShotId, 'end', false);
+        }
+    };
+
     const handleManualEndFrameInputChange = (nextValue) => {
         if (!editingShot) return;
         let tech = {};
@@ -20043,20 +20578,34 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const entries = Object.entries(normalizedPending);
             if (entries.length === 0) return;
 
+            const processedJointJobs = new Set();
+
             for (const [, payload] of entries) {
                 if (cancelled) break;
 
                 const stableShotId = String(payload?.shotId || '').trim();
                 const stableKind = payload?.kind === 'end' ? 'end' : 'start';
                 const jobId = String(payload?.jobId || '').trim();
+                const isJointDiptych = payload?.mode === 'joint_diptych';
                 if (!stableShotId || !jobId) {
                     clearPendingImageJob(stableShotId, stableKind);
                     continue;
                 }
+                if (isJointDiptych && processedJointJobs.has(jobId)) {
+                    continue;
+                }
+                if (isJointDiptych) {
+                    processedJointJobs.add(jobId);
+                }
 
                 let errorStreak = 0;
                 let waitMs = 2500;
-                setShotGeneratingState(stableShotId, stableKind, true);
+                if (isJointDiptych) {
+                    setShotGeneratingState(stableShotId, 'start', true);
+                    setShotGeneratingState(stableShotId, 'end', true);
+                } else {
+                    setShotGeneratingState(stableShotId, stableKind, true);
+                }
 
                 while (!cancelled) {
                     try {
@@ -20070,7 +20619,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             if (resultUrl) {
                                 const currentShot = (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
                                     || (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null);
-                                if (stableKind === 'start') {
+                                if (isJointDiptych) {
+                                    await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
+                                } else if (stableKind === 'start') {
                                     const nextData = { image_url: resultUrl };
                                     try {
                                         await onUpdateShot(stableShotId, nextData);
@@ -20098,30 +20649,54 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         return { ...prev, ...nextData };
                                     });
                                 }
-                                onLog?.(`Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation completed for shot ${stableShotId}.`, 'success');
+                                onLog?.(isJointDiptych
+                                    ? `Recovered joint start/end generation completed for shot ${stableShotId}.`
+                                    : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation completed for shot ${stableShotId}.`, 'success');
                                 refreshShotAssetsMeta();
                                 await refreshShots();
                             }
-                            clearPendingImageJob(stableShotId, stableKind);
-                            setShotGeneratingState(stableShotId, stableKind, false);
+                            if (isJointDiptych) {
+                                clearPendingJointDiptychImageJob(stableShotId);
+                                setShotGeneratingState(stableShotId, 'start', false);
+                                setShotGeneratingState(stableShotId, 'end', false);
+                            } else {
+                                clearPendingImageJob(stableShotId, stableKind);
+                                setShotGeneratingState(stableShotId, stableKind, false);
+                            }
                             break;
                         }
 
                         if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
-                            clearPendingImageJob(stableShotId, stableKind);
-                            setShotGeneratingState(stableShotId, stableKind, false);
+                            if (isJointDiptych) {
+                                clearPendingJointDiptychImageJob(stableShotId);
+                                setShotGeneratingState(stableShotId, 'start', false);
+                                setShotGeneratingState(stableShotId, 'end', false);
+                            } else {
+                                clearPendingImageJob(stableShotId, stableKind);
+                                setShotGeneratingState(stableShotId, stableKind, false);
+                            }
                             const errMsg = String(status?.error || 'unknown error');
                             const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
-                            onLog?.(`Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation failed for shot ${stableShotId}: ${errMsg}`, tone);
+                            onLog?.(isJointDiptych
+                                ? `Recovered joint start/end generation failed for shot ${stableShotId}: ${errMsg}`
+                                : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation failed for shot ${stableShotId}: ${errMsg}`, tone);
                             break;
                         }
                     } catch (e) {
                         const detail = e?.response?.data?.detail || e?.message || '';
                         const detailLower = String(detail).toLowerCase();
                         if (detailLower.includes('job not found')) {
-                            clearPendingImageJob(stableShotId, stableKind);
-                            setShotGeneratingState(stableShotId, stableKind, false);
-                            onLog?.(`Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
+                            if (isJointDiptych) {
+                                clearPendingJointDiptychImageJob(stableShotId);
+                                setShotGeneratingState(stableShotId, 'start', false);
+                                setShotGeneratingState(stableShotId, 'end', false);
+                            } else {
+                                clearPendingImageJob(stableShotId, stableKind);
+                                setShotGeneratingState(stableShotId, stableKind, false);
+                            }
+                            onLog?.(isJointDiptych
+                                ? `Recovered joint start/end job missing for shot ${stableShotId}; cleared pending state.`
+                                : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
                             break;
                         }
 
@@ -20146,9 +20721,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, [
         activeEpisode?.id,
         clearPendingImageJob,
+        clearPendingJointDiptychImageJob,
         extractImageJobResultUrl,
         onLog,
         onUpdateShot,
+        applyJointShotDiptychResult,
         readImageJobStateStorage,
         refreshShots,
         setEditingShot,
@@ -21696,6 +22273,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
         let createdImageJobId = '';
+        let keepRunningUi = false;
 
         // Check inherit logic - Inherit from previous End Frame
         const currentPrompt = String(promptOverride || shotSnapshot.start_frame || '').trim();
@@ -21758,55 +22336,25 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
              }
 
              try {
-                // Refs Logic for Start Frame (updated):
-                // 1. If user has manually edited the Refs list (it exists in tech notes), respect it 100% (handling deletions/inactive).
-                // 2. If list is undefined (never touched), auto-populate strictly from Subjects (latest entity images).
-                // 3. Filter out any null/empty strings just in case.
-                
-                let refs = [];
-                try {
-                    const noteStr = shotSnapshot.technical_notes || '{}';
-                    const tech = JSON.parse(noteStr);
-                    const isManualMode = Array.isArray(tech.ref_image_urls);
-                    const isUserEdited = Boolean(tech.ref_image_urls_user_edited);
-                    const isLockedManual = isManualMode && isUserEdited;
-                    
-                    // Always calculate auto-suggested refs first (with new robust logic)
-                    const autoMatches = getSuggestedRefImages(shotSnapshot, rawPrompt, true, resolvedEntities);
-
-                    if (isLockedManual) {
-                        refs = [...tech.ref_image_urls];
-                    } else if (isManualMode) {
-                        // Manual but not locked: refresh refs by latest entity images.
-                        const deletedRefs = tech.deleted_ref_urls || [];
-                        refs = autoMatches.filter(url => !deletedRefs.includes(url));
-                    } else {
-                        // Auto-populate mode
-                        refs = autoMatches;
-                        
-                        // Deduplicate only in Auto Mode
-                        refs = [...new Set(refs)];
-                    }
-                } catch(e) { console.error("Error determining refs:", e); }
-                
-                // Final clean
-                refs = refs.filter(Boolean);
+                const refs = resolveShotStartFrameRefs(shotSnapshot, rawPrompt, resolvedEntities);
 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
-                   const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+                const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+                const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info);
 
                 const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
                     project_id: projectId,
-                        episode_id: activeEpisode?.id,
+                    episode_id: activeEpisode?.id,
                     shot_id: targetShotId,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'start_frame',
-                        ...(cfgOverride ? { cfg: cfgOverride } : {}),
-                        ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                    ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
+                    ...(cfgOverride ? { cfg: cfgOverride } : {}),
+                    ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
                         createdImageJobId = String(jobId || '').trim();
@@ -21829,6 +22377,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             } catch (e) {
                 console.error(`Attempt ${attempts} failed:`, e);
+                if (isClientInterruptionError(e)) {
+                    const recovered = await tryRecoverShotMediaAfterInterruption({
+                        shotId: targetShotId,
+                        mediaKey: 'start',
+                    });
+                    if (recovered) {
+                        keepRunningUi = true;
+                        success = true;
+                        break;
+                    }
+                }
                 if (createdImageJobId) {
                     clearPendingImageJob(targetShotId, 'start');
                     createdImageJobId = '';
@@ -21839,8 +22398,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
         }
-        clearPendingImageJob(targetShotId, 'start');
-        setShotGeneratingState(targetShotId, 'start', false);
+        if (!keepRunningUi) {
+            clearPendingImageJob(targetShotId, 'start');
+            setShotGeneratingState(targetShotId, 'start', false);
+        }
     };
 
     const handleGenerateEndFrame = async (promptOverride = null, cfgOverride = null) => {
@@ -21848,6 +22409,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
         let createdImageJobId = '';
+        let keepRunningUi = false;
         setShotGeneratingState(targetShotId, 'end', true);
         abortGenerationRef.current = false;
 
@@ -21889,6 +22451,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
                 const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+                const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info);
 
                 const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                     project_id: projectId,
@@ -21898,6 +22461,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     shot_name: shotSnapshot.shot_name,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'end_frame',
+                    ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
                     ...(cfgOverride ? { cfg: cfgOverride } : {}),
                     ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
@@ -21923,6 +22487,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             } catch (e) {
                 console.error(`Attempt ${attempts} failed:`, e);
+                if (isClientInterruptionError(e)) {
+                    const recovered = await tryRecoverShotMediaAfterInterruption({
+                        shotId: targetShotId,
+                        mediaKey: 'end',
+                    });
+                    if (recovered) {
+                        keepRunningUi = true;
+                        success = true;
+                        break;
+                    }
+                }
                 if (createdImageJobId) {
                     clearPendingImageJob(targetShotId, 'end');
                     createdImageJobId = '';
@@ -21933,17 +22508,26 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
         }
-        clearPendingImageJob(targetShotId, 'end');
-        setShotGeneratingState(targetShotId, 'end', false);
+        if (!keepRunningUi) {
+            clearPendingImageJob(targetShotId, 'end');
+            setShotGeneratingState(targetShotId, 'end', false);
+        }
     };
 
     const handleForceStopShotImage = useCallback(async (kind) => {
         const stableKind = kind === 'end' ? 'end' : 'start';
         const stableShotId = String(editingShot?.id || '').trim();
         if (!stableShotId) return;
+        const pendingPayload = getPendingImageJobPayload(stableShotId, stableKind);
+        const isJointDiptych = pendingPayload?.mode === 'joint_diptych';
 
         abortGenerationRef.current = true;
-        setShotGeneratingState(stableShotId, stableKind, false);
+        if (isJointDiptych) {
+            setShotGeneratingState(stableShotId, 'start', false);
+            setShotGeneratingState(stableShotId, 'end', false);
+        } else {
+            setShotGeneratingState(stableShotId, stableKind, false);
+        }
 
         const resolved = await syncShotMediaRuntimeState({
             shotId: stableShotId,
@@ -21953,7 +22537,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const jobId = String(resolved?.jobId || '').trim();
 
         if (!jobId) {
-            releaseShotImageUiByShotId(stableShotId, stableKind);
+            if (isJointDiptych) {
+                releaseShotJointDiptychUiByShotId(stableShotId);
+            } else {
+                releaseShotImageUiByShotId(stableShotId, stableKind);
+            }
             onLog?.(t('已停止前端重试循环，并清除本地图片运行状态。未检测到可停止的后端图片任务。', 'Stopped local retry loop and cleared local image running state. No active backend image job found.'), 'warning');
             return;
         }
@@ -21965,16 +22553,24 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'unknown error';
             if (isMissingJobError(e)) {
-                releaseShotImageUiByShotId(stableShotId, stableKind);
+                if (isJointDiptych) {
+                    releaseShotJointDiptychUiByShotId(stableShotId);
+                } else {
+                    releaseShotImageUiByShotId(stableShotId, stableKind);
+                }
                 onLog?.(t('后端图片任务已不存在，已清除本地运行状态。', 'Backend image job no longer exists. Cleared local running state.'), 'warning');
                 return;
             }
             onLog?.(`${t('停止图片任务失败', 'Failed to stop image task')}: ${detail}`, 'error');
             showNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
         } finally {
-            clearPendingImageJob(stableShotId, stableKind);
+            if (isJointDiptych) {
+                clearPendingJointDiptychImageJob(stableShotId);
+            } else {
+                clearPendingImageJob(stableShotId, stableKind);
+            }
         }
-    }, [clearPendingImageJob, editingShot?.id, isMissingJobError, onLog, releaseShotImageUiByShotId, setShotGeneratingState, syncShotMediaRuntimeState, t]);
+    }, [clearPendingImageJob, clearPendingJointDiptychImageJob, editingShot?.id, getPendingImageJobPayload, isMissingJobError, onLog, releaseShotImageUiByShotId, releaseShotJointDiptychUiByShotId, setShotGeneratingState, syncShotMediaRuntimeState, t]);
 
     const handleSetEndFrameFromVideoLastFrame = useCallback(async () => {
         if (!editingShot?.id) return;
@@ -22310,19 +22906,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
 
         let createdVideoJobId = '';
-
-        const isClientInterruptionError = (err) => {
-            const msg = String(
-                err?.code || err?.name || err?.message || err?.response?.data?.detail || ''
-            ).toLowerCase();
-            return (
-                msg.includes('canceled')
-                || msg.includes('cancelled')
-                || msg.includes('aborted')
-                || msg.includes('econnaborted')
-                || msg.includes('network error')
-            );
-        };
+        let keepRunningUi = false;
 
         onLog?.('Generating Video...', 'info');
         try {
@@ -22531,9 +23115,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             if (videoSettled.status === 'rejected') {
                 const e = videoSettled.reason;
-                if (createdVideoJobId && isClientInterruptionError(e)) {
-                    onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
-                    showNotification('Video job continues in background.', 'info');
+                if (isClientInterruptionError(e)) {
+                    const recovered = await tryRecoverShotMediaAfterInterruption({
+                        shotId: targetShotId,
+                        mediaKey: 'video',
+                    });
+                    if (recovered) {
+                        keepRunningUi = true;
+                    } else if (createdVideoJobId) {
+                        onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
+                        showNotification('Video job continues in background.', 'info');
+                        keepRunningUi = true;
+                    } else {
+                        clearPendingVideoJob(targetShotId);
+                        onLog?.(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
+                        showNotification(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
+                    }
                 } else {
                     clearPendingVideoJob(targetShotId);
                     onLog?.(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
@@ -22541,16 +23138,31 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
         } catch (e) {
-             if (createdVideoJobId && isClientInterruptionError(e)) {
-                 onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
-                 showNotification('Video job continues in background.', 'info');
+             if (isClientInterruptionError(e)) {
+                 const recovered = await tryRecoverShotMediaAfterInterruption({
+                     shotId: targetShotId,
+                     mediaKey: 'video',
+                 });
+                 if (recovered) {
+                     keepRunningUi = true;
+                 } else if (createdVideoJobId) {
+                     onLog?.('Video job is still running on server; it will auto-resume when you return.', 'warning');
+                     showNotification('Video job continues in background.', 'info');
+                     keepRunningUi = true;
+                 } else {
+                     clearPendingVideoJob(targetShotId);
+                     onLog?.(`Generation failed: ${e.message}`, 'error');
+                     showNotification(`Generation failed: ${e.message}`, 'error');
+                 }
              } else {
                  clearPendingVideoJob(targetShotId);
                  onLog?.(`Generation failed: ${e.message}`, 'error');
                  showNotification(`Generation failed: ${e.message}`, 'error');
              }
         } finally {
-            setShotGeneratingState(targetShotId, 'video', false);
+            if (!keepRunningUi) {
+                setShotGeneratingState(targetShotId, 'video', false);
+            }
         }
     };
 
@@ -23312,6 +23924,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 >
                                                     {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
                                                     {currentShotGenerating ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleGenerateShotDiptychFrames(shotImageCfgValue)}
+                                                    disabled={currentShotGenerating}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating ? 'bg-violet-500/10 text-violet-200/40 cursor-wait' : 'bg-violet-500/20 text-violet-200 hover:bg-violet-500/30'}`}
+                                                    title={t('把起始帧与结束帧提示词拼成两宫格生图后自动拆分回填', 'Generate a two-panel composite from the start/end prompts, then split and apply both frames automatically')}
+                                                >
+                                                    {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Layers className="w-3 h-3"/>}
+                                                    {currentShotGenerating ? t('联生中...', 'Joint...') : t('首尾联生', 'Joint')}
                                                 </button>
                                             </div>
                                         </div>
