@@ -18,6 +18,7 @@ RULE_DESCRIPTIONS = {
     "exact": "标准值与API枚举值精确匹配",
     "semantic_token": "按语义token匹配",
     "semantic_alias": "按别名语义匹配",
+    "nearest": "按数值绝对距离就近匹配",
     "nearest_lower": "按数值就近取不高于标准值",
     "nearest_ratio": "按比例最接近匹配",
     "semantic_prefix": "按前缀语义匹配",
@@ -239,6 +240,14 @@ def main() -> None:
     with engine.begin() as conn:
         conn.execute(values.delete().where(values.c.standard_dimension.in_(sorted(EXCLUDED_STANDARD_DIMENSIONS))))
         conn.execute(mappings.delete().where(mappings.c.standard_dimension.in_(sorted(EXCLUDED_STANDARD_DIMENSIONS))))
+        conn.execute(
+            mappings.delete().where(
+                and_(
+                    mappings.c.provider == "kie",
+                    ~mappings.c.standard_dimension.in_(sorted(EXCLUDED_STANDARD_DIMENSIONS)),
+                )
+            )
+        )
 
         for row in _read_csv_rows(dict_csv):
             if _upsert_value(conn, values, row, now_dt):

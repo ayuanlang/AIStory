@@ -57,6 +57,7 @@ from pathlib import Path
 from collections import deque
 import threading
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import hmac
 import base64
@@ -4618,9 +4619,13 @@ def _get_project_share_record(db: Session, project_id: int, user_id: int) -> Opt
     ).first()
 
 
-def _normalize_project_share_role(value: Any) -> str:
+def _normalize_project_share_role(value: Any, *, strict: bool = False) -> str:
     raw = str(value or "").strip().lower()
-    return raw if raw in _PROJECT_SHARE_ROLES else "editor"
+    if raw in _PROJECT_SHARE_ROLES:
+        return raw
+    if strict and raw:
+        raise HTTPException(status_code=400, detail=f"Invalid project share role: {raw}")
+    return "editor"
 
 
 def _normalize_project_share_permissions(value: Any) -> Dict[str, Any]:
@@ -5017,10 +5022,7 @@ def _validate_review_target_ids_for_project(
 def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThreadModel, current_user: User, project: Project) -> str:
     if current_user.id == thread.reviewer_user_id:
         return "reviewer"
-    if current_user.id == thread.requester_user_id or project.owner_id == current_user.id:
-        return "requester"
-    share = _get_project_share_record(db, thread.project_id, current_user.id)
-    if share and _normalize_project_share_role(getattr(share, "role", None)) == "editor":
+    if current_user.id == thread.requester_user_id:
         return "requester"
     raise HTTPException(status_code=403, detail="Not authorized to reply in this review thread")
 
@@ -5306,6 +5308,27 @@ def sanitize_llm_markdown_output(text: str) -> str:
             lines = lines[first_md_index:]
 
     return "\n".join(lines).strip()
+
+
+def _is_provider_moderation_block_response(raw_text: Any, cleaned_text: Optional[str] = None) -> bool:
+    """Treat moderation as a hard block only when the payload reduces to the marker itself."""
+    raw = str(raw_text or "")
+    cleaned = str(cleaned_text if cleaned_text is not None else sanitize_llm_markdown_output(raw)).strip()
+
+    def _normalize_marker(value: str) -> str:
+        text = str(value or "").strip()
+        text = re.sub(r"^\s*=+\s*", "", text)
+        return text.strip().upper()
+
+    if cleaned and _normalize_marker(cleaned) != "PROHIBITED_CONTENT":
+        return False
+
+    raw_lines = [str(line or "").strip() for line in raw.splitlines() if str(line or "").strip()]
+    if not raw_lines:
+        return False
+
+    non_marker_lines = [line for line in raw_lines if _normalize_marker(line) != "PROHIBITED_CONTENT"]
+    return len(non_marker_lines) == 0
 
 
 def _split_markdown_row_escaped(row_line: str) -> List[str]:
@@ -5978,7 +6001,7 @@ def create_project_share(
     if not target:
         raise HTTPException(status_code=400, detail="target_user is required")
 
-    role = _normalize_project_share_role(payload.role)
+    role = _normalize_project_share_role(payload.role, strict=True)
     permissions = _normalize_project_share_permissions(payload.permissions)
 
     target_user = db.query(User).filter(or_(User.username == target, User.email == target)).first()
@@ -6217,8 +6240,8 @@ def update_review_thread_status(
     next_status = str(payload.status or "").strip().lower()
     if next_status not in _ASSET_REVIEW_THREAD_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid review thread status: {next_status}")
-    sender_role = _resolve_thread_sender_role(db, thread, current_user, project)
-    if next_status == "archived" and sender_role != "requester" and current_user.id != project.owner_id:
+    can_archive = int(current_user.id or 0) in {int(thread.requester_user_id or 0), int(project.owner_id or 0)}
+    if next_status == "archived" and not can_archive:
         raise HTTPException(status_code=403, detail="Only requester side can archive review threads")
 
     now_iso = now_bj_iso()
@@ -10854,6 +10877,7 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     # Entities - Fetch project entities and match with Linked Characters / Environment
     project_entities = db.query(Entity).filter(Entity.project_id == project.id).all()
     entity_descriptions = []
+    subject_packets = []
     
     # Identify relevant entity names from Scene data
     relevant_names = set()
@@ -10879,6 +10903,14 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
 
     env_narrative = ""
     env_narratives_map = {}
+
+    def _trim_packet_text(value: Any, limit: int = 420) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if not text:
+            return ""
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + "..."
 
     for ent in project_entities:
         # Check relevancy (Case-insensitive check, considering name_en)
@@ -10935,6 +10967,13 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
                            break
 
             desc_parts = []
+            normalized_type = _normalize_subject_entity_type(getattr(ent, "type", None)) or "entity"
+            if normalized_type == "character":
+                subject_ref = f"CHAR:[@{ent.name}]"
+            elif normalized_type == "prop":
+                subject_ref = f"PROP:[{ent.name}]"
+            else:
+                subject_ref = f"ENV:[{ent.name}]"
             
             # 0. Anchor Description (Critical for AI Visualization)
             if ent.anchor_description:
@@ -10969,6 +11008,51 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
             if ent.atmosphere:
                 desc_parts.append(f"Atmosphere: {ent.atmosphere}")
 
+            packet_parts = [f"name={ent.name}", f"type={normalized_type}"]
+            if ent.name_en:
+                packet_parts.append(f"name_en={_trim_packet_text(ent.name_en, 120)}")
+            if ent.anchor_description:
+                packet_parts.append(f"anchor={_trim_packet_text(ent.anchor_description, 220)}")
+
+            primary_description = ent.narrative_description or ent.description
+            extracted_description = ""
+            if primary_description:
+                extracted_description = _trim_packet_text(primary_description, 320)
+            if extracted_description:
+                packet_parts.append(f"description={extracted_description}")
+
+            if normalized_type == 'character':
+                if ent.appearance_cn:
+                    packet_parts.append(f"appearance_cn={_trim_packet_text(ent.appearance_cn, 220)}")
+                if ent.clothing:
+                    packet_parts.append(f"clothing={_trim_packet_text(ent.clothing, 180)}")
+                if ent.action_characteristics:
+                    packet_parts.append(f"action_characteristics={_trim_packet_text(ent.action_characteristics, 180)}")
+                if ent.role:
+                    packet_parts.append(f"role={_trim_packet_text(ent.role, 120)}")
+                if ent.archetype:
+                    packet_parts.append(f"archetype={_trim_packet_text(ent.archetype, 120)}")
+            elif normalized_type == 'prop':
+                if ent.visual_params:
+                    packet_parts.append(f"visual_params={_trim_packet_text(ent.visual_params, 220)}")
+            else:
+                if ent.atmosphere:
+                    packet_parts.append(f"atmosphere={_trim_packet_text(ent.atmosphere, 180)}")
+                if ent.visual_params:
+                    packet_parts.append(f"visual_params={_trim_packet_text(ent.visual_params, 220)}")
+
+            if ent.generation_prompt_en:
+                packet_parts.append(f"generation_prompt_en={_trim_packet_text(ent.generation_prompt_en, 420)}")
+            if ent.generation_prompt_cn:
+                packet_parts.append(f"generation_prompt_cn={_trim_packet_text(ent.generation_prompt_cn, 320)}")
+
+            if ent.visual_dependencies:
+                packet_parts.append(f"visual_dependencies={_trim_packet_text(json.dumps(ent.visual_dependencies, ensure_ascii=False), 220)}")
+            if ent.dependency_strategy:
+                packet_parts.append(f"dependency_strategy={_trim_packet_text(json.dumps(ent.dependency_strategy, ensure_ascii=False), 220)}")
+
+            subject_packets.append(f"- {subject_ref} | " + " | ".join(packet_parts))
+
             if desc_parts:
                 entity_descriptions.append(f"[{ent.name}] " + " | ".join(desc_parts))
             else:
@@ -10984,6 +11068,15 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     entity_section = ""
     if entity_descriptions:
         entity_section = "# Entity Reference\n" + "\n".join(entity_descriptions) + "\n"
+
+    subject_packet_section = ""
+    if subject_packets:
+        subject_packet_section = (
+            "# Relevant Subject Packets\n"
+            "Authoritative upstream subject descriptions for this scene. For each shot, first decide Associated Entities, then inherit only the matching subject packets into Shot Logic, Start Frame, Video Content, Keyframes, and End Frame. Preserve stable identity/state/dependency semantics; do not rename or reinvent them.\n"
+            + "\n".join(subject_packets)
+            + "\n"
+        )
 
     # 3. Prepare System Prompt
     system_prompt = ""
@@ -11014,6 +11107,8 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
 | **Linked Characters** | {scene.linked_characters or ''} |
 | **Key Props** | {scene.key_props or ''} |
 | **Core Goal** | {core_goal_text} |
+
+{subject_packet_section}
 
 {entity_section}
 
@@ -11101,6 +11196,7 @@ class SceneAiShotsBatchStartRequest(BaseModel):
 
 SCENE_AI_SHOTS_BATCH_STATUS_KEY = "scene_ai_shots_batch_status"
 SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC = 300
+SCENE_AI_SHOTS_BATCH_DEFAULT_CONCURRENCY = 3
 
 
 def _read_scene_ai_shots_batch_status(episode: Episode) -> Dict[str, Any]:
@@ -11155,7 +11251,58 @@ def _persist_scene_ai_shots_batch_status(db: Session, episode: Episode, status_p
     db.commit()
 
 
-def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id: int) -> None:
+def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int) -> Dict[str, Any]:
+    item_db = SessionLocal()
+    try:
+        scene = item_db.query(Scene).filter(Scene.id == scene_id, Scene.episode_id == episode_id).first()
+        user = item_db.query(User).filter(User.id == user_id).first()
+        if not scene or not user:
+            raise RuntimeError("Scene or user not found")
+
+        scene_label = str(scene.scene_no or scene.scene_name or f"#{scene_id}")
+        _release_db_connection(item_db, "scene_ai_shots_batch_item")
+        generated = asyncio.run(
+            asyncio.wait_for(
+                ai_generate_shots(scene_id=scene_id, req=None, db=item_db, current_user=user),
+                timeout=SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC,
+            )
+        )
+        generated_rows = generated.get("content") if isinstance(generated, dict) else []
+        if not isinstance(generated_rows, list) or len(generated_rows) == 0:
+            raise RuntimeError("No parsed rows returned")
+
+        apply_scene_ai_result(
+            scene_id=scene_id,
+            data=AnalysisContent(content=generated_rows),
+            db=item_db,
+            current_user=user,
+        )
+        return {
+            "scene_id": int(scene_id),
+            "scene_label": scene_label,
+            "ok": True,
+        }
+    except asyncio.TimeoutError:
+        scene_label = str((scene.scene_no if 'scene' in locals() and scene else None) or (scene.scene_name if 'scene' in locals() and scene else None) or f"#{scene_id}")
+        return {
+            "scene_id": int(scene_id),
+            "scene_label": scene_label,
+            "ok": False,
+            "error": f"scene processing exceeded {SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC}s timeout",
+        }
+    except Exception as e:
+        scene_label = str((scene.scene_no if 'scene' in locals() and scene else None) or (scene.scene_name if 'scene' in locals() and scene else None) or f"#{scene_id}")
+        return {
+            "scene_id": int(scene_id),
+            "scene_label": scene_label,
+            "ok": False,
+            "error": str(e),
+        }
+    finally:
+        item_db.close()
+
+
+def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id: int, batch_max_concurrency: int) -> None:
     db = SessionLocal()
     try:
         episode = db.query(Episode).filter(Episode.id == episode_id).first()
@@ -11195,7 +11342,12 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             latest_status = _read_scene_ai_shots_batch_status(latest_episode)
             return bool(latest_status.get("stop_requested") or latest_status.get("force_stopped"))
 
-        for sid in scene_ids:
+        effective_batch_max_concurrency = _resolve_user_batch_parallel_limit(
+            batch_max_concurrency,
+            default=SCENE_AI_SHOTS_BATCH_DEFAULT_CONCURRENCY,
+        )
+        remaining_scene_ids = list(scene_ids)
+        while remaining_scene_ids:
             episode = _read_latest_episode()
             if not episode:
                 break
@@ -11224,37 +11376,99 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                 )
                 return
 
-            scene_label = scene_label_map.get(sid) or f"#{sid}"
-            latest["current_scene_id"] = sid
-            latest["current_scene_label"] = scene_label
+            batch_scene_ids = remaining_scene_ids[:effective_batch_max_concurrency]
+            batch_scene_labels = [scene_label_map.get(sid) or f"#{sid}" for sid in batch_scene_ids]
+            latest["current_scene_id"] = batch_scene_ids[0] if len(batch_scene_ids) == 1 else None
+            latest["current_scene_label"] = " / ".join(batch_scene_labels)
             latest["current_scene_started_at"] = now_bj_iso()
-            latest["message"] = f"Processing scene {scene_label}..."
+            latest["message"] = (
+                f"Processing scenes {', '.join(batch_scene_labels)}..."
+                if len(batch_scene_labels) > 1
+                else f"Processing scene {batch_scene_labels[0]}..."
+            )
             latest["updated_at"] = now_bj_iso()
             _persist_scene_ai_shots_batch_status(db, episode, latest)
 
-            try:
-                _release_db_connection(db, "scene_ai_shots_batch_job")
-                generated = asyncio.run(
-                    asyncio.wait_for(
-                        ai_generate_shots(scene_id=sid, req=None, db=db, current_user=user),
-                        timeout=SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC,
-                    )
-                )
-                generated_rows = generated.get("content") if isinstance(generated, dict) else []
-                if not isinstance(generated_rows, list) or len(generated_rows) == 0:
-                    raise RuntimeError("No parsed rows returned")
+            with ThreadPoolExecutor(max_workers=min(effective_batch_max_concurrency, len(batch_scene_ids))) as executor:
+                future_map = {
+                    executor.submit(_run_scene_ai_shots_batch_item, sid, episode_id, user_id): sid
+                    for sid in batch_scene_ids
+                }
+                for future in as_completed(future_map):
+                    sid = future_map[future]
+                    scene_label = scene_label_map.get(sid) or f"#{sid}"
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        result = {
+                            "scene_id": sid,
+                            "scene_label": scene_label,
+                            "ok": False,
+                            "error": str(e),
+                        }
 
-                if _stop_requested():
-                    latest_after_generate = _read_scene_ai_shots_batch_status(episode)
-                    latest_after_generate["running"] = False
-                    latest_after_generate["completed"] = completed
-                    latest_after_generate["success"] = success
-                    latest_after_generate["failed"] = failed
-                    latest_after_generate["errors"] = errors
-                    latest_after_generate["finished_at"] = now_bj_iso()
-                    latest_after_generate["stopped_by_user"] = True
-                    latest_after_generate["message"] = "Stopped by user request"
-                    _persist_scene_ai_shots_batch_status(db, episode, latest_after_generate)
+                    if bool(result.get("ok")):
+                        success += 1
+                        _log_batch_sys_event(
+                            kind="scene-ai-shots-batch",
+                            phase="item",
+                            user_id=user_id,
+                            user_name=user_name,
+                            project_id=project_id,
+                            episode_id=episode_id,
+                            job_id=job_id,
+                            item_id=sid,
+                            item_label=result.get("scene_label") or scene_label,
+                            result="success",
+                            message="Scene AI shots generated",
+                        )
+                    else:
+                        failed += 1
+                        error_message = str(result.get("error") or "Unknown error")
+                        errors.append(f"{result.get('scene_label') or scene_label}: {error_message}")
+                        _log_batch_sys_event(
+                            kind="scene-ai-shots-batch",
+                            phase="item",
+                            user_id=user_id,
+                            user_name=user_name,
+                            project_id=project_id,
+                            episode_id=episode_id,
+                            job_id=job_id,
+                            item_id=sid,
+                            item_label=result.get("scene_label") or scene_label,
+                            result="failed",
+                            message=error_message,
+                        )
+
+                    completed += 1
+                    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+                    if not episode:
+                        break
+                    latest = _read_scene_ai_shots_batch_status(episode)
+                    latest["completed"] = completed
+                    latest["success"] = success
+                    latest["failed"] = failed
+                    latest["errors"] = errors
+                    latest["current_scene_id"] = sid
+                    latest["current_scene_label"] = result.get("scene_label") or scene_label
+                    latest["updated_at"] = now_bj_iso()
+                    latest["message"] = f"Progress {completed}/{total}"
+                    _persist_scene_ai_shots_batch_status(db, episode, latest)
+
+            remaining_scene_ids = remaining_scene_ids[len(batch_scene_ids):]
+            if _stop_requested() and remaining_scene_ids:
+                episode = _read_latest_episode()
+                if episode:
+                    latest_after_batch = _read_scene_ai_shots_batch_status(episode)
+                    latest_after_batch["running"] = False
+                    latest_after_batch["completed"] = completed
+                    latest_after_batch["success"] = success
+                    latest_after_batch["failed"] = failed
+                    latest_after_batch["errors"] = errors
+                    latest_after_batch["finished_at"] = now_bj_iso()
+                    latest_after_batch["stopped_by_user"] = True
+                    latest_after_batch["message"] = "Stopped by user request"
+                    _persist_scene_ai_shots_batch_status(db, episode, latest_after_batch)
                     _log_batch_sys_event(
                         kind="scene-ai-shots-batch",
                         phase="end",
@@ -11267,75 +11481,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                         message="Stopped by user request",
                         extra={"completed": completed, "success": success, "failed": failed},
                     )
-                    return
-
-                apply_scene_ai_result(
-                    scene_id=sid,
-                    data=AnalysisContent(content=generated_rows),
-                    db=db,
-                    current_user=user,
-                )
-                success += 1
-                _log_batch_sys_event(
-                    kind="scene-ai-shots-batch",
-                    phase="item",
-                    user_id=user_id,
-                    user_name=user_name,
-                    project_id=project_id,
-                    episode_id=episode_id,
-                    job_id=job_id,
-                    item_id=sid,
-                    item_label=scene_label,
-                    result="success",
-                    message="Scene AI shots generated",
-                )
-            except asyncio.TimeoutError:
-                failed += 1
-                errors.append(
-                    f"{scene_label}: scene processing exceeded {SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC}s timeout"
-                )
-                _log_batch_sys_event(
-                    kind="scene-ai-shots-batch",
-                    phase="item",
-                    user_id=user_id,
-                    user_name=user_name,
-                    project_id=project_id,
-                    episode_id=episode_id,
-                    job_id=job_id,
-                    item_id=sid,
-                    item_label=scene_label,
-                    result="failed",
-                    message=f"scene processing exceeded {SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC}s timeout",
-                )
-            except Exception as e:
-                failed += 1
-                errors.append(f"{scene_label}: {str(e)}")
-                _log_batch_sys_event(
-                    kind="scene-ai-shots-batch",
-                    phase="item",
-                    user_id=user_id,
-                    user_name=user_name,
-                    project_id=project_id,
-                    episode_id=episode_id,
-                    job_id=job_id,
-                    item_id=sid,
-                    item_label=scene_label,
-                    result="failed",
-                    message=str(e),
-                )
-
-            completed += 1
-            episode = db.query(Episode).filter(Episode.id == episode_id).first()
-            if not episode:
-                break
-            latest = _read_scene_ai_shots_batch_status(episode)
-            latest["completed"] = completed
-            latest["success"] = success
-            latest["failed"] = failed
-            latest["errors"] = errors
-            latest["updated_at"] = now_bj_iso()
-            latest["message"] = f"Progress {completed}/{total}"
-            _persist_scene_ai_shots_batch_status(db, episode, latest)
+                return
 
         episode = db.query(Episode).filter(Episode.id == episode_id).first()
         if episode:
@@ -11416,6 +11562,11 @@ def start_scene_ai_shots_batch(
     if not scene_ids:
         raise HTTPException(status_code=400, detail="No saved scenes found for batch")
 
+    batch_max_concurrency = _resolve_user_batch_parallel_limit(
+        getattr(current_user, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
+        default=SCENE_AI_SHOTS_BATCH_DEFAULT_CONCURRENCY,
+    )
+
     now_iso = now_bj_iso()
     status_payload = {
         "running": True,
@@ -11424,6 +11575,7 @@ def start_scene_ai_shots_batch(
         "started_by_user_id": int(current_user.id),
         "started_by_username": str(current_user.username or ""),
         "scene_ids": scene_ids,
+        "max_concurrency": batch_max_concurrency,
         "total": len(scene_ids),
         "completed": 0,
         "success": 0,
@@ -11451,12 +11603,12 @@ def start_scene_ai_shots_batch(
         job_id=f"scene-ai-shots-batch:{int(episode_id)}",
         result="running",
         message="Batch task started",
-        extra={"scene_ids": scene_ids, "total": len(scene_ids)},
+        extra={"scene_ids": scene_ids, "total": len(scene_ids), "max_concurrency": batch_max_concurrency},
     )
 
     worker = threading.Thread(
         target=_run_scene_ai_shots_batch_job,
-        args=(episode_id, scene_ids, current_user.id),
+        args=(episode_id, scene_ids, current_user.id, batch_max_concurrency),
         daemon=True,
     )
     worker.start()
@@ -11655,7 +11807,11 @@ async def ai_generate_shots(
         # Keep original model output for read-only auditing in UI.
         raw_text_original = str(response_content_raw or "")
 
-        if re.search(r"\bPROHIBITED_CONTENT\b", raw_str, flags=re.IGNORECASE):
+        # Force-remove common reasoning leakage (e.g., "analysis", <think> blocks)
+        # before moderation classification, parsing, and persistence.
+        response_content = sanitize_llm_markdown_output(response_content_raw)
+
+        if _is_provider_moderation_block_response(raw_str, response_content):
             logger.warning(
                 f"[ai_generate_shots] prohibited_content_marker_detected scene_id={scene_id} user_id={current_user.id}"
             )
@@ -11663,9 +11819,6 @@ async def ai_generate_shots(
                 billing_service.cancel_reservation(db, reservation_tx.id, "provider moderation block")
             raise HTTPException(status_code=502, detail="Provider moderation blocked shot generation (PROHIBITED_CONTENT)")
 
-        # Force-remove common reasoning leakage (e.g., "analysis", <think> blocks)
-        # before table parsing and persistence.
-        response_content = sanitize_llm_markdown_output(response_content_raw)
         reasoning_prefix_terms = [
             "i will",
             "let me",
@@ -11927,12 +12080,13 @@ async def ai_regenerate_shots(
             raise HTTPException(status_code=502, detail="LLM returned empty response")
 
         raw_text_original = str(response_content_raw or "")
-        if re.search(r"\bPROHIBITED_CONTENT\b", raw_str, flags=re.IGNORECASE):
+
+        response_content = sanitize_llm_markdown_output(response_content_raw)
+        if _is_provider_moderation_block_response(raw_str, response_content):
             if reservation_tx:
                 billing_service.cancel_reservation(db, reservation_tx.id, "provider moderation block")
             raise HTTPException(status_code=502, detail="Provider moderation blocked shot regeneration (PROHIBITED_CONTENT)")
 
-        response_content = sanitize_llm_markdown_output(response_content_raw)
         if not response_content:
             if reservation_tx:
                 billing_service.cancel_reservation(db, reservation_tx.id, "empty response after sanitize")
@@ -13313,7 +13467,7 @@ class UserOut(BaseModel):
     email: Optional[str] = None
     full_name: Optional[str] = None
     avatar_url: Optional[str] = None
-    is_active: bool
+    is_active: int
     account_status: int = 1
     email_verified: bool = False
     is_superuser: bool
@@ -13330,6 +13484,29 @@ class UserPageOut(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+USER_ACTIVE_LEVEL_DEFAULT = 1
+USER_BATCH_PARALLEL_LIMIT_MAX = 12
+
+
+def _normalize_user_active_level(value: Any, default: int = USER_ACTIVE_LEVEL_DEFAULT) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(0, parsed)
+
+
+def _is_user_enabled(value: Any) -> bool:
+    return _normalize_user_active_level(value, USER_ACTIVE_LEVEL_DEFAULT) > 0
+
+
+def _resolve_user_batch_parallel_limit(value: Any, default: int = USER_ACTIVE_LEVEL_DEFAULT) -> int:
+    normalized = _normalize_user_active_level(value, default)
+    if normalized <= 0:
+        normalized = max(1, int(default or USER_ACTIVE_LEVEL_DEFAULT))
+    return min(USER_BATCH_PARALLEL_LIMIT_MAX, max(1, normalized))
 
 
 def _is_valid_email_format(email: str) -> bool:
@@ -13548,7 +13725,7 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         username=user.username,
         full_name=user.full_name,
         hashed_password=hashed_password,
-        is_active=False,
+        is_active=0,
         account_status=-1,
         email_verified=False,
         email_verification_code=verify_code,
@@ -13644,7 +13821,7 @@ def confirm_user_verification_code(
 
     user.email_verified = True
     user.account_status = 1
-    user.is_active = True
+    user.is_active = USER_ACTIVE_LEVEL_DEFAULT
     user.email_verification_code = None
     user.email_verification_expires_at = None
     db.commit()
@@ -13767,11 +13944,11 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
         raise HTTPException(status_code=403, detail="System is under maintenance. Only system administrators can login now")
     if (
         user.account_status == -1
-        and (not bool(user.is_active))
+        and (not _is_user_enabled(user.is_active))
         and (not bool(getattr(user, "is_superuser", False)))
     ):
         raise HTTPException(status_code=403, detail="Email verification required. Please verify your email code before login")
-    if not bool(user.is_active):
+    if not _is_user_enabled(user.is_active):
         raise HTTPException(status_code=403, detail="User is disabled")
 
     try:
@@ -13813,11 +13990,11 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
         raise HTTPException(status_code=403, detail="System is under maintenance. Only system administrators can login now")
     if (
         user.account_status == -1
-        and (not bool(user.is_active))
+        and (not _is_user_enabled(user.is_active))
         and (not bool(getattr(user, "is_superuser", False)))
     ):
         raise HTTPException(status_code=403, detail="Email verification required. Please verify your email code before login")
-    if not bool(user.is_active):
+    if not _is_user_enabled(user.is_active):
         raise HTTPException(status_code=403, detail="User is disabled")
 
     try:
@@ -16232,6 +16409,7 @@ class GenerationRequest(BaseModel):
     imageUrls: Optional[List[str]] = None
     project_id: Optional[int] = None
     episode_id: Optional[int] = None
+    scene_id: Optional[int] = None
     shot_id: Optional[int] = None
     shot_number: Optional[str] = None
     shot_name: Optional[str] = None
@@ -16283,6 +16461,8 @@ class VideoGenerationRequest(BaseModel):
     multi_prompt: Optional[List[Dict[str, Any]]] = None
     kling_elements: Optional[List[Dict[str, Any]]] = None
     project_id: Optional[int] = None
+    episode_id: Optional[int] = None
+    scene_id: Optional[int] = None
     shot_id: Optional[int] = None
     shot_number: Optional[str] = None
     shot_name: Optional[str] = None
@@ -19385,7 +19565,7 @@ class UserUpdate(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
     full_name: Optional[str] = None
-    is_active: Optional[bool] = None
+    is_active: Optional[int] = None
     account_status: Optional[int] = None
     email_verified: Optional[bool] = None
     is_authorized: Optional[bool] = None
@@ -19424,7 +19604,7 @@ def read_users_me(
         "email": getattr(current_user, "email", None),
         "full_name": getattr(current_user, "full_name", None),
         "avatar_url": getattr(current_user, "avatar_url", None),
-        "is_active": bool(getattr(current_user, "is_active", True)),
+        "is_active": _normalize_user_active_level(getattr(current_user, "is_active", USER_ACTIVE_LEVEL_DEFAULT), USER_ACTIVE_LEVEL_DEFAULT),
         "account_status": int(getattr(current_user, "account_status", 1) or 1),
         "email_verified": bool(getattr(current_user, "email_verified", False)),
         "is_superuser": bool(getattr(current_user, "is_superuser", False)),
@@ -19590,16 +19770,18 @@ def update_user(
         user.full_name = (user_in.full_name or "").strip() or None
         
     if user_in.is_active is not None:
-        user.is_active = user_in.is_active
+        user.is_active = _normalize_user_active_level(user_in.is_active, USER_ACTIVE_LEVEL_DEFAULT)
     if user_in.account_status is not None:
         user.account_status = int(user_in.account_status)
         if user.account_status == -1:
-            user.is_active = False
+            user.is_active = 0
             user.email_verified = False
     if user_in.email_verified is not None:
         user.email_verified = bool(user_in.email_verified)
         if user.email_verified and user.account_status == -1:
             user.account_status = 1
+            if not _is_user_enabled(user.is_active):
+                user.is_active = USER_ACTIVE_LEVEL_DEFAULT
     if user_in.is_authorized is not None:
         user.is_authorized = user_in.is_authorized
     if user_in.is_superuser is not None:

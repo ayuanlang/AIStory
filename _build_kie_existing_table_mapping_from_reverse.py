@@ -19,7 +19,7 @@ def confidence_from_rule(rule: str) -> str:
     r = clean(rule).lower()
     if r in {"exact", "semantic_token", "semantic_alias"}:
         return "HIGH"
-    if r in {"nearest_lower", "nearest_ratio", "semantic_prefix"}:
+    if r in {"nearest", "nearest_lower", "nearest_ratio", "semantic_prefix"}:
         return "MEDIUM"
     if r.startswith("fallback"):
         return "LOW"

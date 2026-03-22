@@ -25,6 +25,18 @@ _user_auth_cache = {
 }
 
 
+def _normalize_user_active_level(value, default: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(0, parsed)
+
+
+def _is_user_enabled(value) -> bool:
+    return _normalize_user_active_level(value, 1) > 0
+
+
 def _build_cached_principal(user: User) -> dict:
     now = time.time()
     email_value = getattr(user, "email", None)
@@ -42,7 +54,7 @@ def _build_cached_principal(user: User) -> dict:
         "email": email_value,
         "full_name": full_name_value,
         "avatar_url": avatar_value,
-        "is_active": bool(getattr(user, "is_active", True)),
+        "is_active": _normalize_user_active_level(getattr(user, "is_active", 1), 1),
         "is_superuser": bool(getattr(user, "is_superuser", False)),
         "is_authorized": bool(getattr(user, "is_authorized", False)),
         "is_system": bool(getattr(user, "is_system", False)),
@@ -104,7 +116,7 @@ def _entry_to_principal(entry: dict) -> SimpleNamespace:
         email=email_value,
         full_name=full_name_value,
         avatar_url=avatar_value,
-        is_active=bool(entry.get("is_active", True)),
+        is_active=_normalize_user_active_level(entry.get("is_active", 1), 1),
         is_superuser=bool(entry.get("is_superuser", False)),
         is_authorized=bool(entry.get("is_authorized", False)),
         is_system=bool(entry.get("is_system", False)),
@@ -152,7 +164,7 @@ def warm_user_auth_cache_from_db(limit: int = 2000) -> int:
         try:
             rows = (
                 session.query(UserModel)
-                .filter(UserModel.is_active == True)  # noqa: E712
+                .filter(UserModel.is_active > 0)
                 .order_by(UserModel.id.desc())
                 .limit(max(1, int(limit or 2000)))
                 .all()
@@ -213,14 +225,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
     if (
         getattr(user, "account_status", 1) == -1
-        and not bool(getattr(user, "is_active", True))
+        and not _is_user_enabled(getattr(user, "is_active", 1))
         and not bool(getattr(user, "is_superuser", False))
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Email verification required",
         )
-    if not bool(getattr(user, "is_active", True)):
+    if not _is_user_enabled(getattr(user, "is_active", 1)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is disabled",

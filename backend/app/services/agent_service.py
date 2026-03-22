@@ -1399,16 +1399,64 @@ Output ONLY the JSON object now."""
 
     def _is_deprecated_system_config(self, config_value: Any, deprecated_flag: Any = None) -> bool:
         if isinstance(deprecated_flag, bool):
-            if deprecated_flag:
-                return True
-        elif deprecated_flag is not None and str(deprecated_flag).strip().lower() in {"1", "true", "yes", "y", "on"}:
-            return True
+            return deprecated_flag
+        return deprecated_flag is not None and str(deprecated_flag).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _resolve_runtime_model(self, setting: Optional[SystemAPISetting], provider_defaults: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        if not setting:
+            return None
+        cfg = self._safe_json_dict_or_none(getattr(setting, "config", None)) or {}
+        resolved = str(
+            cfg.get("runtime_model")
+            or cfg.get("upstream_model")
+            or cfg.get("model_override")
+            or getattr(setting, "model", None)
+            or (provider_defaults or {}).get("model")
+            or ""
+        ).strip()
+        return resolved or None
+
+    def _promote_runtime_endpoint(self, category: Optional[str], provider: Optional[str], config_value: Any) -> Dict[str, Any]:
         cfg = self._safe_json_dict_or_none(config_value) or {}
-        return bool(
-            cfg.get("deprecated")
-            or cfg.get("is_deprecated")
-            or cfg.get("disable_api")
-        )
+        resolved_category = str(category or "").strip()
+        endpoint = str(cfg.get("endpoint") or "").strip()
+        endpoint_hint = str(cfg.get("endpoint_hint") or "").strip()
+        if endpoint or not endpoint_hint:
+            return cfg
+
+        endpoint_hint_lower = endpoint_hint.lower()
+        runtime_activation = None
+        if resolved_category == "Image" and "generatecontent" in endpoint_hint_lower:
+            runtime_activation = "image_gemini_native"
+        elif resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
+            runtime_activation = "image_openai_compatible"
+        elif resolved_category == "Video" and (
+            "/v1/videos" in endpoint_hint_lower or "/v1/chat/completions" in endpoint_hint_lower
+        ):
+            runtime_activation = "video_openai_compatible"
+        elif resolved_category == "Voice" and "voice-clone" in endpoint_hint_lower:
+            runtime_activation = "audio_runninghub_compatible"
+        elif resolved_category == "Voice" and any(token in endpoint_hint_lower for token in ("tts", "text-to-speech", "voice", "/audio")):
+            normalized_voice_provider = self._normalize_provider_name(provider, "Voice")
+            runtime_activation = "audio_kie_compatible" if normalized_voice_provider == "kie" else "audio_runninghub_compatible"
+        elif resolved_category == "LLM" and "/v1/chat/completions" in endpoint_hint_lower:
+            runtime_activation = "llm_openai_compatible"
+
+        if not runtime_activation:
+            return cfg
+
+        promoted = dict(cfg)
+        promoted["endpoint"] = endpoint_hint
+        promoted.setdefault("runtime_activation", runtime_activation)
+        return promoted
+
+    def _get_runtime_activation(self, api_config: Optional[Dict[str, Any]]) -> str:
+        outer = api_config if isinstance(api_config, dict) else {}
+        cfg = self._safe_json_dict_or_none(outer.get("config")) or {}
+        activation = cfg.get("runtime_activation")
+        if activation is None:
+            activation = outer.get("runtime_activation")
+        return str(activation or "").strip().lower()
 
     def _normalize_api_keys(self, value: Any) -> List[str]:
         if value is None:
@@ -1567,7 +1615,7 @@ Output ONLY the JSON object now."""
                         return {}
 
                     fallback_default = defaults.get(str(selected_row.provider or "").strip(), {})
-                    merged_config = dict(selected_row.config or {})
+                    merged_config = self._promote_runtime_endpoint(resolved_category, selected_row.provider, selected_row.config)
                     merged_config["__selection_source"] = selection_source
                     merged_config["__resolved_source"] = f"system_fallback:{selected_row.provider}/{selected_row.model}"
                     merged_config["__resolved_setting_id"] = selected_row.id
@@ -1586,7 +1634,8 @@ Output ONLY the JSON object now."""
                         "provider": selected_row.provider,
                         "api_key": self._pick_runtime_api_key(selected_row.config, selected_row.api_key, session=session, provider_name=selected_row.provider),
                         "base_url": selected_row.base_url or fallback_default.get("base_url"),
-                        "model": selected_row.model or fallback_default.get("model"),
+                        "model": self._resolve_runtime_model(selected_row, fallback_default),
+                        "modality": getattr(selected_row, "modality", None),
                         "config": merged_config,
                     }
 
@@ -1651,7 +1700,7 @@ Output ONLY the JSON object now."""
                         return _resolve_system_default_fallback("system_fallback_selected_deprecated")
 
                     fallback_default = defaults.get(str(setting_by_id.provider or "").strip(), {})
-                    merged_config = dict(setting_by_id.config or {})
+                    merged_config = self._promote_runtime_endpoint(resolved_category, setting_by_id.provider, setting_by_id.config)
                     merged_config["__selection_source"] = "system_marker_id"
                     merged_config["__resolved_source"] = f"system_by_user_setting_id:{setting_by_id.id}"
                     merged_config["__resolved_setting_id"] = setting_by_id.id
@@ -1666,7 +1715,8 @@ Output ONLY the JSON object now."""
                         "provider": setting_by_id.provider,
                         "api_key": self._pick_runtime_api_key(setting_by_id.config, setting_by_id.api_key, session=session, provider_name=setting_by_id.provider),
                         "base_url": setting_by_id.base_url or fallback_default.get("base_url"),
-                        "model": setting_by_id.model or fallback_default.get("model"),
+                        "model": self._resolve_runtime_model(setting_by_id, fallback_default),
+                        "modality": getattr(setting_by_id, "modality", None),
                         "config": merged_config,
                     }
                     logger.warning(
@@ -1805,7 +1855,11 @@ Output ONLY the JSON object now."""
 
                     from app.api.settings import DEFAULTS
                     default = DEFAULTS.get(sys_fallback.provider, {})
-                    merged_config = dict(sys_fallback.config or default.get("config", {}) or {})
+                    merged_config = self._promote_runtime_endpoint(
+                        resolved_category,
+                        sys_fallback.provider,
+                        sys_fallback.config or default.get("config", {}) or {},
+                    )
                     merged_config["__resolved_setting_id"] = sys_fallback.id
                     merged_config["__resolved_source"] = f"system_fallback:{sys_fallback.provider}/{sys_fallback.model}->{sys_fallback.id}"
                     merged_config["__resolved_category"] = resolved_category
@@ -1830,7 +1884,7 @@ Output ONLY the JSON object now."""
                             provider_name=sys_fallback.provider,
                         ),
                         "base_url": sys_fallback.base_url or default.get("base_url"),
-                        "model": sys_fallback.model or default.get("model"),
+                        "model": self._resolve_runtime_model(sys_fallback, default),
                         "config": merged_config,
                     }
 
@@ -1925,7 +1979,11 @@ Output ONLY the JSON object now."""
                 if selected:
                     from app.api.settings import DEFAULTS
                     default = DEFAULTS.get(selected.provider, {})
-                    merged_config = dict(selected.config or default.get("config", {}) or {})
+                    merged_config = self._promote_runtime_endpoint(
+                        resolved_category,
+                        selected.provider,
+                        selected.config or default.get("config", {}) or {},
+                    )
                     merged_config["__resolved_setting_id"] = selected.id
                     merged_config["__resolved_source"] = selected_source
                     merged_config["__resolved_category"] = getattr(selected, "category", resolved_category)
@@ -1949,7 +2007,7 @@ Output ONLY the JSON object now."""
                         "provider": selected.provider,
                         "api_key": self._pick_runtime_api_key(selected.config, selected.api_key, session=session, provider_name=selected.provider),
                         "base_url": selected.base_url or default.get("base_url"),
-                        "model": selected.model or default.get("model"),
+                        "model": self._resolve_runtime_model(selected, default),
                         "config": merged_config
                     }
         except Exception as e:
@@ -2023,7 +2081,11 @@ Output ONLY the JSON object now."""
 
                 from app.api.settings import DEFAULTS
                 default = DEFAULTS.get(selected.provider, {})
-                merged_config = dict(selected.config or default.get("config", {}) or {})
+                merged_config = self._promote_runtime_endpoint(
+                    resolved_category,
+                    selected.provider,
+                    selected.config or default.get("config", {}) or {},
+                )
                 merged_config["__selection_source"] = "system_default_llm"
                 merged_config["__resolved_setting_id"] = selected.id
                 merged_config["__resolved_category"] = resolved_category
@@ -2032,7 +2094,7 @@ Output ONLY the JSON object now."""
                     "provider": selected.provider,
                     "api_key": _runtime_key(selected),
                     "base_url": selected.base_url or default.get("base_url"),
-                    "model": selected.model or default.get("model"),
+                    "model": self._resolve_runtime_model(selected, default),
                     "config": merged_config,
                 }
         except Exception as e:
@@ -2107,7 +2169,7 @@ Output ONLY the JSON object now."""
                         "provider": row.provider,
                         "api_key": api_key,
                         "base_url": row.base_url or default.get("base_url"),
-                        "model": row.model or default.get("model"),
+                        "model": self._resolve_runtime_model(row, default),
                         "config": merged_config,
                         "avg_price_estimate": avg_price_estimate,
                         "_setting_id": int(row.id),
@@ -4728,63 +4790,254 @@ Output ONLY the JSON object now."""
         }
 
     async def _generate_image_with_metadata(self, prompt, llm_config, user_id: int, reference_image_url=None):
-        provider = "stability"
-        if llm_config and "provider" in llm_config:
-            provider = llm_config["provider"]
-        
-        api_config = self.get_api_config(provider, user_id, category="Image")
-        
-        if provider == "doubao":
-             return await self._handle_doubao_generation("image", prompt, api_config, reference_image_url)
-        elif provider == "grsai":
-             return await self._handle_grsai_generation("image", prompt, api_config, reference_image_url)
-        elif provider == "tencent":
-             return await self._handle_tencent_generation("image", prompt, api_config, reference_image_url)
-        
-        print(f"Mocking Image Gen for {provider}")
-        return {
-            "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_image.png",
-            "metadata": {"provider": provider, "model": api_config.get("model", "default")}
-        }
+        return await self._generate_media_with_metadata(
+            category="image",
+            llm_config=llm_config,
+            user_id=user_id,
+            prompt=prompt,
+            reference_image_url=reference_image_url,
+        )
 
     async def _generate_video_with_metadata(self, prompt, llm_config, user_id: int, reference_image_url=None, last_frame_url=None, duration=5):
-        provider = "runway"
+        return await self._generate_media_with_metadata(
+            category="video",
+            llm_config=llm_config,
+            user_id=user_id,
+            prompt=prompt,
+            reference_image_url=reference_image_url,
+            last_frame_url=last_frame_url,
+            duration=duration,
+        )
+
+    async def _generate_voice_with_metadata(self, prompt, llm_config, user_id: int, duration=5):
+        return await self._generate_media_with_metadata(
+            category="voice",
+            llm_config=llm_config,
+            user_id=user_id,
+            prompt=prompt,
+            duration=duration,
+        )
+
+    def _get_media_generation_category_spec(self, category: str) -> Dict[str, Any]:
+        category_text = str(category or "").strip().lower()
+        default_spec = {
+            "config_category": str(category_text or "Media").capitalize(),
+            "default_provider": "unknown",
+            "activation_set": set(),
+            "fallback_url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_media.bin",
+            "fallback_label": str(category_text or "Media").capitalize(),
+            "metadata_field": "",
+        }
+        specs = {
+            "image": {
+                "config_category": "Image",
+                "default_provider": "stability",
+                "activation_set": {"image_gemini_native", "image_openai_compatible"},
+                "fallback_url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_image.png",
+                "fallback_label": "Image",
+                "metadata_field": "model",
+                "metadata_source": "api_config",
+                "metadata_source_key": "model",
+                "metadata_default": "default",
+                "legacy_handlers": {
+                    "doubao": {
+                        "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/doubao_gen.png",
+                        "metadata": {"provider": "doubao"},
+                        "context_metadata_fields": {"ref": "reference_image_url"},
+                    },
+                    "grsai": {
+                        "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/grsai_gen.png",
+                        "metadata": {"provider": "grsai"},
+                    },
+                    "tencent": {
+                        "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/tencent_gen.png",
+                        "metadata": {"provider": "tencent"},
+                    },
+                },
+            },
+            "video": {
+                "config_category": "Video",
+                "default_provider": "runway",
+                "activation_set": {"video_openai_compatible"},
+                "fallback_url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_video.mp4",
+                "fallback_label": "Video",
+                "metadata_field": "duration",
+                "metadata_source": "duration",
+                "legacy_handlers": {
+                    "doubao": {
+                        "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/doubao_gen.mp4",
+                        "metadata": {"provider": "doubao"},
+                    },
+                    "grsai": {
+                        "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/grsai_gen.mp4",
+                        "metadata": {"provider": "grsai"},
+                    },
+                    "tencent": {
+                        "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/tencent_gen.mp4",
+                        "metadata": {"provider": "tencent"},
+                    },
+                },
+            },
+            "voice": {
+                "config_category": "Voice",
+                "default_provider": "kie",
+                "activation_set": {"audio_kie_compatible", "audio_runninghub_compatible"},
+                "fallback_url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_voice.mp3",
+                "fallback_label": "Voice",
+                "metadata_field": "duration",
+                "metadata_source": "duration",
+            },
+        }
+        resolved = dict(default_spec)
+        resolved.update(specs.get(category_text) or {})
+        return resolved
+
+    def _get_legacy_media_generation_spec(self, category_spec: Dict[str, Any], provider: Any) -> Optional[Dict[str, Any]]:
+        legacy_handlers = category_spec.get("legacy_handlers") if isinstance(category_spec.get("legacy_handlers"), dict) else {}
+        if not legacy_handlers:
+            return None
+        return legacy_handlers.get(str(provider or "").strip().lower())
+
+    def _build_media_generation_metadata(self, spec: Dict[str, Any], api_config: Optional[Dict[str, Any]] = None, duration: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = dict(metadata or {})
+        metadata_field = str(spec.get("metadata_field") or "").strip()
+        if not metadata_field:
+            return payload
+        metadata_source = str(spec.get("metadata_source") or "").strip().lower()
+        cfg = api_config if isinstance(api_config, dict) else {}
+        if metadata_source == "api_config":
+            source_key = str(spec.get("metadata_source_key") or metadata_field).strip()
+            source_value = cfg.get(source_key)
+            if source_value is None or str(source_value).strip() == "":
+                source_value = spec.get("metadata_default")
+            if source_value is not None and str(source_value).strip() != "":
+                payload[metadata_field] = source_value
+        elif metadata_source == "duration" and duration is not None:
+            payload[metadata_field] = duration
+        return payload
+
+    def _build_legacy_media_generation_metadata(self, spec: Dict[str, Any], reference_image_url=None, last_frame_url=None) -> Dict[str, Any]:
+        payload = dict(spec.get("metadata") or {})
+        context_fields = spec.get("context_metadata_fields") if isinstance(spec.get("context_metadata_fields"), dict) else {}
+        if not context_fields:
+            return payload
+        source_map = {
+            "reference_image_url": reference_image_url,
+            "last_frame_url": last_frame_url,
+        }
+        for target_key, source_name in context_fields.items():
+            value = source_map.get(str(source_name or "").strip())
+            if value is not None:
+                payload[str(target_key)] = value
+        return payload
+
+    async def _generate_media_with_metadata(self, category: str, llm_config, user_id: int, prompt, reference_image_url=None, last_frame_url=None, duration=5):
+        spec = self._get_media_generation_category_spec(category)
+        category_text = str(category or "").strip().lower()
+        default_provider = spec.get("default_provider") or "unknown"
+        provider = default_provider
         if llm_config and "provider" in llm_config:
             provider = llm_config["provider"]
-            
-        api_config = self.get_api_config(provider, user_id, category="Video")
 
-        if provider == "doubao":
-             return await self._handle_doubao_generation("video", prompt, api_config, reference_image_url)
-        elif provider == "grsai":
-             return await self._handle_grsai_generation("video", prompt, api_config, reference_image_url, last_frame_url=last_frame_url)
-        elif provider == "tencent":
-             return await self._handle_tencent_generation("video", prompt, api_config, reference_image_url)
+        api_config = self.get_api_config(provider, user_id, category=spec.get("config_category"))
+        if isinstance(api_config, dict) and api_config.get("provider"):
+            provider = api_config.get("provider")
+        runtime_activation = self._get_runtime_activation(api_config)
 
-        print(f"Mocking Video Gen for {provider}")
+        activation_result = self._build_activation_mock_generation_result(
+            category=category_text,
+            provider=provider,
+            api_config=api_config,
+            runtime_activation=runtime_activation,
+            duration=duration,
+            allowed_activations=spec.get("activation_set"),
+        )
+        if activation_result is not None:
+            return activation_result
+
+        if self._get_legacy_media_generation_spec(spec, provider) is not None:
+            legacy_result = await self._dispatch_legacy_media_generation(
+                category=category_text,
+                provider=provider,
+                prompt=prompt,
+                api_config=api_config,
+                reference_image_url=reference_image_url,
+                last_frame_url=last_frame_url,
+            )
+            if legacy_result is not None:
+                return legacy_result
+
+        fallback_metadata = self._build_media_generation_metadata(
+            spec=spec,
+            api_config=api_config,
+            duration=duration,
+        )
+
+        return self._build_mock_generation_result(
+            provider=provider,
+            url=spec.get("fallback_url"),
+            metadata=fallback_metadata,
+            label=spec.get("fallback_label"),
+        )
+
+    async def _dispatch_legacy_media_generation(self, category: str, provider: Any, prompt, api_config, reference_image_url=None, last_frame_url=None):
+        category_text = str(category or "").strip().lower()
+        category_spec = self._get_media_generation_category_spec(category_text)
+        spec = self._get_legacy_media_generation_spec(category_spec, provider)
+        if spec is None:
+            return None
+        payload = self._build_legacy_media_generation_metadata(
+            spec,
+            reference_image_url=reference_image_url,
+            last_frame_url=last_frame_url,
+        )
+        url = spec.get("url")
+        if not url:
+            return None
         return {
-            "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/generated_video.mp4",
-            "metadata": {"provider": provider, "duration": duration}
-        }
-    
-    # --- Provider Implementations ---
-    
-    async def _handle_doubao_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None):
-        return {
-            "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/doubao_gen.png" if gen_type == "image" else "https://pub-8415848529ba47329437b600ab383416.r2.dev/doubao_gen.mp4",
-            "metadata": {"provider": "doubao", "ref": ref_image}
+            "url": url,
+            "metadata": payload,
         }
 
-    async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None):
-         return {
-            "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/grsai_gen.png" if gen_type == "image" else "https://pub-8415848529ba47329437b600ab383416.r2.dev/grsai_gen.mp4",
-            "metadata": {"provider": "grsai"}
+    def _build_activation_mock_generation_result(self, category: str, provider: Any, api_config: Optional[Dict[str, Any]], runtime_activation: str = "", duration: Optional[int] = None, allowed_activations: Optional[Any] = None):
+        category_text = str(category or "").strip().lower()
+        spec = self._get_media_generation_category_spec(category_text)
+        valid_activations = set(allowed_activations or spec.get("activation_set") or set())
+        if str(runtime_activation or "").strip().lower() not in valid_activations:
+            return None
+        return self._build_runtime_mock_generation_result(
+            category=category_text,
+            provider=provider,
+            api_config=api_config,
+            runtime_activation=runtime_activation,
+            duration=duration,
+        )
+
+    def _build_runtime_mock_generation_result(self, category: str, provider: Any, api_config: Optional[Dict[str, Any]], runtime_activation: str = "", duration: Optional[int] = None):
+        category_text = str(category or "").strip().lower()
+        spec = self._get_media_generation_category_spec(category_text)
+        cfg = api_config if isinstance(api_config, dict) else {}
+        metadata = self._build_media_generation_metadata(
+            spec=spec,
+            api_config=api_config,
+            duration=duration,
+            metadata={
+                "provider": cfg.get("provider", provider),
+                "runtime_activation": runtime_activation,
+            },
+        )
+        return {
+            "url": spec.get("fallback_url"),
+            "metadata": metadata,
         }
 
-    async def _handle_tencent_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None):
+    def _build_mock_generation_result(self, provider: Any, url: str, metadata: Optional[Dict[str, Any]] = None, label: str = "Media"):
+        print(f"Mocking {label} Gen for {provider}")
+        payload = dict(metadata or {})
+        payload.setdefault("provider", provider)
         return {
-            "url": "https://pub-8415848529ba47329437b600ab383416.r2.dev/tencent_gen.png" if gen_type == "image" else "https://pub-8415848529ba47329437b600ab383416.r2.dev/tencent_gen.mp4",
-            "metadata": {"provider": "tencent"}
+            "url": url,
+            "metadata": payload,
         }
     
     def _log_generation(self, provider, prompt, status, result):

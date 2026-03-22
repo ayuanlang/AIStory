@@ -1417,6 +1417,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const [isReviewPanelLoading, setIsReviewPanelLoading] = useState(false);
     const [isReviewPanelSubmitting, setIsReviewPanelSubmitting] = useState(false);
     const [currentUserId, setCurrentUserId] = useState(null);
+    const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [selectedQuickReviewThreadId, setSelectedQuickReviewThreadId] = useState(null);
     const [selectedQuickReviewRounds, setSelectedQuickReviewRounds] = useState([]);
     const [selectedQuickReviewRoundId, setSelectedQuickReviewRoundId] = useState(null);
@@ -1531,9 +1532,21 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     }, [id, mode, loadProjectReviewPanel]);
 
     useEffect(() => {
+        const normalizeBatchParallelLimit = (value) => {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) return 3;
+            return Math.min(12, Math.max(1, Math.trunc(parsed)));
+        };
+
         fetchMe()
-            .then((user) => setCurrentUserId(Number(user?.id || 0) || null))
-            .catch(() => setCurrentUserId(null));
+            .then((user) => {
+                setCurrentUserId(Number(user?.id || 0) || null);
+                setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
+            })
+            .catch(() => {
+                setCurrentUserId(null);
+                setUserBatchParallelLimit(3);
+            });
     }, []);
 
     const quickReviewUnreadCount = useMemo(
@@ -15655,6 +15668,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh' }) =
     const { addLog: onLog } = useLog();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const subjectBatchScopeKey = String(projectId || '');
+    const SUBJECT_BATCH_PARALLEL_LIMIT = userBatchParallelLimit;
     const isMountedRef = useRef(false);
     const [subTab, setSubTab] = useState('character');
     const [entityListLoading, setEntityListLoading] = useState(false);
@@ -16299,38 +16313,53 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh' }) =
 
         let successCount = 0;
         let failedCount = 0;
+        let processedCount = 0;
 
         try {
-            for (let idx = 0; idx < targets.length; idx += 1) {
+            for (let idx = 0; idx < targets.length; idx += SUBJECT_BATCH_PARALLEL_LIMIT) {
                 if (subjectBatchAnalyzeSessionRef.current !== batchSessionId || subjectBatchAnalyzeStopRequestedRef.current) {
                     break;
                 }
-                const entity = targets[idx];
-                const current = idx + 1;
+                const batch = targets.slice(idx, idx + SUBJECT_BATCH_PARALLEL_LIMIT);
+                const batchLabel = batch.map((entity) => entity?.name || entity?.name_en || entity?.id).join(', ');
                 updateAnalyzeBatchRuntimeState(true, {
-                    current,
+                    current: Math.min(processedCount + 1, targets.length),
                     total: targets.length,
-                    status: t(`分析中：${entity?.name || entity?.name_en || entity?.id}`, `Analyzing: ${entity?.name || entity?.name_en || entity?.id}`),
+                    status: t(`分析中：${batchLabel}`, `Analyzing: ${batchLabel}`),
                 });
 
-                try {
+                const settled = await Promise.allSettled(batch.map(async (entity) => {
                     const updated = await analyzeEntityImage(entity.id);
                     setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
                     setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
                     setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
-                    successCount += 1;
-                } catch (err) {
-                    failedCount += 1;
-                    if (onLog) {
-                        onLog(
-                            t(
-                                `批量提示词反推失败：${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`,
-                                `Batch prompt reverse failed: ${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`
-                            ),
-                            'error'
-                        );
+                    return updated;
+                }));
+
+                settled.forEach((result, batchIndex) => {
+                    const entity = batch[batchIndex];
+                    processedCount += 1;
+                    if (result.status === 'fulfilled') {
+                        successCount += 1;
+                    } else {
+                        failedCount += 1;
+                        if (onLog) {
+                            onLog(
+                                t(
+                                    `批量提示词反推失败：${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`,
+                                    `Batch prompt reverse failed: ${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`
+                                ),
+                                'error'
+                            );
+                        }
                     }
-                }
+
+                    updateAnalyzeBatchRuntimeState(true, {
+                        current: processedCount,
+                        total: targets.length,
+                        status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
+                    });
+                });
             }
 
             if (subjectBatchAnalyzeSessionRef.current !== batchSessionId || subjectBatchAnalyzeStopRequestedRef.current) {
@@ -16489,39 +16518,49 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh' }) =
 
         let successCount = 0;
         let failedCount = 0;
+        let processedCount = 0;
 
         try {
-            for (let idx = 0; idx < targets.length; idx += 1) {
+            for (let idx = 0; idx < targets.length; idx += SUBJECT_BATCH_PARALLEL_LIMIT) {
                 if (subjectBatchReconstructSessionRef.current !== batchSessionId || subjectBatchReconstructStopRequestedRef.current) {
                     break;
                 }
-                const entity = targets[idx];
-                const current = idx + 1;
+                const batch = targets.slice(idx, idx + SUBJECT_BATCH_PARALLEL_LIMIT);
+                const batchLabel = batch.map((entity) => entity?.name || entity?.name_en || entity?.id).join(', ');
                 updateReconstructBatchRuntimeState(true, {
-                    current,
+                    current: Math.min(processedCount + 1, targets.length),
                     total: targets.length,
                     status: t(
-                        `处理中：${entity?.name || entity?.name_en || entity?.id}`,
-                        `Processing: ${entity?.name || entity?.name_en || entity?.id}`
+                        `处理中：${batchLabel}`,
+                        `Processing: ${batchLabel}`
                     ),
                 });
 
-                try {
-                    // eslint-disable-next-line no-await-in-loop
-                    await reconstructEntityAssetCore(entity);
-                    successCount += 1;
-                } catch (err) {
-                    failedCount += 1;
-                    if (onLog) {
-                        onLog(
-                            t(
-                                `批量参考生图失败：${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`,
-                                `Batch reference image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${err?.response?.data?.detail || err?.message || 'Unknown error'}`
-                            ),
-                            'error'
-                        );
+                const settled = await Promise.allSettled(batch.map((entity) => reconstructEntityAssetCore(entity)));
+                settled.forEach((result, batchIndex) => {
+                    const entity = batch[batchIndex];
+                    processedCount += 1;
+                    if (result.status === 'fulfilled') {
+                        successCount += 1;
+                    } else {
+                        failedCount += 1;
+                        if (onLog) {
+                            onLog(
+                                t(
+                                    `批量参考生图失败：${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`,
+                                    `Batch reference image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`
+                                ),
+                                'error'
+                            );
+                        }
                     }
-                }
+
+                    updateReconstructBatchRuntimeState(true, {
+                        current: processedCount,
+                        total: targets.length,
+                        status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
+                    });
+                });
             }
 
             if (subjectBatchReconstructSessionRef.current !== batchSessionId || subjectBatchReconstructStopRequestedRef.current) {
@@ -17163,42 +17202,100 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh' }) =
                 
                 let batch = [];
                 if (readyBatch.length > 0) {
-                    batch = readyBatch;
+                    batch = readyBatch.slice(0, SUBJECT_BATCH_PARALLEL_LIMIT);
                 } else {
                     // Cycle or blocked -> Force proceed with one
                     batch = [queue[0]];
                 }
 
-                for (const entity of batch) {
-                    if (subjectBatchGenerateSessionRef.current !== batchSessionId) {
-                        break;
-                    }
-                    if (subjectBatchGenerateStopRequestedRef.current) {
-                        break;
-                    }
-                    const idx = processedCount + 1;
-                    updateGenerateBatchRuntimeState(true, { current: idx, total: toGenerate.length, status: `Generating ${entity.name}...` });
-                    
-                    try {
-                        // 1. Prepare Prompt
-                        const epInfo = currentEpisode?.episode_info || {};
-                        const preferredImageSize = getEpisodePreferredImageSize(epInfo);
-                        let basePrompt = getEntityPromptByLang(entity, resolvedPromptSubmitLang) || 
-                                         entity.description || 
-                                         `A ${entity.type} named ${entity.name}.`;
-                        
-                        if (!basePrompt || basePrompt.trim().length < 2) {
-                             basePrompt = `${entity.type} ${entity.name}`;
-                        }
+                const batchLabel = batch.map((entity) => entity?.name || entity?.name_en || entity?.id).join(', ');
+                updateGenerateBatchRuntimeState(true, {
+                    current: Math.min(processedCount + 1, toGenerate.length),
+                    total: toGenerate.length,
+                    status: t(`生成中：${batchLabel}`, `Generating: ${batchLabel}`),
+                });
 
-                        // We pass 'allEntities' so [Reference] replacement works
-                        // Note: processPrompt uses allEntities to find values. 
-                        // It reads entity.description usually.
-                        const finalPrompt = prependEntityGlobalStyleToPromptHead(
-                            String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
-                            { injectIfMissing: true }
+                const settled = await Promise.allSettled(batch.map(async (entity) => {
+                    const epInfo = currentEpisode?.episode_info || {};
+                    const preferredImageSize = getEpisodePreferredImageSize(epInfo);
+                    let basePrompt = getEntityPromptByLang(entity, resolvedPromptSubmitLang)
+                        || entity.description
+                        || `A ${entity.type} named ${entity.name}.`;
+
+                    if (!basePrompt || basePrompt.trim().length < 2) {
+                        basePrompt = `${entity.type} ${entity.name}`;
+                    }
+
+                    const finalPrompt = prependEntityGlobalStyleToPromptHead(
+                        String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
+                        { injectIfMissing: true }
+                    );
+                    if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
+                        return { entity, skippedPrompt: true };
+                    }
+
+                    const depUrls = [];
+                    const deps = Array.isArray(entity.visual_dependencies) ? entity.visual_dependencies : [];
+                    deps.forEach(dep => {
+                        const startDep = String(dep).trim();
+                        const startDepNormalized = normalizeEntityToken(startDep);
+
+                        const target = allEntities.find(e => {
+                            if (!e) return false;
+                            if (String(e.id).trim() === startDep) return true;
+                            if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
+                            if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
+                            return false;
+                        });
+
+                        if (target && urlMap.has(target.id)) {
+                            depUrls.push(urlMap.get(target.id));
+                        }
+                    });
+                    const uniqueRefs = [...new Set(depUrls)];
+
+                    if (onLog) {
+                        onLog(
+                            `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                            'process'
                         );
-                        if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
+                    }
+
+                    const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                        project_id: projectId,
+                        episode_id: currentEpisode?.id,
+                        entity_id: entity?.id,
+                        entity_name: entity?.name || entity?.name_en,
+                        subject_name: entity?.name || entity?.name_en,
+                        subject_type: entity?.type,
+                        entity_type: entity?.type,
+                        prompt_language: resolvedPromptSubmitLang,
+                        asset_type: 'subject',
+                        ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                        negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities)
+                    });
+
+                    if (!res?.url) {
+                        throw new Error('Generated result missing image URL');
+                    }
+
+                    await updateEntity(entity.id, { image_url: res.url });
+                    return {
+                        entity,
+                        updatedEnt: { ...entity, image_url: res.url },
+                        imageUrl: res.url,
+                    };
+                }));
+
+                const batchEntityIds = new Set(batch.map((entity) => entity.id));
+                queue = queue.filter(q => !batchEntityIds.has(q.id));
+
+                settled.forEach((result, batchIndex) => {
+                    const entity = batch[batchIndex];
+                    processedCount += 1;
+
+                    if (result.status === 'fulfilled') {
+                        if (result.value?.skippedPrompt) {
                             skippedPromptCount += 1;
                             onLog?.(
                                 t(
@@ -17207,95 +17304,34 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh' }) =
                                 ),
                                 'warning'
                             );
-                            queue = queue.filter(q => q.id !== entity.id);
-                            processedCount++;
-                            continue;
-                        }
-                        
-                        // 2. Resolve Dependencies (Build Ref URLs FROM LATEST MAP)
-                        const depUrls = [];
-                         const deps = Array.isArray(entity.visual_dependencies) ? entity.visual_dependencies : [];
-                         deps.forEach(dep => {
-                             const startDep = String(dep).trim();
-                             const startDepNormalized = normalizeEntityToken(startDep);
-                             
-                             let target = allEntities.find(e => {
-                                 if (!e) return false;
-                                 if (String(e.id).trim() === startDep) return true;
-                                 if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
-                                 if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
-                                 return false;
-                             });
-
-                             // Use urlMap to get the LATEST url (since target object might be stale in allEntities closure vs real-time updates)
-                             if (target && urlMap.has(target.id)) {
-                                 depUrls.push(urlMap.get(target.id));
-                             }
-                        });
-                        const uniqueRefs = [...new Set(depUrls)];
-
-                        if (onLog) {
-                            onLog(
-                                `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
-                                'process'
-                            );
-                        }
-                        
-                        // 3. Generate
-                        const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                            project_id: projectId,
-                            episode_id: currentEpisode?.id,
-                            entity_id: entity?.id,
-                            entity_name: entity?.name || entity?.name_en,
-                            subject_name: entity?.name || entity?.name_en,
-                            subject_type: entity?.type,
-                            entity_type: entity?.type,
-                            prompt_language: resolvedPromptSubmitLang,
-                            asset_type: 'subject',
-                            ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                            negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities)
-                        });
-
-                        if (subjectBatchGenerateSessionRef.current !== batchSessionId) {
-                            break;
-                        }
-                        
-                        if (res && res.url) {
-                            // 4. Update
-                            await updateEntity(entity.id, { image_url: res.url });
-                            
-                            // Update local tracking
-                            urlMap.set(entity.id, res.url);
-                            
-                            const updatedEnt = { ...entity, image_url: res.url };
-                            
-                            // Update Master List
+                        } else if (result.value?.imageUrl) {
+                            urlMap.set(entity.id, result.value.imageUrl);
+                            const updatedEnt = result.value.updatedEnt;
                             setAllEntities(prev => prev.map(e => e.id === entity.id ? updatedEnt : e));
-                            
-                            // Update Current View (Force Refresh)
-                            setEntities(prev => {
-                                if (prev.some(p => p.id === entity.id)) {
-                                    return prev.map(e => e.id === entity.id ? updatedEnt : e);
-                                }
-                                return prev;
-                            });
-
-                            // Update Modal if open
+                            setEntities(prev => (prev.some(p => p.id === entity.id)
+                                ? prev.map(e => e.id === entity.id ? updatedEnt : e)
+                                : prev));
                             if (viewingEntity && viewingEntity.id === entity.id) {
                                 setViewingEntity(updatedEnt);
                             }
                         }
-
-                    } catch(e) {
-                        if (subjectBatchGenerateSessionRef.current !== batchSessionId) {
-                            break;
-                        }
-                         console.error(`Batch Gen Error for ${entity.name}`, e);
+                    } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
+                        console.error(`Batch Gen Error for ${entity.name}`, result.reason);
+                        onLog?.(
+                            t(
+                                `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`,
+                                `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`
+                            ),
+                            'error'
+                        );
                     }
 
-                    queue = queue.filter(q => q.id !== entity.id);
-                    processedCount++;
-                }
+                    updateGenerateBatchRuntimeState(true, {
+                        current: processedCount,
+                        total: toGenerate.length,
+                        status: t(`已处理 ${processedCount}/${toGenerate.length}`, `Processed ${processedCount}/${toGenerate.length}`),
+                    });
+                });
             }
             if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
                 alert(t('批量生图已停止。', 'Batch image generation stopped.'));
@@ -18673,10 +18709,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         stopRequested: false,
         currentShotLabel: '',
         currentAssetLabel: '',
+        mode: '',
     }); // Progress tracking
     const [isShotBatchProgressDismissed, setIsShotBatchProgressDismissed] = useState(false);
     const SHOT_MEDIA_BATCH_KIND = 'shot-media-batch';
     const SHOT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
+    const SHOT_BATCH_PARALLEL_LIMIT = userBatchParallelLimit;
     const shotBatchStatusTimerRef = useRef(null);
     const shotBatchStartupGuardUntilRef = useRef(0);
     const shotBatchBootstrapUntilRef = useRef(0);
@@ -18690,6 +18728,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const shotsRef = useRef([]);
     const editingShotRef = useRef(null);
     const generatingStateByShotRef = useRef({});
+    const shotLocalBatchSessionRef = useRef('');
+    const shotLocalBatchStopRequestedRef = useRef(false);
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [activeImageCapabilityProfile, setActiveImageCapabilityProfile] = useState(null);
     const [localKeyframes, setLocalKeyframes] = useState([]);
@@ -18723,6 +18763,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         stopRequested: false,
         currentShotLabel: '',
         currentAssetLabel: '',
+        mode: '',
     }), []);
 
     const getShotBatchRuntimeStorageKey = useCallback((episodeId, sceneId) => {
@@ -18755,6 +18796,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     stopRequested: Boolean(parsed?.stopRequested),
                     currentShotLabel: String(parsed?.currentShotLabel || ''),
                     currentAssetLabel: String(parsed?.currentAssetLabel || ''),
+                    mode: String(parsed?.mode || ''),
                 },
             };
         } catch (_) {
@@ -18775,6 +18817,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 stopRequested: Boolean(progress?.stopRequested),
                 currentShotLabel: String(progress?.currentShotLabel || ''),
                 currentAssetLabel: String(progress?.currentAssetLabel || ''),
+                mode: String(progress?.mode || ''),
                 updatedAt: Date.now(),
             };
             window.localStorage.setItem(key, JSON.stringify(payload));
@@ -19547,9 +19590,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setBatchProgress(createShotBatchProgressState());
             return;
         }
+        if (restored.running && restored.progress?.mode === 'keyframes-local') {
+            setIsBatchGenerating(false);
+            setBatchProgress({
+                ...(restored.progress || createShotBatchProgressState()),
+                mode: 'keyframes-local',
+                stopRequested: true,
+                status: t('上一次本地关键帧批量任务已中断，请重新执行。', 'The previous local keyframe batch was interrupted. Please run it again.'),
+            });
+            return;
+        }
         setIsBatchGenerating(Boolean(restored.running));
         setBatchProgress(restored.progress || createShotBatchProgressState());
-    }, [activeEpisode?.id, selectedSceneId, loadShotBatchRuntime, createShotBatchProgressState]);
+    }, [activeEpisode?.id, selectedSceneId, loadShotBatchRuntime, createShotBatchProgressState, t]);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
@@ -23309,8 +23362,432 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [onLog, releaseShotVideoUiByShotId, syncShotMediaRuntimeState, t]);
 
+    const applyShotPatchToLocalState = useCallback((shotId, patch) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId || !patch || typeof patch !== 'object') return;
+        setShots(prev => prev.map((shot) => (String(shot?.id || '') === stableShotId ? { ...shot, ...patch } : shot)));
+        setEditingShot(prev => (String(prev?.id || '') === stableShotId ? { ...prev, ...patch } : prev));
+    }, []);
+
+    const generateShotKeyframesBatchItem = useCallback(async ({ shotSnapshot, resolvedEntities, priorEndFrameUrl = '' }) => {
+        const stableShot = shotSnapshot || null;
+        const stableShotId = String(stableShot?.id || '').trim();
+        if (!stableShotId) {
+            throw new Error('Missing shot id for batch keyframe generation');
+        }
+
+        let workingShot = { ...stableShot };
+        let techNotes = {};
+        try {
+            techNotes = JSON.parse(workingShot.technical_notes || '{}');
+        } catch {
+            techNotes = {};
+        }
+
+        const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
+        const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
+        const rawStartPrompt = resolvedPromptSubmitLang === 'cn'
+            ? (cnStartPrompt || workingShot.start_frame || workingShot.video_content || 'A cinematic shot')
+            : (workingShot.start_frame || cnStartPrompt || workingShot.video_content || 'A cinematic shot');
+        const rawEndPrompt = resolvedPromptSubmitLang === 'cn'
+            ? (cnEndPrompt || workingShot.end_frame || 'End frame')
+            : (workingShot.end_frame || cnEndPrompt || 'End frame');
+
+        const normalizedEndPrompt = String(rawEndPrompt || '').trim().toUpperCase();
+        const endPromptIsNoLike = ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt);
+        const startPromptIsInherited = isStartFrameInheritPrompt(rawStartPrompt);
+        const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info) || '16:9';
+        const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+
+        let startUrl = String(workingShot.image_url || '').trim();
+        let endUrl = String(techNotes.end_frame_url || '').trim();
+
+        setShotGeneratingState(stableShotId, 'start', true);
+        setShotGeneratingState(stableShotId, 'end', true);
+
+        try {
+            if (!startUrl && startPromptIsInherited) {
+                const inheritedUrl = String(priorEndFrameUrl || '').trim();
+                if (!inheritedUrl) {
+                    throw new Error('Previous shot end frame is not ready for SAP inheritance');
+                }
+                startUrl = inheritedUrl;
+                workingShot = { ...workingShot, image_url: inheritedUrl };
+            }
+
+            const needsJointDiptych = !startPromptIsInherited
+                && !endPromptIsNoLike
+                && !startUrl
+                && !endUrl;
+
+            if (needsJointDiptych) {
+                const isManualStart = techNotes.manual_start_frame === true;
+                const isManualEnd = techNotes.manual_end_frame === true;
+                const { text: startSubmitPrompt } = injectEntityFeatures(rawStartPrompt, isManualStart, resolvedEntities);
+                const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, resolvedEntities);
+                const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
+                const requestAspectRatio = selectBestShotDiptychRequestAspectRatio({
+                    diptychPlan,
+                    allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
+                });
+                const combinedRefs = resolveShotStartFrameRefs(workingShot, rawStartPrompt, resolvedEntities);
+                const combinedPrompt = resolvedPromptSubmitLang === 'cn'
+                    ? [
+                        `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
+                        `第一格（起始帧）：${startSubmitPrompt}`,
+                        `第二格（结束帧）：${endSubmitPrompt}`,
+                    ].join('\n\n')
+                    : [
+                        `Create one single-canvas two-panel diptych for later post-split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels arranged ${diptychPlan.layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom'} with a narrow clean divider. The final single-frame delivery target is ${diptychPlan.targetAspectRatio}, so compose each panel with extra bleed and crop-safe margin so it can be split and lightly center-cropped into an independent ${diptychPlan.targetAspectRatio} frame. Keep faces, hands, props, and key action away from the seam and outer edges. Do not add a third panel, text labels, numbering, speech bubbles, or collage elements. Maintain identity, environment continuity, lighting continuity, and scene geography across both panels. Panel A is the shot start frame. Panel B is the shot end frame.`,
+                        `Panel A (Start Frame): ${startSubmitPrompt}`,
+                        `Panel B (End Frame): ${endSubmitPrompt}`,
+                    ].join('\n\n');
+                const shouldApplyGlobalCtx = !(isManualStart && isManualEnd);
+                const globalCtx = shouldApplyGlobalCtx
+                    ? getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(combinedPrompt) })
+                    : '';
+                const finalPrompt = shouldApplyGlobalCtx ? `${combinedPrompt}${globalCtx}` : combinedPrompt;
+                const jointNegativePrompt = [
+                    buildEntityNegativePrompt(`${rawStartPrompt}\n${rawEndPrompt}`, null, resolvedEntities),
+                    'more than two panels, extra frame, uneven split, contact sheet, text label, numbering, caption, comic bubble',
+                ].filter(Boolean).join(', ');
+
+                const compositeResult = await generateImage(finalPrompt, null, combinedRefs.length > 0 ? combinedRefs : null, {
+                    project_id: projectId,
+                    episode_id: activeEpisode?.id,
+                    shot_id: stableShotId,
+                    shot_number: workingShot.shot_id,
+                    shot_name: workingShot.shot_name,
+                    prompt_language: resolvedPromptSubmitLang,
+                    asset_type: 'start_frame',
+                    aspect_ratio: requestAspectRatio,
+                    ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                    negative_prompt: jointNegativePrompt,
+                    on_job_created: (jobId) => {
+                        const stableJobId = String(jobId || '').trim();
+                        if (!stableJobId) return;
+                        setPendingJointDiptychImageJob(stableShotId, stableJobId);
+                    },
+                });
+
+                if (!compositeResult?.url) {
+                    throw new Error('No composite image URL returned');
+                }
+
+                const nextData = await applyJointShotDiptychResult({
+                    shotRecord: {
+                        ...workingShot,
+                        start_frame: rawStartPrompt,
+                        end_frame: rawEndPrompt,
+                    },
+                    compositeUrl: compositeResult.url,
+                });
+
+                const nextTech = (() => {
+                    try {
+                        return JSON.parse(nextData?.technical_notes || '{}');
+                    } catch {
+                        return {};
+                    }
+                })();
+
+                return {
+                    shotId: stableShotId,
+                    shotLabel: String(workingShot.shot_id || workingShot.shot_name || `#${stableShotId}`),
+                    shotPatch: nextData,
+                    startUrl: String(nextData?.image_url || '').trim(),
+                    endUrl: String(nextTech?.end_frame_url || '').trim(),
+                };
+            }
+
+            if (!startUrl && !startPromptIsInherited) {
+                const isManualStart = techNotes.manual_start_frame === true;
+                const { text: startSubmitPrompt } = injectEntityFeatures(rawStartPrompt, isManualStart, resolvedEntities);
+                const startRefs = resolveShotStartFrameRefs(workingShot, rawStartPrompt, resolvedEntities);
+                const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(startSubmitPrompt) });
+                const finalStartPrompt = isManualStart ? startSubmitPrompt : (startSubmitPrompt + globalCtx);
+                const startResult = await generateImage(finalStartPrompt, null, startRefs.length > 0 ? startRefs : null, {
+                    project_id: projectId,
+                    episode_id: activeEpisode?.id,
+                    shot_id: stableShotId,
+                    shot_number: workingShot.shot_id,
+                    shot_name: workingShot.shot_name,
+                    prompt_language: resolvedPromptSubmitLang,
+                    asset_type: 'start_frame',
+                    ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
+                    ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                    negative_prompt: buildEntityNegativePrompt(rawStartPrompt, null, resolvedEntities),
+                    on_job_created: (jobId) => {
+                        const stableJobId = String(jobId || '').trim();
+                        if (!stableJobId) return;
+                        setPendingImageJob(stableShotId, 'start', stableJobId);
+                    },
+                });
+                if (!startResult?.url) {
+                    throw new Error('No start frame image URL returned');
+                }
+                startUrl = String(startResult.url || '').trim();
+                workingShot = { ...workingShot, image_url: startUrl };
+            }
+
+            if (!endUrl) {
+                if (endPromptIsNoLike) {
+                    if (!startUrl) {
+                        throw new Error('Cannot reuse start frame as end frame without a start frame URL');
+                    }
+                    endUrl = startUrl;
+                    techNotes.end_frame_url = endUrl;
+                    techNotes.end_frame_reused_from_start = true;
+                    techNotes.video_gen_mode = 'start_end';
+                } else {
+                    const isManualEnd = techNotes.manual_end_frame === true;
+                    const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, resolvedEntities);
+                    const endRefs = getEndFrameVisibleRefs({ ...workingShot, image_url: startUrl || workingShot.image_url }, rawEndPrompt, resolvedEntities);
+                    const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(endSubmitPrompt) });
+                    const finalEndPrompt = isManualEnd ? endSubmitPrompt : (endSubmitPrompt + globalCtx);
+                    const endResult = await generateImage(finalEndPrompt, null, endRefs.length > 0 ? endRefs : null, {
+                        project_id: projectId,
+                        episode_id: activeEpisode?.id,
+                        shot_id: stableShotId,
+                        shot_number: workingShot.shot_id,
+                        shot_name: workingShot.shot_name,
+                        prompt_language: resolvedPromptSubmitLang,
+                        asset_type: 'end_frame',
+                        ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
+                        ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                        negative_prompt: buildEntityNegativePrompt(rawEndPrompt, null, resolvedEntities),
+                        on_job_created: (jobId) => {
+                            const stableJobId = String(jobId || '').trim();
+                            if (!stableJobId) return;
+                            setPendingImageJob(stableShotId, 'end', stableJobId);
+                        },
+                    });
+                    if (!endResult?.url) {
+                        throw new Error('No end frame image URL returned');
+                    }
+                    endUrl = String(endResult.url || '').trim();
+                    techNotes.end_frame_url = endUrl;
+                    techNotes.end_frame_reused_from_start = false;
+                    techNotes.video_gen_mode = 'start_end';
+                }
+            }
+
+            const nextPatch = {
+                ...(startUrl ? { image_url: startUrl } : {}),
+                start_frame: rawStartPrompt,
+                end_frame: rawEndPrompt,
+                technical_notes: JSON.stringify(techNotes),
+            };
+            await onUpdateShot(stableShotId, nextPatch);
+            return {
+                shotId: stableShotId,
+                shotLabel: String(workingShot.shot_id || workingShot.shot_name || `#${stableShotId}`),
+                shotPatch: nextPatch,
+                startUrl,
+                endUrl,
+            };
+        } finally {
+            clearPendingJointDiptychImageJob(stableShotId);
+            clearPendingImageJob(stableShotId, 'start');
+            clearPendingImageJob(stableShotId, 'end');
+            setShotGeneratingState(stableShotId, 'start', false);
+            setShotGeneratingState(stableShotId, 'end', false);
+        }
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, projectId, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
+
+    const runLocalKeyframeBatch = useCallback(async () => {
+        const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
+        const targetShots = orderedShots.filter((shot) => {
+            const currentStartUrl = String(shot?.image_url || '').trim();
+            const currentEndUrl = String(getShotEndFrameUrl(shot) || '').trim();
+            const rawEndPrompt = String(shot?.end_frame || '').trim().toUpperCase();
+            const treatsEndAsStart = ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(rawEndPrompt) && currentStartUrl;
+            return !currentStartUrl || !(currentEndUrl || treatsEndAsStart);
+        });
+
+        if (targetShots.length === 0) {
+            alert(t('当前所有镜头都已有起始帧和结束帧。', 'All shots already have start and end frames.'));
+            return;
+        }
+
+        const ok = await confirmUiMessage(
+            t(
+                `将为 ${targetShots.length} 个镜头批量生成缺失关键帧。系统会按依赖关系分批执行，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个，并优先使用首尾联合生图。是否继续？`,
+                `Generate missing keyframes for ${targetShots.length} shots. The scheduler will respect dependencies, run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave, and prefer joint start/end generation. Continue?`
+            )
+        );
+        if (!ok) return;
+
+        const resolvedEntities = await awaitShotGenerationEntities();
+        const prevShotIdByShotId = new Map();
+        orderedShots.forEach((shot, index) => {
+            const stableShotId = String(shot?.id || '').trim();
+            const prevShot = index > 0 ? orderedShots[index - 1] : null;
+            prevShotIdByShotId.set(stableShotId, String(prevShot?.id || '').trim());
+        });
+
+        const endUrlMap = new Map();
+        orderedShots.forEach((shot) => {
+            const stableShotId = String(shot?.id || '').trim();
+            const existingEndUrl = String(getShotEndFrameUrl(shot) || '').trim();
+            const normalizedEndPrompt = String(shot?.end_frame || '').trim().toUpperCase();
+            const startUrl = String(shot?.image_url || '').trim();
+            if (existingEndUrl) {
+                endUrlMap.set(stableShotId, existingEndUrl);
+            } else if (['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt) && startUrl) {
+                endUrlMap.set(stableShotId, startUrl);
+            }
+        });
+
+        shotLocalBatchStopRequestedRef.current = false;
+        const batchSessionId = `shot-keyframe-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        shotLocalBatchSessionRef.current = batchSessionId;
+        if (shotBatchStatusTimerRef.current) {
+            clearInterval(shotBatchStatusTimerRef.current);
+            shotBatchStatusTimerRef.current = null;
+        }
+        setIsBatchGenerating(true);
+        setBatchProgress({
+            current: 0,
+            total: targetShots.length,
+            status: t('关键帧批量任务准备中...', 'Preparing keyframe batch...'),
+            stopRequested: false,
+            currentShotLabel: '',
+            currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+            mode: 'keyframes-local',
+        });
+        onLog?.(t('开始本地关键帧批量任务。', 'Started local keyframe batch.'), 'process');
+
+        let completed = 0;
+        let success = 0;
+        let failed = 0;
+        let queue = [...targetShots];
+
+        const isReady = (shot) => {
+            const rawStartPrompt = String(shot?.start_frame || shot?.video_content || '').trim();
+            if (!isStartFrameInheritPrompt(rawStartPrompt)) return true;
+            const prevShotId = prevShotIdByShotId.get(String(shot?.id || '').trim());
+            if (!prevShotId) return true;
+            return Boolean(endUrlMap.get(prevShotId));
+        };
+
+        try {
+            while (queue.length > 0) {
+                if (shotLocalBatchSessionRef.current !== batchSessionId || shotLocalBatchStopRequestedRef.current) {
+                    break;
+                }
+
+                const readyBatch = queue.filter(isReady).slice(0, SHOT_BATCH_PARALLEL_LIMIT);
+                const batch = readyBatch.length > 0 ? readyBatch : [queue[0]];
+                const batchLabel = batch.map((shot) => shot?.shot_id || shot?.shot_name || shot?.id).join(', ');
+
+                setBatchProgress({
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`处理中：${batchLabel}`, `Processing: ${batchLabel}`),
+                    stopRequested: false,
+                    currentShotLabel: batchLabel,
+                    currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+                    mode: 'keyframes-local',
+                });
+
+                const settled = await Promise.allSettled(batch.map((shot) => generateShotKeyframesBatchItem({
+                    shotSnapshot: shot,
+                    resolvedEntities,
+                    priorEndFrameUrl: endUrlMap.get(prevShotIdByShotId.get(String(shot?.id || '').trim()) || '') || '',
+                })));
+
+                const batchShotIds = new Set(batch.map((shot) => String(shot?.id || '').trim()));
+                queue = queue.filter((shot) => !batchShotIds.has(String(shot?.id || '').trim()));
+
+                settled.forEach((result, batchIndex) => {
+                    const shot = batch[batchIndex];
+                    completed += 1;
+                    if (result.status === 'fulfilled') {
+                        success += 1;
+                        const nextPatch = result.value?.shotPatch || {};
+                        applyShotPatchToLocalState(shot?.id, nextPatch);
+                        const stableShotId = String(shot?.id || '').trim();
+                        if (result.value?.endUrl) {
+                            endUrlMap.set(stableShotId, result.value.endUrl);
+                        } else if (result.value?.startUrl && ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(String(shot?.end_frame || '').trim().toUpperCase())) {
+                            endUrlMap.set(stableShotId, result.value.startUrl);
+                        }
+                    } else {
+                        failed += 1;
+                        onLog?.(
+                            t(
+                                `镜头批量关键帧失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`,
+                                `Shot keyframe batch failed: ${shot?.shot_id || shot?.shot_name || shot?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`
+                            ),
+                            'error'
+                        );
+                    }
+
+                    setBatchProgress({
+                        current: completed,
+                        total: targetShots.length,
+                        status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
+                        stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
+                        currentShotLabel: String(shot?.shot_id || shot?.shot_name || shot?.id || ''),
+                        currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+                        mode: 'keyframes-local',
+                    });
+                });
+            }
+
+            if (shotLocalBatchSessionRef.current !== batchSessionId || shotLocalBatchStopRequestedRef.current) {
+                onLog?.(t(`关键帧批量任务已停止：成功 ${success}，失败 ${failed}`, `Keyframe batch stopped: ${success} succeeded, ${failed} failed`), 'warning');
+                setBatchProgress({
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`关键帧批量已停止：成功 ${success}，失败 ${failed}`, `Keyframe batch stopped: ${success} succeeded, ${failed} failed`),
+                    stopRequested: true,
+                    currentShotLabel: '',
+                    currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+                    mode: 'keyframes-local',
+                });
+                return;
+            }
+
+            onLog?.(t(`关键帧批量完成：成功 ${success}，失败 ${failed}`, `Keyframe batch complete: ${success} succeeded, ${failed} failed`), failed > 0 ? 'warning' : 'success');
+            setBatchProgress({
+                current: completed,
+                total: targetShots.length,
+                status: t(`关键帧批量完成：成功 ${success}，失败 ${failed}`, `Keyframe batch complete: ${success} succeeded, ${failed} failed`),
+                stopRequested: false,
+                currentShotLabel: '',
+                currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+                mode: 'keyframes-local',
+            });
+        } finally {
+            shotLocalBatchSessionRef.current = '';
+            shotLocalBatchStopRequestedRef.current = false;
+            if (shotBatchStatusTimerRef.current) {
+                clearInterval(shotBatchStatusTimerRef.current);
+                shotBatchStatusTimerRef.current = null;
+            }
+            setIsBatchGenerating(false);
+            refreshShots();
+            refreshShotAssetsMeta();
+        }
+    }, [SHOT_BATCH_PARALLEL_LIMIT, activeEpisode?.episode_info, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotKeyframesBatchItem, getShotEndFrameUrl, isStartFrameInheritPrompt, onLog, refreshShotAssetsMeta, refreshShots, shots, t]);
+
     const pollShotBatchStatus = useCallback(async () => {
         if (!activeEpisode?.id) return null;
+        if (shotLocalBatchSessionRef.current && batchProgressRef.current?.mode === 'keyframes-local') {
+            return {
+                running: true,
+                total: Number(batchProgressRef.current?.total || 0),
+                completed: Number(batchProgressRef.current?.current || 0),
+                message: String(batchProgressRef.current?.status || ''),
+                stop_requested: Boolean(batchProgressRef.current?.stopRequested),
+                current_shot_label: String(batchProgressRef.current?.currentShotLabel || ''),
+                current_asset_type: 'joint_diptych',
+                current_asset_label: String(batchProgressRef.current?.currentAssetLabel || ''),
+                mode: 'keyframes-local',
+            };
+        }
         try {
             const status = await getShotMediaBatchStatus(activeEpisode.id);
             if (!status || typeof status !== 'object') return null;
@@ -23346,6 +23823,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 stopRequested: Boolean(status.stop_requested),
                 currentShotLabel: String(status.current_shot_label || ''),
                 currentAssetLabel,
+                mode: String(status.mode || 'videos-backend'),
             });
 
             if (!running && shotBatchStatusTimerRef.current) {
@@ -23372,7 +23850,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const hydrate = async () => {
             let recovered = false;
-            if (!isBatchGeneratingRef.current) {
+            if (!isBatchGeneratingRef.current && batchProgressRef.current?.mode !== 'keyframes-local') {
                 recovered = await recoverShotBatchFromJobPool();
             }
             const status = await pollShotBatchStatus();
@@ -23406,12 +23884,25 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!activeEpisode?.id) return;
         setIsStoppingShotBatch(true);
         try {
+            if (shotLocalBatchSessionRef.current && batchProgressRef.current?.mode === 'keyframes-local') {
+                shotLocalBatchStopRequestedRef.current = true;
+                setBatchProgress((prev) => ({
+                    ...prev,
+                    stopRequested: true,
+                    status: prev.status || t('已请求停止当前关键帧批量任务。', 'Stop requested for current keyframe batch.'),
+                    mode: 'keyframes-local',
+                }));
+                onLog?.(t('已请求停止当前关键帧批量任务。', 'Stop requested for current keyframe batch.'), 'warning');
+                return;
+            }
+
             const res = await stopShotMediaBatch(activeEpisode.id);
             setBatchProgress((prev) => ({
                 ...prev,
                 stopRequested: true,
                 status: res?.message || prev.status || t('已强制停止当前镜头批处理。', 'Current shot batch force-stopped.'),
                 currentAssetLabel: prev.currentAssetLabel || '',
+                mode: 'videos-backend',
             }));
             await pollShotBatchStatus();
             onLog?.(`Shot batch: ${res?.message || 'stop requested'}`, 'warning');
@@ -23440,7 +23931,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return;
         }
 
-        const latest = await pollShotBatchStatus();
+        const latest = mode === 'videos' ? await pollShotBatchStatus() : null;
         if (latest?.running) {
             alert('A batch task is already running. Please stop it first.');
             return;
@@ -23448,7 +23939,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const ok = mode === 'videos'
             ? await confirmUiMessage(`Generate Videos for all ${shots.length} shots? This will AUTO-GENERATE any missing Start/End frames first.`)
-            : await confirmUiMessage(`Generate missing Start/End frames for all ${shots.length} shots? This may take a while.`);
+            : await confirmUiMessage(
+                t(
+                    `为当前缺失关键帧的镜头启动本地并发批处理？系统会按依赖顺序分批执行，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个镜头。`,
+                    `Start local concurrent batching for shots with missing keyframes? The scheduler will respect dependency order and run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave.`
+                )
+            );
         if (!ok) return;
 
         setIsShotBatchStarting(true);
@@ -23458,6 +23954,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 const msg = t('当前镜头尚未保存到数据库，无法批量执行。请先保存镜头。', 'Current shots are not saved to database yet, cannot run batch. Please save shots first.');
                 onLog?.(msg, 'warning');
                 alert(msg);
+                return;
+            }
+
+            if (mode === 'keyframes') {
+                await runLocalKeyframeBatch();
                 return;
             }
 
@@ -23477,6 +23978,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 stopRequested: false,
                 currentShotLabel: '',
                 currentAssetLabel: '',
+                mode: 'videos-backend',
             });
             onLog?.(
                 mode === 'videos'

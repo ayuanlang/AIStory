@@ -13,7 +13,7 @@ class User(Base):
     avatar_url = Column(String, nullable=True)
     hashed_password = Column(String)
     
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Integer, default=1)
     account_status = Column(Integer, default=1)  # 1=active, -1=pending email verification, 0=disabled
     email_verified = Column(Boolean, default=False)
     email_verification_code = Column(String, nullable=True)

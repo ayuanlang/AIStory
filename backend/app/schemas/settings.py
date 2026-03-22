@@ -97,7 +97,43 @@ class SystemAPISelectionRequest(BaseModel):
     mode: Optional[str] = None
 
 
-class SystemAPISettingManageUpdate(BaseModel):
+class SystemAPISettingFeatureFields(BaseModel):
+    generation_modes: Optional[List[str]] = None
+    input_formats: Optional[List[str]] = None
+    output_format: Optional[str] = None
+    supported_resolutions: Optional[List[str]] = None
+    aspect_ratios: Optional[List[str]] = None
+    max_images_per_call: Optional[int] = None
+    reference_image_limit: Optional[Any] = None
+    reference_video_limit: Optional[Any] = None
+    durations_seconds: Optional[List[float]] = None
+    max_duration: Optional[float] = None
+    fps_options: Optional[List[float]] = None
+    image_size_values: Optional[List[str]] = None
+    quality_values: Optional[List[str]] = None
+    has_audio: Optional[bool] = None
+    sound_supported: Optional[bool] = None
+    multi_shots_supported: Optional[bool] = None
+    mode_values: Optional[List[str]] = None
+    capability_flags: Optional[Dict[str, Any]] = None
+    text_capabilities: Optional[Dict[str, Any]] = None
+    image_capabilities: Optional[Dict[str, Any]] = None
+    video_capabilities: Optional[Dict[str, Any]] = None
+    digital_human_capabilities: Optional[Dict[str, Any]] = None
+    voice_capabilities: Optional[Dict[str, Any]] = None
+    music_capabilities: Optional[Dict[str, Any]] = None
+    pricing_unit: Optional[str] = None
+    token_billing_supported: Optional[bool] = None
+    input_token_price: Optional[float] = None
+    output_token_price: Optional[float] = None
+    per_resolution_price_map: Optional[Dict[str, Any]] = None
+    per_duration_price_map: Optional[Dict[str, Any]] = None
+    has_tiered_pricing: Optional[bool] = None
+    free_quota: Optional[Any] = None
+    currency: Optional[str] = None
+
+
+class SystemAPISettingManageUpdate(SystemAPISettingFeatureFields):
     name: Optional[str] = None
     provider: Optional[str] = None
     category: Optional[str] = None
@@ -118,7 +154,7 @@ class SystemAPISettingManageUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-class SystemAPISettingManageCreate(BaseModel):
+class SystemAPISettingManageCreate(SystemAPISettingFeatureFields):
     name: Optional[str] = "System Setting"
     provider: str
     category: str = "LLM"
@@ -183,12 +219,45 @@ class SystemAPISettingOut(BaseModel):
     has_granular_billing_rules: Optional[bool] = False
     deprecated: bool = False
     is_active: bool = False
+    generation_modes: Optional[List[str]] = None
+    input_formats: Optional[List[str]] = None
+    output_format: Optional[str] = None
+    supported_resolutions: Optional[List[str]] = None
+    aspect_ratios: Optional[List[str]] = None
+    max_images_per_call: Optional[int] = None
+    reference_image_limit: Optional[Any] = None
+    reference_video_limit: Optional[Any] = None
+    durations_seconds: Optional[List[float]] = None
+    max_duration: Optional[float] = None
+    fps_options: Optional[List[float]] = None
+    image_size_values: Optional[List[str]] = None
+    quality_values: Optional[List[str]] = None
+    has_audio: Optional[bool] = None
+    sound_supported: Optional[bool] = None
+    multi_shots_supported: Optional[bool] = None
+    mode_values: Optional[List[str]] = None
+    capability_flags: Optional[Dict[str, Any]] = None
+    text_capabilities: Optional[Dict[str, Any]] = None
+    image_capabilities: Optional[Dict[str, Any]] = None
+    video_capabilities: Optional[Dict[str, Any]] = None
+    digital_human_capabilities: Optional[Dict[str, Any]] = None
+    voice_capabilities: Optional[Dict[str, Any]] = None
+    music_capabilities: Optional[Dict[str, Any]] = None
+    pricing_unit: Optional[str] = None
+    token_billing_supported: Optional[bool] = None
+    input_token_price: Optional[float] = None
+    output_token_price: Optional[float] = None
+    per_resolution_price_map: Optional[Dict[str, Any]] = None
+    per_duration_price_map: Optional[Dict[str, Any]] = None
+    has_tiered_pricing: Optional[bool] = None
+    free_quota: Optional[Any] = None
+    currency: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 
-class SystemAPISettingImportItem(BaseModel):
+class SystemAPISettingImportItem(SystemAPISettingFeatureFields):
     fixed_id: Optional[int] = None
     id: Optional[int] = None
     name: Optional[str] = "System Setting"
@@ -216,7 +285,7 @@ class SystemAPISettingImportRequest(BaseModel):
     replace_all: bool = False
 
 
-class SystemAPIProviderModelImportItem(BaseModel):
+class SystemAPIProviderModelImportItem(SystemAPISettingFeatureFields):
     fixed_id: Optional[int] = None
     id: Optional[int] = None
     name: Optional[str] = "System Setting"

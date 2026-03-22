@@ -270,6 +270,26 @@ def pick_numeric_nearest_lower(std_value: str, allowed_values: List[str], parser
     return min_val, "fallback_min"
 
 
+def pick_numeric_nearest(std_value: str, allowed_values: List[str], parser) -> Tuple[str, str]:
+    req = parser(std_value)
+    parsed: List[Tuple[str, float]] = []
+    for val in allowed_values:
+        num = parser(val)
+        if num is None:
+            continue
+        parsed.append((val, float(num)))
+
+    if not parsed:
+        return allowed_values[0], "fallback_baseline"
+
+    if req is None:
+        min_val = min(parsed, key=lambda x: x[1])[0]
+        return min_val, "fallback_baseline"
+
+    best_val, _best_num = min(parsed, key=lambda x: (abs(x[1] - float(req)), x[1]))
+    return best_val, "nearest"
+
+
 def pick_aspect_ratio(std_value: str, allowed_values: List[str]) -> Tuple[str, str]:
     std_norm = normalize_std_value("ASPECT_RATIO", std_value)
     std_low = clean(std_norm).lower()
@@ -370,7 +390,7 @@ def choose_mapping(std_dim: str, std_value: str, allowed_values: List[str]) -> T
     if std_dim == "ASPECT_RATIO":
         return pick_aspect_ratio(std_value, allowed_values)
     if std_dim == "DURATION_SECONDS":
-        return pick_numeric_nearest_lower(std_value, allowed_values, parse_float)
+        return pick_numeric_nearest(std_value, allowed_values, parse_float)
     if std_dim == "RESOLUTION_TIER":
         return pick_numeric_nearest_lower(std_value, allowed_values, parse_resolution_rank)
     if std_dim in {"NUM_IMAGES", "UPSCALE_FACTOR", "SAFETY_TOLERANCE"}:

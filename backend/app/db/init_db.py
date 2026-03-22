@@ -139,7 +139,7 @@ def create_default_superuser():
                     "username": "ylsystem",
                     "email": "ylsystem@admin.com",
                     "password": hashed,
-                    "active": True, # SQLAlchemy generic type handling should convert to 1/0 or TRUE/FALSE
+                    "active": 1,
                     "account_status": 1,
                     "email_verified": True,
                     "superuser": True,
@@ -841,7 +841,7 @@ def check_and_migrate_tables():
         if is_postgres:
             # Robust Postgres Strategy
             user_columns_pg = [
-                ("is_active", "BOOLEAN DEFAULT TRUE"),
+                ("is_active", "INTEGER DEFAULT 1"),
                 ("account_status", "INTEGER DEFAULT 1"),
                 ("email_verified", "BOOLEAN DEFAULT FALSE"),
                 ("email_verification_code", "VARCHAR"),
@@ -859,6 +859,27 @@ def check_and_migrate_tables():
                         # logger.info(f"Ensured users.{col_name} exists")
                      except Exception as e:
                         logger.error(f"Failed to ensure users.{col_name}: {e}")
+
+            try:
+                inspector = inspect(engine)
+                existing_user_cols_meta = {c['name']: c for c in inspector.get_columns('users')}
+                is_active_col = existing_user_cols_meta.get('is_active') or {}
+                is_active_type_name = str(is_active_col.get('type') or '').lower()
+                with engine.begin() as conn:
+                    if 'bool' in is_active_type_name:
+                        conn.execute(text("""
+                            ALTER TABLE users
+                            ALTER COLUMN is_active TYPE INTEGER
+                            USING CASE
+                                WHEN is_active IS TRUE THEN 1
+                                WHEN is_active IS FALSE OR is_active IS NULL THEN 0
+                                ELSE 0
+                            END
+                        """))
+                    conn.execute(text("ALTER TABLE users ALTER COLUMN is_active SET DEFAULT 1"))
+                    conn.execute(text("UPDATE users SET is_active = 0 WHERE is_active IS NULL"))
+            except Exception as e:
+                logger.warning(f"Failed to normalize users.is_active to integer semantics: {e}")
         
         # Fallback / Original logic for non-postgres or extra checks
         # 1. Get current columns using Inspector (works for both)
@@ -868,7 +889,7 @@ def check_and_migrate_tables():
 
         # format: (column_name, sql_type_and_default)
         columns_to_check = [
-            ("is_active", "BOOLEAN DEFAULT TRUE"),
+            ("is_active", "INTEGER DEFAULT 1"),
             ("account_status", "INTEGER DEFAULT 1"),
             ("email_verified", "BOOLEAN DEFAULT FALSE"),
             ("email_verification_code", "VARCHAR"),

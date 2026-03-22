@@ -68,3 +68,31 @@ python apply_kie_system_data_standard_seed.py \
    --dict-csv uploads/kie/_kie_system_data_standard_dictionary.csv \
    --map-csv uploads/kie/_kie_system_to_model_enum_mapping.csv
 ```
+
+## Webhook Signature Verification
+
+The backend supports HMAC verification for provider callbacks.
+
+Relevant environment variables:
+
+- `WEBHOOK_HMAC_KEY`: shared secret used to verify callback signatures.
+- `WEBHOOK_HMAC_ALLOW_UNSIGNED`: whether callbacks without signature verification are accepted. Default is `1`.
+- `WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS`: maximum allowed timestamp skew for signed callbacks. Default is `300`.
+
+Recommended production configuration:
+
+```bash
+WEBHOOK_HMAC_KEY=replace-with-a-long-random-secret
+WEBHOOK_HMAC_ALLOW_UNSIGNED=0
+WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS=300
+```
+
+Current behavior if `WEBHOOK_HMAC_KEY` is empty:
+
+- When `WEBHOOK_HMAC_ALLOW_UNSIGNED=1`, the server logs a warning and accepts unsigned callbacks.
+- When `WEBHOOK_HMAC_ALLOW_UNSIGNED=0`, unsigned callbacks are rejected because no verification key is configured.
+
+Signed callbacks are expected to include these headers:
+
+- `x-webhook-timestamp`
+- `x-webhook-signature`

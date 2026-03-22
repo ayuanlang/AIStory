@@ -884,7 +884,12 @@ class MediaGenerationService:
                 out.append(num)
         return sorted(set(out))
 
-    def _map_duration_nearest(self, requested: Any, allowed_values: Any) -> Optional[int]:
+    def _map_duration_nearest(
+        self,
+        requested: Any,
+        allowed_values: Any,
+        prefer_higher_on_tie: bool = False,
+    ) -> Optional[int]:
         allowed = self._normalize_duration_enum_values(allowed_values)
         if not allowed:
             return None
@@ -893,7 +898,13 @@ class MediaGenerationService:
         except Exception:
             requested_num = float(allowed[0])
 
-        return min(allowed, key=lambda item: (abs(float(item) - requested_num), float(item)))
+        return min(
+            allowed,
+            key=lambda item: (
+                abs(float(item) - requested_num),
+                -float(item) if prefer_higher_on_tie else float(item),
+            ),
+        )
 
     def _normalize_enum_token(self, value: Any) -> str:
         text = str(value or "").strip().lower()
@@ -1267,6 +1278,8 @@ class MediaGenerationService:
             resolved_setting_id = None
 
         runtime_enum_catalog = self._load_system_api_runtime_enum_catalog(resolved_setting_id)
+        model_hint = str(active_config.get("model") or tool_conf.get("model") or "").strip().lower()
+        prefer_higher_seedance_duration = bool(category == "Video" and "seedance" in model_hint)
 
         effective_aspect_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
         effective_image_size = str(image_size or "").strip() or None
@@ -1300,7 +1313,11 @@ class MediaGenerationService:
         if category in {"Video", "Voice"}:
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
             if isinstance(allowed_durations, list) and allowed_durations and effective_duration is not None:
-                mapped_duration = self._map_duration_nearest(effective_duration, allowed_durations)
+                mapped_duration = self._map_duration_nearest(
+                    effective_duration,
+                    allowed_durations,
+                    prefer_higher_on_tie=prefer_higher_seedance_duration,
+                )
                 if mapped_duration is not None:
                     effective_duration = int(mapped_duration)
             max_duration = runtime_enum_catalog.get("max_duration")
@@ -2867,7 +2884,19 @@ class MediaGenerationService:
                 smart_enabled = False
 
         effective_provider = self._normalize_provider_name(provider, category)
-        baseline_config = dict(api_config or {})
+        request_provider_options = {}
+        if isinstance((api_config or {}).get("__request_provider_options"), dict):
+            request_provider_options = dict((api_config or {}).get("__request_provider_options") or {})
+
+        def _merge_request_provider_options(config_obj: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+            merged_config_obj = dict(config_obj or {})
+            if request_provider_options:
+                merged_inner = self._safe_json_dict(merged_config_obj.get("config"))
+                merged_inner.update(request_provider_options)
+                merged_config_obj["config"] = merged_inner
+            return merged_config_obj
+
+        baseline_config = _merge_request_provider_options(api_config)
         if requested_model:
             baseline_config["model"] = requested_model
 
@@ -2890,7 +2919,7 @@ class MediaGenerationService:
                         baseline_config.get("model"),
                         replacement_candidate.get("model"),
                     )
-                    baseline_config = dict(replacement_candidate.get("config") or {})
+                    baseline_config = _merge_request_provider_options(replacement_candidate.get("config"))
                     effective_provider = self._normalize_provider_name(replacement_candidate.get("provider"), category)
 
         fallback_candidates: List[Dict[str, Any]] = []
@@ -2967,14 +2996,14 @@ class MediaGenerationService:
                 first = multi_ref_target[0]
                 attempt_items.append({
                     "provider": first.get("provider"),
-                    "config": dict(first.get("config") or {}),
+                    "config": _merge_request_provider_options(first.get("config")),
                     "tag": "multi_ref_default",
                 })
 
         for _ in range(retry_limit):
             attempt_items.append({
                 "provider": effective_provider,
-                "config": dict(baseline_config),
+                "config": _merge_request_provider_options(baseline_config),
                 "tag": "active_retry",
             })
 
@@ -2982,14 +3011,14 @@ class MediaGenerationService:
             for c in fallback_candidates:
                 attempt_items.append({
                     "provider": c.get("provider"),
-                    "config": dict(c.get("config") or {}),
+                    "config": _merge_request_provider_options(c.get("config")),
                     "tag": "priority_fallback",
                 })
         elif smart_enabled and legacy_strategy:
             for c in fallback_candidates:
                 attempt_items.append({
                     "provider": c.get("provider"),
-                    "config": dict(c.get("config") or {}),
+                    "config": _merge_request_provider_options(c.get("config")),
                     "tag": "priority_fallback",
                 })
 
@@ -3017,7 +3046,7 @@ class MediaGenerationService:
                 continue
 
             selected_provider = self._normalize_provider_name(attempt.get("provider"), category)
-            selected_config = dict(attempt.get("config") or {})
+            selected_config = _merge_request_provider_options(attempt.get("config"))
             if not selected_provider:
                 continue
 
@@ -3543,6 +3572,7 @@ class MediaGenerationService:
             merged_config = dict((api_config.get("config") or {}))
             merged_config.update(provider_options)
             api_config["config"] = merged_config
+            api_config["__request_provider_options"] = dict(provider_options)
 
         logger.info(
             "Generate image provider resolution | user_id=%s strict_provider=%s requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s",
@@ -3674,6 +3704,7 @@ class MediaGenerationService:
             merged_config = dict((api_config.get("config") or {}))
             merged_config.update(provider_options)
             api_config["config"] = merged_config
+            api_config["__request_provider_options"] = dict(provider_options)
 
         _debug_log(
             "[MediaService][VoiceConfig] requested_provider=%s requested_model=%s resolved_provider=%s resolved_model=%s resolved_source=%s voice=%s language_code=%s"
@@ -3812,6 +3843,7 @@ class MediaGenerationService:
             merged_config = dict((api_config.get("config") or {}))
             merged_config.update(provider_options)
             api_config["config"] = merged_config
+            api_config["__request_provider_options"] = dict(provider_options)
 
         selected_strategy = self.USER_API_STRATEGY_FIXED
         try:
@@ -4019,7 +4051,7 @@ class MediaGenerationService:
             try:
                 d_int = int(final_duration)
                 if is_seedance_model:
-                    mapped_duration = self._map_duration_nearest(d_int, [4, 8])
+                    mapped_duration = self._map_duration_nearest(d_int, [4, 8], prefer_higher_on_tie=True)
                     if mapped_duration is not None:
                         final_duration = int(mapped_duration)
                     elif d_int <= 0:
@@ -5127,6 +5159,7 @@ class MediaGenerationService:
         query_endpoint = str(tool_conf.get("query_endpoint") or "/openapi/v2/query").strip() or "/openapi/v2/query"
         query_url = query_endpoint if re.match(r"^https?://", query_endpoint, flags=re.IGNORECASE) else f"{base_url}{query_endpoint if query_endpoint.startswith('/') else '/' + query_endpoint}"
         endpoint_lower = endpoint.lower()
+        model_lower = str(config.get("model") or tool_conf.get("model") or "").strip().lower()
 
         raw_ref_values = ref_image if isinstance(ref_image, list) else [ref_image]
         image_refs: List[str] = []
@@ -5323,6 +5356,25 @@ class MediaGenerationService:
 
             if _pick_tool_value("keepOriginalSound") is not None:
                 payload_obj["keepOriginalSound"] = _normalize_bool(_pick_tool_value("keepOriginalSound"), True)
+
+        def _is_runninghub_hailuo_video_endpoint() -> bool:
+            haystack = f"{endpoint_lower} {model_lower}"
+            return "hailuo" in haystack or "minimax" in haystack
+
+        def _set_runninghub_prompt_expansion_flag(payload_obj: Dict[str, Any]):
+            explicit_value = _pick_tool_value(
+                "enablePromptExpansion",
+                "enable_prompt_expansion",
+                "promptExpansion",
+                "prompt_expand",
+                "promptExtend",
+                "prompt_extend",
+            )
+            if explicit_value is not None:
+                payload_obj["enablePromptExpansion"] = _normalize_bool(explicit_value, True)
+                return
+            if _is_runninghub_hailuo_video_endpoint():
+                payload_obj["enablePromptExpansion"] = True
 
         raw_callback_url = str(
             tool_conf.get("webhookUrl")
@@ -5545,6 +5597,8 @@ class MediaGenerationService:
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "movementAmplitude", movement_amplitude)
             _set_audio_flags(payload)
+
+        _set_runninghub_prompt_expansion_flag(payload)
 
         base_metadata.update({
             "duration": payload.get("duration"),
@@ -7132,14 +7186,18 @@ class MediaGenerationService:
                 duration_value = 5
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
             if isinstance(allowed_durations, list) and allowed_durations:
-                mapped_duration = self._map_duration_nearest(duration_value, allowed_durations)
+                mapped_duration = self._map_duration_nearest(
+                    duration_value,
+                    allowed_durations,
+                    prefer_higher_on_tie=is_seedance_video_model,
+                )
                 if mapped_duration is not None:
                     duration_value = int(mapped_duration)
 
             # KIE Seedance models often reject non-enum durations; if runtime enum is missing,
             # apply a conservative fallback aligned with common Seedance options.
             if is_seedance_video_model and (not isinstance(allowed_durations, list) or not allowed_durations):
-                mapped_duration = self._map_duration_nearest(duration_value, [4, 8])
+                mapped_duration = self._map_duration_nearest(duration_value, [4, 8], prefer_higher_on_tie=True)
                 if mapped_duration is not None:
                     duration_value = int(mapped_duration)
 
@@ -8043,11 +8101,15 @@ class MediaGenerationService:
                     current_duration_int = int(float(current_duration_text))
                     allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
                     if isinstance(allowed_durations, list) and allowed_durations:
-                        mapped_duration = self._map_duration_nearest(current_duration_int, allowed_durations)
+                        mapped_duration = self._map_duration_nearest(
+                            current_duration_int,
+                            allowed_durations,
+                            prefer_higher_on_tie=is_seedance_video_model,
+                        )
                         if mapped_duration is not None:
                             current_duration_int = int(mapped_duration)
                     elif is_seedance_video_model:
-                        mapped_duration = self._map_duration_nearest(current_duration_int, [4, 8])
+                        mapped_duration = self._map_duration_nearest(current_duration_int, [4, 8], prefer_higher_on_tie=True)
                         if mapped_duration is not None:
                             current_duration_int = int(mapped_duration)
                     max_duration = runtime_enum_catalog.get("max_duration")

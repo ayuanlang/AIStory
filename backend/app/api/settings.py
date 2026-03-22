@@ -956,6 +956,7 @@ def _clean_feature_dict(value: Any) -> Dict[str, Any]:
 
 def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     generation_modes = _normalize_generation_modes(profile.get("generation_modes"))
+    capability_flags = _clean_feature_dict(profile.get("capability_flags"))
     text_caps = _clean_feature_dict(profile.get("text_capabilities"))
     image_caps = _clean_feature_dict(profile.get("image_capabilities"))
     video_caps = _clean_feature_dict(profile.get("video_capabilities"))
@@ -969,6 +970,8 @@ def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, A
 
     if profile.get("base_model"):
         out["base_model"] = str(profile.get("base_model") or "").strip()
+    if capability_flags:
+        out["capability_flags"] = capability_flags
 
     if text_caps:
         out["text_capabilities"] = text_caps
@@ -981,6 +984,10 @@ def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, A
         out["supported_resolutions"] = image_caps.get("supported_resolutions")
     if image_caps.get("aspect_ratios"):
         out["aspect_ratios"] = image_caps.get("aspect_ratios")
+    if image_caps.get("max_images_per_call") is not None:
+        out["max_images_per_call"] = image_caps.get("max_images_per_call")
+    if image_caps.get("reference_image_limit") is not None:
+        out["reference_image_limit"] = image_caps.get("reference_image_limit")
     if image_caps.get("image_size_values"):
         out["image_size_values"] = image_caps.get("image_size_values")
     if image_caps.get("quality_values"):
@@ -991,6 +998,7 @@ def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, A
     if video_caps.get("aspect_ratios") and not out.get("aspect_ratios"):
         out["aspect_ratios"] = video_caps.get("aspect_ratios")
     if video_caps.get("durations_seconds"):
+        out["durations_seconds"] = video_caps.get("durations_seconds")
         durations = []
         for val in video_caps.get("durations_seconds") or []:
             try:
@@ -999,6 +1007,12 @@ def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, A
                 continue
         if durations:
             out["max_duration"] = max(durations)
+    if video_caps.get("fps_options"):
+        out["fps_options"] = video_caps.get("fps_options")
+    if video_caps.get("reference_image_limit") is not None and out.get("reference_image_limit") is None:
+        out["reference_image_limit"] = video_caps.get("reference_image_limit")
+    if video_caps.get("reference_video_limit") is not None:
+        out["reference_video_limit"] = video_caps.get("reference_video_limit")
     if video_caps.get("quality_values") and not out.get("quality_values"):
         out["quality_values"] = video_caps.get("quality_values")
     if video_caps.get("image_size_values") and not out.get("image_size_values"):
@@ -1154,6 +1168,7 @@ def _build_modality_payload_from_item(source: Any) -> Optional[Dict[str, Any]]:
     profile = {
         "base_model": getattr(source, "base_model", None),
         "generation_modes": getattr(source, "generation_modes", None),
+        "capability_flags": getattr(source, "capability_flags", None),
         "text_capabilities": getattr(source, "text_capabilities", None),
         "image_capabilities": getattr(source, "image_capabilities", None),
         "video_capabilities": getattr(source, "video_capabilities", None),
@@ -1181,6 +1196,16 @@ def _build_modality_payload_from_item(source: Any) -> Optional[Dict[str, Any]]:
         "sound_supported",
         "multi_shots_supported",
         "mode_values",
+        "capability_flags",
+        "pricing_unit",
+        "token_billing_supported",
+        "input_token_price",
+        "output_token_price",
+        "per_resolution_price_map",
+        "per_duration_price_map",
+        "has_tiered_pricing",
+        "free_quota",
+        "currency",
     ]
     for key in top_level_keys:
         value = getattr(source, key, None)
@@ -1188,6 +1213,50 @@ def _build_modality_payload_from_item(source: Any) -> Optional[Dict[str, Any]]:
             modality[key] = value
 
     return modality or None
+
+
+def _extract_modality_manage_fields(modality_value: Any) -> Dict[str, Any]:
+    modality = _safe_json_dict(modality_value)
+    extracted: Dict[str, Any] = {}
+    for name in [
+        "generation_modes",
+        "input_formats",
+        "output_format",
+        "supported_resolutions",
+        "aspect_ratios",
+        "max_images_per_call",
+        "reference_image_limit",
+        "reference_video_limit",
+        "durations_seconds",
+        "max_duration",
+        "fps_options",
+        "image_size_values",
+        "quality_values",
+        "has_audio",
+        "sound_supported",
+        "multi_shots_supported",
+        "mode_values",
+        "capability_flags",
+        "pricing_unit",
+        "token_billing_supported",
+        "input_token_price",
+        "output_token_price",
+        "per_resolution_price_map",
+        "per_duration_price_map",
+        "has_tiered_pricing",
+        "free_quota",
+        "currency",
+        "text_capabilities",
+        "image_capabilities",
+        "video_capabilities",
+        "digital_human_capabilities",
+        "voice_capabilities",
+        "music_capabilities",
+    ]:
+        value = modality.get(name)
+        if value is not None:
+            extracted[name] = value
+    return extracted
 
 
 def _primary_generation_mode_from_wide(generation_modes: Any) -> Optional[str]:
@@ -2613,6 +2682,7 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
     out_cfg = _sync_model_mode_defaults_config(_strip_billing_from_config(row.config))
     model_mode_defaults = _extract_model_mode_defaults(out_cfg)
     base_model = _resolve_base_model(getattr(row, "base_model", None), getattr(row, "model", None))
+    modality_fields = _extract_modality_manage_fields(getattr(row, "modality", None))
     return SystemAPISettingOut(
         id=row.id,
         name=row.name,
@@ -2634,6 +2704,7 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         has_granular_billing_rules=_has_granular_billing_rules(db, int(row.id)),
         deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
         is_active=is_task_default_system_setting(db, int(row.id), row.category),
+        **modality_fields,
     )
 
 
@@ -2841,14 +2912,7 @@ def delete_task_default_api_for_manage(
 
 
 def _is_setting_deprecated(config_value, deprecated_flag: Any = None) -> bool:
-    if _to_bool(deprecated_flag):
-        return True
-    cfg = _safe_json_dict(config_value)
-    return bool(
-        _to_bool(cfg.get("deprecated"))
-        or _to_bool(cfg.get("is_deprecated"))
-        or _to_bool(cfg.get("disable_api"))
-    )
+    return _to_bool(deprecated_flag)
 
 
 def _non_negative_int(value: Any, default: int = 0) -> int:
@@ -7661,6 +7725,7 @@ def export_system_settings_for_manage(
     items = []
     for row in rows:
         billing = _resolve_system_setting_billing(db, row)
+        modality_fields = _extract_modality_manage_fields(getattr(row, "modality", None))
         items.append({
             "name": row.name,
             "category": row.category,
@@ -7669,34 +7734,6 @@ def export_system_settings_for_manage(
             "base_url": row.base_url,
             "model": row.model,
             "base_model": row.base_model,
-            "generation_modes": getattr(row, "generation_modes", None),
-            "input_formats": getattr(row, "input_formats", None),
-            "output_format": getattr(row, "output_format", None),
-            "supported_resolutions": getattr(row, "supported_resolutions", None),
-            "aspect_ratios": getattr(row, "aspect_ratios", None),
-            "max_images_per_call": getattr(row, "max_images_per_call", None),
-            "reference_image_limit": getattr(row, "reference_image_limit", None),
-            "reference_video_limit": getattr(row, "reference_video_limit", None),
-            "durations_seconds": getattr(row, "durations_seconds", None),
-            "max_duration": getattr(row, "max_duration", None),
-            "fps_options": getattr(row, "fps_options", None),
-            "has_audio": getattr(row, "has_audio", None),
-            "mode_values": getattr(row, "mode_values", None),
-            "text_capabilities": getattr(row, "text_capabilities", None),
-            "image_capabilities": getattr(row, "image_capabilities", None),
-            "video_capabilities": getattr(row, "video_capabilities", None),
-            "digital_human_capabilities": getattr(row, "digital_human_capabilities", None),
-            "voice_capabilities": getattr(row, "voice_capabilities", None),
-            "music_capabilities": getattr(row, "music_capabilities", None),
-            "pricing_unit": getattr(row, "pricing_unit", None),
-            "token_billing_supported": getattr(row, "token_billing_supported", None),
-            "input_token_price": getattr(row, "input_token_price", None),
-            "output_token_price": getattr(row, "output_token_price", None),
-            "per_resolution_price_map": getattr(row, "per_resolution_price_map", None),
-            "per_duration_price_map": getattr(row, "per_duration_price_map", None),
-            "has_tiered_pricing": getattr(row, "has_tiered_pricing", None),
-            "free_quota": getattr(row, "free_quota", None),
-            "currency": getattr(row, "currency", None),
             "tags": getattr(row, "tags", None),
             "supplier_info": getattr(row, "supplier_info", None),
             "config": _strip_billing_from_config(row.config),
@@ -7706,6 +7743,7 @@ def export_system_settings_for_manage(
             "billing_cost_output": billing.get("cost_output", 0),
             "deprecated": bool(row.deprecated),
             "is_active": is_task_default_system_setting(db, int(row.id), row.category),
+            **modality_fields,
         })
 
     return {
@@ -7743,6 +7781,7 @@ def export_system_settings_to_seed_file(
     for row in rows:
         config = _strip_billing_from_config(row.config)
         billing = _resolve_system_setting_billing(db, row)
+        modality_fields = _extract_modality_manage_fields(getattr(row, "modality", None))
         items.append({
             "name": row.name,
             "category": row.category,
@@ -7760,6 +7799,7 @@ def export_system_settings_to_seed_file(
             "billing_cost_output": billing.get("cost_output", 0),
             "deprecated": bool(row.deprecated),
             "is_active": is_task_default_system_setting(db, int(row.id), row.category),
+            **modality_fields,
         })
 
     seed_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "system_api_seed.json"))
@@ -7786,47 +7826,7 @@ def export_system_provider_bundle_for_manage(
     rows = db.query(SystemAPISetting).filter(
         ~SystemAPISetting.category.like("System_%"),
     ).order_by(SystemAPISetting.provider.asc(), SystemAPISetting.category.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
-
-    grouped: Dict[str, List[SystemAPISetting]] = {}
-    for row in rows:
-        provider_name = str(row.provider or "").strip()
-        if not provider_name:
-            continue
-        grouped.setdefault(provider_name, []).append(row)
-
-    providers = []
-    for provider_name, provider_rows in grouped.items():
-        pool_info = _get_system_provider_key_pool_full(db, provider_name)
-        models = []
-        for row in provider_rows:
-            billing = _resolve_system_setting_billing(db, row)
-            models.append({
-                "fixed_id": int(row.id),
-                "id": int(row.id),
-                "name": row.name,
-                "category": row.category,
-                "base_url": row.base_url,
-                "model": row.model,
-                "base_model": row.base_model,
-                "modality": row.modality,
-                "tags": getattr(row, "tags", None),
-                "supplier_info": getattr(row, "supplier_info", None),
-                "config": _strip_billing_from_config(row.config),
-                "billing_unit_type": billing.get("unit_type", "per_call"),
-                "billing_cost": billing.get("cost", 0),
-                "billing_cost_input": billing.get("cost_input", 0),
-                "billing_cost_output": billing.get("cost_output", 0),
-                "deprecated": bool(row.deprecated),
-                "is_active": is_task_default_system_setting(db, int(row.id), row.category),
-            })
-        providers.append({
-            "provider": provider_name,
-            "api_keys": pool_info["keys"],
-            "strategy": pool_info["strategy"],
-            "weights": pool_info["weights"],
-            "model_count": len(models),
-            "models": models,
-        })
+    providers = _build_provider_bundle_export_payload(db, rows)
 
     return {
         "version": 1,
@@ -8052,6 +8052,72 @@ _SYNC_BILLING_RULE_FLOAT_FIELDS = {
     "fps_max",
     "charge_multiplier",
 }
+
+
+def _list_config_sync_exportable_system_rows(db: Session) -> Tuple[List[SystemAPISetting], int]:
+    rows = db.query(SystemAPISetting).filter(
+        ~SystemAPISetting.category.like("System_%"),
+    ).order_by(
+        SystemAPISetting.provider.asc(),
+        SystemAPISetting.category.asc(),
+        SystemAPISetting.model.asc(),
+        SystemAPISetting.id.asc(),
+    ).all()
+
+    exportable_rows: List[SystemAPISetting] = []
+    excluded_deprecated = 0
+    for row in rows:
+        if _is_setting_deprecated(getattr(row, "config", None), getattr(row, "deprecated", None)):
+            excluded_deprecated += 1
+            continue
+        exportable_rows.append(row)
+
+    return exportable_rows, excluded_deprecated
+
+
+def _build_provider_bundle_export_payload(db: Session, rows: List[SystemAPISetting]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, List[SystemAPISetting]] = {}
+    for row in rows:
+        provider_name = str(getattr(row, "provider", "") or "").strip()
+        if not provider_name:
+            continue
+        grouped.setdefault(provider_name, []).append(row)
+
+    providers: List[Dict[str, Any]] = []
+    for provider_name, provider_rows in grouped.items():
+        pool_info = _get_system_provider_key_pool_full(db, provider_name)
+        models = []
+        for row in provider_rows:
+            billing = _resolve_system_setting_billing(db, row)
+            models.append({
+                "fixed_id": int(row.id),
+                "id": int(row.id),
+                "name": row.name,
+                "category": row.category,
+                "base_url": row.base_url,
+                "model": row.model,
+                "base_model": row.base_model,
+                "modality": row.modality,
+                "tags": getattr(row, "tags", None),
+                "supplier_info": getattr(row, "supplier_info", None),
+                "config": _strip_billing_from_config(row.config),
+                "billing_unit_type": billing.get("unit_type", "per_call"),
+                "billing_cost": billing.get("cost", 0),
+                "billing_cost_input": billing.get("cost_input", 0),
+                "billing_cost_output": billing.get("cost_output", 0),
+                "deprecated": bool(row.deprecated),
+                "is_active": is_task_default_system_setting(db, int(row.id), row.category),
+            })
+        providers.append({
+            "provider": provider_name,
+            "api_keys": pool_info["keys"],
+            "strategy": pool_info["strategy"],
+            "weights": pool_info["weights"],
+            "model_count": len(models),
+            "models": models,
+        })
+
+    return providers
 
 
 def _db_has_table(db: Session, table_name: str) -> bool:
@@ -8463,11 +8529,10 @@ def export_system_config_sync_bundle_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    provider_bundle = export_system_provider_bundle_for_manage(db=db, current_user=current_user)
-
-    system_rows = db.query(SystemAPISetting).filter(
-        ~SystemAPISetting.category.like("System_%"),
-    ).all()
+    system_rows, excluded_deprecated_system_apis = _list_config_sync_exportable_system_rows(db)
+    provider_bundle = {
+        "providers": _build_provider_bundle_export_payload(db, system_rows),
+    }
     system_map = {int(row.id): row for row in system_rows}
 
     billing_rules_payload: List[Dict[str, Any]] = []
@@ -8478,6 +8543,8 @@ def export_system_config_sync_bundle_for_manage(
         ).all()
         for rule in rule_rows:
             api_row = system_map.get(int(rule.system_api_id))
+            if not api_row:
+                continue
             entry = {
                 "system_api_ref": {
                     "provider": api_row.provider if api_row else None,
@@ -8560,6 +8627,8 @@ def export_system_config_sync_bundle_for_manage(
         task_default_rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
         for row in task_default_rows:
             api_row = system_map.get(int(getattr(row, "system_api_id", 0) or 0))
+            if not api_row:
+                continue
             task_default_payload.append({
                 "task_category": normalize_task_category(getattr(row, "task_category", None)),
                 "system_api_id": int(getattr(row, "system_api_id", 0) or 0),
@@ -8581,6 +8650,8 @@ def export_system_config_sync_bundle_for_manage(
         ).order_by(SystemAPISetting.id.desc()).all()
         seen = set()
         for row in active_rows:
+            if _is_setting_deprecated(getattr(row, "config", None), getattr(row, "deprecated", None)):
+                continue
             task_category = normalize_task_category(getattr(row, "category", None))
             if task_category in seen:
                 continue
@@ -8617,6 +8688,7 @@ def export_system_config_sync_bundle_for_manage(
             "smtp_configs": len(data["smtp_configs"]),
             "wechat_pay_configs": len(data["wechat_pay_configs"]),
             "task_default_apis": len(data["task_default_apis"]),
+            "excluded_deprecated_system_apis": excluded_deprecated_system_apis,
         },
         "data": data,
     }
@@ -8971,7 +9043,7 @@ def import_system_settings_for_manage(
             import_billing = _billing_from_payload_or_config(item, import_raw_cfg)
             target.config = _strip_billing_from_config(import_raw_cfg)
             target.deprecated = _is_setting_deprecated(target.config, item.deprecated)
-            target.is_active = bool(target.is_active)
+            target.is_active = bool(item.is_active)
             _clear_row_billing_columns(target)
             if _is_system_api_auto_billing_sync_enabled():
                 _upsert_base_billing_rule(db, target.id, target.category, import_billing, activate=True)
@@ -8999,7 +9071,7 @@ def import_system_settings_for_manage(
                 supplier_info=getattr(item, "supplier_info", None),
                 deprecated=_is_setting_deprecated(create_raw_cfg, item.deprecated),
                 config=_strip_billing_from_config(create_raw_cfg),
-                is_active=False,
+                is_active=bool(item.is_active),
             )
             if fixed_id is not None:
                 target.id = int(fixed_id)

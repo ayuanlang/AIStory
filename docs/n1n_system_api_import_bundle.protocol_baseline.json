@@ -1,0 +1,3943 @@
+{
+  "replace_all": false,
+  "items": [
+    {
+      "name": "n1n Doubao Image Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "doubao_image_image",
+      "base_model": "doubao_image",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "i2i",
+          "t2i"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588669e0.md",
+          "https://docs.n1n.ai/391588670e0.md",
+          "https://docs.n1n.ai/391588671e0.md",
+          "https://docs.n1n.ai/391588672e0.md",
+          "https://docs.n1n.ai/391588673e0.md",
+          "https://docs.n1n.ai/391588674e0.md",
+          "https://docs.n1n.ai/391588675e0.md",
+          "https://docs.n1n.ai/391588676e0.md",
+          "https://docs.n1n.ai/391588677e0.md",
+          "https://docs.n1n.ai/391588678e0.md",
+          "https://docs.n1n.ai/391588679e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "doubao_image_image",
+          "protocol_label": "Doubao Image Image",
+          "family_key": "doubao_image",
+          "family_label": "Doubao Image",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 11,
+          "sample_titles": [
+            "doubao-seedream-3-0-t2i-250415",
+            "doubao-seededit-3-0-i2i-250628",
+            "doubao-seedream-4-0-250828-文生图",
+            "doubao-seedream-4-0-250828-图生图",
+            "doubao-seedream-4-0-250828-多图生图",
+            "doubao-seedream-4-5-251128 文生图（纯文本输入单图输出）",
+            "doubao-seedream-4-5-251128  图文生图（单图输入单图输出）",
+            "doubao-seedream-4-5-251128  多图融合（多图输入单图输出）",
+            "doubao-seedream-4-5-251128  组图输出（多图输出）",
+            "doubao-seedream-4-5-251128  单张图生组图"
+          ],
+          "model_hints": [
+            "doubao-seedream-3-0-t2i-250415",
+            "doubao-seededit-3-0-i2i-250628",
+            "doubao-seedream-4-0-250828-",
+            "doubao-seedream-4-5-251128"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "doubao_image",
+          "family_label": "Doubao Image",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Fal.ai Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "fal_ai_image",
+      "base_model": "fal_ai",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i",
+          "i2i"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/358251827e0.md",
+          "https://docs.n1n.ai/358251828e0.md",
+          "https://docs.n1n.ai/358251829e0.md",
+          "https://docs.n1n.ai/fal-ai-flux-1-dev.md",
+          "https://docs.n1n.ai/fal-ai-flux-1-dev-image-to-image.md",
+          "https://docs.n1n.ai/fal-ai-flux-1-dev-redux.md",
+          "https://docs.n1n.ai/fal-ai-flux-1-schnell-redux.md",
+          "https://docs.n1n.ai/fal-ai-flux-pro-kontext.md",
+          "https://docs.n1n.ai/fal-ai-flux-pro-kontext-text-to-image.md",
+          "https://docs.n1n.ai/fal-ai-flux-pro-kontext-max.md",
+          "https://docs.n1n.ai/fal-ai-flux-pro-kontext-max-multi.md",
+          "https://docs.n1n.ai/fal-ai-wan-v2_2-a14b-image-to-image.md",
+          "https://docs.n1n.ai/fal-ai-seedream-v4-text-to-image.md",
+          "https://docs.n1n.ai/fal-ai-vidu-reference-to-image.md",
+          "https://docs.n1n.ai/fal-ai-imagen4-preview.md",
+          "https://docs.n1n.ai/fal-ai-qwen-image-edit-lora.md",
+          "https://docs.n1n.ai/fal-ai-qwen-image-edit-plus.md",
+          "https://docs.n1n.ai/fal-ai-flux-lora.md",
+          "https://docs.n1n.ai/fal-ai-flux-lora-image-to-image.md",
+          "https://docs.n1n.ai/fal-ai-flux-lora-inpainting.md",
+          "https://docs.n1n.ai/fal-ai-qwen-image-edit-lora-api.md"
+        ],
+        "n1n": {
+          "protocol_key": "fal_ai_image",
+          "protocol_label": "Fal.ai Image",
+          "family_key": "fal_ai",
+          "family_label": "Fal.ai",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 21,
+          "sample_titles": [
+            "获取请求结果",
+            "/fal-ai/nano-banana 文生图",
+            "/fal-ai/nano-banana/edit 图片编辑",
+            "Fal-ai Flux-1 dev",
+            "Fal-ai Flux-1 dev image to image",
+            "Fal-ai Flux-1 dev redux 配置教程",
+            "Fal-ai Flux-1 schnell redux 配置教程",
+            "Fal-ai flux pro kontext 配置教程",
+            "Fal-ai flux pro kontext text to image 配置教程",
+            "Fal-ai flux pro kontext max 配置教程"
+          ],
+          "model_hints": [
+            "Flux-1",
+            "flux",
+            "v2.2-a14b",
+            "seedream",
+            "vidu",
+            "imagen4",
+            "qwen"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "fal_ai",
+          "family_label": "Fal.ai",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n FLUX Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "flux_image",
+      "base_model": "flux",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i",
+          "i2i"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/358251420e0.md",
+          "https://docs.n1n.ai/358251421e0.md",
+          "https://docs.n1n.ai/343229240e0.md",
+          "https://docs.n1n.ai/343229239e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "flux_image",
+          "protocol_label": "FLUX Image",
+          "family_key": "flux",
+          "family_label": "FLUX",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 4,
+          "sample_titles": [
+            "Flux 创建（OpenAI DALL-E-3 格式）",
+            "Flux 编辑（OpenAI DALL-E-3 格式）",
+            "查询任务",
+            "创建任务 black-forest-labs/flux-kontext-dev"
+          ],
+          "model_hints": [
+            "Flux",
+            "DALL-E-3"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "flux",
+          "family_label": "FLUX",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Gemini Native Image Generation",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "gemini_native_image",
+      "base_model": "gemini",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i",
+          "i2i"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "runtime-ready",
+        "native"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413679988e0.md",
+          "https://docs.n1n.ai/413679989e0.md",
+          "https://docs.n1n.ai/413679990e0.md",
+          "https://docs.n1n.ai/413679991e0.md",
+          "https://docs.n1n.ai/413679992e0.md",
+          "https://docs.n1n.ai/413679993e0.md",
+          "https://docs.n1n.ai/413680006e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "gemini_native_image",
+          "protocol_label": "Gemini Native Image Generation",
+          "family_key": "gemini",
+          "family_label": "Google Gemini",
+          "api_style": "native",
+          "endpoint_hint": "/v1beta/models/{model}:generateContent",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 7,
+          "sample_titles": [
+            "图片生成",
+            "图片生成 gemini-2.5-flash-image",
+            "图片生成 gemini-2.5-flash-image 控制宽高比",
+            "图片生成 gemini-3-pro-image-preview 控制宽高比 +清晰度",
+            "图片编辑",
+            "图片理解",
+            "Imagen 生成图片"
+          ],
+          "model_hints": [
+            "gemini-2.5-flash-image",
+            "gemini-image-editing",
+            "gemini-3-pro-image-preview"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": false,
+        "is_deprecated": false,
+        "disable_api": false,
+        "provider_api_key_strategy": "random",
+        "runtime_model": "gemini-2.5-flash-image",
+        "runtime_activation": "image_gemini_native",
+        "endpoint_hint": "/v1beta/models/{model}:generateContent",
+        "n1n": {
+          "api_style": "native",
+          "family_key": "gemini",
+          "family_label": "Google Gemini",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": true
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": false,
+      "is_active": true
+    },
+    {
+      "name": "n1n GPT Image Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "gpt_image_image",
+      "base_model": "gpt_image",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i",
+          "i2i"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/405487897e0.md",
+          "https://docs.n1n.ai/405487898e0.md",
+          "https://docs.n1n.ai/405487899e0.md",
+          "https://docs.n1n.ai/405487900e0.md",
+          "https://docs.n1n.ai/405487901e0.md",
+          "https://docs.n1n.ai/405487902e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "gpt_image_image",
+          "protocol_label": "GPT Image Image",
+          "family_key": "gpt_image",
+          "family_label": "GPT Image",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 6,
+          "sample_titles": [
+            "创建  gpt-image-1",
+            "编辑  gpt-image-1",
+            "蒙版  gpt-image-1",
+            "创建  gpt-image-1.5",
+            "编辑  gpt-image-1.5",
+            "蒙版  gpt-image-1.5"
+          ],
+          "model_hints": [
+            "gpt-image-1",
+            "gpt-image-1.5"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "gpt_image",
+          "family_label": "GPT Image",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Grok Image Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "grok_image_image",
+      "base_model": "grok_image",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i",
+          "i2i"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/grok-image-create.md",
+          "https://docs.n1n.ai/grok-image-edit.md"
+        ],
+        "n1n": {
+          "protocol_key": "grok_image_image",
+          "protocol_label": "Grok Image Image",
+          "family_key": "grok_image",
+          "family_label": "Grok Image",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "Grok Image Create 图片生成",
+            "Grok Image Edit 图片编辑"
+          ],
+          "model_hints": [
+            "Grok"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "grok_image",
+          "family_label": "Grok Image",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Ideogram Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "ideogram_image",
+      "base_model": "ideogram",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i",
+          "i2i",
+          "i2t"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/329862098e0.md",
+          "https://docs.n1n.ai/329862099e0.md",
+          "https://docs.n1n.ai/329862100e0.md",
+          "https://docs.n1n.ai/329862101e0.md",
+          "https://docs.n1n.ai/329862102e0.md",
+          "https://docs.n1n.ai/329862103e0.md",
+          "https://docs.n1n.ai/329862104e0.md",
+          "https://docs.n1n.ai/329862105e0.md",
+          "https://docs.n1n.ai/329862106e0.md",
+          "https://docs.n1n.ai/343275978e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "ideogram_image",
+          "protocol_label": "Ideogram Image",
+          "family_key": "ideogram",
+          "family_label": "Ideogram",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 10,
+          "sample_titles": [
+            "Generate 3.0（文生图）Generate",
+            "Generate 3.0（图片编辑）Edit",
+            "Generate 3.0（图片重制）Remix",
+            "Generate 3.0（图片重构）Reframe",
+            "Generate 3.0（替换背景） Replace Background",
+            "Ideogram（文生图）",
+            "Remix（混合图）",
+            "Upscale（放大高清）",
+            "Describe（描述）",
+            "创建任务 ideogram-ai/ideogram-v2-turbo"
+          ],
+          "model_hints": [
+            "Ideogram",
+            "ideogram-ai/ideogram-v2-turbo",
+            "https://replicate.com/ideogram-ai/ideogram-v2-turbo"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "ideogram",
+          "family_label": "Ideogram",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Jimeng Image Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "jimeng_image_image",
+      "base_model": "jimeng_image",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i",
+          "i2i"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588685e0.md",
+          "https://docs.n1n.ai/391588686e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "jimeng_image_image",
+          "protocol_label": "Jimeng Image Image",
+          "family_key": "jimeng_image",
+          "family_label": "Jimeng Image",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "创建绘画",
+            "编辑图片"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "jimeng_image",
+          "family_label": "Jimeng Image",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Kling Platform Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "kling_image",
+      "base_model": "kling",
+      "modality": {
+        "output_format": "image",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/kling-image-generations.md",
+          "https://docs.n1n.ai/418161761e0.md",
+          "https://docs.n1n.ai/kling-omni-image.md",
+          "https://docs.n1n.ai/418161765e0.md",
+          "https://docs.n1n.ai/kling-image-recognize.md"
+        ],
+        "n1n": {
+          "protocol_key": "kling_image",
+          "protocol_label": "Kling Platform Image",
+          "family_key": "kling",
+          "family_label": "Kling Platform",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 5,
+          "sample_titles": [
+            "Kling 可灵图像生成",
+            "查询任务（单个）",
+            "Kling 可灵 Omni-Image",
+            "Kling 可灵图像识别"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "kling",
+          "family_label": "Kling Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Midjourney Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "midjourney_image",
+      "base_model": "midjourney",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "i2t"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/329862087e0.md",
+          "https://docs.n1n.ai/329862088e0.md",
+          "https://docs.n1n.ai/329862089e0.md",
+          "https://docs.n1n.ai/329862090e0.md",
+          "https://docs.n1n.ai/329862091e0.md",
+          "https://docs.n1n.ai/329862092e0.md",
+          "https://docs.n1n.ai/329862093e0.md",
+          "https://docs.n1n.ai/329862094e0.md",
+          "https://docs.n1n.ai/329862095e0.md",
+          "https://docs.n1n.ai/329862096e0.md",
+          "https://docs.n1n.ai/329862097e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "midjourney_image",
+          "protocol_label": "Midjourney Image",
+          "family_key": "midjourney",
+          "family_label": "Midjourney",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 11,
+          "sample_titles": [
+            "上传图片",
+            "提交Imagine任务",
+            "根据任务ID 查询任务状态",
+            "根据ID列表查询任务",
+            "获取任务图片的seed",
+            "执行Action动作",
+            "提交Blend任务",
+            "提交Describe任务",
+            "提交Shorten任务",
+            "提交Modal"
+          ],
+          "model_hints": [
+            "https://docs.midjourney.com/hc/en-us/articles/33329380893325-Managing-Image-Uploads",
+            "https://docs.midjourney.com/hc/en-us/articles/32023408776205-Prompt-Basics",
+            "seed",
+            "https://docs.midjourney.com/hc/en-us/articles/32804058614669-Upscalers",
+            "https://docs.midjourney.com/hc/en-us/articles/32635189884557-Blend-Images-on-Discord",
+            "https://docs.midjourney.com/hc/en-us/articles/32497889043981-Describe",
+            "https://docs.midjourney.com/hc/en-us/articles/32595476770957-Zoom-Out"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "midjourney",
+          "family_label": "Midjourney",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Qwen Image Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "qwen_image_image",
+      "base_model": "qwen_image",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "i2i"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/405488298e0.md",
+          "https://docs.n1n.ai/405488299e0.md",
+          "https://docs.n1n.ai/405488300e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "qwen_image_image",
+          "protocol_label": "Qwen Image Image",
+          "family_key": "qwen_image",
+          "family_label": "Qwen Image",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 3,
+          "sample_titles": [
+            "qwen-image-max",
+            "z-image-turbo",
+            "qwen-image-edit-2509"
+          ],
+          "model_hints": [
+            "qwen-image-max",
+            "qwen-image-edit-2509"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "qwen_image",
+          "family_label": "Qwen Image",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Replicate Platform Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "replicate_image",
+      "base_model": "replicate",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/343276039e0.md",
+          "https://docs.n1n.ai/343275972e0.md",
+          "https://docs.n1n.ai/343275973e0.md",
+          "https://docs.n1n.ai/343276040e0.md",
+          "https://docs.n1n.ai/343275983e0.md",
+          "https://docs.n1n.ai/343275984e0.md",
+          "https://docs.n1n.ai/343275985e0.md",
+          "https://docs.n1n.ai/343275986e0.md",
+          "https://docs.n1n.ai/343275987e0.md",
+          "https://docs.n1n.ai/343275990e0.md",
+          "https://docs.n1n.ai/343275991e0.md",
+          "https://docs.n1n.ai/343275992e0.md",
+          "https://docs.n1n.ai/343275993e0.md",
+          "https://docs.n1n.ai/343275994e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "replicate_image",
+          "protocol_label": "Replicate Platform Image",
+          "family_key": "replicate",
+          "family_label": "Replicate Platform",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 14,
+          "sample_titles": [
+            "查询任务",
+            "创建任务 lucataco/flux-schnell-lora",
+            "创建任务 lucataco/flux-dev-lora",
+            "创建任务 black-forest-labs/flux-kontext-dev",
+            "创建任务 black-forest-labs/flux-1.1-pro-ultra",
+            "创建任务 black-forest-labs/flux-kontext-pro",
+            "创建任务 black-forest-labs/flux-kontext-max",
+            "创建任务 flux-kontext-apps/multi-image-kontext-max",
+            "创建任务 flux-kontext-apps/multi-image-kontext-pro",
+            "创建任务 black-forest-labs/flux-fill-dev"
+          ],
+          "model_hints": [
+            "black-forest-labs/flux-1.1-pro-ultra",
+            "https://replicate.com/black-forest-labs/flux-1.1-pro-ultra",
+            "flux-kontext-apps/multi-image-kontext-max",
+            "flux-kontext-apps/multi-image-kontext-pro",
+            "google/imagen-4-fast",
+            "https://replicate.com/google/imagen-4-fast",
+            "google/imagen-4-ultra",
+            "https://replicate.com/google/imagen-4-ultra",
+            "google/imagen-4",
+            "https://replicate.com/google/imagen-4"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "replicate",
+          "family_label": "Replicate Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Tencent AIGC Image Image",
+      "category": "Image",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "tencent_image_image",
+      "base_model": "tencent_image",
+      "modality": {
+        "output_format": "image",
+        "generation_modes": [
+          "t2i"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/405488296e0.md",
+          "https://docs.n1n.ai/405488297e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "tencent_image_image",
+          "protocol_label": "Tencent AIGC Image Image",
+          "family_key": "tencent_image",
+          "family_label": "Tencent AIGC Image",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "获取请求结果",
+            "创建任务"
+          ],
+          "model_hints": [
+            "https://cloud.tencent.com/document/product/266/126240"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "tencent_image",
+          "family_label": "Tencent AIGC Image",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Claude Chat Compatible",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "claude_chat_compatible",
+      "base_model": "claude",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "chat_compatible"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413680383e0.md",
+          "https://docs.n1n.ai/413680384e0.md",
+          "https://docs.n1n.ai/413680385e0.md",
+          "https://docs.n1n.ai/413680386e0.md",
+          "https://docs.n1n.ai/413680387e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "claude_chat_compatible",
+          "protocol_label": "Claude Chat Compatible",
+          "family_key": "claude",
+          "family_label": "Anthropic Claude",
+          "api_style": "chat_compatible",
+          "endpoint_hint": "/v1/chat/completions",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 5,
+          "sample_titles": [
+            "创建思考聊天",
+            "创建聊天补全 （流式）",
+            "创建聊天补全 （非流）",
+            "创建聊天识图 （流式）",
+            "创建聊天识图 （非流）"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1/chat/completions",
+        "n1n": {
+          "api_style": "chat_compatible",
+          "family_key": "claude",
+          "family_label": "Anthropic Claude",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Claude Native Messages",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "claude_native_messages",
+      "base_model": "claude",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text",
+          "pdf",
+          "web"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "native"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413680376e0.md",
+          "https://docs.n1n.ai/413680377e0.md",
+          "https://docs.n1n.ai/413680378e0.md",
+          "https://docs.n1n.ai/413680379e0.md",
+          "https://docs.n1n.ai/413680380e0.md",
+          "https://docs.n1n.ai/413680381e0.md",
+          "https://docs.n1n.ai/413680382e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "claude_native_messages",
+          "protocol_label": "Claude Native Messages",
+          "family_key": "claude",
+          "family_label": "Anthropic Claude",
+          "api_style": "native",
+          "endpoint_hint": "/v1/messages",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 7,
+          "sample_titles": [
+            "创建聊天补全 （流式）",
+            "创建函数调用 （流式）",
+            "创建格式化输出",
+            "创建思考聊天",
+            "PDF 支持",
+            "PDF 支持 base64 格式",
+            "联网搜索"
+          ],
+          "model_hints": [
+            "base64"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1/messages",
+        "n1n": {
+          "api_style": "native",
+          "family_key": "claude",
+          "family_label": "Anthropic Claude",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Fal.ai LLM",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "fal_ai_llm",
+      "base_model": "fal_ai",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "provider_specific"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/fal-ai-request.md",
+          "https://docs.n1n.ai/fal-ai-seedream-v4-edit.md"
+        ],
+        "n1n": {
+          "protocol_key": "fal_ai_llm",
+          "protocol_label": "Fal.ai LLM",
+          "family_key": "fal_ai",
+          "family_label": "Fal.ai",
+          "api_style": "provider_specific",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "Fal-ai 获取请求结果",
+            "Fal-ai seedream v4 edit 配置教程"
+          ],
+          "model_hints": [
+            "seedream"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "provider_specific",
+          "family_key": "fal_ai",
+          "family_label": "Fal.ai",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Gemini Native Embeddings",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "gemini_native_embeddings",
+      "base_model": "gemini",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "native"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413680003e0.md",
+          "https://docs.n1n.ai/427695946e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "gemini_native_embeddings",
+          "protocol_label": "Gemini Native Embeddings",
+          "family_key": "gemini",
+          "family_label": "Google Gemini",
+          "api_style": "native",
+          "endpoint_hint": "/v1beta/models/{model}:embedContent",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "Embeddings",
+            "文本嵌入"
+          ],
+          "model_hints": [
+            "rest_3"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1beta/models/{model}:embedContent",
+        "n1n": {
+          "api_style": "native",
+          "family_key": "gemini",
+          "family_label": "Google Gemini",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Gemini Native Generate Content",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "gemini_native_generate_content",
+      "base_model": "gemini",
+      "modality": {
+        "output_format": "text",
+        "generation_modes": [
+          "t2a"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "native"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413679985e0.md",
+          "https://docs.n1n.ai/413679986e0.md",
+          "https://docs.n1n.ai/413679987e0.md",
+          "https://docs.n1n.ai/413679994e0.md",
+          "https://docs.n1n.ai/413679995e0.md",
+          "https://docs.n1n.ai/413679996e0.md",
+          "https://docs.n1n.ai/413679998e0.md",
+          "https://docs.n1n.ai/413679999e0.md",
+          "https://docs.n1n.ai/413680000e0.md",
+          "https://docs.n1n.ai/413680001e0.md",
+          "https://docs.n1n.ai/413680002e0.md",
+          "https://docs.n1n.ai/413680004e0.md",
+          "https://docs.n1n.ai/413680005e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "gemini_native_generate_content",
+          "protocol_label": "Gemini Native Generate Content",
+          "family_key": "gemini",
+          "family_label": "Google Gemini",
+          "api_style": "native",
+          "endpoint_hint": "/v1beta/models/{model}:generateContent",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 13,
+          "sample_titles": [
+            "文本生成",
+            "文本生成-流",
+            "文本生成+思考-流",
+            "格式化输出",
+            "函数调用",
+            "文档理解",
+            "代码执行",
+            "google search",
+            "视频理解",
+            "URL context"
+          ],
+          "model_hints": [
+            "gemini-image-editing",
+            "gemini-3-pro-preview:generateContent"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1beta/models/{model}:generateContent",
+        "n1n": {
+          "api_style": "native",
+          "family_key": "gemini",
+          "family_label": "Google Gemini",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Kling Platform LLM",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "kling_llm",
+      "base_model": "kling",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "provider_specific"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/kling-multi-image-to-image.md",
+          "https://docs.n1n.ai/418161763e0.md",
+          "https://docs.n1n.ai/kling-image-expand.md",
+          "https://docs.n1n.ai/418161767e0.md",
+          "https://docs.n1n.ai/kling-avatar-image-to-video.md",
+          "https://docs.n1n.ai/418161770e0.md",
+          "https://docs.n1n.ai/kling-text-to-audio.md",
+          "https://docs.n1n.ai/418161772e0.md",
+          "https://docs.n1n.ai/kling-virtual-try-on.md",
+          "https://docs.n1n.ai/418161777e0.md",
+          "https://docs.n1n.ai/kling-face-recognition.md",
+          "https://docs.n1n.ai/kling-advanced-lip-sync.md",
+          "https://docs.n1n.ai/418161780e0.md",
+          "https://docs.n1n.ai/kling-custom-voices.md",
+          "https://docs.n1n.ai/418161782e0.md",
+          "https://docs.n1n.ai/kling-delete-voices.md",
+          "https://docs.n1n.ai/427696340e0.md",
+          "https://docs.n1n.ai/kling-motion-control.md",
+          "https://docs.n1n.ai/418161784e0.md",
+          "https://docs.n1n.ai/kling-custom-elements.md"
+        ],
+        "n1n": {
+          "protocol_key": "kling_llm",
+          "protocol_label": "Kling Platform LLM",
+          "family_key": "kling",
+          "family_label": "Kling Platform",
+          "api_style": "provider_specific",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 20,
+          "sample_titles": [
+            "Kling 可灵多图参考生图",
+            "查询任务（单个）",
+            "Kling 可灵扩图",
+            "Kling 可灵数字人",
+            "Kling 可灵文生音效",
+            "Kling 可灵虚拟试穿",
+            "Kling 可灵人脸识别",
+            "Kling 可灵对口型",
+            "Kling 可灵自定义音色",
+            "查询自定义音色（单个）"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "provider_specific",
+          "family_key": "kling",
+          "family_label": "Kling Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n MiniMax Platform LLM",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "minimax_llm",
+      "base_model": "minimax",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "provider_specific"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/minimax-voice-clone.md",
+          "https://docs.n1n.ai/minimax-text-chatcompletion.md",
+          "https://docs.n1n.ai/minimax-voice-design.md"
+        ],
+        "n1n": {
+          "protocol_key": "minimax_llm",
+          "protocol_label": "MiniMax Platform LLM",
+          "family_key": "minimax",
+          "family_label": "MiniMax Platform",
+          "api_style": "provider_specific",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 3,
+          "sample_titles": [
+            "MiniMax 音色快速复刻",
+            "MiniMax 文本合成",
+            "MiniMax 音色设计"
+          ],
+          "model_hints": [
+            "MiniMax"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "provider_specific",
+          "family_key": "minimax",
+          "family_label": "MiniMax Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n OpenAI Compatible Chat Completions",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "openai_chat_completions",
+      "base_model": "openai",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text",
+          "image",
+          "web"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "runtime-ready",
+        "openai_compatible"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413681052e0.md",
+          "https://docs.n1n.ai/413681053e0.md",
+          "https://docs.n1n.ai/413681054e0.md",
+          "https://docs.n1n.ai/413681055e0.md",
+          "https://docs.n1n.ai/413681056e0.md",
+          "https://docs.n1n.ai/413681057e0.md",
+          "https://docs.n1n.ai/413681058e0.md",
+          "https://docs.n1n.ai/413681059e0.md",
+          "https://docs.n1n.ai/413681060e0.md",
+          "https://docs.n1n.ai/413681061e0.md",
+          "https://docs.n1n.ai/413681062e0.md",
+          "https://docs.n1n.ai/413681063e0.md",
+          "https://docs.n1n.ai/413681064e0.md",
+          "https://docs.n1n.ai/413681065e0.md",
+          "https://docs.n1n.ai/413681066e0.md",
+          "https://docs.n1n.ai/413681067e0.md",
+          "https://docs.n1n.ai/413681069e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "openai_chat_completions",
+          "protocol_label": "OpenAI Compatible Chat Completions",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "api_style": "openai_compatible",
+          "endpoint_hint": "/v1/chat/completions",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 17,
+          "sample_titles": [
+            "创建聊天补全 （流式）",
+            "创建聊天补全 （非流）",
+            "创建聊天识图 （流式）",
+            "创建聊天识图 （流式）base64 格式",
+            "创建聊天识图 （非流）",
+            "创建聊天创作图 （非流）",
+            "官方 Function Calling 调用",
+            "官方 N 测试",
+            "列出模型",
+            "创建聊天函数调用"
+          ],
+          "model_hints": [
+            "base64",
+            "qwen-mt-turbo",
+            "deepseek",
+            "v3.1",
+            "deepseek-ocr"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": false,
+        "is_deprecated": false,
+        "disable_api": false,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1/chat/completions",
+        "runtime_model": "qwen-mt-turbo",
+        "n1n": {
+          "api_style": "openai_compatible",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": true
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": false,
+      "is_active": true
+    },
+    {
+      "name": "n1n OpenAI Compatible Embeddings",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "openai_embeddings",
+      "base_model": "openai",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "openai_compatible"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413681068e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "openai_embeddings",
+          "protocol_label": "OpenAI Compatible Embeddings",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "api_style": "openai_compatible",
+          "endpoint_hint": "/v1/embeddings",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 1,
+          "sample_titles": [
+            "创建嵌入"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1/embeddings",
+        "n1n": {
+          "api_style": "openai_compatible",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n OpenAI Compatible Responses",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "openai_responses",
+      "base_model": "openai_responses",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "openai_compatible"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413682053e0.md",
+          "https://docs.n1n.ai/413682054e0.md",
+          "https://docs.n1n.ai/413682055e0.md",
+          "https://docs.n1n.ai/413682056e0.md",
+          "https://docs.n1n.ai/413682057e0.md",
+          "https://docs.n1n.ai/413682058e0.md",
+          "https://docs.n1n.ai/413682059e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "openai_responses",
+          "protocol_label": "OpenAI Compatible Responses",
+          "family_key": "openai_responses",
+          "family_label": "OpenAI Compatible",
+          "api_style": "openai_compatible",
+          "endpoint_hint": "/v1/responses",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 7,
+          "sample_titles": [
+            "创建模型响应",
+            "创建函数调用",
+            "创建模型响应（流式返回）",
+            "创建模型响应（控制思考长度）",
+            "创建网络搜索",
+            "创建模型响应 gpt-5 启用思考",
+            "创建函数调用 Copy"
+          ],
+          "model_hints": [
+            "gpt-5"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1/responses",
+        "n1n": {
+          "api_style": "openai_compatible",
+          "family_key": "openai_responses",
+          "family_label": "OpenAI Compatible",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Replicate Platform LLM",
+      "category": "LLM",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "replicate_llm",
+      "base_model": "replicate",
+      "modality": {
+        "output_format": "text",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "provider_specific"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/343275967e0.md",
+          "https://docs.n1n.ai/343275968e0.md",
+          "https://docs.n1n.ai/343275969e0.md",
+          "https://docs.n1n.ai/343275970e0.md",
+          "https://docs.n1n.ai/343275971e0.md",
+          "https://docs.n1n.ai/343275974e0.md",
+          "https://docs.n1n.ai/343275975e0.md",
+          "https://docs.n1n.ai/343275976e0.md",
+          "https://docs.n1n.ai/343275977e0.md",
+          "https://docs.n1n.ai/343275981e0.md",
+          "https://docs.n1n.ai/343275982e0.md",
+          "https://docs.n1n.ai/343275988e0.md",
+          "https://docs.n1n.ai/343275989e0.md",
+          "https://docs.n1n.ai/343275995e0.md",
+          "https://docs.n1n.ai/391588781e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "replicate_llm",
+          "protocol_label": "Replicate Platform LLM",
+          "family_key": "replicate",
+          "family_label": "Replicate Platform",
+          "api_style": "provider_specific",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 15,
+          "sample_titles": [
+            "创建任务-通过模型version（predictions）",
+            "创建任务 stability-ai/stable-diffusion",
+            "创建任务 stability-ai/sdxl",
+            "创建任务 stability-ai/stable-diffusion-inpainting",
+            "创建任务 stability-ai/stable-diffusion-img2img",
+            "创建任务 andreasjansson/stable-diffusion-animation",
+            "创建任务 sujaykhandekar/object-removal",
+            "创建任务 cjwbw/rembg",
+            "创建任务 lucataco/animate-diff",
+            "创建任务 recraft-ai/recraft-v3"
+          ],
+          "model_hints": [
+            "stability-ai/stable-diffusion-img2img",
+            "https://replicate.com/stability-ai/stable-diffusion-img2img",
+            "recraft-ai/recraft-v3",
+            "https://replicate.com/recraft-ai/recraft-v3",
+            "recraft-ai/recraft-v3-svg",
+            "https://replicate.com/recraft-ai/recraft-v3-svg",
+            "prunaai/vace-14b",
+            "https://replicate.com/prunaai/vace-14b",
+            "bytedance/seedream-4"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "provider_specific",
+          "family_key": "replicate",
+          "family_label": "Replicate Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Suno Music Music",
+      "category": "Music",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "suno_music",
+      "base_model": "suno",
+      "modality": {
+        "output_format": "audio",
+        "generation_modes": [
+          "t2a"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/suno-music-generation-1.md",
+          "https://docs.n1n.ai/suno-music-generation-2.md",
+          "https://docs.n1n.ai/suno-music-generation-3.md",
+          "https://docs.n1n.ai/suno-music-generation-4.md",
+          "https://docs.n1n.ai/suno-music-generation-5.md",
+          "https://docs.n1n.ai/suno-music-generation-6.md",
+          "https://docs.n1n.ai/suno-music-lyrics-generation.md",
+          "https://docs.n1n.ai/suno-music-concatenation.md",
+          "https://docs.n1n.ai/suno-upload-finish.md",
+          "https://docs.n1n.ai/suno-upload-audio-process-status.md",
+          "https://docs.n1n.ai/suno-initialize-clip.md",
+          "https://docs.n1n.ai/suno-request-upload.md",
+          "https://docs.n1n.ai/suno-s3-upload.md",
+          "https://docs.n1n.ai/suno-fetch-batch-tasks.md",
+          "https://docs.n1n.ai/suno-fetch-single-task.md",
+          "https://docs.n1n.ai/suno-get-clip-wav.md",
+          "https://docs.n1n.ai/suno-timing.md",
+          "https://docs.n1n.ai/suno-feed.md"
+        ],
+        "n1n": {
+          "protocol_key": "suno_music",
+          "protocol_label": "Suno Music Music",
+          "family_key": "suno",
+          "family_label": "Suno Music",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 18,
+          "sample_titles": [
+            "Suno 生成歌曲（灵感模式）",
+            "Suno 生成歌曲（自定义模式）",
+            "Suno 生成歌曲（续写模式）",
+            "Suno 生成歌曲（歌手风格）",
+            "Suno 生成歌曲（上传歌曲二次创作）",
+            "Suno 生成歌曲（拼接歌曲）",
+            "Suno 生成歌词",
+            "Suno 歌曲拼接",
+            "Suno 报告上传完毕",
+            "Suno 查询上传处理状态"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "suno",
+          "family_label": "Suno Music",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Rerank Tools",
+      "category": "Tools",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "rerank_tools",
+      "base_model": "rerank",
+      "modality": {
+        "output_format": "json"
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "provider_specific"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/329862124e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "rerank_tools",
+          "protocol_label": "Rerank Tools",
+          "family_key": "rerank",
+          "family_label": "Rerank",
+          "api_style": "provider_specific",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 1,
+          "sample_titles": [
+            "重排序"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "provider_specific",
+          "family_key": "rerank",
+          "family_label": "Rerank",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Doubao Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "doubao_video_video",
+      "base_model": "doubao_video",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/405490169e0.md",
+          "https://docs.n1n.ai/405490170e0.md",
+          "https://docs.n1n.ai/405490171e0.md",
+          "https://docs.n1n.ai/405490172e0.md",
+          "https://docs.n1n.ai/405490173e0.md",
+          "https://docs.n1n.ai/405490174e0.md",
+          "https://docs.n1n.ai/405490175e0.md",
+          "https://docs.n1n.ai/405490176e0.md",
+          "https://docs.n1n.ai/405490177e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "doubao_video_video",
+          "protocol_label": "Doubao Video Video",
+          "family_key": "doubao_video",
+          "family_label": "Doubao Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 9,
+          "sample_titles": [
+            "文生视频示例",
+            "图生视频-首帧",
+            "seedance-lite-首尾帧",
+            "图生视频-base64编码",
+            "seedance-lite-参考图",
+            "查询单个任务",
+            "查询视频生成任务列表-默认",
+            "查询视频生成任务列表-搜索多个任务 ID",
+            "seedance-1-5-pro-首尾帧"
+          ],
+          "model_hints": [
+            "https://www.volcengine.com/docs/82379/1520757",
+            "seedance-lite-",
+            "base64",
+            "seedance-1-5-pro-"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "doubao_video",
+          "family_label": "Doubao Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Fal.ai Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "fal_ai_video",
+      "base_model": "fal_ai",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "i2v",
+          "t2v"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/fal-ai-veo3-api.md",
+          "https://docs.n1n.ai/fal-ai-veo3-fast-image-to-video-api.md",
+          "https://docs.n1n.ai/fal-ai-veo3-fast-api.md",
+          "https://docs.n1n.ai/fal-ai-veo3-request.md",
+          "https://docs.n1n.ai/fal-ai-veo3-image-to-video.md",
+          "https://docs.n1n.ai/fal-ai-kling-video-v2_5-turbo-pro-text-to-video.md",
+          "https://docs.n1n.ai/fal-ai-kling-video-v2_5-turbo-pro-image-to-video.md",
+          "https://docs.n1n.ai/fal-ai-kling-video-v2_5-turbo-pro-text-to-video-api.md"
+        ],
+        "n1n": {
+          "protocol_key": "fal_ai_video",
+          "protocol_label": "Fal.ai Video",
+          "family_key": "fal_ai",
+          "family_label": "Fal.ai",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 8,
+          "sample_titles": [
+            "Fal-ai veo3 API 配置使用教程",
+            "Fal-ai veo3 fast image to video API 配置教程",
+            "Fal-ai veo3 fast API 配置教程",
+            "Fal-ai veo3 request 配置教程",
+            "Fal-ai veo3 image to video 配置教程",
+            "Fal-ai kling video v2.5 turbo pro text to video 配置教程",
+            "Fal-ai kling video v2.5 turbo pro image to video 配置教程"
+          ],
+          "model_hints": [
+            "veo3",
+            "v2.5"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "fal_ai",
+          "family_label": "Fal.ai",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Grok Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "grok_video_video",
+      "base_model": "grok_video",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "t2v"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588769e0.md",
+          "https://docs.n1n.ai/391588770e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "grok_video_video",
+          "protocol_label": "Grok Video Video",
+          "family_key": "grok_video",
+          "family_label": "Grok Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "创建视频",
+            "查询任务"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "grok_video",
+          "family_label": "Grok Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Hailuo Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "hailuo_video_video",
+      "base_model": "hailuo_video",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588741e0.md",
+          "https://docs.n1n.ai/391588742e0.md",
+          "https://docs.n1n.ai/391588743e0.md",
+          "https://docs.n1n.ai/391588744e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "hailuo_video_video",
+          "protocol_label": "Hailuo Video Video",
+          "family_key": "hailuo_video",
+          "family_label": "Hailuo Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 4,
+          "sample_titles": [
+            "提交视频生成任务",
+            "视频任务状态查询",
+            "图生视频",
+            "首尾帧视频"
+          ],
+          "model_hints": [
+            "f14c5738213294faa7",
+            "d1439376e52fcee2853049"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "hailuo_video",
+          "family_label": "Hailuo Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Jimeng Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "jimeng_video_video",
+      "base_model": "jimeng_video",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "t2v"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588739e0.md",
+          "https://docs.n1n.ai/391588740e0.md",
+          "https://docs.n1n.ai/391588737e0.md",
+          "https://docs.n1n.ai/391588738e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "jimeng_video_video",
+          "protocol_label": "Jimeng Video Video",
+          "family_key": "jimeng_video",
+          "family_label": "Jimeng Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 4,
+          "sample_titles": [
+            "创建视频",
+            "查询任务",
+            "提交视频生成任务",
+            "查询视频任务(免费)"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "jimeng_video",
+          "family_label": "Jimeng Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Kling Platform Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "kling_video",
+      "base_model": "kling",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "t2v",
+          "i2v",
+          "v2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/kling-text-to-video.md",
+          "https://docs.n1n.ai/418161743e0.md",
+          "https://docs.n1n.ai/kling-image-to-video.md",
+          "https://docs.n1n.ai/418161745e0.md",
+          "https://docs.n1n.ai/kling-omni-video.md",
+          "https://docs.n1n.ai/418161747e0.md",
+          "https://docs.n1n.ai/kling-multi-image-to-video.md",
+          "https://docs.n1n.ai/418161749e0.md",
+          "https://docs.n1n.ai/kling-init-selection.md",
+          "https://docs.n1n.ai/kling-add-selection.md",
+          "https://docs.n1n.ai/kling-delete-selection.md",
+          "https://docs.n1n.ai/kling-preview-selection.md",
+          "https://docs.n1n.ai/kling-multi-elements.md",
+          "https://docs.n1n.ai/418161755e0.md",
+          "https://docs.n1n.ai/kling-video-extend.md",
+          "https://docs.n1n.ai/418161757e0.md",
+          "https://docs.n1n.ai/kling-video-effects.md",
+          "https://docs.n1n.ai/418161759e0.md",
+          "https://docs.n1n.ai/kling-video-to-audio.md",
+          "https://docs.n1n.ai/418161774e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "kling_video",
+          "protocol_label": "Kling Platform Video",
+          "family_key": "kling",
+          "family_label": "Kling Platform",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 20,
+          "sample_titles": [
+            "Kling 可灵文生视频",
+            "查询任务（单个）",
+            "Kling 可灵图生视频",
+            "Kling 可灵 Omni-Video",
+            "Kling 可灵多图参考生视频",
+            "Kling 可灵初始化待编辑视频",
+            "Kling 可灵增加视频选区",
+            "Kling 可灵删减视频选区",
+            "Kling 可灵预览已选区视频",
+            "Kling 可灵多模态视频"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "kling",
+          "family_label": "Kling Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Luma Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "luma_video",
+      "base_model": "luma",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "v2v"
+        ],
+        "input_formats": [
+          "text",
+          "video"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588722e0.md",
+          "https://docs.n1n.ai/391588723e0.md",
+          "https://docs.n1n.ai/391588724e0.md",
+          "https://docs.n1n.ai/391588725e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "luma_video",
+          "protocol_label": "Luma Video Video",
+          "family_key": "luma",
+          "family_label": "Luma Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 4,
+          "sample_titles": [
+            "提交生成视频任务",
+            "扩展视频",
+            "查询单个任务",
+            "批量获取任务"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "luma",
+          "family_label": "Luma Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n MiniMax Platform Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "minimax_video",
+      "base_model": "minimax",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "i2v"
+        ],
+        "input_formats": [
+          "image",
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/minimax-video-generation.md",
+          "https://docs.n1n.ai/minimax-first-last-frame-video-generation.md",
+          "https://docs.n1n.ai/minimax-video-generation-query.md",
+          "https://docs.n1n.ai/minimax-video-audio-retrieve.md"
+        ],
+        "n1n": {
+          "protocol_key": "minimax_video",
+          "protocol_label": "MiniMax Platform Video",
+          "family_key": "minimax",
+          "family_label": "MiniMax Platform",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 4,
+          "sample_titles": [
+            "MiniMax 文生图生视频生成",
+            "MiniMax 首尾帧生成视频",
+            "MiniMax 查询视频生成状态",
+            "MiniMax 检索视频下载 - 检索异步音频下载"
+          ],
+          "model_hints": [
+            "MiniMax"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "minimax",
+          "family_label": "MiniMax Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Replicate Platform Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "replicate_video",
+      "base_model": "replicate",
+      "modality": {
+        "output_format": "video",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/343275979e0.md",
+          "https://docs.n1n.ai/343275980e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "replicate_video",
+          "protocol_label": "Replicate Platform Video",
+          "family_key": "replicate",
+          "family_label": "Replicate Platform",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "创建任务 minimax/video-01-live",
+            "创建任务 minimax/video-01"
+          ],
+          "model_hints": [
+            "minimax/video-01-live",
+            "https://replicate.com/minimax/video-01-live",
+            "minimax/video-01",
+            "https://replicate.com/minimax/video-01"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "replicate",
+          "family_label": "Replicate Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Runway Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "runway_video",
+      "base_model": "runway",
+      "modality": {
+        "output_format": "video",
+        "input_formats": [
+          "image",
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588735e0.md",
+          "https://docs.n1n.ai/391588736e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "runway_video",
+          "protocol_label": "Runway Video Video",
+          "family_key": "runway",
+          "family_label": "Runway Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "提交视频生成任务",
+            "查询视频任务（免费）"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "runway",
+          "family_label": "Runway Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Sora Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "sora_video",
+      "base_model": "sora",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "i2v",
+          "t2v",
+          "v2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588754e0.md",
+          "https://docs.n1n.ai/391588755e0.md",
+          "https://docs.n1n.ai/391588756e0.md",
+          "https://docs.n1n.ai/391588757e0.md",
+          "https://docs.n1n.ai/391588758e0.md",
+          "https://docs.n1n.ai/391588759e0.md",
+          "https://docs.n1n.ai/391588760e0.md",
+          "https://docs.n1n.ai/391588761e0.md",
+          "https://docs.n1n.ai/391588762e0.md",
+          "https://docs.n1n.ai/391588763e0.md",
+          "https://docs.n1n.ai/391588764e0.md",
+          "https://docs.n1n.ai/391588765e0.md",
+          "https://docs.n1n.ai/391588766e0.md",
+          "https://docs.n1n.ai/391588767e0.md",
+          "https://docs.n1n.ai/391588768e0.md",
+          "https://docs.n1n.ai/391588753e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "sora_video",
+          "protocol_label": "Sora Video Video",
+          "family_key": "sora",
+          "family_label": "Sora Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 16,
+          "sample_titles": [
+            "查询任务",
+            "创建视频，带图片  sora-2",
+            "创建视频 sora-2",
+            "创建视频 sora-2-pro",
+            "创建视频 （带 Character）",
+            "创建视频",
+            "创建视频, 带图片",
+            "连续修改生成视频",
+            "OpenAI 查询任务",
+            "OpenAI 下载视频"
+          ],
+          "model_hints": [
+            "sora-2",
+            "sora-2-all",
+            "sora-2-pro"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "sora",
+          "family_label": "Sora Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Tencent AIGC Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "tencent_video_video",
+      "base_model": "tencent_video",
+      "modality": {
+        "output_format": "video",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/405490396e0.md",
+          "https://docs.n1n.ai/427696092e0.md",
+          "https://docs.n1n.ai/405490397e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "tencent_video_video",
+          "protocol_label": "Tencent AIGC Video Video",
+          "family_key": "tencent_video",
+          "family_label": "Tencent AIGC Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 3,
+          "sample_titles": [
+            "创建任务",
+            "特效模板创建任务",
+            "获取请求结果"
+          ],
+          "model_hints": [
+            "https://cloud.tencent.com/document/product/266/126240"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "tencent_video",
+          "family_label": "Tencent AIGC Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Tongyi Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "tongyi_video_video",
+      "base_model": "tongyi_video",
+      "modality": {
+        "output_format": "video",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588773e0.md",
+          "https://docs.n1n.ai/391588774e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "tongyi_video_video",
+          "protocol_label": "Tongyi Video Video",
+          "family_key": "tongyi_video",
+          "family_label": "Tongyi Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "生成视频",
+            "视频查询"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "tongyi_video",
+          "family_label": "Tongyi Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Veo Video Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "veo_video",
+      "base_model": "veo",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/391588715e0.md",
+          "https://docs.n1n.ai/391588716e0.md",
+          "https://docs.n1n.ai/391588717e0.md",
+          "https://docs.n1n.ai/391588718e0.md",
+          "https://docs.n1n.ai/391588719e0.md",
+          "https://docs.n1n.ai/391588720e0.md",
+          "https://docs.n1n.ai/391588721e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "veo_video",
+          "protocol_label": "Veo Video Video",
+          "family_key": "veo",
+          "family_label": "Veo Video",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 7,
+          "sample_titles": [
+            "创建视频",
+            "创建视频，带图片",
+            "查询任务",
+            "创建视频（参考图）",
+            "OpenAI 创建视频，带图片",
+            "OpenAI 查询任务",
+            "OpenAI 下载视频"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "veo",
+          "family_label": "Veo Video",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Vidu Platform Video",
+      "category": "Video",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "vidu_video",
+      "base_model": "vidu",
+      "modality": {
+        "output_format": "video",
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/vidu-text-to-speech.md",
+          "https://docs.n1n.ai/vidu-text-to-video.md",
+          "https://docs.n1n.ai/vidu-image-to-video.md",
+          "https://docs.n1n.ai/vidu-image-generation.md",
+          "https://docs.n1n.ai/vidu-text-to-audio.md",
+          "https://docs.n1n.ai/vidu-reference-image-to-video.md",
+          "https://docs.n1n.ai/vidu-start-end-frame-to-video.md",
+          "https://docs.n1n.ai/vidu-task-results.md"
+        ],
+        "n1n": {
+          "protocol_key": "vidu_video",
+          "protocol_label": "Vidu Platform Video",
+          "family_key": "vidu",
+          "family_label": "Vidu Platform",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 8,
+          "sample_titles": [
+            "Vidu 语音合成",
+            "Vidu 文生视频",
+            "Vidu 图生视频",
+            "Vidu 图片生成",
+            "Vidu 文生音频",
+            "Vidu 参考生视频",
+            "Vidu 首尾帧生视频",
+            "Vidu 获取请求结果"
+          ],
+          "model_hints": [
+            "Vidu"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "vidu",
+          "family_label": "Vidu Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_second",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n Kling Platform Voice",
+      "category": "Voice",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "kling_voice",
+      "base_model": "kling",
+      "modality": {
+        "output_format": "audio",
+        "generation_modes": [
+          "t2a"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/kling-audio-tts.md"
+        ],
+        "n1n": {
+          "protocol_key": "kling_voice",
+          "protocol_label": "Kling Platform Voice",
+          "family_key": "kling",
+          "family_label": "Kling Platform",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 1,
+          "sample_titles": [
+            "Kling 可灵语音合成"
+          ],
+          "model_hints": [],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "kling",
+          "family_label": "Kling Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n MiniMax Platform Voice",
+      "category": "Voice",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "minimax_voice",
+      "base_model": "minimax",
+      "modality": {
+        "output_format": "audio",
+        "generation_modes": [
+          "t2a",
+          "a2a"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "async_task"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/minimax-speech-t2a-async.md",
+          "https://docs.n1n.ai/minimax-speech-t2a-sync.md",
+          "https://docs.n1n.ai/minimax-audio-clone.md",
+          "https://docs.n1n.ai/minimax-audio-example-clone.md",
+          "https://docs.n1n.ai/minimax-speech-t2a-async-query.md"
+        ],
+        "n1n": {
+          "protocol_key": "minimax_voice",
+          "protocol_label": "MiniMax Platform Voice",
+          "family_key": "minimax",
+          "family_label": "MiniMax Platform",
+          "api_style": "async_task",
+          "endpoint_hint": null,
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 5,
+          "sample_titles": [
+            "MiniMax 异步语音合成 V2",
+            "MiniMax 同步语音合成 V2",
+            "MiniMax 复刻音频",
+            "MiniMax 示例音频",
+            "MiniMax 查询语音生成状态"
+          ],
+          "model_hints": [
+            "MiniMax"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": null,
+        "n1n": {
+          "api_style": "async_task",
+          "family_key": "minimax",
+          "family_label": "MiniMax Platform",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n OpenAI Compatible Audio Chat",
+      "category": "Voice",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "openai_audio_chat_completions",
+      "base_model": "openai",
+      "modality": {
+        "output_format": "audio",
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "openai_compatible"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413681047e0.md",
+          "https://docs.n1n.ai/413681051e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "openai_audio_chat_completions",
+          "protocol_label": "OpenAI Compatible Audio Chat",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "api_style": "openai_compatible",
+          "endpoint_hint": "/v1/chat/completions",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "GPT-4o-audio",
+            "创建翻译（不支持）"
+          ],
+          "model_hints": [
+            "GPT-4o-audio"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1/chat/completions",
+        "n1n": {
+          "api_style": "openai_compatible",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_million_tokens",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n OpenAI Compatible Text To Speech",
+      "category": "Voice",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "openai_audio_speech",
+      "base_model": "openai",
+      "modality": {
+        "output_format": "audio",
+        "generation_modes": [
+          "t2a"
+        ],
+        "input_formats": [
+          "text"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "openai_compatible"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413681050e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "openai_audio_speech",
+          "protocol_label": "OpenAI Compatible Text To Speech",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "api_style": "openai_compatible",
+          "endpoint_hint": "/v1/audio/speech",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 1,
+          "sample_titles": [
+            "创建语音 gpt-4o-mini-tts"
+          ],
+          "model_hints": [
+            "gpt-4o-mini-tts"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1/audio/speech",
+        "n1n": {
+          "api_style": "openai_compatible",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    },
+    {
+      "name": "n1n OpenAI Compatible Audio Transcriptions",
+      "category": "Voice",
+      "provider": "n1n",
+      "base_url": "https://api.n1n.ai",
+      "model": "openai_audio_transcriptions",
+      "base_model": "openai",
+      "modality": {
+        "output_format": "audio",
+        "generation_modes": [
+          "a2t"
+        ],
+        "input_formats": [
+          "audio"
+        ]
+      },
+      "tags": [
+        "n1n",
+        "auto-import",
+        "staging-only",
+        "openai_compatible"
+      ],
+      "supplier_info": {
+        "source_urls": [
+          "https://docs.n1n.ai/413681048e0.md",
+          "https://docs.n1n.ai/413681049e0.md"
+        ],
+        "n1n": {
+          "protocol_key": "openai_audio_transcriptions",
+          "protocol_label": "OpenAI Compatible Audio Transcriptions",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "api_style": "openai_compatible",
+          "endpoint_hint": "/v1/audio/transcriptions",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "doc_count": 2,
+          "sample_titles": [
+            "音频转文字 whisper-1",
+            "音频转文字 gpt-4o-transcribe"
+          ],
+          "model_hints": [
+            "whisper-1",
+            "gpt-4o-transcribe"
+          ],
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "known_fixed_prices": [
+            {
+              "group_name": "MJ 绘画",
+              "unit_type": "per_call",
+              "price_usd": 0.24,
+              "source_url": "https://docs.n1n.ai/llm-api-price-group.md"
+            }
+          ]
+        }
+      },
+      "config": {
+        "deprecated": true,
+        "is_deprecated": true,
+        "disable_api": true,
+        "provider_api_key_strategy": "random",
+        "endpoint_hint": "/v1/audio/transcriptions",
+        "n1n": {
+          "api_style": "openai_compatible",
+          "family_key": "openai",
+          "family_label": "OpenAI Compatible",
+          "mirror_base_url": "https://hk.n1n.ai",
+          "pricing_basis": "official_rate_x_group_multiplier",
+          "billing_ready": false,
+          "runtime_ready": false
+        }
+      },
+      "billing_unit_type": "per_call",
+      "billing_cost": 0,
+      "billing_cost_input": 0,
+      "billing_cost_output": 0,
+      "deprecated": true,
+      "is_active": false
+    }
+  ]
+}

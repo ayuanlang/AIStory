@@ -183,6 +183,7 @@ const UserAdmin = () => {
     const [selectedSystemApiId, setSelectedSystemApiId] = useState('');
     const [systemApiFilterCategory, setSystemApiFilterCategory] = useState('all');
     const [systemApiFilterProvider, setSystemApiFilterProvider] = useState('all');
+    const [systemApiCapabilityFilter, setSystemApiCapabilityFilter] = useState('all');
     const [systemApiHideDeprecated, setSystemApiHideDeprecated] = useState(false);
     const [systemApiSortMode, setSystemApiSortMode] = useState('default');
     const [systemApiKeyProvider, setSystemApiKeyProvider] = useState('');
@@ -253,6 +254,7 @@ const UserAdmin = () => {
         fps_options: '',
         has_audio: 'any',
         mode_values: '',
+        capability_flags: '{}',
         text_capabilities: '{}',
         image_capabilities: '{}',
         video_capabilities: '{}',
@@ -2069,6 +2071,7 @@ const UserAdmin = () => {
                 fps_options: '',
                 has_audio: 'any',
                 mode_values: '',
+                capability_flags: '{}',
                 text_capabilities: '{}',
                 image_capabilities: '{}',
                 video_capabilities: '{}',
@@ -2119,6 +2122,7 @@ const UserAdmin = () => {
             fps_options: Array.isArray(row.fps_options) ? row.fps_options.join(', ') : '',
             has_audio: row.has_audio === true ? 'true' : (row.has_audio === false ? 'false' : 'any'),
             mode_values: Array.isArray(row.mode_values) ? row.mode_values.join(', ') : '',
+            capability_flags: safeJsonStr(row.capability_flags) || '{}',
             text_capabilities: safeJsonStr(row.text_capabilities) || '{}',
             image_capabilities: safeJsonStr(row.image_capabilities) || '{}',
             video_capabilities: safeJsonStr(row.video_capabilities) || '{}',
@@ -2218,19 +2222,104 @@ const UserAdmin = () => {
         return Array.from(set);
     }, [systemApiRows, systemApiFilterCategory]);
 
+    const getSystemApiCapabilityInfo = (row) => {
+        const category = String(row?.category || '').trim();
+        const provider = String(row?.provider || '').trim();
+        if (!row || !provider || !category || category.startsWith('System_')) {
+            return {
+                callable: false,
+                state: 'system',
+                label: t('系统配置', 'System Config'),
+                detail: t('非业务 API 调用入口', 'Not a business API runtime entry'),
+            };
+        }
+        if (isSystemApiDeprecated(row)) {
+            return {
+                callable: false,
+                state: 'deprecated',
+                label: t('已弃用', 'Deprecated'),
+                detail: t('该配置已被 system_api_settings.deprecated 标记为弃用', 'This configuration is disabled by system_api_settings.deprecated'),
+            };
+        }
+
+        const cfg = getSystemApiConfig(row);
+        const runtimeEndpoint = String(cfg?.endpoint || cfg?.endpoint_hint || '').trim();
+        const runtimeActivation = String(cfg?.runtime_activation || '').trim();
+        if (runtimeEndpoint || runtimeActivation) {
+            return {
+                callable: true,
+                state: 'callable',
+                label: t('已启用', 'Enabled'),
+                detail: runtimeEndpoint
+                    ? t('未弃用，且已声明运行时 endpoint', 'Not deprecated, with a declared runtime endpoint')
+                    : t('未弃用，且已声明运行时激活方式', 'Not deprecated, with a declared runtime activation'),
+            };
+        }
+
+        return {
+            callable: true,
+            state: 'staging_only',
+            label: t('已启用', 'Enabled'),
+            detail: t('未弃用，当前按 system_api_settings 记录参与前后端选择；建议继续补充 endpoint 与能力元数据', 'Not deprecated, so it participates in frontend/backend selection; add endpoint and capability metadata when available'),
+        };
+    };
+
+    const systemApiProviderSummaryRows = React.useMemo(() => {
+        const bucket = new Map();
+        (systemApiRows || []).forEach((row) => {
+            const category = String(row?.category || '').trim();
+            if (!category || category.startsWith('System_')) return;
+            if (systemApiFilterCategory !== 'all' && category !== systemApiFilterCategory) return;
+
+            const provider = String(row?.provider || '').trim();
+            if (!provider) return;
+
+            if (!bucket.has(provider)) {
+                bucket.set(provider, {
+                    provider,
+                    total_rows: 0,
+                    callable_rows: 0,
+                    deprecated_rows: 0,
+                    default_rows: 0,
+                    staging_only_rows: 0,
+                    categories: new Set(),
+                });
+            }
+
+            const summary = bucket.get(provider);
+            const capability = getSystemApiCapabilityInfo(row);
+            summary.total_rows += 1;
+            summary.categories.add(category);
+            if (capability.callable) summary.callable_rows += 1;
+            if (capability.state === 'staging_only') summary.staging_only_rows += 1;
+            if (isSystemApiDeprecated(row)) summary.deprecated_rows += 1;
+            if (row?.is_active) summary.default_rows += 1;
+        });
+
+        return Array.from(bucket.values())
+            .map((item) => ({
+                ...item,
+                categories: Array.from(item.categories).sort((a, b) => a.localeCompare(b)),
+                has_callable_entry: item.callable_rows > 0,
+            }))
+            .sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || '')));
+    }, [systemApiRows, systemApiFilterCategory]);
+
     const filteredSystemApiRows = React.useMemo(() => {
         return systemApiRows.filter((row) => {
             if (systemApiFilterCategory !== 'all' && String(row?.category || '') !== systemApiFilterCategory) return false;
             if (systemApiFilterProvider !== 'all' && String(row?.provider || '') !== systemApiFilterProvider) return false;
+            if (systemApiCapabilityFilter === 'callable' && !getSystemApiCapabilityInfo(row).callable) return false;
+            if (systemApiCapabilityFilter === 'not_callable' && getSystemApiCapabilityInfo(row).callable) return false;
+            if (systemApiCapabilityFilter === 'staging_only' && getSystemApiCapabilityInfo(row).state !== 'staging_only') return false;
             return true;
         });
-    }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider]);
+    }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider, systemApiCapabilityFilter]);
 
-    const isSystemApiDeprecated = (row) => {
+    function isSystemApiDeprecated(row) {
         if (typeof row?.deprecated === 'boolean') return row.deprecated;
-        const cfg = getSystemApiConfig(row);
-        return !!(cfg?.deprecated || cfg?.is_deprecated || cfg?.disable_api);
-    };
+        return false;
+    }
 
     const getSmartPriority = (row) => {
         const cfg = getSystemApiConfig(row);
@@ -2355,6 +2444,7 @@ const UserAdmin = () => {
                 fps_options: parseCsvNumberArrayField(systemApiForm.fps_options),
                 has_audio: toNullableBool(systemApiForm.has_audio),
                 mode_values: parseCsvArrayField(systemApiForm.mode_values),
+                capability_flags: parseJsonObjectFieldSafe(systemApiForm.capability_flags),
                 text_capabilities: parseJsonObjectFieldSafe(systemApiForm.text_capabilities),
                 image_capabilities: parseJsonObjectFieldSafe(systemApiForm.image_capabilities),
                 video_capabilities: parseJsonObjectFieldSafe(systemApiForm.video_capabilities),
@@ -2412,6 +2502,7 @@ const UserAdmin = () => {
                 fps_options: parseCsvNumberArrayField(systemApiForm.fps_options),
                 has_audio: toNullableBool(systemApiForm.has_audio),
                 mode_values: parseCsvArrayField(systemApiForm.mode_values),
+                capability_flags: parseJsonObjectFieldSafe(systemApiForm.capability_flags),
                 text_capabilities: parseJsonObjectFieldSafe(systemApiForm.text_capabilities),
                 image_capabilities: parseJsonObjectFieldSafe(systemApiForm.image_capabilities),
                 video_capabilities: parseJsonObjectFieldSafe(systemApiForm.video_capabilities),
@@ -3722,6 +3813,63 @@ const UserAdmin = () => {
         return parsed.toLocaleString();
     };
 
+    const getTransactionProviderUsage = (txn) => {
+        const details = txn?.details && typeof txn.details === 'object' ? txn.details : {};
+        const usage = details?.provider_usage && typeof details.provider_usage === 'object'
+            ? details.provider_usage
+            : details?.usage && typeof details.usage === 'object'
+                ? details.usage
+                : null;
+        if (!usage) return null;
+
+        const items = [
+            { key: 'thirdPartyConsumeMoney', label: t('第三方消耗金额', 'Third-Party Cost') },
+            { key: 'consumeMoney', label: t('供应商消耗金额', 'Provider Cost') },
+            { key: 'consumeCoins', label: t('消耗点数', 'Consumed Coins') },
+            { key: 'taskCostTime', label: t('任务耗时', 'Task Cost Time') },
+        ].filter((item) => usage[item.key] !== undefined && usage[item.key] !== null && String(usage[item.key]).trim() !== '');
+
+        if (items.length === 0) return null;
+
+        return {
+            items,
+            source: String(details?.usage_source || '').trim(),
+        };
+    };
+
+    const renderTransactionProviderUsage = (txn) => {
+        const usageInfo = getTransactionProviderUsage(txn);
+        if (!usageInfo) return null;
+
+        const summaryText = usageInfo.items
+            .slice(0, 2)
+            .map((item) => `${item.label}: ${txn.details.provider_usage?.[item.key] ?? txn.details.usage?.[item.key]}`)
+            .join(' · ');
+
+        return (
+            <details className="rounded-lg border border-cyan-400/20 bg-cyan-500/5 p-2">
+                <summary className="cursor-pointer list-none text-xs font-medium text-cyan-200">
+                    {t('供应商用量审计', 'Provider Usage Audit')}
+                    {summaryText ? <span className="ml-2 text-[11px] text-cyan-100/70">{summaryText}</span> : null}
+                </summary>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {usageInfo.items.map((item) => (
+                        <div key={item.key} className="rounded-md border border-white/10 bg-black/20 px-2 py-1.5">
+                            <div className="text-[10px] uppercase tracking-wide text-cyan-100/60">{item.label}</div>
+                            <div className="mt-1 break-all font-mono text-[11px] text-cyan-50">{String(txn.details.provider_usage?.[item.key] ?? txn.details.usage?.[item.key] ?? '')}</div>
+                        </div>
+                    ))}
+                    {usageInfo.source ? (
+                        <div className="rounded-md border border-white/10 bg-black/20 px-2 py-1.5">
+                            <div className="text-[10px] uppercase tracking-wide text-cyan-100/60">{t('来源', 'Source')}</div>
+                            <div className="mt-1 break-all font-mono text-[11px] text-cyan-50">{usageInfo.source}</div>
+                        </div>
+                    ) : null}
+                </div>
+            </details>
+        );
+    };
+
     const fetchMaintenanceConfig = async () => {
         setIsMaintenanceLoading(true);
         try {
@@ -3917,12 +4065,20 @@ const UserAdmin = () => {
 
     const totalPages = Math.max(1, Math.ceil((Number(usersTotal) || 0) / Math.max(1, Number(usersPageSize) || 1)));
 
+    const normalizeUserActiveLevel = (value, fallback = 1) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return Math.max(0, Number(fallback) || 0);
+        return Math.max(0, Math.trunc(parsed));
+    };
+
+    const isUserEnabled = (value) => normalizeUserActiveLevel(value, 1) > 0;
+
     const toUserEditDraft = (user) => ({
         id: user?.id,
         username: String(user?.username || ''),
         email: String(user?.email || ''),
         full_name: String(user?.full_name || ''),
-        is_active: !!user?.is_active,
+        is_active: normalizeUserActiveLevel(user?.is_active, 1),
         account_status: Number(user?.account_status ?? 1),
         email_verified: !!user?.email_verified,
         is_authorized: !!user?.is_authorized,
@@ -4164,7 +4320,7 @@ const UserAdmin = () => {
                 username: String(userEditModal.username || '').trim(),
                 email: String(userEditModal.email || '').trim(),
                 full_name: String(userEditModal.full_name || '').trim(),
-                is_active: !!userEditModal.is_active,
+                is_active: normalizeUserActiveLevel(userEditModal.is_active, 1),
                 account_status: Number(userEditModal.account_status ?? 1),
                 email_verified: !!userEditModal.email_verified,
                 is_authorized: !!userEditModal.is_authorized,
@@ -4254,7 +4410,7 @@ const UserAdmin = () => {
     const updateUser = async (userId, data) => {
         try {
             const response = await api.put(`/users/${userId}`, data);
-            setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, ...response.data } : u)));
+            setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, ...response.data, is_active: normalizeUserActiveLevel(response.data?.is_active, u?.is_active ?? 1) } : u)));
             if (data.is_system !== undefined) fetchAllData(usersPage, usersPageSize);
         } catch (e) {
             alert(e.message || t('更新失败', 'Update failed'));
@@ -4944,8 +5100,17 @@ const UserAdmin = () => {
 
                                         <div className="grid grid-cols-1 gap-3 text-sm">
                                             <div className="flex items-center justify-between rounded-lg bg-black/20 border border-white/5 px-3 py-2">
-                                                <span>{t('启用', 'Active')}</span>
-                                                <Toggle active={user.is_active} onClick={() => updateUser(user.id, { is_active: !user.is_active })} />
+                                                <span>{t('启用级别', 'Active Level')}</span>
+                                                <div className="flex items-center gap-2">
+                                                    <input
+                                                        className="w-20 bg-black/30 border border-gray-700 rounded px-2 py-1 text-xs text-right"
+                                                        inputMode="numeric"
+                                                        value={normalizeUserActiveLevel(user.is_active, 1)}
+                                                        onChange={(e) => setUsers(users.map((u) => (u.id === user.id ? { ...u, is_active: normalizeUserActiveLevel(e.target.value, u.is_active) } : u)))}
+                                                        onBlur={() => updateUser(user.id, { is_active: normalizeUserActiveLevel(user.is_active, 1) })}
+                                                    />
+                                                    <Toggle active={isUserEnabled(user.is_active)} onClick={() => updateUser(user.id, { is_active: isUserEnabled(user.is_active) ? 0 : 1 })} />
+                                                </div>
                                             </div>
                                             <div className="flex items-center justify-between rounded-lg bg-black/20 border border-white/5 px-3 py-2">
                                                 <span>{t('邮箱已验证', 'Email Verified')}</span>
@@ -4967,7 +5132,7 @@ const UserAdmin = () => {
                                         <th className="p-3">{t('用户', 'User')}</th>
                                         <th className="p-3">{t('姓名', 'Full Name')}</th>
                                         <th className="p-3">{t('积分', 'Credits')}</th>
-                                        <th className="p-3 text-center">{t('启用', 'Active')}</th>
+                                        <th className="p-3 text-center">{t('启用级别', 'Active Level')}</th>
                                         <th className="p-3 text-center">{t('状态', 'Status')}</th>
                                         <th className="p-3 text-center">{t('邮箱已验证', 'Email Verified')}</th>
                                         <th className="p-3 text-center">{t('超级管理员', 'Superuser')}</th>
@@ -5015,10 +5180,19 @@ const UserAdmin = () => {
                                                 </button>
                                             </td>
                                             <td className="p-3 text-center">
-                                                <Toggle 
-                                                    active={user.is_active} 
-                                                    onClick={() => updateUser(user.id, { is_active: !user.is_active })}
-                                                />
+                                                <div className="flex items-center justify-center gap-2">
+                                                    <input
+                                                        className="w-20 bg-black/30 border border-gray-700 rounded px-2 py-1 text-xs text-right"
+                                                        inputMode="numeric"
+                                                        value={normalizeUserActiveLevel(user.is_active, 1)}
+                                                        onChange={(e) => setUsers(users.map((u) => (u.id === user.id ? { ...u, is_active: normalizeUserActiveLevel(e.target.value, u.is_active) } : u)))}
+                                                        onBlur={() => updateUser(user.id, { is_active: normalizeUserActiveLevel(user.is_active, 1) })}
+                                                    />
+                                                    <Toggle 
+                                                        active={isUserEnabled(user.is_active)} 
+                                                        onClick={() => updateUser(user.id, { is_active: isUserEnabled(user.is_active) ? 0 : 1 })}
+                                                    />
+                                                </div>
                                             </td>
                                             <td className="p-3 text-center">
                                                 <select
@@ -5483,6 +5657,9 @@ const UserAdmin = () => {
                                         </div>
                                         <div>
                                             <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('详情', 'Details')}</div>
+                                            <div className="mb-2">
+                                                {renderTransactionProviderUsage(txn)}
+                                            </div>
                                             <div className="max-h-[180px] overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-gray-900/50 p-2 border border-gray-800 font-mono text-[11px] text-gray-400">
                                                     {JSON.stringify(txn.details, null, 2)}
                                             </div>
@@ -5511,6 +5688,9 @@ const UserAdmin = () => {
                                                 <td className="p-3">{txn.user_id}</td>
                                                 <td className="p-3"><span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300">{txn.task_type}</span></td>
                                                 <td className="p-3 text-xs text-gray-500">
+                                                    <div className="mb-2 w-[350px]">
+                                                        {renderTransactionProviderUsage(txn)}
+                                                    </div>
                                                     <div className="max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all w-[350px] bg-gray-900/50 p-1 rounded border border-gray-800 font-mono">
                                                         {JSON.stringify(txn.details, null, 2)}
                                                     </div>
@@ -6226,6 +6406,19 @@ const UserAdmin = () => {
                                                     ))}
                                                 </select>
                                             </div>
+                                            <div>
+                                                <label className="text-xs uppercase text-gray-400">{t('调用能力筛选', 'Capability Filter')}</label>
+                                                <select
+                                                    value={systemApiCapabilityFilter}
+                                                    onChange={(e) => setSystemApiCapabilityFilter(e.target.value)}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="all">{t('全部能力', 'All Capability States')}</option>
+                                                    <option value="callable">{t('仅启用', 'Enabled Only')}</option>
+                                                    <option value="not_callable">{t('仅禁用', 'Disabled Only')}</option>
+                                                    <option value="staging_only">{t('缺少运行时元数据', 'Missing Runtime Metadata')}</option>
+                                                </select>
+                                            </div>
                                             <div className="flex items-end gap-2">
                                                 <button
                                                     onClick={() => setSystemApiHideDeprecated(h => !h)}
@@ -6237,6 +6430,7 @@ const UserAdmin = () => {
                                                     onClick={() => {
                                                         setSystemApiFilterCategory('all');
                                                         setSystemApiFilterProvider('all');
+                                                        setSystemApiCapabilityFilter('all');
                                                         setSystemApiHideDeprecated(false);
                                                         setSystemApiSortMode('default');
                                                     }}
@@ -6299,6 +6493,43 @@ const UserAdmin = () => {
                                             </div>
                                         </div>
 
+                                        <div className="border border-cyan-500/20 rounded-lg p-3 bg-cyan-500/5 space-y-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs font-semibold text-cyan-200">{t('供应商功能入口（按数据去重）', 'Provider Capability Entry (Deduped by Data)')}</div>
+                                                <div className="text-[11px] text-cyan-100/70">{t('点击下方 provider 快速筛选；“已启用”表示当前未被 system_api_settings.deprecated 禁用。', 'Click a provider below to filter quickly; “Enabled” means the row is not disabled by system_api_settings.deprecated.')}</div>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {systemApiProviderSummaryRows.map((item) => {
+                                                    const isSelected = String(systemApiFilterProvider || 'all') === String(item.provider || '');
+                                                    return (
+                                                        <button
+                                                            key={`system-api-provider-summary-${item.provider}`}
+                                                            type="button"
+                                                            onClick={() => setSystemApiFilterProvider(String(item.provider || 'all'))}
+                                                            className={`rounded-lg border px-3 py-2 text-left min-w-[180px] ${isSelected ? 'border-cyan-300 bg-cyan-700/20 text-cyan-50' : 'border-cyan-500/20 bg-black/20 text-cyan-100/90 hover:bg-cyan-500/10'}`}
+                                                            title={item.categories.join(', ') || '-'}
+                                                        >
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <span className="font-mono text-xs font-semibold">{item.provider}</span>
+                                                                <span className={`rounded px-1.5 py-0.5 text-[10px] ${item.has_callable_entry ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-200 border border-amber-500/30'}`}>
+                                                                    {item.has_callable_entry ? t('已启用', 'Enabled') : t('已禁用', 'Disabled')}
+                                                                </span>
+                                                            </div>
+                                                            <div className="mt-1 text-[11px] text-cyan-100/70">
+                                                                {t('行数', 'Rows')}: {item.total_rows} | {t('已启用', 'Enabled')}: {item.callable_rows}
+                                                            </div>
+                                                            <div className="text-[11px] text-cyan-100/60">
+                                                                {t('缺少运行时元数据', 'Missing Runtime Metadata')}: {item.staging_only_rows} | {t('默认', 'Default')}: {item.default_rows}
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })}
+                                                {systemApiProviderSummaryRows.length === 0 && (
+                                                    <div className="text-[11px] text-gray-400">{t('暂无 provider 数据', 'No provider summary data')}</div>
+                                                )}
+                                            </div>
+                                        </div>
+
                                         <div className="text-xs text-gray-400">
                                             {t('共', 'Total')} {systemApiRows.length} {t('条，当前显示', ', showing')} {visibleSystemApiRows.length} {t('条', 'items')}
                                         </div>
@@ -6331,13 +6562,16 @@ const UserAdmin = () => {
                                                         <th className="text-left p-2 whitespace-nowrap">{t('模态', 'Modality')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('标签', 'Tags')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('弃用', 'Deprecated')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('API 调用能力', 'API Capability')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('智能策略', 'Smart Strategy')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('类别默认', 'Category Default')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('操作', 'Actions')}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {visibleSystemApiRows.map((row) => (
+                                                    {visibleSystemApiRows.map((row) => {
+                                                        const capability = getSystemApiCapabilityInfo(row);
+                                                        return (
                                                         <tr
                                                             key={row.id}
                                                             onClick={() => setSelectedSystemApiId(String(row.id))}
@@ -6363,6 +6597,14 @@ const UserAdmin = () => {
                                                                 ) : (
                                                                     <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">{t('正常', 'Active')}</span>
                                                                 )}
+                                                            </td>
+                                                            <td className="p-2">
+                                                                <div className="flex flex-col gap-1">
+                                                                    <span className={`inline-flex w-fit px-1.5 py-0.5 rounded border text-[11px] ${capability.callable ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/30' : 'bg-amber-500/20 text-amber-200 border-amber-500/30'}`}>
+                                                                        {capability.label}
+                                                                    </span>
+                                                                    <span className="text-[10px] text-gray-500 max-w-[180px] truncate" title={capability.detail}>{capability.detail}</span>
+                                                                </div>
                                                             </td>
                                                             <td className="p-2">
                                                                 <div className="flex flex-wrap gap-1">
@@ -6395,10 +6637,10 @@ const UserAdmin = () => {
                                                                 </button>
                                                             </td>
                                                         </tr>
-                                                    ))}
+                                                    )})}
                                                     {visibleSystemApiRows.length === 0 && (
                                                         <tr className="border-t border-white/10">
-                                                            <td className="p-3 text-gray-400" colSpan={11}>
+                                                            <td className="p-3 text-gray-400" colSpan={14}>
                                                                 {t('无匹配结果，请调整筛选条件。', 'No matching settings. Adjust your filters.')}
                                                             </td>
                                                         </tr>
@@ -6777,6 +7019,7 @@ const UserAdmin = () => {
                                             <div className="md:col-span-2 border border-white/10 rounded p-3 space-y-2 bg-white/5">
                                                 <div className="text-xs font-semibold text-emerald-200">{t('类别能力字段（JSON对象）', 'Category Capability Fields (JSON object)')}</div>
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                    <textarea rows={3} value={systemApiForm.capability_flags} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, capability_flags: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='capability_flags: {"supports_first_frame":true,"supports_last_frame":true}' />
                                                     <textarea rows={3} value={systemApiForm.text_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, text_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='text_capabilities: {"supports_chat":true}' />
                                                     <textarea rows={3} value={systemApiForm.image_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, image_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='image_capabilities: {}' />
                                                     <textarea rows={3} value={systemApiForm.video_capabilities} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, video_capabilities: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder='video_capabilities: {}' />
@@ -7506,6 +7749,24 @@ const UserAdmin = () => {
                                             className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                             placeholder="resolution, aspect ratio, duration, t2i, i2v, digital human"
                                         />
+                                    </div>
+                                </div>
+                                <div className="border border-cyan-500/20 rounded p-2 bg-black/20 space-y-2">
+                                    <div className="text-[11px] text-cyan-200">{t('供应商快捷入口（按数据去重）', 'Provider Quick Entry (Deduped by Data)')}</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {systemApiProviderSummaryRows.map((item) => (
+                                            <button
+                                                key={`supplier-ops-provider-${item.provider}`}
+                                                type="button"
+                                                onClick={() => setSupplierFeatureProvider(String(item.provider || ''))}
+                                                className={`rounded border px-2.5 py-1.5 text-[11px] ${String(supplierFeatureProvider || '').trim() === String(item.provider || '').trim() ? 'border-cyan-300 bg-cyan-700/20 text-cyan-50' : 'border-cyan-500/20 bg-black/20 text-cyan-100/80 hover:bg-cyan-500/10'}`}
+                                            >
+                                                <span className="font-mono">{item.provider}</span>
+                                                <span className={`ml-2 rounded px-1 py-0.5 ${item.has_callable_entry ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'}`}>
+                                                    {item.has_callable_entry ? t('已启用', 'Enabled') : t('已禁用', 'Disabled')}
+                                                </span>
+                                            </button>
+                                        ))}
                                     </div>
                                 </div>
                                 {(() => {
@@ -8443,12 +8704,13 @@ const UserAdmin = () => {
                             <input className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.username} placeholder={t('用户名', 'Username')} onChange={(e) => setUserEditModal((p) => ({ ...p, username: e.target.value }))} />
                             <input className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.email} placeholder={t('邮箱', 'Email')} onChange={(e) => setUserEditModal((p) => ({ ...p, email: e.target.value }))} />
                             <input className="md:col-span-2 bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.full_name} placeholder={t('姓名', 'Full Name')} onChange={(e) => setUserEditModal((p) => ({ ...p, full_name: e.target.value }))} />
+                            <input className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" inputMode="numeric" value={normalizeUserActiveLevel(userEditModal.is_active, 1)} placeholder={t('启用级别', 'Active Level')} onChange={(e) => setUserEditModal((p) => ({ ...p, is_active: normalizeUserActiveLevel(e.target.value, p?.is_active ?? 1) }))} />
                             <select className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.account_status} onChange={(e) => setUserEditModal((p) => ({ ...p, account_status: Number(e.target.value) }))}>
                                 <option value={1}>{t('正常', 'Active')}</option>
                                 <option value={0}>{t('禁用', 'Disabled')}</option>
                                 <option value={-1}>{t('待邮箱校验', 'Pending Verify')}</option>
                             </select>
-                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_active} onChange={(e) => setUserEditModal((p) => ({ ...p, is_active: e.target.checked }))} />{t('启用', 'Active')}</label>
+                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={isUserEnabled(userEditModal.is_active)} onChange={(e) => setUserEditModal((p) => ({ ...p, is_active: e.target.checked ? Math.max(1, normalizeUserActiveLevel(p?.is_active, 1)) : 0 }))} />{t('启用', 'Enabled')}</label>
                             <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.email_verified} onChange={(e) => setUserEditModal((p) => ({ ...p, email_verified: e.target.checked }))} />{t('邮箱已验证', 'Email Verified')}</label>
                             <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_authorized} onChange={(e) => setUserEditModal((p) => ({ ...p, is_authorized: e.target.checked }))} />{t('授权', 'Authorized')}</label>
                             <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_system} onChange={(e) => setUserEditModal((p) => ({ ...p, is_system: e.target.checked }))} />{t('系统密钥提供方', 'System Key Provider')}</label>

@@ -195,6 +195,61 @@ const Settings = () => {
         }
         return parsed.toLocaleString();
     };
+    const getTransactionProviderUsage = (txn) => {
+        const details = txn?.details && typeof txn.details === 'object' ? txn.details : {};
+        const usage = details?.provider_usage && typeof details.provider_usage === 'object'
+            ? details.provider_usage
+            : details?.usage && typeof details.usage === 'object'
+                ? details.usage
+                : null;
+        if (!usage) return null;
+
+        const items = [
+            { key: 'thirdPartyConsumeMoney', label: t('第三方消耗金额', 'Third-Party Cost') },
+            { key: 'consumeMoney', label: t('供应商消耗金额', 'Provider Cost') },
+            { key: 'consumeCoins', label: t('消耗点数', 'Consumed Coins') },
+            { key: 'taskCostTime', label: t('任务耗时', 'Task Cost Time') },
+        ].filter((item) => usage[item.key] !== undefined && usage[item.key] !== null && String(usage[item.key]).trim() !== '');
+
+        if (items.length === 0) return null;
+
+        return {
+            items,
+            source: String(details?.usage_source || '').trim(),
+        };
+    };
+    const renderTransactionProviderUsage = (txn) => {
+        const usageInfo = getTransactionProviderUsage(txn);
+        if (!usageInfo) return null;
+
+        const summaryText = usageInfo.items
+            .slice(0, 2)
+            .map((item) => `${item.label}: ${txn.details.provider_usage?.[item.key] ?? txn.details.usage?.[item.key]}`)
+            .join(' · ');
+
+        return (
+            <details className="mt-2 rounded-lg border border-cyan-400/20 bg-cyan-500/5 p-2">
+                <summary className="cursor-pointer list-none text-xs font-medium text-cyan-200">
+                    {t('供应商用量审计', 'Provider Usage Audit')}
+                    {summaryText ? <span className="ml-2 text-[11px] text-cyan-100/70">{summaryText}</span> : null}
+                </summary>
+                <div className="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+                    {usageInfo.items.map((item) => (
+                        <div key={item.key} className="rounded-md border border-white/10 bg-black/20 px-2 py-1.5">
+                            <div className="text-[10px] uppercase tracking-wide text-cyan-100/60">{item.label}</div>
+                            <div className="mt-1 font-mono text-cyan-50 break-all">{String(txn.details.provider_usage?.[item.key] ?? txn.details.usage?.[item.key] ?? '')}</div>
+                        </div>
+                    ))}
+                    {usageInfo.source ? (
+                        <div className="rounded-md border border-white/10 bg-black/20 px-2 py-1.5">
+                            <div className="text-[10px] uppercase tracking-wide text-cyan-100/60">{t('来源', 'Source')}</div>
+                            <div className="mt-1 font-mono text-cyan-50 break-all">{usageInfo.source}</div>
+                        </div>
+                    ) : null}
+                </div>
+            </details>
+        );
+    };
     const location = useLocation();
     const navigate = useNavigate();
     const { llmConfig, setLLMConfig, savedConfigs, saveProviderConfig, addLog, generationConfig, setGenerationConfig, savedToolConfigs, saveToolConfig } = useStore();
@@ -2098,6 +2153,7 @@ const Settings = () => {
                                                     </td>
                                                     <td className="p-3">
                                                         <span className="bg-white/5 px-2 py-0.5 rounded text-xs uppercase border border-white/10">{t.task_type}</span>
+                                                        {renderTransactionProviderUsage(t)}
                                                     </td>
                                                     <td className={`p-3 text-right font-mono font-bold ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
                                                         {t.amount > 0 ? '+' : ''}{t.amount}

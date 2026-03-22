@@ -88,6 +88,12 @@
 ### 1) Environment Prompt Template
 `[Global Style]. Use 【base_env_name / reference image id】 as the visual base while keeping architecture and material anchors stable. From 【exact observer placement in/around environment】, the view faces 【Front/Reverse/Side + target/vector】 in a 【Height/Angle/Framing】 composition. FG/MG/BG must stay explicit, with Primary Subject + Secondary Subject carried by continuous space, lighting, and material detail. Treat OTS-related environment variants as clean-plate backgrounds captured with no actor remnants in frame. Add mood, grain/noise, lens baseline, and textures in natural prose. **No humans or characters present.**`
 
+- `{Stage}` 中心补全规则（Mandatory）：补全 environment 时，必须围绕当前 Scene 的 `{Stage}` 组织描述，优先写清核心舞台由哪些固定环境实体组成，以及这些实体如何形成可执行表演空间。
+- 阈值动作空间补全规则（Mandatory）：若输入 Beat 涉及任何“界面两侧”切换，例如 `门内 -> 门外`、`洞内 -> 洞外`、`窗内 -> 窗外`、`桌前 -> 桌后`、`柜台外 -> 柜台内`、`走廊 -> 房间` 等，补全时必须把对应的框体/边缘/槛口/台面、两侧落脚或站位区、相邻墙面/通道/平台与可通行动线补全成具体空间结构，而不是只写抽象的 doorway view 或 inside/outside view。
+- 界面词触发强制补全规则（Mandatory）：只要输入的 `{Beats}`、`{Observer View}`、`{Stage}` 或剧本文本出现任何“界面两侧”表达，例如 `内/外`、`前/后`、`里/外`、`台前/台后`、`桌前/桌后`、`窗内/窗外`、`洞内/洞外`、`柜台内/柜台外`、`门内/门外`、`入口内侧/外侧`，就必须在补全过程中强制写回该界面的两侧实体、站位面、通行路径与可见/排除集合，不能因为原文省略细节而跳过空间补全。
+- Beat 触发环境状态补全规则（Mandatory）：若输入 Beat 中的动作会直接改变环境固定结构或不可独立列为 prop 的场景组成物，例如墙面开裂、门框破损、玻璃碎裂、柜台挡板断裂、地面积水扩散、烟熏/焦黑/坍塌痕迹等，补全时必须把这些变化写入对应 `ENV:[...]` 的描述与 prompt，而不是只留在 beat 文案中。
+- Beat 触发道具状态补全规则（Mandatory）：若输入 Beat 会直接改变某个可独立识别的道具状态，例如被撞裂、被砸弯、液体洒出、封口撕开、屏幕碎裂、绳索断开、表面烧焦/污染，补全时必须把这些变化写入对应 `PROP:[...]` 的描述、prompt 与依赖逻辑；若同时需要保留变化前后，必须拆成独立 prop 条目并建立依赖链。
+
 ### 1.1) Base + Delta 执行增强（观察方向切换）
 - 环境构图必须显式按前景（FG）/中景（MG）/后景（BG）描述，三层均需给出可见元素与空间关系。
 - 必须明确当前画面主体（Primary Subject）与次级支撑主体（Secondary Subject），并与景别/机位一致。
@@ -100,6 +106,7 @@
   - `AS`：明确侧别变化（如 `left -> right`）；
   - `BG`：同时写 `Visible Set` 与 `Excluded Set`；
   - `FR`：明确景别/构图主对象变化。
+- 若该切换服务于跨阈值或跨界面动作空间，必须额外把界面两侧的 `{Stage}` 实体写具体：例如门内侧墙面、门扇开启角度、门槛压条、洞口边缘、窗沿内外侧、桌边前后站位面、柜台挡板内外侧、外侧平台边缘、可转身净空与主通道方向。
 - 方向差异实体化规则：`Front/Reverse/Side` 只是标签，不等于描述；若只保留标签而缺少实体清单、层级迁移、主次锚点变化，补全结果无效，必须重写。
 - 若该方向切换同时属于 OTS 正反切换上下文，必须保持与输入 Scene 边界一致：仅补当前 Scene 所需环境资产，不得跨 Scene 回填或合并反向变体。
 - 层级重排硬规则（Depth Role Reassignment）：当 Base 前景/中景主体在反向镜头里后移为当前背景时，必须写：
@@ -116,6 +123,18 @@
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from viewer-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, reason: CHAR:[@Guard] pushes it and pauses to listen)}`。
 - Few-shot B（街道正向 -> 街道反向）：
   `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
+- Few-shot C（窗内看外 -> 窗外看内）：
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint shifted from interior window desk side to exterior landing side, now facing inward through ENV:[WindowBay]; Axis Side: left -> right; Background Set Change: Visible Set = [window mullions, sill edge, exterior railing, interior desk lamp glow], Excluded Set = [rear corridor wall as dominant backdrop]; Lighting Direction Change: key becomes exterior spill from viewer-right with warm interior return fill; Framing Change: medium-wide with window frame and sill as primary anchor, desk edge as secondary anchor; Dynamic Parts State: None}`。
+- Few-shot D（桌前 -> 桌后）：
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from front edge of ENV:[WorkTable] to the rear operator side, now facing across tabletop toward the entrance wall; Axis Side: right -> left; Background Set Change: Visible Set = [table rear edge, chair back, cable tray, entrance wall], Excluded Set = [front table apron as dominant foreground]; Lighting Direction Change: key shifts to overhead practical plus side spill from viewer-left; Framing Change: medium shot with rear table edge as primary anchor and entrance wall as secondary anchor; Dynamic Parts State: None}`。
+- Few-shot E（柜台外 -> 柜台内）：
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint crosses from customer-side queue lane to service-side standing bay behind ENV:[Counter]; Axis Side: left -> right; Background Set Change: Visible Set = [counter back shelf, register base, prep surface, service pass opening], Excluded Set = [queue stanchions, storefront glass as dominant backdrop]; Lighting Direction Change: key becomes top practical strip with warm bounce from prep surface; Framing Change: medium-wide with counter back shelf as primary anchor and pass opening as secondary anchor; Dynamic Parts State: None}`。
+- Few-shot F（洞内看外 -> 洞外看内）：
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint shifted from inner cave shelf to the outer ledge facing back into ENV:[CaveMouth]; Axis Side: left -> right; Background Set Change: Visible Set = [rock lip, wet stone edge, hanging roots, inner torch stain], Excluded Set = [deep rear tunnel void as dominant backdrop]; Lighting Direction Change: key changes to exterior daylight spill from viewer-right with dim warm bounce from the cave interior; Framing Change: medium-wide with cave mouth rim as primary anchor and inner stone shelf as secondary anchor; Dynamic Parts State: None}`。
+- Few-shot G（台前 -> 台后）：
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from downstage apron to upstage rear side behind ENV:[StagePortal], now facing across the performance lane toward the audience edge; Axis Side: left -> right; Background Set Change: Visible Set = [rear curtain track, backstage masking leg, fly rope line, stage monitor wedge], Excluded Set = [front audience rail as dominant foreground]; Lighting Direction Change: key shifts to overhead stage practicals with dim footlight spill returning from viewer-left; Framing Change: wide-to-mid with rear curtain track as primary anchor and masking leg as secondary anchor; Dynamic Parts State: None}`。
+- Few-shot H（楼梯下层 -> 楼梯上层）：
+  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated from lower stair landing to upper landing rail, now facing down through ENV:[StairwellCore]; Axis Side: right -> left; Background Set Change: Visible Set = [upper handrail turn, landing guardrail, top-flight tread noses, lower wall sconce], Excluded Set = [ground-floor entry mat as dominant foreground]; Lighting Direction Change: key becomes top-landing practical spill from viewer-left with cool shaft light falling into the stair void; Framing Change: medium-wide with upper rail turn as primary anchor and stairwell void as secondary anchor; Dynamic Parts State: None}`。
 - 状态变化实体化规则：若补全过程需要输出状态差异，不得只写 `messier room`、`older version`、`broken state` 这类抽象词；必须写为 `具体实体 + 可见差异 + 所在层级/位置`。
 
 ### 2) Character Prompt Template

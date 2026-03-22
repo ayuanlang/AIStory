@@ -1,0 +1,456 @@
+# n1n Docs
+
+## Docs
+- [n1n Docs: 企业级大模型 LLM API 接口聚合平台](https://docs.n1n.ai/llm-api.md): LLM API Gateway，OpenAI、Gemini、Claude等国内直连服务，支持 GPT-5、Claude 4.5、Gemini 3 Pro。只需一个 API Key，即可连接全球 500+ 顶尖 AI 模型。
+- [快速开始指南 - 大模型（LLM）API ](https://docs.n1n.ai/llm-api-quickstart.md): 快速开始指南，大模型（LLM）API 
+- [大模型API在线调试](https://docs.n1n.ai/llm-api-debug.md): 大模型API在线调试
+- [大模型API发出请求](https://docs.n1n.ai/llm-api-request.md): 大模型API发出请求
+- [联系我们](https://docs.n1n.ai/7172649m0.md): 
+- 基本介绍 [大模型API分组](https://docs.n1n.ai/llm-api-price-group.md): 大模型API分组
+- 基本介绍 [大模型API价格](https://docs.n1n.ai/llm-api-price.md): 大模型API价格
+- 基本介绍 [大模型API快速开始指南](https://docs.n1n.ai/llm-api-key.md): 大模型 API Key 密钥创建
+- 基本介绍 [大模型API接口调用地址](https://docs.n1n.ai/llm-api-proxy-address.md): 大模型API接口调用地址
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [聊天完成对象](https://docs.n1n.ai/8136493m0.md): 
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [聊天完成块对象](https://docs.n1n.ai/8136494m0.md): 
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 自动补全（Completions） [完成对象](https://docs.n1n.ai/8136495m0.md): 
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 嵌入（Embeddings） [嵌入对象](https://docs.n1n.ai/8136496m0.md): 
+- 聊天（Chat） > Anthropic Claude 接口 [聊天完成对象](https://docs.n1n.ai/8136489m0.md): 
+- 聊天（Chat） > Anthropic Claude 接口 [聊天完成块对象](https://docs.n1n.ai/8136490m0.md): 
+- 聊天（Responses） [Responses API 与 Chat API 对比](https://docs.n1n.ai/8136499m0.md): 
+- 绘画模型 [README](https://docs.n1n.ai/7152836m0.md): 
+- 绘画模型 [图像对象](https://docs.n1n.ai/7152837m0.md): 
+- 绘画模型 > FLUX 系列 > Replicate 官方格式 [Flux 分辨率](https://docs.n1n.ai/7319127m0.md): 
+- 绘画模型 > FLUX 系列 > Replicate 官方格式 [接入教程 ](https://docs.n1n.ai/7319128m0.md): 
+- 绘画模型 > Fal.ai 平台 [状态码](https://docs.n1n.ai/7858083m0.md): 
+- 视频模型 > Luma 视频生成 > 官方 API 格式 [状态码](https://docs.n1n.ai/7858086m0.md): 
+- 视频模型 > Runway 视频生成 [状态码](https://docs.n1n.ai/7858088m0.md): 
+- 视频模型 > Veo 视频生成 > 视频统一格式 [状态码](https://docs.n1n.ai/7858085m0.md): 
+- 视频模型 > 即梦 视频生成 [状态码](https://docs.n1n.ai/7858089m0.md): 
+- 视频模型 > 即梦 视频生成 > 官方格式 [添加中](https://docs.n1n.ai/7858090m0.md): 
+- 视频模型 > 海螺 视频生成 [状态码](https://docs.n1n.ai/7858091m0.md): 
+- Kling 可灵平台 [Kling 可灵 Callback 协议](https://docs.n1n.ai/kling-callback.md): Kling 可灵 Callback 协议
+- Suno 文生音乐 [Suno 文生音乐](https://docs.n1n.ai/suno-api.md): Suno 文生音乐
+- Suno 文生音乐 [Suno 音乐生成 API 接口](https://docs.n1n.ai/8189084m0.md): Suno 音乐生成 API 接口
+- Replicate 聚合平台 [接入教程  ](https://docs.n1n.ai/7320072m0.md): 
+- Replicate 聚合平台 [Flux 分辨率 ](https://docs.n1n.ai/7320073m0.md): 
+- Fal-ai 聚合平台 [Fal-ai API 接口配置使用教程](https://docs.n1n.ai/fal-ai-api.md): Fal-ai API 接口配置使用教程
+- PHP 配置方式 [PHP 使用图片编辑 Demo](https://docs.n1n.ai/php-image-edit.md): 
+- NodeJS 配置方式  [NodeJS 基础对话](https://docs.n1n.ai/nodejs-dialogue.md): 
+- Python 配置方式 [Python OpenAI 官方库（使用 AutoGPT、Langchain 等）](https://docs.n1n.ai/python-openai-lib.md): Python OpenAI 官方库（使用 AutoGPT、Langchain 等）
+- Python 配置方式 [Python OpenAI 连续对话](https://docs.n1n.ai/python-openai-conversation.md): Python OpenAI 连续对话
+- Python 配置方式 [Python OpenAI 语音转文本](https://docs.n1n.ai/python-openai-audio-to-text.md): Python OpenAI 语音转文本
+- Python 配置方式 [Python OpenAI 文本转语音](https://docs.n1n.ai/python-openai-text-to-speech.md): Python OpenAI 文本转语音
+- Python 配置方式 [Python 使用 Embeddings 向量化（OpenAI）](https://docs.n1n.ai/python-openai-embeddings.md): Python 使用 Embeddings 向量化（OpenAI）
+- Python 配置方式 [Python 调用 DALL·E（OpenAI）](https://docs.n1n.ai/python-dalle.md): Python 调用 DALL·E（OpenAI）
+- Python 配置方式 [Python 简单调用 OpenAI Function Calling Demo](https://docs.n1n.ai/python-openai-function-calling-demo.md): Python 简单调用 OpenAI Function Calling Demo
+- Python 配置方式 [Python Langchain 调用 OpenAI Demo](https://docs.n1n.ai/python-langchain.md): Python Langchain 调用 OpenAI Demo
+- Python 配置方式 [Python Llama_index 配置](https://docs.n1n.ai/python-llama-index-setting.md): Python Llama_index 配置
+- Python 配置方式 [Python 使用 GPT-4o 识别图片 - 本地图片](https://docs.n1n.ai/python-gpt-4o-image-recognition.md): Python 使用 GPT-4o 识别图片 - 本地图片
+- Python 配置方式 [Python 库流式输出](https://docs.n1n.ai/python-openai-stream.md): Python 库流式输出
+- Python 配置方式 [Python GPT Realtime 模型调用](https://docs.n1n.ai/python-gpt-realtime-model.md): Python GPT Realtime 模型调用
+- Python 配置方式 [Python Request 请求流式输出 Demo](https://docs.n1n.ai/python-request-using-stream.md): Python Request 请求流式输出 Demo
+- Python 配置方式 [Python 使用 GPT-Image-1 创建编辑图片](https://docs.n1n.ai/python-gpt-image-1-create-edit-image.md): Python 使用 GPT-Image-1 创建编辑图片
+- Python 配置方式 [Python OpenAI 基础对话](https://docs.n1n.ai/python-openai-chat-completions.md): Python OpenAI 基础对话
+- Python 配置方式 [Python GPT-4o 识别图片](https://docs.n1n.ai/python-gpt-4o-image-recognize.md): Python GPT-4o 识别图片
+- Python 配置方式 [Python 使用 Claude 识别图片](https://docs.n1n.ai/python-claude-image-recognition.md): Python 使用 Claude 识别图片
+- Python 配置方式 [Python AIOHTTP 批量请求](https://docs.n1n.ai/python-aiohttp.md): Python AIOHTTP 批量请求
+- 软件 / 插件配置教程 [Claude Code 配置使用 API 教程](https://docs.n1n.ai/claude-code.md): Claude Code 配置使用 API 教程
+- 软件 / 插件配置教程 [Gemini CLI 配置使用 API 教程](https://docs.n1n.ai/gemini-cli.md): Gemini CLI 配置使用 API 教程
+- 软件 / 插件配置教程 [CodeX CLI 配置使用 API 教程](https://docs.n1n.ai/codex-cli.md): CodeX CLI 配置使用 API 教程
+- 软件 / 插件配置教程 [OpenCode 配置使用第三方 API 教程](https://docs.n1n.ai/opencode.md): OpenCode 配置使用第三方 API 教程
+- 软件 / 插件配置教程 [OpenClaw 配置使用 API 教程](https://docs.n1n.ai/openclaw.md): OpenClaw 配置使用 API 教程
+- 软件 / 插件配置教程 [ZeroClaw 配置使用 API 教程](https://docs.n1n.ai/zeroclaw.md): ZeroClaw 配置使用 API 教程
+- 软件 / 插件配置教程 [Cline 配置使用 API 教程](https://docs.n1n.ai/cline.md): Cline 配置使用 API 教程
+- 软件 / 插件配置教程 [Cursor 配置使用 API 教程](https://docs.n1n.ai/cursor.md): Cursor 配置使用 API 教程
+- 软件 / 插件配置教程 [Trae 配置使用第三方 API 教程](https://docs.n1n.ai/trae.md): Trae 配置使用第三方 API 教程
+- 软件 / 插件配置教程 [Claude Dev 配置使用 API 教程](https://docs.n1n.ai/claude-dev.md): Claude Dev 配置使用 API 教程
+- 软件 / 插件配置教程 [n8n 配置使用第三方 API 教程](https://docs.n1n.ai/n8n.md): n8n 配置使用第三方 API 教程
+- 软件 / 插件配置教程 [Dify 配置使用 API 教程](https://docs.n1n.ai/dify.md): Dify 配置使用 API 教程
+- 软件 / 插件配置教程 [Coze 扣子配置使用 API 教程](https://docs.n1n.ai/coze.md): Coze 扣子配置使用 API 教程
+- 软件 / 插件配置教程 [Cherry Studio 配置使用 API 教程](https://docs.n1n.ai/cherry-studio.md): Cherry Studio 配置使用 API 教程
+- 软件 / 插件配置教程 [ChatBox 配置使用 API 教程](https://docs.n1n.ai/chatbox.md): ChatBox 配置使用 API 教程
+- 软件 / 插件配置教程 [LobeChat 配置使用 API 教程](https://docs.n1n.ai/lobechat.md): LobeChat 配置使用 API 教程
+- 软件 / 插件配置教程 [NextChat 配置使用 API 教程](https://docs.n1n.ai/nextchat.md): NextChat 配置使用 API 教程
+- 软件 / 插件配置教程 [Aider 配置使用 API 教程](https://docs.n1n.ai/aider.md): Aider 配置使用 API 教程
+- 软件 / 插件配置教程 [Zotero GPT 配置使用 API 教程](https://docs.n1n.ai/zotero-gpt.md): Zotero GPT 配置使用 API 教程
+- 软件 / 插件配置教程 [GPT Academic 配置使用 API 教程](https://docs.n1n.ai/gpt-academic.md): GPT Academic 配置使用 API 教程
+- 软件 / 插件配置教程 [沉浸式翻译 配置使用 API 教程](https://docs.n1n.ai/immersive-translate.md): 沉浸式翻译 配置使用 API 教程
+- 软件 / 插件配置教程 [ChatGPT Sidebar 配置使用 API 教程](https://docs.n1n.ai/chatgpt-sidebar.md): ChatGPT Sidebar 配置使用 API 教程
+- 软件 / 插件配置教程 [ChatGPT-on-WeChat 配置使用 API 教程](https://docs.n1n.ai/chatgpt-wechat.md): ChatGPT-on-WeChat 配置使用 API 教程
+- FAQ 常见问题 [问题自查方法](https://docs.n1n.ai/faq.md): 
+- FAQ 常见问题 > 入门必看 [我注册了，key 在哪？](https://docs.n1n.ai/7172543m0.md): 
+- FAQ 常见问题 > 入门必看 [如何充值？没有美金能充吗？](https://docs.n1n.ai/7172549m0.md): 
+- FAQ 常见问题 > 入门必看 [可以使用哪些大模型 API ？](https://docs.n1n.ai/7172551m0.md): 
+- FAQ 常见问题 > 入门必看 [如何获取 OpenAI Key ？ 如何获取 Claude Key ？ 如何获取 Gemini Key ？](https://docs.n1n.ai/7172553m0.md): 
+- FAQ 常见问题 > 入门必看 [怎么更换模型使用？](https://docs.n1n.ai/7172555m0.md): 
+- FAQ 常见问题 > 入门必看 [接口在中国大陆能使用吗？](https://docs.n1n.ai/7172556m0.md): 
+- FAQ 常见问题 > 入门必看 [按量计费还是按月支付？](https://docs.n1n.ai/7172557m0.md): 
+- FAQ 常见问题 > 入门必看 [为什么有 3 个 Base URL 到底用哪个？](https://docs.n1n.ai/7172558m0.md): 
+- FAQ 常见问题 > 入门必看 [使用 Anthropic Claude，填写那个 URL？Claude-3-5-sonnet 模型的 Base URL 要填什么？](https://docs.n1n.ai/7172560m0.md): 
+- FAQ 常见问题 > 入门必看 [怎么检查一次调用消耗了多少 Token？](https://docs.n1n.ai/7172568m0.md): 
+- FAQ 常见问题 > 入门必看 [提示和补全分别指什么？](https://docs.n1n.ai/7172569m0.md): 
+- FAQ 常见问题 > 入门必看 [请问我余额为负了怎么回事？](https://docs.n1n.ai/7172570m0.md): 
+- FAQ 常见问题 > 常见误区 [Playground 功能好差？](https://docs.n1n.ai/7172571m0.md): 
+- FAQ 常见问题 > 常见误区 [明明余额还有很多，为什么显示令牌无法使用？](https://docs.n1n.ai/7172574m0.md): 
+- FAQ 常见问题 > 常见误区 [接口调用很卡，有办法稳定么？](https://docs.n1n.ai/7172575m0.md): 
+- FAQ 常见问题 > 常见误区 [Key 为什么不能用？为什么我调用 API 没反应？](https://docs.n1n.ai/7172578m0.md): 
+- FAQ 常见问题 > 常见误区 [咱们这的接口请求数限制是怎样的，多个 Key 一起跑是不是并发更大？](https://docs.n1n.ai/7172580m0.md): 
+- FAQ 常见问题 > 常见误区 [单个 Key 的并发或 RPM、TPM 有限制吗？](https://docs.n1n.ai/7172581m0.md): 
+- FAQ 常见问题 > 常见误区 [新建令牌参数怎么填？](https://docs.n1n.ai/7172582m0.md): 
+- FAQ 常见问题 > 常见误区 [为什么调用接口返回“无效的令牌”？](https://docs.n1n.ai/7172583m0.md): 
+- FAQ 常见问题 > 使用疑问 [可以使用 o1 吗？满血版 o1](https://docs.n1n.ai/7172588m0.md): 
+- FAQ 常见问题 > 使用疑问 [为什么 GPT-4 不知道它自己是谁？](https://docs.n1n.ai/7960364m0.md): 
+- FAQ 常见问题 > 使用疑问 [n1n 支持 Text Embedding 吗？](https://docs.n1n.ai/7172590m0.md): 
+- FAQ 常见问题 > 使用疑问 [API 接口返回报错，报错代码 400 401 403 404 405 413 429 500 503 504 524 是什么意思？](https://docs.n1n.ai/7172591m0.md): 
+- FAQ 常见问题 > 使用疑问 [支持各类开源软件 ChatBox、Dify、Cling 等等接入 n1n 吗？](https://docs.n1n.ai/7172595m0.md): 
+- FAQ 常见问题 > 使用疑问 [怎么在 VBA 里对接？代码示例有吗？](https://docs.n1n.ai/7172609m0.md): 
+- FAQ 常见问题 > 使用疑问 [能使用 .env 存放 API Key 吗？](https://docs.n1n.ai/7172610m0.md): 
+- FAQ 常见问题 > 使用疑问 [示例中用 OpenAI，如果用 Claude 3.5 也可以用吧？](https://docs.n1n.ai/7172612m0.md): 
+- FAQ 常见问题 > 使用疑问 [为什么 gpt-4 额度消耗这么快？](https://docs.n1n.ai/7960363m0.md): 
+- FAQ 常见问题 > 隐私安全 [你们会保留对大模型的调用记录和调用内容吗？](https://docs.n1n.ai/7172614m0.md): 
+- FAQ 常见问题 > 隐私安全 [请问你们的 API，是真的在调用官方的模型输出，还是魔改的？就怕买的是 OpenAI 的接口，输出的是你们自己训练的开源模型结果。](https://docs.n1n.ai/7172615m0.md): 
+- FAQ 常见问题 > 商务合作问题 [企业合作怎么开通，价格如何？](https://docs.n1n.ai/7172619m0.md): 
+- FAQ 常见问题 > 商务合作问题 [企业合作的话是怎么签订合同？](https://docs.n1n.ai/7172620m0.md): 
+- FAQ 常见问题 > 商务合作问题 [能开发票吗？开出来的票是什么类目？](https://docs.n1n.ai/7172621m0.md): 
+- FAQ 常见问题 > 商务合作问题 [企业合作有没有更多折扣？](https://docs.n1n.ai/7172622m0.md): 
+- FAQ 常见问题 > 商务合作问题 [为什么有的分组价格接近原价？](https://docs.n1n.ai/7172623m0.md): 
+- FAQ 常见问题 > 其他 [密码忘记了怎么办？在哪里可以找回密码？](https://docs.n1n.ai/7172625m0.md): 
+- 大模型百科 > 基础概念 [大语言模型（LLM）](https://docs.n1n.ai/llm.md): 什么是大语言模型？了解LLM的基本概念、工作原理和应用场景
+- 大模型百科 > 基础概念 [Token 与分词](https://docs.n1n.ai/token.md): 理解Token的概念、分词过程以及在大语言模型中的重要作用
+- 帮助中心 [AI 返回字段：思考相关](https://docs.n1n.ai/7152878m0.md): 
+- 帮助中心 [HTTP 状态码及其含义](https://docs.n1n.ai/7152879m0.md): 
+- 友情链接 [大模型API接口企业站](https://docs.n1n.ai/7436641m0.md): 
+- 友情链接 [大模型API接口国际站](https://docs.n1n.ai/7443433m0.md): 
+- 隐私条款 [隐私政策](https://docs.n1n.ai/privacy-policy-cn.md): 
+- 隐私条款 [用户协议](https://docs.n1n.ai/user-agreement-cn.md): 
+
+## API Docs
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 音频（Audio） [GPT-4o-audio](https://docs.n1n.ai/413681047e0.md): 官方文档：https://platform.openai.com/docs/api-reference/chat/create
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 音频（Audio） [音频转文字 whisper-1](https://docs.n1n.ai/413681048e0.md): 官方文档：https://platform.openai.com/docs/guides/speech-to-text
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 音频（Audio） [音频转文字 gpt-4o-transcribe](https://docs.n1n.ai/413681049e0.md): 官方文档：https://platform.openai.com/docs/guides/speech-to-text
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 音频（Audio） [创建语音 gpt-4o-mini-tts](https://docs.n1n.ai/413681050e0.md): 官方文档：https://platform.openai.com/docs/guides/text-to-speech
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 音频（Audio） [创建翻译（不支持）](https://docs.n1n.ai/413681051e0.md): 
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天补全 （流式）](https://docs.n1n.ai/413681052e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天补全 （非流） ](https://docs.n1n.ai/413681053e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天识图 （流式）](https://docs.n1n.ai/413681054e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天识图 （流式）base64 格式](https://docs.n1n.ai/413681055e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天识图 （非流） ](https://docs.n1n.ai/413681056e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天创作图 （非流）](https://docs.n1n.ai/413681057e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [官方 Function Calling 调用](https://docs.n1n.ai/413681058e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [官方 N 测试](https://docs.n1n.ai/413681059e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [列出模型](https://docs.n1n.ai/413681060e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天函数调用](https://docs.n1n.ai/413681061e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建结构化输出](https://docs.n1n.ai/413681062e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [控制推理模型努力程度](https://docs.n1n.ai/413681063e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天补全 qwen-mt-turbo](https://docs.n1n.ai/413681064e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [创建聊天补全  deepseek v3.1思考程度（流式）](https://docs.n1n.ai/413681065e0.md): 
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 聊天（Chat） [deepseek-ocr 识别](https://docs.n1n.ai/413681066e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 自动补全（Completions） [创建完成](https://docs.n1n.ai/413681067e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > ChatGPT 接口 > ChatGPT 嵌入（Embeddings） [创建嵌入](https://docs.n1n.ai/413681068e0.md): 获取给定输入的矢量表示，机器学习模型和算法可以轻松使用该表示。
+- 聊天（Chat） > ChatGPT 接口 > Web 搜索 [Web 搜索](https://docs.n1n.ai/413681069e0.md): 参考文档：https://platform.openai.com/docs/api-reference/chat/create
+- 聊天（Chat） > Anthropic Claude 接口 > 原生格式 [创建聊天补全 （流式）](https://docs.n1n.ai/413680376e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > 原生格式 [创建函数调用 （流式）](https://docs.n1n.ai/413680377e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > 原生格式 [创建格式化输出 ](https://docs.n1n.ai/413680378e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > 原生格式 [创建思考聊天](https://docs.n1n.ai/413680379e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > 原生格式 [PDF 支持 ](https://docs.n1n.ai/413680380e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > 原生格式 [PDF 支持 base64 格式](https://docs.n1n.ai/413680381e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > 原生格式 [联网搜索](https://docs.n1n.ai/413680382e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > Chat 兼容格式 [创建思考聊天 ](https://docs.n1n.ai/413680383e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > Chat 兼容格式 [创建聊天补全 （流式）](https://docs.n1n.ai/413680384e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > Chat 兼容格式 [创建聊天补全 （非流） ](https://docs.n1n.ai/413680385e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > Chat 兼容格式 [创建聊天识图 （流式）](https://docs.n1n.ai/413680386e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Anthropic Claude 接口 > Chat 兼容格式 [创建聊天识图 （非流）](https://docs.n1n.ai/413680387e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Gemini 接口 > 原生格式 [文本生成](https://docs.n1n.ai/413679985e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/text-generation?hl=zh-cn#multi-turn-conversations
+- 聊天（Chat） > Gemini 接口 > 原生格式 [文本生成-流 ](https://docs.n1n.ai/413679986e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/text-generation?hl=zh-cn#multi-turn-conversations
+- 聊天（Chat） > Gemini 接口 > 原生格式 [文本生成+思考-流 ](https://docs.n1n.ai/413679987e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/text-generation?hl=zh-cn#multi-turn-conversations
+- 聊天（Chat） > Gemini 接口 > 原生格式 [图片生成](https://docs.n1n.ai/413679988e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/image-generation?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [图片生成 gemini-2.5-flash-image](https://docs.n1n.ai/413679989e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/image-generation?hl=zh-cn#gemini-image-editing
+- 聊天（Chat） > Gemini 接口 > 原生格式 [图片生成 gemini-2.5-flash-image 控制宽高比](https://docs.n1n.ai/413679990e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/image-generation?hl=zh-cn#gemini-image-editing
+- 聊天（Chat） > Gemini 接口 > 原生格式 [图片生成 gemini-3-pro-image-preview 控制宽高比 +清晰度](https://docs.n1n.ai/413679991e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/image-generation?hl=zh-cn#gemini-image-editing
+- 聊天（Chat） > Gemini 接口 > 原生格式 [图片编辑 ](https://docs.n1n.ai/413679992e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/image-generation?hl=zh-cn#gemini-image-editing
+- 聊天（Chat） > Gemini 接口 > 原生格式 [图片理解](https://docs.n1n.ai/413679993e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/image-understanding?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [格式化输出](https://docs.n1n.ai/413679994e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/structured-output?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [函数调用](https://docs.n1n.ai/413679995e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/function-calling?hl=zh-cn&example=meeting
+- 聊天（Chat） > Gemini 接口 > 原生格式 [文档理解](https://docs.n1n.ai/413679996e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/document-processing?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [URL context [原生格式]  ](https://docs.n1n.ai/413679997e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/document-processing?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [代码执行](https://docs.n1n.ai/413679998e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/document-processing?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [google search](https://docs.n1n.ai/413679999e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/document-processing?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [视频理解](https://docs.n1n.ai/413680000e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/video-understanding?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [视频理解 - URL [原生格式]  开发中](https://docs.n1n.ai/393911979e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/video-understanding?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [URL context](https://docs.n1n.ai/413680001e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/url-context?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [音频理解](https://docs.n1n.ai/413680002e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/url-context?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [Embeddings](https://docs.n1n.ai/413680003e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/text-generation?hl=zh-cn#multi-turn-conversations
+- 聊天（Chat） > Gemini 接口 > 原生格式 [TTS 文本转语音](https://docs.n1n.ai/413680004e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/image-generation?hl=zh-cn#gemini-image-editing
+- 聊天（Chat） > Gemini 接口 > 原生格式 [文本生成 gemini-3-pro-preview:generateContent](https://docs.n1n.ai/413680005e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/text-generation?hl=zh-cn#multi-turn-conversations
+- 聊天（Chat） > Gemini 接口 > 原生格式 [ Imagen 生成图片](https://docs.n1n.ai/413680006e0.md): 官方文档：https://ai.google.dev/gemini-api/docs/document-processing?hl=zh-cn
+- 聊天（Chat） > Gemini 接口 > 原生格式 [文本嵌入](https://docs.n1n.ai/427695946e0.md): https://ai.google.dev/gemini-api/docs/embeddings?hl=zh-cn#rest_3   官方文档
+- 聊天（Chat） > Gemini 接口 > Chat 兼容格式 [Gemini 图片创作接口 [Chat 兼容格式]](https://docs.n1n.ai/413680007e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Gemini 接口 > Chat 兼容格式 [聊天接口 [Chat 兼容格式]](https://docs.n1n.ai/413680008e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Gemini 接口 > Chat 兼容格式 [聊天接口-思考1 [Chat 兼容格式] ](https://docs.n1n.ai/413680009e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Gemini 接口 > Chat 兼容格式 [聊天接口-思考2 [Chat 兼容格式] ](https://docs.n1n.ai/413680010e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Gemini 接口 > Chat 兼容格式 [识图接口 [Chat 兼容格式]](https://docs.n1n.ai/413680011e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Gemini 接口 > Chat 兼容格式 [聊天+读取文件接口 [Chat 兼容格式] ](https://docs.n1n.ai/413680012e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 聊天（Chat） > Gemini 接口 > Chat 兼容格式 [文本嵌入 [Chat 兼容格式]](https://docs.n1n.ai/427695997e0.md): 
+- 聊天（Responses） [创建模型响应](https://docs.n1n.ai/413682053e0.md): https://platform.openai.com/docs/api-reference/responses/create
+- 聊天（Responses） [创建函数调用](https://docs.n1n.ai/413682054e0.md): https://platform.openai.com/docs/api-reference/responses/create
+- 聊天（Responses） [创建模型响应（流式返回）](https://docs.n1n.ai/413682055e0.md): https://platform.openai.com/docs/api-reference/responses/create
+- 聊天（Responses） [创建模型响应（控制思考长度）](https://docs.n1n.ai/413682056e0.md): https://platform.openai.com/docs/api-reference/responses/create
+- 聊天（Responses） [创建网络搜索](https://docs.n1n.ai/413682057e0.md): https://platform.openai.com/docs/api-reference/responses/create
+- 聊天（Responses） [创建模型响应 gpt-5 启用思考](https://docs.n1n.ai/413682058e0.md): https://platform.openai.com/docs/api-reference/responses/create
+- 聊天（Responses） [创建函数调用 Copy](https://docs.n1n.ai/413682059e0.md): https://platform.openai.com/docs/api-reference/responses/create
+- 绘画模型 > Midjourney [上传图片](https://docs.n1n.ai/329862087e0.md): 官方文档：https://docs.midjourney.com/hc/en-us/articles/33329380893325-Managing-Image-Uploads
+- 绘画模型 > Midjourney [提交Imagine任务](https://docs.n1n.ai/329862088e0.md): 官方文档：https://docs.midjourney.com/hc/en-us/articles/32023408776205-Prompt-Basics
+- 绘画模型 > Midjourney [根据任务ID 查询任务状态](https://docs.n1n.ai/329862089e0.md): 
+- 绘画模型 > Midjourney [根据ID列表查询任务](https://docs.n1n.ai/329862090e0.md): 
+- 绘画模型 > Midjourney [获取任务图片的seed](https://docs.n1n.ai/329862091e0.md): 
+- 绘画模型 > Midjourney [执行Action动作](https://docs.n1n.ai/329862092e0.md): 官方文档：https://docs.midjourney.com/hc/en-us/articles/32804058614669-Upscalers
+- 绘画模型 > Midjourney [提交Blend任务](https://docs.n1n.ai/329862093e0.md): 官方文档：https://docs.midjourney.com/hc/en-us/articles/32635189884557-Blend-Images-on-Discord
+- 绘画模型 > Midjourney [提交Describe任务](https://docs.n1n.ai/329862094e0.md): 官方文档：https://docs.midjourney.com/hc/en-us/articles/32497889043981-Describe
+- 绘画模型 > Midjourney [提交Shorten任务](https://docs.n1n.ai/329862095e0.md): 官方文档：https://docs.midjourney.com/hc/en-us/articles/32595476770957-Zoom-Out
+- 绘画模型 > Midjourney [提交Modal](https://docs.n1n.ai/329862096e0.md): 
+- 绘画模型 > Midjourney [提交swap_face任务](https://docs.n1n.ai/329862097e0.md): 
+- 绘画模型 > Ideogram [Generate 3.0（文生图）Generate ](https://docs.n1n.ai/329862098e0.md): 使用 Ideogram 3.0 模型，根据给定的提示和可选参数同步生成图像
+- 绘画模型 > Ideogram [Generate 3.0（图片编辑）Edit](https://docs.n1n.ai/329862099e0.md): 使用 Ideogram 3.0 模型，根据给定的提示和可选参数同步生成图像
+- 绘画模型 > Ideogram [Generate 3.0（图片重制）Remix ](https://docs.n1n.ai/329862100e0.md): 使用 Ideogram 3.0 模型，根据给定的提示和可选参数同步生成图像
+- 绘画模型 > Ideogram [Generate 3.0（图片重构）Reframe ](https://docs.n1n.ai/329862101e0.md): 使用 Ideogram 3.0 模型，根据给定的提示和可选参数同步生成图像
+- 绘画模型 > Ideogram [Generate 3.0（替换背景） Replace Background](https://docs.n1n.ai/329862102e0.md): 使用 Ideogram 3.0 模型，根据给定的提示和可选参数同步生成图像
+- 绘画模型 > Ideogram [Ideogram（文生图）](https://docs.n1n.ai/329862103e0.md): Generates images synchronously based on a given prompt and optional parameters.
+- 绘画模型 > Ideogram [Remix（混合图）](https://docs.n1n.ai/329862104e0.md): 官方文档：https://developer.ideogram.ai/api-reference/api-reference/remix
+- 绘画模型 > Ideogram [Upscale（放大高清）](https://docs.n1n.ai/329862105e0.md): 官方文档：https://developer.ideogram.ai/api-reference/api-reference/upscale
+- 绘画模型 > Ideogram [Describe（描述）](https://docs.n1n.ai/329862106e0.md): 官方文档：https://developer.ideogram.ai/api-reference/api-reference/describe
+- 绘画模型 > GPT Image 系列 [创建  gpt-image-1](https://docs.n1n.ai/405487897e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > GPT Image 系列 [编辑  gpt-image-1](https://docs.n1n.ai/405487898e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > GPT Image 系列 [蒙版  gpt-image-1](https://docs.n1n.ai/405487899e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > GPT Image 系列 [创建  gpt-image-1.5](https://docs.n1n.ai/405487900e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > GPT Image 系列 [编辑  gpt-image-1.5](https://docs.n1n.ai/405487901e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > GPT Image 系列 [蒙版  gpt-image-1.5](https://docs.n1n.ai/405487902e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > Grok Image 系列  [Grok Image Create 图片生成](https://docs.n1n.ai/grok-image-create.md): Grok Image Create 图片生成
+- 绘画模型 > Grok Image 系列  [Grok Image Edit 图片编辑](https://docs.n1n.ai/grok-image-edit.md): Grok Image Edit 图片编辑
+- 绘画模型 > Stable Diffusion [Stable-Diffusion](https://docs.n1n.ai/329862085e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > DALL·E 3 [创建 DALL·E 3](https://docs.n1n.ai/358251419e0.md): [图片](https://platform.openai.com/docs/api-reference/images)
+- 绘画模型 > FLUX 系列 > GPT 兼容格式 [Flux 创建（OpenAI DALL-E-3 格式）](https://docs.n1n.ai/358251420e0.md): [图片](https://platform.openai.com/docs/api-reference/images)
+- 绘画模型 > FLUX 系列 > GPT 兼容格式 [Flux 编辑（OpenAI DALL-E-3 格式）](https://docs.n1n.ai/358251421e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > FLUX 系列 > Replicate 官方格式 [查询任务](https://docs.n1n.ai/343229240e0.md): 官方文档: https://replicate.com/black-forest-labs/flux-kontext-max
+- 绘画模型 > FLUX 系列 > Replicate 官方格式 [创建任务 black-forest-labs/flux-kontext-dev](https://docs.n1n.ai/343229239e0.md): 官方文档: https://replicate.com/black-forest-labs/flux-kontext-dev
+- 绘画模型 > Fal.ai 平台 [获取请求结果 ](https://docs.n1n.ai/358251827e0.md): 
+- 绘画模型 > Fal.ai 平台 [/fal-ai/nano-banana 文生图](https://docs.n1n.ai/358251828e0.md): 官方文档: https://fal.ai/models/fal-ai/nano-banana
+- 绘画模型 > Fal.ai 平台 [/fal-ai/nano-banana/edit 图片编辑](https://docs.n1n.ai/358251829e0.md): 官方文档: https://fal.ai/models/fal-ai/nano-banana/edit
+- 绘画模型 > Qwen 千问系列 [qwen-image-max](https://docs.n1n.ai/405488298e0.md): 
+- 绘画模型 > Qwen 千问系列 [z-image-turbo](https://docs.n1n.ai/405488299e0.md): 
+- 绘画模型 > Qwen 千问系列 [qwen-image-edit-2509](https://docs.n1n.ai/405488300e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 即梦绘画 [创建绘画](https://docs.n1n.ai/391588685e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > 即梦绘画 [编辑图片](https://docs.n1n.ai/391588686e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 绘画模型 > 豆包系列 [doubao-seedream-3-0-t2i-250415](https://docs.n1n.ai/391588669e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seededit-3-0-i2i-250628](https://docs.n1n.ai/391588670e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-0-250828-文生图](https://docs.n1n.ai/391588671e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-0-250828-图生图](https://docs.n1n.ai/391588672e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-0-250828-多图生图 ](https://docs.n1n.ai/391588673e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-5-251128 文生图（纯文本输入单图输出）](https://docs.n1n.ai/391588674e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-5-251128  图文生图（单图输入单图输出）](https://docs.n1n.ai/391588675e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-5-251128  多图融合（多图输入单图输出）](https://docs.n1n.ai/391588676e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-5-251128  组图输出（多图输出）](https://docs.n1n.ai/391588677e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-5-251128  单张图生组图](https://docs.n1n.ai/391588678e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 豆包系列 [doubao-seedream-4-5-251128  多参考图生组图](https://docs.n1n.ai/391588679e0.md): 给定提示和/或输入图像，模型将生成新图像。
+- 绘画模型 > 腾讯 AIGC [获取请求结果 ](https://docs.n1n.ai/405488296e0.md): 
+- 绘画模型 > 腾讯 AIGC [创建任务](https://docs.n1n.ai/405488297e0.md): 官方文档:https://cloud.tencent.com/document/product/266/126240
+- 视频模型 > Sora 视频生成 > 统一视频格式 [查询任务 ](https://docs.n1n.ai/391588754e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Sora 视频生成 > 统一视频格式 [创建视频，带图片  sora-2](https://docs.n1n.ai/391588755e0.md): 修改 duration 时长参数需要注意：sora-2 的时长为 4、8、12（秒），sora-2-all 的时长为 10、15（秒），如果使用 15 秒，请相应的更改模型名称为 sora-2-all
+- 视频模型 > Sora 视频生成 > 统一视频格式 [创建视频 sora-2](https://docs.n1n.ai/391588756e0.md): 修改 duration 时长参数需要注意：sora-2 的时长为 4、8、12（秒），sora-2-all 的时长为 10、15（秒），如果使用 15 秒，请相应的更改模型名称为 sora-2-all
+- 视频模型 > Sora 视频生成 > 统一视频格式 [创建视频 sora-2-pro](https://docs.n1n.ai/391588757e0.md): 
+- 视频模型 > Sora 视频生成 > 统一视频格式 [创建视频 （带 Character）](https://docs.n1n.ai/391588758e0.md): 1. 修改 duration 时长参数需要注意：sora-2 的时长为 4、8、12（秒），sora-2-all 的时长为 10、15（秒），如果使用 15 秒，请相应的更改模型名称为 sora-2-all
+- 视频模型 > Sora 视频生成 > Chat 格式 [创建视频](https://docs.n1n.ai/391588759e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Sora 视频生成 > Chat 格式 [创建视频, 带图片](https://docs.n1n.ai/391588760e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Sora 视频生成 > Chat 格式 [连续修改生成视频](https://docs.n1n.ai/391588761e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Sora 视频生成 > OpenAI 官方视频格式 [OpenAI 查询任务](https://docs.n1n.ai/391588762e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Sora 视频生成 > OpenAI 官方视频格式 [OpenAI 下载视频](https://docs.n1n.ai/391588763e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Sora 视频生成 > OpenAI 官方视频格式 [OpenAI 创建视频，带图片](https://docs.n1n.ai/391588764e0.md): 修改 seconds 时长参数需要注意：sora-2 的时长为 4、8、12（秒），sora-2-all 的时长为 10、15（秒），如果使用 15 秒，请相应的更改模型名称为 sora-2-all
+- 视频模型 > Sora 视频生成 > OpenAI 官方视频格式 [使用故事板创建视频](https://docs.n1n.ai/391588765e0.md): 修改 seconds 时长参数需要注意：sora-2 的时长为 4、8、12（秒），sora-2-all 的时长为 10、15（秒），如果使用 15 秒，请相应的更改模型名称为 sora-2-all
+- 视频模型 > Sora 视频生成 > OpenAI 官方视频格式 [OpenAI 创建视频，带图片 私有模式](https://docs.n1n.ai/391588766e0.md): 修改 seconds 时长参数需要注意：sora-2 的时长为 4、8、12（秒），sora-2-all 的时长为 10、15（秒），如果使用 15 秒，请相应的更改模型名称为 sora-2-all
+- 视频模型 > Sora 视频生成 > OpenAI 官方视频格式 [OpenAI 创建视频（带 Character）](https://docs.n1n.ai/391588767e0.md): 1. 修改 seconds 时长参数需要注意：sora-2 的时长为 4、8、12（秒），sora-2-all 的时长为 10、15（秒），如果使用 15 秒，请相应的更改模型名称为 sora-2-all
+- 视频模型 > Sora 视频生成 > OpenAI 官方视频格式 [OpenAI 编辑视频](https://docs.n1n.ai/391588768e0.md): 
+- 视频模型 > Sora 视频生成 [创建角色](https://docs.n1n.ai/391588753e0.md): 
+- 视频模型 > Grok 视频生成 > 视频统一格式 [创建视频 ](https://docs.n1n.ai/391588769e0.md): 
+- 视频模型 > Grok 视频生成 > 视频统一格式 [查询任务 ](https://docs.n1n.ai/391588770e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Luma 视频生成 > 官方 API 格式 [提交生成视频任务](https://docs.n1n.ai/391588722e0.md): 官方文档：https://docs.lumalabs.ai/docs/video-generation
+- 视频模型 > Luma 视频生成 > 官方 API 格式 [扩展视频](https://docs.n1n.ai/391588723e0.md): 官方文档：https://docs.lumalabs.ai/docs/video-generation
+- 视频模型 > Luma 视频生成 > 查询任务 [查询单个任务](https://docs.n1n.ai/391588724e0.md): "state": "completed" 枚举值： "pending", "processing", "completed", "failed"
+- 视频模型 > Luma 视频生成 > 查询任务 [批量获取任务](https://docs.n1n.ai/391588725e0.md): "state": "completed" 枚举值： "pending", "processing", "completed", "failed"
+- 视频模型 > Runway 视频生成 [提交视频生成任务](https://docs.n1n.ai/391588735e0.md): 官方文档：https://docs.dev.runwayml.com/api/#tag/Start-generating/paths/~1v1~1image_to_video/post
+- 视频模型 > Runway 视频生成 [查询视频任务（免费）](https://docs.n1n.ai/391588736e0.md): 
+- 视频模型 > Veo 视频生成 > 视频统一格式 [创建视频](https://docs.n1n.ai/391588715e0.md): :::caution[注意]
+- 视频模型 > Veo 视频生成 > 视频统一格式 [创建视频，带图片](https://docs.n1n.ai/391588716e0.md): :::caution[注意]
+- 视频模型 > Veo 视频生成 > 视频统一格式 [查询任务](https://docs.n1n.ai/391588717e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Veo 视频生成 > 视频统一格式 [创建视频（参考图）](https://docs.n1n.ai/391588718e0.md): :::caution[注意]
+- 视频模型 > Veo 视频生成 > OpenAI 视频格式  [OpenAI 创建视频，带图片](https://docs.n1n.ai/391588719e0.md): :::caution[注意]
+- 视频模型 > Veo 视频生成 > OpenAI 视频格式  [OpenAI 查询任务](https://docs.n1n.ai/391588720e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > Veo 视频生成 > OpenAI 视频格式  [OpenAI 下载视频](https://docs.n1n.ai/391588721e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > 即梦 视频生成 > 视频统一格式 [创建视频](https://docs.n1n.ai/391588739e0.md): 
+- 视频模型 > 即梦 视频生成 > 视频统一格式 [查询任务](https://docs.n1n.ai/391588740e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- 视频模型 > 即梦 视频生成 [提交视频生成任务](https://docs.n1n.ai/391588737e0.md): 
+- 视频模型 > 即梦 视频生成 [查询视频任务(免费)](https://docs.n1n.ai/391588738e0.md): TaskStatus:
+- 视频模型 > 海螺 视频生成 [提交视频生成任务 ](https://docs.n1n.ai/391588741e0.md): 官方文档：https://www.minimax.io/platform/document/Model%3Fkey=684261f14c5738213294faa7?key=66d1439376e52fcee2853049&document=video_generation
+- 视频模型 > 海螺 视频生成 [视频任务状态查询](https://docs.n1n.ai/391588742e0.md): 
+- 视频模型 > 海螺 视频生成 [图生视频](https://docs.n1n.ai/391588743e0.md): 官方文档：https://www.minimax.io/platform/document/Model%3Fkey=684261f14c5738213294faa7?key=66d1439376e52fcee2853049&document=video_generation
+- 视频模型 > 海螺 视频生成 [首尾帧视频](https://docs.n1n.ai/391588744e0.md): 官方文档：https://www.minimax.io/platform/document/Model%3Fkey=684261f14c5738213294faa7?key=66d1439376e52fcee2853049&document=video_generation
+- 视频模型 > 豆包 视频生成 [文生视频示例](https://docs.n1n.ai/405490169e0.md): 官方文档：https://www.volcengine.com/docs/82379/1520757
+- 视频模型 > 豆包 视频生成 [图生视频-首帧](https://docs.n1n.ai/405490170e0.md): 官方文档：https://www.volcengine.com/docs/82379/1520757
+- 视频模型 > 豆包 视频生成 [seedance-lite-首尾帧](https://docs.n1n.ai/405490171e0.md): 
+- 视频模型 > 豆包 视频生成 [图生视频-base64编码](https://docs.n1n.ai/405490172e0.md): 官方文档：https://www.volcengine.com/docs/82379/1520757
+- 视频模型 > 豆包 视频生成 [seedance-lite-参考图](https://docs.n1n.ai/405490173e0.md): 官方文档：https://www.volcengine.com/docs/82379/1520757
+- 视频模型 > 豆包 视频生成 [查询单个任务](https://docs.n1n.ai/405490174e0.md): 
+- 视频模型 > 豆包 视频生成 [查询视频生成任务列表-默认](https://docs.n1n.ai/405490175e0.md): 
+- 视频模型 > 豆包 视频生成 [查询视频生成任务列表-搜索多个任务 ID](https://docs.n1n.ai/405490176e0.md): 
+- 视频模型 > 豆包 视频生成 [seedance-1-5-pro-首尾帧 ](https://docs.n1n.ai/405490177e0.md): 
+- 视频模型 > 通义万象 视频生成 [生成视频](https://docs.n1n.ai/391588773e0.md): 
+- 视频模型 > 通义万象 视频生成 [视频查询](https://docs.n1n.ai/391588774e0.md): 
+- 视频模型 > 腾讯 AIGC 视频生成 [创建任务](https://docs.n1n.ai/405490396e0.md): 官方文档:https://cloud.tencent.com/document/product/266/126240
+- 视频模型 > 腾讯 AIGC 视频生成 [特效模板创建任务](https://docs.n1n.ai/427696092e0.md): 官方文档:https://cloud.tencent.com/document/product/266/126240
+- 视频模型 > 腾讯 AIGC 视频生成 [获取请求结果 ](https://docs.n1n.ai/405490397e0.md): 
+- Kling 可灵平台 > Kling 可灵文生视频 [Kling 可灵文生视频](https://docs.n1n.ai/kling-text-to-video.md): Kling 可灵文生视频
+- Kling 可灵平台 > Kling 可灵文生视频 [查询任务（单个）](https://docs.n1n.ai/418161743e0.md): 
+- Kling 可灵平台 > Kling 可灵图生视频 [Kling 可灵图生视频](https://docs.n1n.ai/kling-image-to-video.md): Kling 可灵图生视频
+- Kling 可灵平台 > Kling 可灵图生视频 [查询任务（单个）](https://docs.n1n.ai/418161745e0.md): 
+- Kling 可灵平台 > Kling 可灵 Omni-Video [Kling 可灵 Omni-Video](https://docs.n1n.ai/kling-omni-video.md): Kling 可灵 Omni-Video
+- Kling 可灵平台 > Kling 可灵 Omni-Video [查询任务（单个）](https://docs.n1n.ai/418161747e0.md): 
+- Kling 可灵平台 > Kling 可灵多图参考生视频 [Kling 可灵多图参考生视频](https://docs.n1n.ai/kling-multi-image-to-video.md): Kling 可灵多图参考生视频
+- Kling 可灵平台 > Kling 可灵多图参考生视频 [查询任务（单个）](https://docs.n1n.ai/418161749e0.md): 
+- Kling 可灵平台 > Kling 可灵多模态视频编辑 [Kling 可灵初始化待编辑视频](https://docs.n1n.ai/kling-init-selection.md): Kling 可灵初始化待编辑视频
+- Kling 可灵平台 > Kling 可灵多模态视频编辑 [Kling 可灵增加视频选区](https://docs.n1n.ai/kling-add-selection.md): Kling 可灵增加视频选区
+- Kling 可灵平台 > Kling 可灵多模态视频编辑 [Kling 可灵删减视频选区](https://docs.n1n.ai/kling-delete-selection.md): Kling 可灵删减视频选区
+- Kling 可灵平台 > Kling 可灵多模态视频编辑 [Kling 可灵预览已选区视频](https://docs.n1n.ai/kling-preview-selection.md): Kling 可灵预览已选区视频
+- Kling 可灵平台 > Kling 可灵多模态视频编辑 [Kling 可灵多模态视频](https://docs.n1n.ai/kling-multi-elements.md): Kling 可灵多模态视频
+- Kling 可灵平台 > Kling 可灵多模态视频编辑 [查询任务（单个）](https://docs.n1n.ai/418161755e0.md): 
+- Kling 可灵平台 > Kling 可灵视频延长 [Kling 可灵视频延长](https://docs.n1n.ai/kling-video-extend.md): Kling 可灵视频延长
+- Kling 可灵平台 > Kling 可灵视频延长 [查询任务（单个）](https://docs.n1n.ai/418161757e0.md): 
+- Kling 可灵平台 > Kling 可灵视频特效 [Kling 可灵视频特效](https://docs.n1n.ai/kling-video-effects.md): Kling 可灵视频特效
+- Kling 可灵平台 > Kling 可灵视频特效 [查询任务（单个）](https://docs.n1n.ai/418161759e0.md): 
+- Kling 可灵平台 > Kling 可灵图像生成 [Kling 可灵图像生成](https://docs.n1n.ai/kling-image-generations.md): Kling 可灵图像生成
+- Kling 可灵平台 > Kling 可灵图像生成 [查询任务（单个）](https://docs.n1n.ai/418161761e0.md): 
+- Kling 可灵平台 > Kling 可灵多图参考生图 [Kling 可灵多图参考生图](https://docs.n1n.ai/kling-multi-image-to-image.md): Kling 可灵多图参考生图
+- Kling 可灵平台 > Kling 可灵多图参考生图 [查询任务（单个）](https://docs.n1n.ai/418161763e0.md): 
+- Kling 可灵平台 > Kling 可灵 Omni-Image [Kling 可灵 Omni-Image](https://docs.n1n.ai/kling-omni-image.md): Kling 可灵 Omni-Image
+- Kling 可灵平台 > Kling 可灵 Omni-Image [查询任务（单个）](https://docs.n1n.ai/418161765e0.md): 
+- Kling 可灵平台 > Kling 可灵扩图 [Kling 可灵扩图](https://docs.n1n.ai/kling-image-expand.md): Kling 可灵扩图
+- Kling 可灵平台 > Kling 可灵扩图 [查询任务（单个）](https://docs.n1n.ai/418161767e0.md): 
+- Kling 可灵平台 > Kling 可灵图像识别 [Kling 可灵图像识别](https://docs.n1n.ai/kling-image-recognize.md): Kling 可灵图像识别
+- Kling 可灵平台 > Kling 可灵数字人 [Kling 可灵数字人](https://docs.n1n.ai/kling-avatar-image-to-video.md): Kling 可灵数字人
+- Kling 可灵平台 > Kling 可灵数字人 [查询任务（单个）](https://docs.n1n.ai/418161770e0.md): 
+- Kling 可灵平台 > Kling 可灵文生音效 [Kling 可灵文生音效](https://docs.n1n.ai/kling-text-to-audio.md): Kling 可灵文生音效
+- Kling 可灵平台 > Kling 可灵文生音效 [查询任务（单个）](https://docs.n1n.ai/418161772e0.md): 
+- Kling 可灵平台 > Kling 可灵视频生音效 [Kling 可灵视频生音效](https://docs.n1n.ai/kling-video-to-audio.md): Kling 可灵视频生音效
+- Kling 可灵平台 > Kling 可灵视频生音效 [查询任务（单个）](https://docs.n1n.ai/418161774e0.md): 
+- Kling 可灵平台 > Kling 可灵语音合成 [Kling 可灵语音合成](https://docs.n1n.ai/kling-audio-tts.md): Kling 可灵语音合成
+- Kling 可灵平台 > Kling 可灵虚拟试穿 [Kling 可灵虚拟试穿](https://docs.n1n.ai/kling-virtual-try-on.md): Kling 可灵虚拟试穿
+- Kling 可灵平台 > Kling 可灵虚拟试穿 [查询任务（单个）](https://docs.n1n.ai/418161777e0.md): 
+- Kling 可灵平台 > Kling 可灵对口型 [Kling 可灵人脸识别](https://docs.n1n.ai/kling-face-recognition.md): Kling 可灵人脸识别
+- Kling 可灵平台 > Kling 可灵对口型 [Kling 可灵对口型](https://docs.n1n.ai/kling-advanced-lip-sync.md): Kling 可灵对口型
+- Kling 可灵平台 > Kling 可灵对口型 [查询任务（单个）](https://docs.n1n.ai/418161780e0.md): 
+- Kling 可灵平台 > Kling 可灵自定义音色 [Kling 可灵自定义音色](https://docs.n1n.ai/kling-custom-voices.md): Kling 可灵自定义音色
+- Kling 可灵平台 > Kling 可灵自定义音色 [查询自定义音色（单个）](https://docs.n1n.ai/418161782e0.md): 
+- Kling 可灵平台 > Kling 可灵自定义音色 [Kling 可灵删除自定义音色](https://docs.n1n.ai/kling-delete-voices.md): Kling 可灵删除自定义音色
+- Kling 可灵平台 > Kling 可灵自定义音色 [查询官方音色](https://docs.n1n.ai/427696340e0.md): 
+- Kling 可灵平台 > Kling 可灵动作控制 [Kling 可灵动作控制](https://docs.n1n.ai/kling-motion-control.md): Kling 可灵动作控制
+- Kling 可灵平台 > Kling 可灵动作控制 [查询任务（单个）](https://docs.n1n.ai/418161784e0.md): 
+- Kling 可灵平台 > Kling 可灵主体 [Kling 可灵主体](https://docs.n1n.ai/kling-custom-elements.md): Kling 可灵主体
+- MiniMax 海螺平台 [MiniMax 异步语音合成 V2](https://docs.n1n.ai/minimax-speech-t2a-async.md): MiniMax 异步语音合成 V2
+- MiniMax 海螺平台 [MiniMax 同步语音合成 V2](https://docs.n1n.ai/minimax-speech-t2a-sync.md): MiniMax 同步语音合成 V2
+- MiniMax 海螺平台 [MiniMax 文生图生视频生成](https://docs.n1n.ai/minimax-video-generation.md): MiniMax 文生图生视频生成
+- MiniMax 海螺平台 [MiniMax 复刻音频](https://docs.n1n.ai/minimax-audio-clone.md): MiniMax 复刻音频
+- MiniMax 海螺平台 [MiniMax 示例音频](https://docs.n1n.ai/minimax-audio-example-clone.md): MiniMax 示例音频
+- MiniMax 海螺平台 [MiniMax 首尾帧生成视频](https://docs.n1n.ai/minimax-first-last-frame-video-generation.md): MiniMax 首尾帧生成视频
+- MiniMax 海螺平台 [MiniMax 音色快速复刻](https://docs.n1n.ai/minimax-voice-clone.md): MiniMax 音色快速复刻
+- MiniMax 海螺平台 [MiniMax 查询视频生成状态](https://docs.n1n.ai/minimax-video-generation-query.md): MiniMax 查询视频生成状态
+- MiniMax 海螺平台 [MiniMax 检索视频下载 - 检索异步音频下载](https://docs.n1n.ai/minimax-video-audio-retrieve.md): MiniMax 检索视频下载 - 检索异步音频下载
+- MiniMax 海螺平台 [MiniMax 文本合成](https://docs.n1n.ai/minimax-text-chatcompletion.md): MiniMax 文本合成
+- MiniMax 海螺平台 [MiniMax 查询语音生成状态](https://docs.n1n.ai/minimax-speech-t2a-async-query.md): MiniMax 查询语音生成状态
+- MiniMax 海螺平台 [MiniMax 音色设计](https://docs.n1n.ai/minimax-voice-design.md): MiniMax 音色设计
+- Vidu 视频/图片/音频生成 [Vidu 语音合成](https://docs.n1n.ai/vidu-text-to-speech.md): Vidu 语音合成
+- Vidu 视频/图片/音频生成 [Vidu 文生视频](https://docs.n1n.ai/vidu-text-to-video.md): Vidu 文本生成视频
+- Vidu 视频/图片/音频生成 [Vidu 图生视频](https://docs.n1n.ai/vidu-image-to-video.md): Vidu 图片生成视频
+- Vidu 视频/图片/音频生成 [Vidu 图片生成](https://docs.n1n.ai/vidu-image-generation.md): Vidu 图片生成
+- Vidu 视频/图片/音频生成 [Vidu 文生音频](https://docs.n1n.ai/vidu-text-to-audio.md): Vidu 文本生成音频
+- Vidu 视频/图片/音频生成 [Vidu 参考生视频](https://docs.n1n.ai/vidu-reference-image-to-video.md): Vidu 参考图片生成视频
+- Vidu 视频/图片/音频生成 [Vidu 首尾帧生视频](https://docs.n1n.ai/vidu-start-end-frame-to-video.md): Vidu 首尾帧生成视频
+- Vidu 视频/图片/音频生成 [Vidu 获取请求结果](https://docs.n1n.ai/vidu-task-results.md): Vidu 获取请求结果
+- GPTs 相关 [GPT-4-All（分析图片）](https://docs.n1n.ai/329862125e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- GPTs 相关 [GPT-4-All（生成图片）](https://docs.n1n.ai/329862126e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- GPTs 相关 [GPTs 对话](https://docs.n1n.ai/329862127e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- Suno 文生音乐 > Suno 任务提交 [Suno 生成歌曲（灵感模式）](https://docs.n1n.ai/suno-music-generation-1.md): Suno 生成歌曲（灵感模式）
+- Suno 文生音乐 > Suno 任务提交 [Suno 生成歌曲（自定义模式）](https://docs.n1n.ai/suno-music-generation-2.md): Suno 生成歌曲（自定义模式）
+- Suno 文生音乐 > Suno 任务提交 [Suno 生成歌曲（续写模式）](https://docs.n1n.ai/suno-music-generation-3.md): Suno 生成歌曲（续写模式）
+- Suno 文生音乐 > Suno 任务提交 [Suno 生成歌曲（歌手风格）](https://docs.n1n.ai/suno-music-generation-4.md): Suno 生成歌曲（歌手风格）
+- Suno 文生音乐 > Suno 任务提交 [Suno 生成歌曲（上传歌曲二次创作）](https://docs.n1n.ai/suno-music-generation-5.md): Suno 生成歌曲（上传歌曲二次创作）
+- Suno 文生音乐 > Suno 任务提交 [Suno 生成歌曲（拼接歌曲）](https://docs.n1n.ai/suno-music-generation-6.md): Suno 生成歌曲（拼接歌曲）
+- Suno 文生音乐 > Suno 任务提交 [Suno 生成歌词](https://docs.n1n.ai/suno-music-lyrics-generation.md): Suno 生成歌词
+- Suno 文生音乐 > Suno 任务提交 [Suno 歌曲拼接](https://docs.n1n.ai/suno-music-concatenation.md): Suno 歌曲拼接
+- Suno 文生音乐 > Suno 任务提交 [Suno 报告上传完毕](https://docs.n1n.ai/suno-upload-finish.md): Suno 报告上传完毕
+- Suno 文生音乐 > Suno 任务提交 [Suno 查询上传处理状态](https://docs.n1n.ai/suno-upload-audio-process-status.md): Suno 查询上传处理状态
+- Suno 文生音乐 > Suno 任务提交 [Suno 初始化音频文件](https://docs.n1n.ai/suno-initialize-clip.md): Suno 初始化音频文件
+- Suno 文生音乐 > Suno 任务提交 [Suno 请求上传授权](https://docs.n1n.ai/suno-request-upload.md): Suno 请求上传授权
+- Suno 文生音乐 > Suno 任务提交 [Suno 使用 S3 上传示例](https://docs.n1n.ai/suno-s3-upload.md): Suno 使用 S3 上传示例
+- Suno 文生音乐 > Suno 查询接口 [Suno 批量获取任务](https://docs.n1n.ai/suno-fetch-batch-tasks.md): Suno 批量获取任务
+- Suno 文生音乐 > Suno 查询接口 [Suno 查询单个任务](https://docs.n1n.ai/suno-fetch-single-task.md): Suno 查询单个任务
+- Suno 文生音乐 > Suno 查询接口 [Suno 获取 wav](https://docs.n1n.ai/suno-get-clip-wav.md): Suno 获取 wav
+- Suno 文生音乐 > Suno 查询接口 [Suno Timing 歌词音频时间线](https://docs.n1n.ai/suno-timing.md): Suno Timing 歌词音频时间线
+- Suno 文生音乐 > Suno 查询接口 [Suno 场景详情获取](https://docs.n1n.ai/suno-feed.md): Suno 场景详情获取
+- Rerank 重排序模型 [重排序](https://docs.n1n.ai/329862124e0.md): 给定一个提示，该模型将返回一个或多个预测的完成，并且还可以返回每个位置的替代标记的概率。
+- Replicate 聚合平台 [查询任务](https://docs.n1n.ai/343276039e0.md): 官方文档: https://replicate.com/black-forest-labs/flux-kontext-max
+- Replicate 聚合平台 [创建任务-通过模型version（predictions）](https://docs.n1n.ai/343275967e0.md): version models 支持以下
+- Replicate 聚合平台 [创建任务 stability-ai/stable-diffusion](https://docs.n1n.ai/343275968e0.md): 官方文档: https://replicate.com/stability-ai/stable-diffusion
+- Replicate 聚合平台 [创建任务 stability-ai/sdxl](https://docs.n1n.ai/343275969e0.md): 官方文档: https://replicate.com/stability-ai/sdxl
+- Replicate 聚合平台 [创建任务 stability-ai/stable-diffusion-inpainting](https://docs.n1n.ai/343275970e0.md): 官方文档: https://replicate.com/stability-ai/stable-diffusion-inpainting
+- Replicate 聚合平台 [创建任务 stability-ai/stable-diffusion-img2img](https://docs.n1n.ai/343275971e0.md): 官方文档: https://replicate.com/stability-ai/stable-diffusion-img2img
+- Replicate 聚合平台 [创建任务 lucataco/flux-schnell-lora](https://docs.n1n.ai/343275972e0.md): 官方文档: https://replicate.com/lucataco/flux-schnell-lora
+- Replicate 聚合平台 [创建任务 lucataco/flux-dev-lora](https://docs.n1n.ai/343275973e0.md): 官方文档: https://replicate.com/lucataco/flux-dev-lora
+- Replicate 聚合平台 [创建任务 andreasjansson/stable-diffusion-animation](https://docs.n1n.ai/343275974e0.md): 官方文档:https://replicate.com/andreasjansson/stable-diffusion-animation
+- Replicate 聚合平台 [创建任务 sujaykhandekar/object-removal](https://docs.n1n.ai/343275975e0.md): 官方文档:https://replicate.com/sujaykhandekar/object-removal
+- Replicate 聚合平台 [创建任务 cjwbw/rembg](https://docs.n1n.ai/343275976e0.md): 官方文档:https://replicate.com/cjwbw/rembg
+- Replicate 聚合平台 [创建任务 lucataco/animate-diff](https://docs.n1n.ai/343275977e0.md): 官方文档:https://replicate.com/lucataco/animate-diff
+- Replicate 聚合平台 [创建任务 ideogram-ai/ideogram-v2-turbo](https://docs.n1n.ai/343275978e0.md): 官方文档:https://replicate.com/ideogram-ai/ideogram-v2-turbo
+- Replicate 聚合平台 [创建任务 black-forest-labs/flux-kontext-dev](https://docs.n1n.ai/343276040e0.md): 官方文档: https://replicate.com/black-forest-labs/flux-kontext-dev
+- Replicate 聚合平台 [创建任务 minimax/video-01-live](https://docs.n1n.ai/343275979e0.md): 官方文档:https://replicate.com/minimax/video-01-live
+- Replicate 聚合平台 [创建任务 minimax/video-01](https://docs.n1n.ai/343275980e0.md): 官方文档:https://replicate.com/minimax/video-01
+- Replicate 聚合平台 [创建任务 recraft-ai/recraft-v3](https://docs.n1n.ai/343275981e0.md): 官方文档:https://replicate.com/recraft-ai/recraft-v3
+- Replicate 聚合平台 [创建任务 recraft-ai/recraft-v3-svg](https://docs.n1n.ai/343275982e0.md): 官方文档:https://replicate.com/recraft-ai/recraft-v3-svg
+- Replicate 聚合平台 [创建任务 black-forest-labs/flux-1.1-pro-ultra](https://docs.n1n.ai/343275983e0.md): 官方文档: https://replicate.com/black-forest-labs/flux-1.1-pro-ultra
+- Replicate 聚合平台 [创建任务 black-forest-labs/flux-kontext-pro](https://docs.n1n.ai/343275984e0.md): 官方文档: https://replicate.com/black-forest-labs/flux-kontext-pro
+- Replicate 聚合平台 [创建任务 black-forest-labs/flux-kontext-max](https://docs.n1n.ai/343275985e0.md): 官方文档: https://replicate.com/black-forest-labs/flux-kontext-max
+- Replicate 聚合平台 [创建任务 flux-kontext-apps/multi-image-kontext-max](https://docs.n1n.ai/343275986e0.md): 官方文档:https://replicate.com/flux-kontext-apps/multi-image-kontext-max
+- Replicate 聚合平台 [创建任务 flux-kontext-apps/multi-image-kontext-pro](https://docs.n1n.ai/343275987e0.md): 官方文档:https://replicate.com/flux-kontext-apps/multi-image-kontext-pro
+- Replicate 聚合平台 [创建任务 lucataco/remove-bg](https://docs.n1n.ai/343275988e0.md): 官方文档:https://replicate.com/lucataco/remove-bg
+- Replicate 聚合平台 [创建任务 riffusion/riffusion](https://docs.n1n.ai/343275989e0.md): 官方文档:https://replicate.com/riffusion/riffusion
+- Replicate 聚合平台 [创建任务 black-forest-labs/flux-fill-dev](https://docs.n1n.ai/343275990e0.md): 官方文档:https://replicate.com/black-forest-labs/flux-fill-dev
+- Replicate 聚合平台 [创建任务 black-forest-labs/flux-fill-pro](https://docs.n1n.ai/343275991e0.md): 官方文档:https://replicate.com/black-forest-labs/flux-fill-pro
+- Replicate 聚合平台 [创建任务 google/imagen-4-fast](https://docs.n1n.ai/343275992e0.md): 官方文档:https://replicate.com/google/imagen-4-fast
+- Replicate 聚合平台 [创建任务 google/imagen-4-ultra](https://docs.n1n.ai/343275993e0.md): 官方文档:https://replicate.com/google/imagen-4-ultra
+- Replicate 聚合平台 [创建任务 google/imagen-4](https://docs.n1n.ai/343275994e0.md): 官方文档:https://replicate.com/google/imagen-4
+- Replicate 聚合平台 [创建任务 prunaai/vace-14b](https://docs.n1n.ai/343275995e0.md): 官方文档:https://replicate.com/prunaai/vace-14b
+- Replicate 聚合平台 [创建任务 bytedance/seedream-4](https://docs.n1n.ai/391588781e0.md): 
+- Fal-ai 聚合平台 > Falai-veo3 视频生成 [Fal-ai veo3 API 配置使用教程](https://docs.n1n.ai/fal-ai-veo3-api.md): Fal-ai veo3 API 配置使用教程
+- Fal-ai 聚合平台 > Falai-veo3 视频生成 [Fal-ai veo3 fast image to video API 配置教程](https://docs.n1n.ai/fal-ai-veo3-fast-image-to-video-api.md): Fal-ai veo3 fast image to video API 配置教程
+- Fal-ai 聚合平台 > Falai-veo3 视频生成 [Fal-ai veo3 fast API 配置教程](https://docs.n1n.ai/fal-ai-veo3-fast-api.md): Fal-ai veo3 fast API 配置教程
+- Fal-ai 聚合平台 > Falai-veo3 视频生成 [Fal-ai veo3 request 配置教程](https://docs.n1n.ai/fal-ai-veo3-request.md): Fal-ai veo3 request 配置教程
+- Fal-ai 聚合平台 > Falai-veo3 视频生成 [Fal-ai veo3 image to video 配置教程](https://docs.n1n.ai/fal-ai-veo3-image-to-video.md): Fal-ai veo3 image to video 配置教程
+- Fal-ai 聚合平台 [Fal-ai 获取请求结果](https://docs.n1n.ai/fal-ai-request.md): Fal-ai 获取请求结果
+- Fal-ai 聚合平台 [Fal-ai Flux-1 dev](https://docs.n1n.ai/fal-ai-flux-1-dev.md): Fal-ai Flux-1 dev
+- Fal-ai 聚合平台 [Fal-ai Flux-1 dev image to image](https://docs.n1n.ai/fal-ai-flux-1-dev-image-to-image.md): Fal-ai Flux-1 dev image to image
+- Fal-ai 聚合平台 [Fal-ai Flux-1 dev redux 配置教程](https://docs.n1n.ai/fal-ai-flux-1-dev-redux.md): Fal-ai Flux-1 dev redux 配置教程
+- Fal-ai 聚合平台 [Fal-ai Flux-1 schnell redux 配置教程](https://docs.n1n.ai/fal-ai-flux-1-schnell-redux.md): Fal-ai Flux-1 schnell redux 配置教程
+- Fal-ai 聚合平台 [Fal-ai flux pro kontext 配置教程](https://docs.n1n.ai/fal-ai-flux-pro-kontext.md): Fal-ai flux pro kontext 配置教程
+- Fal-ai 聚合平台 [Fal-ai flux pro kontext text to image 配置教程](https://docs.n1n.ai/fal-ai-flux-pro-kontext-text-to-image.md): Fal-ai flux pro kontext text to image 配置教程
+- Fal-ai 聚合平台 [Fal-ai flux pro kontext max 配置教程](https://docs.n1n.ai/fal-ai-flux-pro-kontext-max.md): Fal-ai flux pro kontext max 配置教程
+- Fal-ai 聚合平台 [Fal-ai flux pro kontext max multi 配置教程](https://docs.n1n.ai/fal-ai-flux-pro-kontext-max-multi.md): Fal-ai flux pro kontext max multi 配置教程
+- Fal-ai 聚合平台 [Fal-ai wan v2.2-a14b image to image 配置教程](https://docs.n1n.ai/fal-ai-wan-v2_2-a14b-image-to-image.md): Fal-ai wan v2.2-a14b image to image 配置教程
+- Fal-ai 聚合平台 [Fal-ai seedream v4 text to image 配置教程](https://docs.n1n.ai/fal-ai-seedream-v4-text-to-image.md): Fal-ai seedream v4 text to image 配置教程
+- Fal-ai 聚合平台 [Fal-ai seedream v4 edit 配置教程](https://docs.n1n.ai/fal-ai-seedream-v4-edit.md): Fal-ai seedream v4 edit 配置教程
+- Fal-ai 聚合平台 [Fal-ai vidu reference to image 配置教程](https://docs.n1n.ai/fal-ai-vidu-reference-to-image.md): Fal-ai vidu reference to image 配置教程
+- Fal-ai 聚合平台 [Fal-ai imagen4 preview 配置教程](https://docs.n1n.ai/fal-ai-imagen4-preview.md): Fal-ai imagen4 preview 配置教程
+- Fal-ai 聚合平台 [Fal-ai qwen image edit lora 配置教程](https://docs.n1n.ai/fal-ai-qwen-image-edit-lora.md): Fal-ai qwen image edit lora 配置教程
+- Fal-ai 聚合平台 [Fal-ai qwen image edit plus 配置教程](https://docs.n1n.ai/fal-ai-qwen-image-edit-plus.md): Fal-ai qwen image edit plus 配置教程
+- Fal-ai 聚合平台 [Fal-ai kling video v2.5 turbo pro text to video 配置教程](https://docs.n1n.ai/fal-ai-kling-video-v2_5-turbo-pro-text-to-video.md): Fal-ai kling video v2.5 turbo pro text to video 配置教程
+- Fal-ai 聚合平台 [Fal-ai kling video v2.5 turbo pro image to video 配置教程](https://docs.n1n.ai/fal-ai-kling-video-v2_5-turbo-pro-image-to-video.md): Fal-ai kling video v2.5 turbo pro image to video 配置教程
+- Fal-ai 聚合平台 [Fal-ai flux lora 配置教程](https://docs.n1n.ai/fal-ai-flux-lora.md): Fal-ai flux lora 配置教程
+- Fal-ai 聚合平台 [Fal-ai flux lora image to image 配置教程](https://docs.n1n.ai/fal-ai-flux-lora-image-to-image.md): Fal-ai flux lora image to image 配置教程
+- Fal-ai 聚合平台 [Fal-ai flux lora inpainting 配置教程](https://docs.n1n.ai/fal-ai-flux-lora-inpainting.md): Fal-ai flux lora inpainting 配置教程
+- Fal-ai 聚合平台 [Fal-ai kling video v2.5 turbo pro text to video 配置教程](https://docs.n1n.ai/fal-ai-kling-video-v2_5-turbo-pro-text-to-video-api.md): Fal-ai kling video v2.5 turbo pro text to video 配置教程
+- Fal-ai 聚合平台 [Fal-ai qwen image edit lora 配置教程](https://docs.n1n.ai/fal-ai-qwen-image-edit-lora-api.md): Fal-ai qwen image edit lora 配置教程

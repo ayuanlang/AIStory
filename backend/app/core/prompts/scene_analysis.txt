@@ -127,15 +127,23 @@
 - 背景硬排除（Hard Exclusion, Mandatory）：`Excluded Set` 内元素不得成为当前镜头主背景或中景主锚点；若出现则结果无效，必须重写。
 - 构图去耦（Composition Decoupling, Mandatory）：反向镜头必须显式声明 `new primary anchor`，不得沿用 Base 的 primary anchor 作为当前主锚点。
 - 层级迁移失败防呆（Anti-Failure Guard）：若反向结果仍保留 Base 前景/中景主体为当前前景主锚点、未后移到背景，判为无效 Delta，必须重写。
+- 方向切换专门环境实体硬规则（Mandatory）：凡涉及 `Front/Reverse`、`门内/门外`、`窗内/窗外`、`桌前/桌后`、`柜台外/柜台内`、`台前/台后`、`上层/下层` 等观察方向切换，必须**新建一个专门环境实体**承接该方向版本，不得只在原环境 prose 里追加一句 Delta 就算完成。
+  - 固定要求：新环境实体必须满足 `Environment Relation=VARIANT_OF:<BaseEnv>`，`Base Environment Reference=<BaseEnv>`，并在 Part 2 `environments` 中作为独立对象输出。
+  - 依赖要求：该专门环境实体必须显式依赖 Base 环境，写出 `visual_dependencies=[ENV:[BaseEnv]]` 与 `dependency_strategy`，说明“继承结构/材质/光照锚点，只改变方向、可见集合、构图与动态部件状态”。
+  - 禁止写法：禁止只保留一个 `ENV:[BaseEnv]`，再在 Scene/Beat 里口头说明“此处反向看”或“门外看内”；方向切换若没有对应的专门环境实体，判为无效。
 - 强约束附加句（推荐）：`Reference usage scope: structure/material/lighting style only; ignore base composition and original background dominance.`
 - 方向切换推荐写法（可直接复用）：
-  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved to opposite axis side behind ENV:[AudienceArea], now facing ENV:[MainStage] entrance; Axis Side: left -> right; Background Set Change: Visible Set = [stage portal, curtain rail, front seats], Excluded Set = [backstage corridor, rear exit door]; Lighting Direction Change: key light now front-right motivated by stage practicals; Framing Change: wide-to-mid with stage portal centered; Dynamic Parts State: None}`。
-- 层级重排示例（Base 前景后移为当前背景）：
-  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved behind ENV:[DeskZone], now facing ENV:[EntranceCorridor]; Axis Side: left -> right; Background Set Change: Visible Set = [entrance door, corridor wall lamps, visitor chairs], Excluded Set = [window wall panorama, skyline glass reflection as dominant backdrop]; Lighting Direction Change: key shifts to back-right from window spill; Framing Change: medium shot with ENV:[EntranceDoor] and visitor chairs as MG anchor, desk edge no longer dominant; Depth Role Reassignment: Base FG/MG:[DeskEdge, DeskFrontPlane] -> Current BG:[DeskEdge, DeskFrontPlane]; Base BG:[EntranceDoor, CorridorWall] -> Current MG:[EntranceDoor, VisitorChairs]; Dynamic Parts State: None}`。
-- 方向切换 Few-shot A（门内看外 -> 门外看内）：
-  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint moved from inside doorway threshold to exterior corridor side, now facing inward to ENV:[RoomEntrance]; Axis Side: right -> left; Background Set Change: Visible Set = [door frame interior edge, corridor wall lamps, entry mat], Excluded Set = [window-side bookshelf, bed corner, inner desk area]; Lighting Direction Change: key light switches to corridor practicals from viewer-left; Framing Change: medium-wide with doorway centered and room depth behind; Dynamic Parts State: PROP:[Door](Open -> Half-Open, trigger: draft airflow and closer damping)}`。
-- 方向切换 Few-shot B（街道正向 -> 街道反向）：
-  `Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint relocated to opposite sidewalk across traffic lane, now facing reverse toward ENV:[CrosswalkJunction]; Axis Side: left -> right; Background Set Change: Visible Set = [crosswalk signal pole, storefront neon, bus-stop shelter], Excluded Set = [alley dumpster row, rear parking gate, service entrance shutter]; Lighting Direction Change: key light becomes back-right from street signage and vehicle headlights; Framing Change: wide shot with crosswalk signal as new composition anchor; Dynamic Parts State: None}`。
+  `新环境实体：ENV:[<Base>_<DirectionTag>_<Scale>]，Environment Relation=VARIANT_OF:<Base>，Base Environment Reference=<Base>。Environment Delta = {Viewpoint Anchor/Viewing Direction: ..., Axis Side: ..., Background Set Change: Visible Set=[...], Excluded Set=[...], Lighting Direction Change: ..., Framing Change: ..., Dynamic Parts State: ...}`。
+- 层级重排简式（Base 前景后移为当前背景）：
+  `Depth Role Reassignment: Base FG/MG:[A,B] -> Current BG:[...]; Base BG:[...] -> Current MG/FG:[...]`。
+- 方向切换简例 A（门内 -> 门外）：
+  `ENV:[RoomDoor_Reverse_Mid] VARIANT_OF ENV:[RoomDoor_Front_Mid]；Delta = {Viewpoint Anchor/Viewing Direction: moved to corridor side facing inward; Axis Side: right -> left; Background Set Change: Visible Set=[door frame, corridor lamp, entry mat], Excluded Set=[bed corner, inner desk]; Lighting Direction Change: corridor practical key; Framing Change: doorway-centered medium-wide; Dynamic Parts State: PROP:[Door](Open -> Half-Open, trigger: closer damping)}`。
+- 方向切换简例 B（窗内 -> 窗外）：
+  `ENV:[WindowBay_Reverse_Mid] VARIANT_OF ENV:[WindowBay_Front_Mid]；Delta = {Viewpoint Anchor/Viewing Direction: moved to exterior side facing inward; Axis Side: left -> right; Background Set Change: Visible Set=[window mullion, sill, exterior rail], Excluded Set=[rear corridor wall]; Lighting Direction Change: exterior spill with warm interior return; Framing Change: window-centered medium-wide; Dynamic Parts State: None}`。
+- 方向切换简例 C（桌前/柜台外 -> 桌后/柜台内）：
+  `ENV:[WorkSurface_Reverse_Mid] VARIANT_OF ENV:[WorkSurface_Front_Mid]；Delta = {Viewpoint Anchor/Viewing Direction: moved behind work surface facing entrance side; Axis Side: right -> left; Background Set Change: Visible Set=[rear edge, chair back, service opening], Excluded Set=[front apron, queue lane]; Lighting Direction Change: overhead practical key; Framing Change: rear-edge medium shot; Dynamic Parts State: None}`。
+- 方向切换简例 D（台前/下层 -> 台后/上层）：
+  `ENV:[StageOrStair_Reverse_Wide] VARIANT_OF ENV:[StageOrStair_Front_Wide]；Delta = {Viewpoint Anchor/Viewing Direction: moved to opposite side facing back across the main lane/void; Axis Side: left -> right; Background Set Change: Visible Set=[rear rail, landing edge, backstage leg], Excluded Set=[front rail as dominant FG]; Lighting Direction Change: top practical or stage practical key; Framing Change: reverse wide with new rear anchor; Dynamic Parts State: None}`。
 - `Dynamic Parts State` 非 `None` 时必须写 `Before -> After + trigger`（仅允许非角色、非叙事触发因素）。
   - 合规：`Dynamic Parts State: PROP:[Door](Open -> Closed, trigger: hinge self-close + latch tension)`。
   - 不合规：`Dynamic Parts State: Door: Closed`
@@ -194,6 +202,9 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 #### {Stage}
 - 必须是 Environment 内可执行表演的具体空间，不是抽象点。
 - 必须成为视觉中心，人物落位以其为参照。
+- 必须写清 `{Stage}` 由哪些固定环境实体共同构成，例如门框、门槛、走廊、外侧平台、桌组、舞台口、楼梯起点、窗边工作区等；禁止把 `{Stage}` 写成无实体支撑的抽象区域名。
+- 必须交代 `{Stage}` 的边界、进出入口、可站位面、转身/停顿区与主要通行动线；后续 Environment prompt 必须围绕这些 `{Stage}` 实体展开，而不是脱离 `{Stage}` 单独堆砌空间形容词。
+- 若 `{Beats}` 涉及任何“界面/阈值两侧切换”动作，例如 `门内 -> 门外`、`洞内 -> 洞外`、`窗内 -> 窗外`、`桌前 -> 桌后`、`柜台内 -> 柜台外`、`走廊 -> 房间`、`台上 -> 台下` 等，`{Stage}` 必须提前写出该界面两侧的对应实体、通过宽度/可达净空、必要的开合或遮挡部件，以及连续动作路径，确保该动作在环境上物理可执行。
 
 #### {Environment Context}
 - 一句话交代材质/构造/光影/核心陈设。
@@ -320,10 +331,18 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ### 1) Environment Prompt Template
 - 硬约束优先级（Mandatory）：本小节约束高于 Environment 示例中的历史写法；若冲突，以本小节最新硬约束为准。
 - 字段回写硬规则（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 不得只写抽象镜头学描述，必须显式吸收并可被人工核对地回写以下结构字段中的有效信息：`name/name_en`、`atmosphere`、`visual_params`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic`。其中 `name/name_en` 不得原样当作标签堆砌，但其场所身份、方向属性、景别属性、昼夜/光照属性必须转译进提示词语义。
+- `{Stage}` 中心写作规则（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 必须围绕当前 Scene 的 `{Stage}`（核心舞台）组织描述，先把承载表演的核心空间和其固定实体写清，再展开 FG/MG/BG、光照、材质与 Delta。禁止只写“办公室/走廊/门口氛围”这类空泛场所词，而不说明 `{Stage}` 由哪些可见实体构成。
+- `{Stage}` 实体回写规则（Mandatory）：Environment prompt 必须把 `{Stage}` 的关键环境实体显式落成可见物体与空间结构，例如门框内侧、门扇开启角度、门槛压条、外侧走廊壁灯、台阶起点、桌边通道、舞台口边框、窗口工作台、栏杆转角等；禁止用“door area / outside space / action zone / transition area”这类抽象占位替代具体实体。
+- 动作通道预埋规则（Mandatory）：Environment prompt 必须服务 `{Beats}` 的动作空间，但只能写成静态物理条件。若某 Beat 需要跨越任何界面或阈值，例如穿门、出洞、探窗内外、绕到桌后、进出台口、进入柜台内侧或切换室内外，环境提示词必须预埋对应的可执行通道、净空、转身区、视线通廊与界面两侧结构，让下游动作有明确落点；禁止只写“空间可通行”而不说明到底哪条路径可通行。
+- 界面两侧具体化规则（Mandatory）：当 Beat 涉及任何“内/外、前/后、上/下、台前/台后、障碍前侧/后侧”的界面切换，例如 `门内看外 / 门外看内 / 洞内看外 / 洞外看内 / 窗内看外 / 窗外看内 / 桌前到桌后 / 柜台外到柜台内`，Environment prompt 必须具体写出该界面的两侧实体与接触结构，例如框体、边缘、台面、槛口、洞口、窗沿、桌边、柜台挡板、外侧落脚区、内侧站位区，以及两侧各自的 Visible Set / Excluded Set 与层级重排。若只写 `doorway transition`、`inside/outside shift`、`reverse side of desk` 这类抽象短语而没有两侧实体清单与空间关系，判为无效。
+- 界面词触发强制回写规则（Mandatory）：只要 `{Beats}`、`{Observer View}`、`{Stage}` 或上游剧本文本出现任何“界面两侧”表达，例如 `内/外`、`前/后`、`里/外`、`台前/台后`、`桌前/桌后`、`窗内/窗外`、`洞内/洞外`、`柜台内/柜台外`、`门内/门外`、`入口内侧/外侧`，Environment prompt 就必须强制回写该界面的对应实体、两侧站位面、可通行路径和 Visible/Excluded 集合；不得因为 beat 里没展开细节就省略环境侧的实体补全。
 - 项目语言-环境语境对齐规则（Mandatory）：Environment 设计不得只做抽象空间拼装；若剧本未明确给出地域/城市/建筑系统，则必须按 `Project Context.Language` 对应的现实生活环境进行默认设计补全，包括建筑细部、室内组织、导视/招牌语言、办公或家居陈设、材质老化方式与日常使用痕迹。英文项目默认优先采用英美语境的空间与标识系统，禁止无依据照搬中文办公区/住宅语境样板。
 - 字段语言职责固定（Mandatory）：Environment 模板中的 `description_cn`、`generation_prompt_cn` 始终必须输出中文；`name_en`、`generation_prompt_en`、`negative_prompt_en` 始终必须输出英文；`anchor_description` 始终必须输出英文短语。以上字段语言职责不受项目语言影响。
 - 场所身份落点规则（Mandatory）：Environment prompt 必须先交代“这是什么空间、属于何种功能场所、当前是哪个视角/方向/景别/时段版本”，再展开 FG/MG/BG、Delta 与光照。禁止只有构图，没有空间身份。
 - 依赖关系回写规则（Mandatory）：当 environment 存在 `visual_dependencies` 或 `dependency_strategy` 非 `Original` 时，`generation_prompt_cn/en` 必须明确写出“继承哪个 base environment 的哪些稳定锚点，以及当前仅改变哪些方向/构图/光照/状态项”。
+- Beat 触发环境状态归属规则（Mandatory）：若 `{Beats}` 中的动作会直接改变环境固定结构或不可独立列为 prop 的场景组成物，例如撞击造成墙面开裂、门框破损、玻璃幕墙碎裂、桌面固定台灯翻倒并仍属于环境布置、柜台挡板断裂、地面积水扩散、烟熏/焦黑/坍塌/燃烧痕迹等，必须把这些变化写入对应 `ENV:[...]` 的 `description_cn` 与 `generation_prompt_cn/en`，不得只留在 beat 文案里。
+- 环境初始态/变化态拆分规则（Mandatory）：若同一 Scene 或连续 Beats 同时需要“变化前初始状态”和“变化后结果状态”两个都可被镜头识别的环境版本，必须拆成两个独立 environment 条目或明确 `ENV:[Base] -> ENV:[Variant]` 关系；禁止在同一个 environment 描述里混写“完好+破坏后”双状态。若当前镜头只使用初始态，就把完好锚点写清；若当前镜头只使用变化态，就把破坏结果、残留位置与受影响结构写清。
+- 环境/道具归属分流规则（Mandatory）：Beat 引发的状态变化必须先判断归属。固定建筑结构、内建陈设、不可移动的大型空间组成件，优先归入 environment；手持物、可搬动物、可单独复用的关键对象，归入 prop。禁止把墙体裂缝、门框破口、地面碎玻璃分布这类环境结果误写成 prop，也禁止把可独立复用的破损关键物只埋在 environment prose 中不建 prop。
 - 去叙事化硬规则（Mandatory）：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅允许描述“抽象空间结构、几何关系、光照层次、材质质感、构图层级”，不得涉及角色、剧情事件、动作因果、对话语义。
 - 泄漏根因提示（Mandatory）：高频误差来自“把 OTS 的角色关系（A/B shoulder）从分镜层串写进环境提示词”。处理顺序必须为：先完成 Scene/Beats，再单独生成 Environment prompt，最后执行角色词剔除。
 - OTS 环境生成顺序（Mandatory）：若某 Shot 计划采用 OTS，生成顺序必须固定为：先完成角色分镜与 OTS 关系，再单独抽取该视角下承载剧情空间的 **纯环境 clean plate**，最后仅在 Shot 级叠加角色肩部/头部/动作信息。禁止反向操作成“先写带人物关系或事件关系的 OTS 画面，再把人物/剧情信息回填进 Environment”。
@@ -420,6 +439,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - 项目语言-道具体系对齐规则（Mandatory）：若剧本未明确给出品牌、产地、工业体系或年代地域特征，道具设计必须按 `Project Context.Language` 对应的现实语境补全，包括常见材质处理、印刷语言、包装方式、工业造型、办公/家居用品体系与磨损逻辑。英文项目默认优先采用英美语境道具体系，禁止无依据把中文标签、中文制式生活器物或示例中的默认道具直接搬进英文项目。
 - 道具身份落点规则（Mandatory）：Prop prompt 必须明确该物体是什么、属于手持还是静置、当前处于何种单一状态、有哪些不可丢失的识别结构。若 `description_cn` 中有磨损、氧化、裂痕、液位、开合状态、雕刻、标签等信息，必须回写进 prompt 主体段落。
 - 依赖关系回写规则（Mandatory）：当 prop 不是 `Original` 时，prompt 必须写清“继承哪一版道具的哪些稳定锚点，以及当前只改变哪些状态项”，不得只在 JSON 的 `dependency_strategy` 中声明而提示词完全失语。
+- Beat 触发道具状态回写规则（Mandatory）：若 `{Beats}` 中的动作会直接改变某个可独立识别的道具状态，例如被撞裂、被砸弯、洒出液体、封口撕开、灯泡炸裂、屏幕碎裂、刀刃崩口、箱体变形、绳索断开、表面沾灰/沾水/烧焦/污染，这些变化必须写入对应 `PROP:[...]` 的 `description_cn`、`generation_prompt_cn/en`、`visual_dependencies` 与 `dependency_strategy.logic`，不得只在 beat 过程里提一句“被砸坏了”。
+- Beat 触发道具拆分规则（Mandatory）：若镜头需要同时保留道具的初始态与变化态，必须拆成多个独立 prop 条目并建立依赖链，例如 `PROP:[Bottle_Intact] -> PROP:[Bottle_Shattered]`、`PROP:[Monitor_On] -> PROP:[Monitor_Cracked_Black]`；禁止单一道具条目同时描述“完好+破损后”或“关闭+炸裂后”双状态。
 - 具体示例（仅示范写法，不可照抄值）：
   - 中文项目 / `generation_prompt_en` 示例：`Photoreal prop sheet for Antique Pocket Watch, treated as a static hero object study rather than a generic accessory. Preserve the identity cues from its description: brushed brass body, mild edge dents, scratched crystal, engraved inner lid pattern, and a fully readable hinged opening structure in one stable intact state. Render it as a strict object-only six-view study from a camera centered on the turntable and slightly above the midline, moving through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep material depth, metal oxidation, and engraved detail legible without flattening. Use 50mm for structure views and 70mm macro for close detail. White background, high-resolution output, no hands, no characters, no body parts.`
   - 中文项目 / `generation_prompt_cn` 示例：`写实道具六视图：古董怀表，作为静置型关键道具进行主资产表达，而不是泛化小配件。必须保留其身份特征：拉丝黄铜表壳、边缘细小磕碰、镜面轻微划痕、内盖雕刻纹理，以及完整可开合的铰链结构，并保持单一稳定状态。机位锚点位于转台中心、镜头略高于物体中线，视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证金属材质、氧化痕迹与雕刻层次清晰可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率输出。`

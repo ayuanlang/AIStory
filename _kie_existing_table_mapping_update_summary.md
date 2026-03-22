@@ -7,8 +7,8 @@
 
 ## Confidence distribution
 - HIGH: 159
-- MEDIUM: 389
-- LOW: 277
+- MEDIUM: 448
+- LOW: 218
 
 ## Note
 - `note` column uses `std_to_api:<rule>` to preserve mapping rule traceability.

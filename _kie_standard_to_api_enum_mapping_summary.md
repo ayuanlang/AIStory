@@ -26,8 +26,8 @@
 ## 规则分布
 - exact: 158
 - fallback_baseline: 218
-- fallback_min: 59
-- nearest_lower: 274
+- nearest: 294
+- nearest_lower: 39
 - nearest_ratio: 109
 - semantic_alias: 1
 - semantic_exact: 6
