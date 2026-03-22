@@ -202,13 +202,6 @@ def _release_db_connection(db: Optional[Session], reason: str = "") -> None:
             logger.debug("[db_release] rollback skipped | reason=%s error=%s", reason, exc)
         else:
             logger.debug("[db_release] rollback skipped | error=%s", exc)
-    try:
-        db.close()
-    except Exception as exc:
-        if reason:
-            logger.debug("[db_release] close skipped | reason=%s error=%s", reason, exc)
-        else:
-            logger.debug("[db_release] close skipped | error=%s", exc)
 
 _VIDEO_DEDUP_WINDOW_SECONDS = 20
 _VIDEO_DEDUP_MAX_CACHE = 256
