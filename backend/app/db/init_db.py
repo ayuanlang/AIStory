@@ -32,6 +32,120 @@ _REVIEW_MODELS_AVAILABLE = all(
 logger = logging.getLogger(__name__)
 
 
+def _compile_column_type_sql(column) -> str:
+    try:
+        return column.type.compile(dialect=engine.dialect)
+    except Exception:
+        return str(column.type)
+
+
+def _ensure_missing_table_columns(table_name: str, model, *, is_postgres: bool) -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table(table_name):
+        return
+
+    existing_cols = {c['name'] for c in inspector.get_columns(table_name)}
+    missing_columns = [
+        column
+        for column in model.__table__.columns
+        if not column.primary_key and column.name not in existing_cols
+    ]
+    if not missing_columns:
+        return
+
+    with engine.begin() as conn:
+        for column in missing_columns:
+            column_type_sql = _compile_column_type_sql(column)
+            ddl = f"ALTER TABLE {table_name} ADD COLUMN {'IF NOT EXISTS ' if is_postgres else ''}{column.name} {column_type_sql}"
+            conn.execute(text(ddl))
+
+    logger.info(
+        "Ensured missing columns for %s: %s",
+        table_name,
+        ", ".join(column.name for column in missing_columns),
+    )
+
+
+def _ensure_review_workflow_schema(*, is_postgres: bool) -> None:
+    if not _REVIEW_MODELS_AVAILABLE:
+        logger.warning("Skipping project asset review table bootstrap because review models are unavailable")
+        return
+
+    inspector = inspect(engine)
+    try:
+        if not inspector.has_table("project_asset_review_threads"):
+            ProjectAssetReviewThread.__table__.create(bind=engine, checkfirst=True)
+            logger.info("Created project_asset_review_threads table")
+        if not inspector.has_table("project_asset_review_rounds"):
+            ProjectAssetReviewRound.__table__.create(bind=engine, checkfirst=True)
+            logger.info("Created project_asset_review_rounds table")
+        if not inspector.has_table("project_asset_review_messages"):
+            ProjectAssetReviewMessage.__table__.create(bind=engine, checkfirst=True)
+            logger.info("Created project_asset_review_messages table")
+    except Exception as exc:
+        logger.error(f"Failed to ensure project asset review tables: {exc}")
+        return
+
+    try:
+        _ensure_missing_table_columns("project_asset_review_threads", ProjectAssetReviewThread, is_postgres=is_postgres)
+        _ensure_missing_table_columns("project_asset_review_rounds", ProjectAssetReviewRound, is_postgres=is_postgres)
+        _ensure_missing_table_columns("project_asset_review_messages", ProjectAssetReviewMessage, is_postgres=is_postgres)
+
+        with engine.begin() as conn:
+            if is_postgres:
+                conn.execute(text("UPDATE project_asset_review_threads SET title = COALESCE(title, '')"))
+                conn.execute(text("UPDATE project_asset_review_threads SET status = COALESCE(NULLIF(status, ''), 'open')"))
+                conn.execute(text("UPDATE project_asset_review_threads SET latest_round_no = COALESCE(latest_round_no, 0)"))
+                conn.execute(text("UPDATE project_asset_review_threads SET latest_activity_at = COALESCE(latest_activity_at, updated_at, created_at)"))
+                conn.execute(text("UPDATE project_asset_review_threads SET created_at = COALESCE(created_at, updated_at, latest_activity_at, '')"))
+                conn.execute(text("UPDATE project_asset_review_threads SET updated_at = COALESCE(updated_at, latest_activity_at, created_at, '')"))
+                conn.execute(text("UPDATE project_asset_review_threads SET requester_last_read_at = COALESCE(requester_last_read_at, created_at, updated_at, latest_activity_at)"))
+
+                conn.execute(text("UPDATE project_asset_review_rounds SET round_no = COALESCE(round_no, 1)"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET scope_type = COALESCE(NULLIF(scope_type, ''), 'all_current')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET entity_required = COALESCE(entity_required, TRUE)"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET shot_required = COALESCE(shot_required, TRUE)"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET entity_decision = COALESCE(NULLIF(entity_decision, ''), 'pending')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET shot_decision = COALESCE(NULLIF(shot_decision, ''), 'pending')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET overall_status = COALESCE(NULLIF(overall_status, ''), 'pending_reviewer')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET selected_entity_ids = COALESCE(selected_entity_ids, '[]'::json)"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET selected_shot_ids = COALESCE(selected_shot_ids, '[]'::json)"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET created_at = COALESCE(created_at, updated_at, '')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET updated_at = COALESCE(updated_at, created_at, '')"))
+
+                conn.execute(text("UPDATE project_asset_review_messages SET sender_role = COALESCE(NULLIF(sender_role, ''), 'requester')"))
+                conn.execute(text("UPDATE project_asset_review_messages SET message_type = COALESCE(NULLIF(message_type, ''), 'message')"))
+                conn.execute(text("UPDATE project_asset_review_messages SET created_at = COALESCE(created_at, '')"))
+            else:
+                conn.execute(text("UPDATE project_asset_review_threads SET title = COALESCE(title, '')"))
+                conn.execute(text("UPDATE project_asset_review_threads SET status = COALESCE(NULLIF(status, ''), 'open')"))
+                conn.execute(text("UPDATE project_asset_review_threads SET latest_round_no = COALESCE(latest_round_no, 0)"))
+                conn.execute(text("UPDATE project_asset_review_threads SET latest_activity_at = COALESCE(latest_activity_at, updated_at, created_at)"))
+                conn.execute(text("UPDATE project_asset_review_threads SET created_at = COALESCE(created_at, updated_at, latest_activity_at, '')"))
+                conn.execute(text("UPDATE project_asset_review_threads SET updated_at = COALESCE(updated_at, latest_activity_at, created_at, '')"))
+                conn.execute(text("UPDATE project_asset_review_threads SET requester_last_read_at = COALESCE(requester_last_read_at, created_at, updated_at, latest_activity_at)"))
+
+                conn.execute(text("UPDATE project_asset_review_rounds SET round_no = COALESCE(round_no, 1)"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET scope_type = COALESCE(NULLIF(scope_type, ''), 'all_current')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET entity_required = COALESCE(entity_required, 1)"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET shot_required = COALESCE(shot_required, 1)"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET entity_decision = COALESCE(NULLIF(entity_decision, ''), 'pending')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET shot_decision = COALESCE(NULLIF(shot_decision, ''), 'pending')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET overall_status = COALESCE(NULLIF(overall_status, ''), 'pending_reviewer')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET selected_entity_ids = COALESCE(selected_entity_ids, '[]')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET selected_shot_ids = COALESCE(selected_shot_ids, '[]')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET created_at = COALESCE(created_at, updated_at, '')"))
+                conn.execute(text("UPDATE project_asset_review_rounds SET updated_at = COALESCE(updated_at, created_at, '')"))
+
+                conn.execute(text("UPDATE project_asset_review_messages SET sender_role = COALESCE(NULLIF(sender_role, ''), 'requester')"))
+                conn.execute(text("UPDATE project_asset_review_messages SET message_type = COALESCE(NULLIF(message_type, ''), 'message')"))
+                conn.execute(text("UPDATE project_asset_review_messages SET created_at = COALESCE(created_at, '')"))
+
+        logger.info("Ensured project asset review workflow schema compatibility")
+    except Exception as exc:
+        logger.error(f"Failed to ensure project asset review workflow schema compatibility: {exc}")
+
+
 def _deactivate_legacy_duplicate_base_billing_rules() -> None:
     """Keep only the newest active base pricing rule per system API."""
     try:
@@ -211,44 +325,7 @@ def check_and_migrate_tables():
         except Exception as e:
             logger.error(f"Failed to ensure project_shares review columns: {e}")
 
-        # Ensure project asset review tables exist for multi-round reviewer workflow.
-        try:
-            if _REVIEW_MODELS_AVAILABLE:
-                inspector = inspect(engine)
-                if not inspector.has_table("project_asset_review_threads"):
-                    ProjectAssetReviewThread.__table__.create(bind=engine, checkfirst=True)
-                    logger.info("Created project_asset_review_threads table")
-                if not inspector.has_table("project_asset_review_rounds"):
-                    ProjectAssetReviewRound.__table__.create(bind=engine, checkfirst=True)
-                    logger.info("Created project_asset_review_rounds table")
-                if not inspector.has_table("project_asset_review_messages"):
-                    ProjectAssetReviewMessage.__table__.create(bind=engine, checkfirst=True)
-                    logger.info("Created project_asset_review_messages table")
-            else:
-                logger.warning("Skipping project asset review table bootstrap because review models are unavailable")
-        except Exception as e:
-            logger.error(f"Failed to ensure project asset review tables: {e}")
-
-        try:
-            if _REVIEW_MODELS_AVAILABLE:
-                inspector = inspect(engine)
-                if inspector.has_table("project_asset_review_threads"):
-                    review_thread_cols = {c['name'] for c in inspector.get_columns('project_asset_review_threads')}
-                    with engine.begin() as conn:
-                        if 'requester_last_read_at' not in review_thread_cols:
-                            if is_postgres:
-                                conn.execute(text("ALTER TABLE project_asset_review_threads ADD COLUMN IF NOT EXISTS requester_last_read_at VARCHAR"))
-                            else:
-                                conn.execute(text("ALTER TABLE project_asset_review_threads ADD COLUMN requester_last_read_at VARCHAR"))
-                        if 'reviewer_last_read_at' not in review_thread_cols:
-                            if is_postgres:
-                                conn.execute(text("ALTER TABLE project_asset_review_threads ADD COLUMN IF NOT EXISTS reviewer_last_read_at VARCHAR"))
-                            else:
-                                conn.execute(text("ALTER TABLE project_asset_review_threads ADD COLUMN reviewer_last_read_at VARCHAR"))
-                        conn.execute(text("UPDATE project_asset_review_threads SET requester_last_read_at = COALESCE(requester_last_read_at, created_at)"))
-                    logger.info("Ensured project_asset_review_threads read-tracking columns")
-        except Exception as e:
-            logger.error(f"Failed to ensure review thread read-tracking columns: {e}")
+        _ensure_review_workflow_schema(is_postgres=is_postgres)
 
         # Ensure provider_key_pool table exists
         try:

@@ -37,29 +37,38 @@ _DB_BOOT_MAX_RETRIES = 5
 _DB_BOOT_RETRY_DELAY = 2  # seconds
 
 
-def _bootstrap_db():
-    """Run DB schema creation, migrations and seed data with retry."""
+def _bootstrap_db_schema() -> bool:
+    """Run blocking schema/bootstrap work before serving requests."""
     for _attempt in range(1, _DB_BOOT_MAX_RETRIES + 1):
         try:
             Base.metadata.create_all(bind=engine)
             check_and_migrate_tables()
             create_default_superuser()
-            init_initial_data()
-            try:
-                _warm_runtime_caches()
-            except Exception as cache_exc:
-                logger.warning("Runtime cache warm failed after bootstrap: %s", cache_exc)
-            return  # success
+            return True
         except Exception as exc:
             if _attempt < _DB_BOOT_MAX_RETRIES:
                 logger.warning(
-                    "DB bootstrap attempt %d/%d failed: %s — retrying in %ds",
+                    "Critical DB bootstrap attempt %d/%d failed: %s — retrying in %ds",
                     _attempt, _DB_BOOT_MAX_RETRIES, exc, _DB_BOOT_RETRY_DELAY,
                 )
                 time.sleep(_DB_BOOT_RETRY_DELAY)
             else:
-                logger.error("DB bootstrap failed after %d attempts, starting anyway: %s",
+                logger.error("Critical DB bootstrap failed after %d attempts: %s",
                              _DB_BOOT_MAX_RETRIES, exc)
+    return False
+
+
+def _bootstrap_db_post_init() -> None:
+    """Run non-critical seed/cache work after schema is ready."""
+    try:
+        init_initial_data()
+    except Exception as exc:
+        logger.warning("Post-init data bootstrap failed: %s", exc)
+
+    try:
+        _warm_runtime_caches()
+    except Exception as exc:
+        logger.warning("Runtime cache warm failed after bootstrap: %s", exc)
 
 
 _RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -111,8 +120,12 @@ class SelectiveGZipMiddleware(GZipMiddleware):
 async def lifespan(app: FastAPI):
     configure_uvicorn_logging_noise_reduction()
     if _RUN_DB_BOOTSTRAP_ON_START:
-        # Start DB bootstrap in background so health checks can pass quickly.
-        asyncio.create_task(asyncio.to_thread(_bootstrap_db))
+        schema_ready = await asyncio.to_thread(_bootstrap_db_schema)
+        if not schema_ready:
+            logger.error("Critical DB schema bootstrap did not complete successfully before serving requests")
+            raise RuntimeError("Critical DB schema bootstrap failed")
+        else:
+            asyncio.create_task(asyncio.to_thread(_bootstrap_db_post_init))
     else:
         logger.warning("RUN_DB_BOOTSTRAP_ON_START is disabled; skipping startup DB bootstrap")
     yield

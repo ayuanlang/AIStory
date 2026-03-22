@@ -1423,6 +1423,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const [isReviewPanelLoading, setIsReviewPanelLoading] = useState(false);
     const [isReviewPanelSubmitting, setIsReviewPanelSubmitting] = useState(false);
     const [currentUserId, setCurrentUserId] = useState(null);
+    const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [selectedQuickReviewThreadId, setSelectedQuickReviewThreadId] = useState(null);
     const [selectedQuickReviewRounds, setSelectedQuickReviewRounds] = useState([]);
     const [selectedQuickReviewRoundId, setSelectedQuickReviewRoundId] = useState(null);
@@ -1540,9 +1541,11 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         fetchMe()
             .then((user) => {
                 setCurrentUserId(Number(user?.id || 0) || null);
+                setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
             })
             .catch(() => {
                 setCurrentUserId(null);
+                setUserBatchParallelLimit(3);
             });
     }, []);
 

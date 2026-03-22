@@ -5,7 +5,7 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
+from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy import or_, and_, text, inspect
 from app.db.session import get_db, SessionLocal
 from app.models import all_models as models
@@ -117,6 +117,37 @@ def _require_review_models() -> None:
         status_code=503,
         detail="Project asset review is temporarily unavailable on this deployment",
     )
+
+
+def _is_schema_compat_error(exc: Exception) -> bool:
+    raw = str(getattr(exc, "orig", exc) or exc).strip().lower()
+    if not raw:
+        return False
+    markers = (
+        "undefinedcolumn",
+        "undefinedtable",
+        "does not exist",
+        "no such column",
+        "no such table",
+        "datatype mismatch",
+        "type boolean but expression is of type integer",
+    )
+    return any(marker in raw for marker in markers)
+
+
+def _run_with_schema_self_heal(db: Session, operation, *, context: str):
+    try:
+        return operation()
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_schema_compat_error(exc):
+            raise
+        logger.warning("[%s] detected schema mismatch, running migration and retrying once: %s", context, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        check_and_migrate_tables()
+        return operation()
 
 
 def get_current_claims(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
@@ -4605,18 +4636,26 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
 
 
 def _is_project_shared_with_user(db: Session, project_id: int, user_id: int) -> bool:
-    share = db.query(ProjectShare).filter(
-        ProjectShare.project_id == project_id,
-        ProjectShare.user_id == user_id,
-    ).first()
+    share = _run_with_schema_self_heal(
+        db,
+        lambda: db.query(ProjectShare).filter(
+            ProjectShare.project_id == project_id,
+            ProjectShare.user_id == user_id,
+        ).first(),
+        context="project_share.lookup_shared",
+    )
     return share is not None
 
 
 def _get_project_share_record(db: Session, project_id: int, user_id: int) -> Optional[ProjectShare]:
-    return db.query(ProjectShare).filter(
-        ProjectShare.project_id == project_id,
-        ProjectShare.user_id == user_id,
-    ).first()
+    return _run_with_schema_self_heal(
+        db,
+        lambda: db.query(ProjectShare).filter(
+            ProjectShare.project_id == project_id,
+            ProjectShare.user_id == user_id,
+        ).first(),
+        context="project_share.lookup_record",
+    )
 
 
 def _normalize_project_share_role(value: Any, *, strict: bool = False) -> str:
@@ -5076,7 +5115,11 @@ def _resolve_review_reviewer(
 
 def _require_review_thread_access(db: Session, thread_id: int, current_user: User) -> Tuple[ProjectAssetReviewThreadModel, Project]:
     _require_review_models()
-    thread = db.query(ProjectAssetReviewThread).filter(ProjectAssetReviewThread.id == thread_id).first()
+    thread = _run_with_schema_self_heal(
+        db,
+        lambda: db.query(ProjectAssetReviewThread).filter(ProjectAssetReviewThread.id == thread_id).first(),
+        context="review_thread.require_access",
+    )
     if not thread:
         raise HTTPException(status_code=404, detail="Review thread not found")
     project = _require_project_access(db, int(thread.project_id), current_user)
@@ -5976,12 +6019,16 @@ def list_project_shares(
     current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
-    rows = (
-        db.query(ProjectShare, User)
-        .join(User, User.id == ProjectShare.user_id)
-        .filter(ProjectShare.project_id == project_id)
-        .order_by(ProjectShare.id.desc())
-        .all()
+    rows = _run_with_schema_self_heal(
+        db,
+        lambda: (
+            db.query(ProjectShare, User)
+            .join(User, User.id == ProjectShare.user_id)
+            .filter(ProjectShare.project_id == project_id)
+            .order_by(ProjectShare.id.desc())
+            .all()
+        ),
+        context="project_share.list",
     )
     return [
         _serialize_project_share(share, user)
@@ -6012,10 +6059,7 @@ def create_project_share(
     if project and project.owner_id == target_user.id:
         raise HTTPException(status_code=400, detail="Project owner already has access")
 
-    existing = db.query(ProjectShare).filter(
-        ProjectShare.project_id == project_id,
-        ProjectShare.user_id == target_user.id,
-    ).first()
+    existing = _get_project_share_record(db, project_id, target_user.id)
     if existing:
         _apply_project_share_access_fields(existing, role, permissions)
         db.add(existing)
@@ -6038,10 +6082,7 @@ def delete_project_share(
     current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
-    share = db.query(ProjectShare).filter(
-        ProjectShare.project_id == project_id,
-        ProjectShare.user_id == shared_user_id,
-    ).first()
+    share = _get_project_share_record(db, project_id, shared_user_id)
     if not share:
         raise HTTPException(status_code=404, detail="Share record not found")
     db.delete(share)
@@ -6057,11 +6098,15 @@ def list_project_review_threads(
 ):
     _require_review_models()
     _require_project_access(db, project_id, current_user)
-    threads = (
-        db.query(ProjectAssetReviewThread)
-        .filter(ProjectAssetReviewThread.project_id == project_id)
-        .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
-        .all()
+    threads = _run_with_schema_self_heal(
+        db,
+        lambda: (
+            db.query(ProjectAssetReviewThread)
+            .filter(ProjectAssetReviewThread.project_id == project_id)
+            .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
+            .all()
+        ),
+        context="review_thread.list_project",
     )
     user_ids = {thread.requester_user_id for thread in threads} | {thread.reviewer_user_id for thread in threads}
     users = {user.id: user for user in db.query(User).filter(User.id.in_(list(user_ids))).all()} if user_ids else {}
@@ -6077,11 +6122,15 @@ def list_review_inbox_threads(
     current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
-    threads = (
-        db.query(ProjectAssetReviewThread)
-        .filter(ProjectAssetReviewThread.reviewer_user_id == current_user.id)
-        .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
-        .all()
+    threads = _run_with_schema_self_heal(
+        db,
+        lambda: (
+            db.query(ProjectAssetReviewThread)
+            .filter(ProjectAssetReviewThread.reviewer_user_id == current_user.id)
+            .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
+            .all()
+        ),
+        context="review_thread.list_inbox",
     )
     user_ids = {thread.requester_user_id for thread in threads} | {thread.reviewer_user_id for thread in threads}
     users = {user.id: user for user in db.query(User).filter(User.id.in_(list(user_ids))).all()} if user_ids else {}
@@ -6097,11 +6146,15 @@ def list_review_outbox_threads(
     current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
-    threads = (
-        db.query(ProjectAssetReviewThread)
-        .filter(ProjectAssetReviewThread.requester_user_id == current_user.id)
-        .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
-        .all()
+    threads = _run_with_schema_self_heal(
+        db,
+        lambda: (
+            db.query(ProjectAssetReviewThread)
+            .filter(ProjectAssetReviewThread.requester_user_id == current_user.id)
+            .order_by(ProjectAssetReviewThread.latest_activity_at.desc(), ProjectAssetReviewThread.id.desc())
+            .all()
+        ),
+        context="review_thread.list_outbox",
     )
     user_ids = {thread.requester_user_id for thread in threads} | {thread.reviewer_user_id for thread in threads}
     users = {user.id: user for user in db.query(User).filter(User.id.in_(list(user_ids))).all()} if user_ids else {}
