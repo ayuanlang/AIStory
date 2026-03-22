@@ -85,22 +85,19 @@ services:
   # Frontend Service
   - type: web
     name: aistory-frontend
-    env: static
+    env: node
     buildCommand: |
       cd frontend
       npm ci --no-audit --no-fund
       npm run build
-    staticPublishPath: frontend/dist
-    routes:
-      - type: rewrite
-        source: /api/*
-        destination: https://aistory-backend-xggg.onrender.com/api/*
-      - type: rewrite
-        source: /uploads/*
-        destination: https://aistory-backend-xggg.onrender.com/uploads/*
-      - type: rewrite
-        source: /*
-        destination: /index.html
+    startCommand: |
+      cd frontend
+      node server.mjs
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.0"
+      - key: BACKEND_PROXY_TARGET
+        value: "https://aistory-backend-xggg.onrender.com"
 
 databases:
   - name: aistory-db
