@@ -58,7 +58,10 @@ class Settings(BaseSettings):
     GZIP_MINIMUM_SIZE: int = int(os.getenv("GZIP_MINIMUM_SIZE", "1024"))
     RATE_LIMIT_LOGIN: str = os.getenv("RATE_LIMIT_LOGIN", "5/minute")
     RATE_LIMIT_RESET: str = os.getenv("RATE_LIMIT_RESET", "3/minute")
-    CORS_ORIGINS: str = _env_or_default("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173")
+    CORS_ORIGINS: str = _env_or_default(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://localhost:5173,https://aistory.pro,https://www.aistory.pro",
+    )
     CORS_ALLOW_ORIGIN_REGEX: str = _env_or_default("CORS_ALLOW_ORIGIN_REGEX", r"^https://.*\.onrender\.com$")
     MAX_ASSET_UPLOAD_MB: int = int(os.getenv("MAX_ASSET_UPLOAD_MB", "100"))
     MAX_AVATAR_UPLOAD_MB: int = int(os.getenv("MAX_AVATAR_UPLOAD_MB", "5"))
