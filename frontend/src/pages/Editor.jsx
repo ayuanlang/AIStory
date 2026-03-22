@@ -1423,7 +1423,6 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const [isReviewPanelLoading, setIsReviewPanelLoading] = useState(false);
     const [isReviewPanelSubmitting, setIsReviewPanelSubmitting] = useState(false);
     const [currentUserId, setCurrentUserId] = useState(null);
-    const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [selectedQuickReviewThreadId, setSelectedQuickReviewThreadId] = useState(null);
     const [selectedQuickReviewRounds, setSelectedQuickReviewRounds] = useState([]);
     const [selectedQuickReviewRoundId, setSelectedQuickReviewRoundId] = useState(null);
@@ -1541,11 +1540,9 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         fetchMe()
             .then((user) => {
                 setCurrentUserId(Number(user?.id || 0) || null);
-                setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
             })
             .catch(() => {
                 setCurrentUserId(null);
-                setUserBatchParallelLimit(3);
             });
     }, []);
 
@@ -15551,7 +15548,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     );
 };
 
-const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh' }) => {
+const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3 }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const createSubjectBatchTaskState = () => ({
@@ -18545,7 +18542,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh' }) =
     );
 };
 
-const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null }) => {
+const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3 }) => {
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
@@ -28991,14 +28988,14 @@ const Editor = ({
                             />
                         )}
                         {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
-                        {activeTab === 'subjects' && <SubjectLibrary projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} />}
+                        {activeTab === 'subjects' && <SubjectLibrary projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} />}
                         {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                             if (sceneId) {
                                 setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
                             }
                             setActiveTab('shots');
                         }} uiLang={uiLang} />}
-                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} />}
+                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
                         {activeTab === 'montage' && <VideoStudio activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                     </div>
                 </div>
