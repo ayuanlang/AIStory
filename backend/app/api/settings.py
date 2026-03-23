@@ -23,6 +23,8 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 from app.db.session import get_db
 from app.core.time_utils import now_bj_iso
+from app.core.config import settings
+from app.core.homepage_referral import create_homepage_referral_token
 from app.core.prompts.supplier_feature_analysis_prompt import get_supplier_feature_analysis_system_prompt
 from app.models.all_models import (
     APISetting,
@@ -121,6 +123,7 @@ from app.schemas.settings import (
     KIEDataDictionaryBundleImportResponse,
     KIEDataStandardValueMappingImportRequest,
 )
+from app.schemas.homepage_referral import HomepageShareLinkOut
 from app.api.deps import get_current_user
 from app.services.billing_service import BillingService
 
@@ -299,10 +302,13 @@ def _normalize_user_preferences(payload: Any) -> Dict[str, Any]:
 
     advanced_model["reasoning_effort"] = _normalize_reasoning_effort(advanced_model.get("reasoning_effort"))
 
+    homepage_referral = raw.get("homepage_referral") if isinstance(raw.get("homepage_referral"), dict) else {}
+
     return {
         "prompt_submit_language": _normalize_prompt_submit_language(raw.get("prompt_submit_language")),
         "auto_download_local": bool(raw.get("auto_download_local", False)),
         "generation": generation,
+        "homepage_referral": homepage_referral,
         "advanced_model": advanced_model,
     }
 
@@ -4274,6 +4280,29 @@ def update_user_preferences(
     db.commit()
     db.refresh(user_row)
     return UserPreferencesOut(**merged)
+
+
+@router.get("/settings/homepage-share-link", response_model=HomepageShareLinkOut)
+def get_homepage_share_link(
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        referral_token = create_homepage_referral_token(int(current_user.id), settings.SECRET_KEY)
+    except Exception as exc:
+        logger.exception(
+            "Failed to create homepage share link | user_id=%s err=%s",
+            getattr(current_user, "id", None),
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to create homepage share link")
+
+    homepage_path = f"/?ref={referral_token}"
+    return HomepageShareLinkOut(
+        referral_token=referral_token,
+        homepage_path=homepage_path,
+        auth_register_path=f"/auth?mode=register&ref={referral_token}",
+        issued_at=datetime.now(timezone.utc).isoformat(),
+    )
 
 @router.post("/settings", response_model=APISettingOut)
 def update_setting(

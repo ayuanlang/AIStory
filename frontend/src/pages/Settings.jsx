@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
-import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound } from 'lucide-react';
+import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound, Link as LinkIcon, Copy } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getUserPreferences, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getUserPreferences, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
@@ -314,7 +314,9 @@ const Settings = () => {
     const [profileName, setProfileName] = useState('');
     const [profileEmail, setProfileEmail] = useState('');
     const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
+    const [homepageShareLink, setHomepageShareLink] = useState('');
     const [isSavingProfile, setIsSavingProfile] = useState(false);
+    const [isLoadingHomepageShareLink, setIsLoadingHomepageShareLink] = useState(false);
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -552,12 +554,52 @@ const Settings = () => {
 
     const loadMyProfile = async () => {
         try {
-            const me = await fetchMe();
+            const [me, shareLinkRes] = await Promise.all([
+                fetchMe(),
+                getHomepageShareLink().catch(() => null),
+            ]);
             setProfileName(me?.full_name || '');
             setProfileEmail(me?.email || '');
             setProfileAvatarUrl(me?.avatar_url || '');
+            if (shareLinkRes?.homepage_path) {
+                setHomepageShareLink(`${window.location.origin}${shareLinkRes.homepage_path}`);
+            }
         } catch (e) {
             console.error('Failed to load profile', e);
+        }
+    };
+
+    const handleCopyHomepageShareLink = async () => {
+        setIsLoadingHomepageShareLink(true);
+        try {
+            let nextLink = homepageShareLink;
+            if (!nextLink) {
+                const shareLinkRes = await getHomepageShareLink();
+                nextLink = shareLinkRes?.homepage_path ? `${window.location.origin}${shareLinkRes.homepage_path}` : '';
+                setHomepageShareLink(nextLink);
+            }
+            if (!nextLink) {
+                throw new Error(t('未能生成主页链接', 'Failed to generate homepage link'));
+            }
+
+            if (navigator?.clipboard?.writeText) {
+                await navigator.clipboard.writeText(nextLink);
+            } else {
+                const input = document.createElement('textarea');
+                input.value = nextLink;
+                input.setAttribute('readonly', 'readonly');
+                input.style.position = 'absolute';
+                input.style.left = '-9999px';
+                document.body.appendChild(input);
+                input.select();
+                document.execCommand('copy');
+                document.body.removeChild(input);
+            }
+            showNotification(t('主页链接已复制', 'Homepage link copied'), 'success');
+        } catch (e) {
+            showNotification(t(`复制主页链接失败：${e.message}`, `Failed to copy homepage link: ${e.message}`), 'error');
+        } finally {
+            setIsLoadingHomepageShareLink(false);
         }
     };
 
@@ -2043,6 +2085,33 @@ const Settings = () => {
                         >
                             {isSavingProfile ? t('保存中...', 'Saving...') : t('保存资料', 'Save Profile')}
                         </button>
+                    </section>
+
+                    <section className="bg-black/20 p-4 sm:p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                            <LinkIcon className="w-5 h-5 text-primary" />
+                            {t('主页分享链接', 'Homepage Share Link')}
+                        </h2>
+                        <p className="text-sm text-muted-foreground">
+                            {t('复制一个带来源标记的主页地址。链接本身不包含明文用户信息，后续通过该链接注册的用户会把解析结果写入 preferences。', 'Copy a homepage URL with an encoded referral marker. The link does not expose plain user information, and registrations through it will store the parsed result in preferences.')}
+                        </p>
+                        <div className="flex flex-col gap-3 md:flex-row">
+                            <input
+                                type="text"
+                                readOnly
+                                value={homepageShareLink}
+                                placeholder={t('点击右侧按钮生成主页链接', 'Generate a homepage link with the button on the right')}
+                                className="w-full rounded-md border border-white/10 bg-white/5 p-2 text-sm text-muted-foreground"
+                            />
+                            <button
+                                onClick={handleCopyHomepageShareLink}
+                                disabled={isLoadingHomepageShareLink}
+                                className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/10 px-4 py-2 text-sm font-bold hover:bg-white/20 disabled:opacity-50"
+                            >
+                                <Copy className="h-4 w-4" />
+                                {isLoadingHomepageShareLink ? t('生成中...', 'Generating...') : t('复制链接', 'Copy Link')}
+                            </button>
+                        </div>
                     </section>
 
                     <section className="bg-black/20 p-4 sm:p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">

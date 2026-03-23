@@ -36,6 +36,7 @@ import json
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 from app.core.config import settings
+from app.core.homepage_referral import parse_homepage_referral_token
 from app.core.entity_token import normalize_entity_token
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import File, UploadFile
@@ -13501,6 +13502,7 @@ class UserCreate(BaseModel):
     email: str
     password: str
     full_name: Optional[str] = None
+    homepage_referral_token: Optional[str] = None
 
 
 class EmailVerificationSendRequest(BaseModel):
@@ -13762,6 +13764,27 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     if not _is_valid_email_format(normalized_email):
         raise HTTPException(status_code=400, detail="Invalid email format")
 
+    homepage_referral: Dict[str, Any] = {}
+    referral_token = str(user.homepage_referral_token or "").strip()
+    if referral_token:
+        try:
+            parsed_referral = parse_homepage_referral_token(referral_token, settings.SECRET_KEY)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid homepage referral token")
+
+        inviter_user = db.query(User).filter(User.id == int(parsed_referral["inviter_user_id"])).first()
+        if not inviter_user:
+            raise HTTPException(status_code=400, detail="Homepage referral inviter not found")
+
+        homepage_referral = {
+            "channel": "homepage_link",
+            "token_version": int(parsed_referral.get("token_version") or 1),
+            "inviter_user_id": int(parsed_referral["inviter_user_id"]),
+            "issued_at": str(parsed_referral.get("issued_at") or ""),
+            "masked_user_id": str(parsed_referral.get("masked_user_id") or ""),
+            "registered_at": datetime.utcnow().isoformat(),
+        }
+
     db_user_email = db.query(User).filter(User.email == normalized_email).first()
     if db_user_email:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -13783,6 +13806,7 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         email_verified=False,
         email_verification_code=verify_code,
         email_verification_expires_at=expire_at,
+        preferences={"homepage_referral": homepage_referral} if homepage_referral else {},
     )
     db.add(db_user)
     db.flush()

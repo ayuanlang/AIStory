@@ -658,13 +658,13 @@ function buildShotDiptychPlan(aspectRatio) {
 function getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight) {
     const seamSourceSpan = layout === 'horizontal' ? sourceWidth : sourceHeight;
     if (!Number.isFinite(seamSourceSpan) || seamSourceSpan <= 0) return 2;
-    return Math.max(2, Math.min(12, Math.round(seamSourceSpan / 256)));
+    return Math.max(2, Math.min(12, Math.round(seamSourceSpan / 208)));
 }
 
 function getShotDiptychSeamBiasPx(layout, sourceWidth, sourceHeight) {
     const seamSourceSpan = layout === 'horizontal' ? sourceWidth : sourceHeight;
     if (!Number.isFinite(seamSourceSpan) || seamSourceSpan <= 0) return 1;
-    return Math.max(1, Math.min(10, Math.round(seamSourceSpan / 384)));
+    return Math.max(1, Math.min(10, Math.round(seamSourceSpan / 320)));
 }
 
 function collectSupportedAspectRatioOptions(values) {

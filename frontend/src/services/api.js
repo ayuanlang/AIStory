@@ -1239,6 +1239,11 @@ export const getUserPreferences = async () => {
     return setCachedUserPreferences(response?.data || {});
 };
 
+export const getHomepageShareLink = async () => {
+    const response = await api.get('/settings/homepage-share-link');
+    return response?.data || {};
+};
+
 export const updateUserPreferences = async (payload = {}) => {
     const response = await api.put('/settings/preferences', payload || {});
     return setCachedUserPreferences(response?.data || {});
@@ -1983,7 +1988,7 @@ export const deleteProject = async (projectId) => {
 }
 
 export const registerUser = async (data) => {
-    // data: { username, email, password, full_name }
+    // data: { username, email, password, full_name, homepage_referral_token? }
     const response = await api.post('/users/', data);
     return response.data;
 }

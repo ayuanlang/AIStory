@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Menu, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { getUiLang, tUI } from '../lib/uiLang';
@@ -11,7 +11,11 @@ const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
     const [scrolled, setScrolled] = useState(false);
     const [isOpen, setIsOpen] = useState(false);
     const navigate = useNavigate();
+    const location = useLocation();
     const isLoggedIn = !!localStorage.getItem('token');
+    const referralToken = new URLSearchParams(location.search).get('ref') || '';
+    const authPath = referralToken ? `/auth?ref=${encodeURIComponent(referralToken)}` : '/auth';
+    const authRegisterPath = referralToken ? `/auth?mode=register&ref=${encodeURIComponent(referralToken)}` : '/auth';
 
     useEffect(() => {
         const handleScroll = () => setScrolled(window.scrollY > 20);
@@ -58,8 +62,8 @@ const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
                             )
                         ) : (
                             <div className="flex items-center space-x-4">
-                                <Link to="/auth" className="text-foreground/80 hover:text-primary transition-colors">{t('登录', 'Log in')}</Link>
-                                <Link to="/auth">
+                                <Link to={authPath} className="text-foreground/80 hover:text-primary transition-colors">{t('登录', 'Log in')}</Link>
+                                <Link to={authRegisterPath}>
                                     <button className="px-6 py-2 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-lg hover:shadow-primary/25 font-medium">
                                         {t('立即开始', 'Get Started')}
                                     </button>
@@ -99,8 +103,8 @@ const Navbar = ({ forceSolid = false, hideMenu = false, className = '' }) => {
                              )
                         ) : (
                             <>
-                                <Link to="/auth" className="block py-2 text-foreground/80">{t('登录', 'Log in')}</Link>
-                                <Link to="/auth" className="block mt-2 w-full text-center px-4 py-3 bg-primary text-primary-foreground rounded-lg">{t('立即开始', 'Get Started')}</Link>
+                                <Link to={authPath} className="block py-2 text-foreground/80">{t('登录', 'Log in')}</Link>
+                                <Link to={authRegisterPath} className="block mt-2 w-full text-center px-4 py-3 bg-primary text-primary-foreground rounded-lg">{t('立即开始', 'Get Started')}</Link>
                             </>
                         )}
                     </div>

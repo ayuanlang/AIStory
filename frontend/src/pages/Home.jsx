@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight, Sparkles, Play } from 'lucide-react';
 import Navbar from '../components/Navbar';
 import { motion } from 'framer-motion';
@@ -10,6 +10,9 @@ const Home = () => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
     const currentYear = new Date().getFullYear();
+    const location = useLocation();
+    const referralToken = new URLSearchParams(location.search).get('ref') || '';
+    const authRegisterPath = referralToken ? `/auth?mode=register&ref=${encodeURIComponent(referralToken)}` : '/auth';
     return (
         <div className="min-h-screen flex flex-col font-sans bg-background text-foreground overflow-hidden selection:bg-primary/20">
             <Navbar />
@@ -47,7 +50,7 @@ const Home = () => {
                         </p>
                         
                         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-8">
-                            <Link to="/auth">
+                            <Link to={authRegisterPath}>
                                 <button className="h-14 px-8 rounded-full bg-primary text-primary-foreground text-lg font-bold hover:bg-white/90 transition-all shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)] flex items-center gap-2 group">
                                     {t('开始创作', 'Start Creating')} <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform"/>
                                 </button>

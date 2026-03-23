@@ -17,6 +17,7 @@ const Auth = () => {
         password: '',
         email: '',
         full_name: '',
+        homepage_referral_token: '',
         reset_token: '',
         verify_code: '',
     });
@@ -49,11 +50,21 @@ const Auth = () => {
         const params = new URLSearchParams(location.search);
         const urlMode = params.get('mode');
         const token = params.get('token') || '';
+        const referralToken = params.get('ref') || '';
         if (urlMode === 'reset') {
             setMode('reset');
             if (token) {
                 setFormData((prev) => ({ ...prev, reset_token: token }));
             }
+            return;
+        }
+        if (urlMode) {
+            setMode(urlMode);
+        } else if (referralToken) {
+            setMode('register');
+        }
+        if (referralToken) {
+            setFormData((prev) => ({ ...prev, homepage_referral_token: referralToken }));
         }
     }, [location.search]);
 
