@@ -4,6 +4,8 @@
 ## Final Goal
 For ONE existing scene only, supplement the missing entities required by that scene while keeping subject extraction principles synchronized with scene_analysis and subject_generation.
 
+- 未成年角色四视图与安全表达规则（Mandatory）：若当前 scene 需要补充或重建未成年角色，仍必须沿用统一的角色四视图/四宫格设定图，不得改成单张肖像、单张全身像或更松散的儿童概念图。未成年差异仅体现在安全边界：必须年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；姿态、服装、布光和措辞只服务识别与剧情状态，不服务成人化观看。
+
 This is an entity-supplement task, not a full rewrite task:
 - Primary output is only the missing entities needed by the current scene.
 - Existing project subjects are authoritative reusable assets and must be reused first.
@@ -114,6 +116,7 @@ You MUST use all of them together.
 - Absolute ban: never place day outfit + night outfit, normal state + armored state, masked state + unmasked state, or any other two distinct readable states into one character item.
 - If the scene needs two readable wardrobe or state versions, they must become two separate character entities with separate dependency logic.
 - clothing must explicitly state the current active outfit and whether other script outfit descriptions exist.
+- clothing must explicitly state the current active outfit, a concise fashion benchmark, and whether other script outfit descriptions exist. The fashion benchmark must include the role positioning, the contemporary style direction, and silhouette/material/color keywords compatible with that role in the project language context.
 
 ### Character Dependency Rules
 - Base characters should be treated as original anchors.
@@ -127,6 +130,8 @@ You MUST use all of them together.
 - Character prompts must explicitly preserve full-body framing with shoes visible.
 - Character descriptions and prompts should stay visually restrained and non-graphic. Prefer mild, identification-first wording such as tired, rain-soaked, dusty, or lightly scuffed over blood-heavy, exposed-wound, or otherwise disturbing depiction.
 - anchor_description must remain even more conservative: only stable recognition cues are allowed, and non-graphic wording is mandatory.
+- anchor_description must stay concise and retrieval-oriented: usually 3 to 5 short English anchor phrases only, designed to let the model quickly locate the same entity in a reference image. For characters, it should briefly cover identity or role, one or two stable appearance or silhouette cues, and only the most discriminative wardrobe or accessory cue when that cue genuinely helps distinguish the subject. The first phrase should usually be the subject's basic role positioning such as female teacher, female investigative reporter, or male chef.
+- Shared-wardrobe avoidance rule (Mandatory): if multiple interacting characters plausibly wear the same wardrobe class, such as suits, uniforms, lab coats, school uniforms, or other group clothing, anchor_description must not waste anchor slots on generic phrases like black suit or standard uniform. Shift the anchors toward more discriminative cues first: face shape, hairstyle silhouette, body outline, signature accessory, shoe profile, wearing method, or uniquely readable garment construction details. Only keep wardrobe language when the garment itself has a clearly distinctive cut/detail.
 - Do not use a waist-up, bust, knee-crop, or otherwise shoe-cutting composition as the main character asset prompt.
 - Character prompts must preserve stable anchors, clothing consistency, lighting logic, and lens baseline.
 - For realistic drama styles, avoid plastic skin, CGI feel, toy-like proportions, and oversmoothed detail.
@@ -218,7 +223,7 @@ You MUST use all of them together.
 - 服装暗示识别规则（Mandatory）：服装证据不只包括直接文字描述，也包括足以锁定特定服装状态的动作、触碰或整理行为。凡是剧本出现“摸了下婚纱”“整了整将军服”“提起裙摆”“扯正领带”“扣上白大褂/雨衣/盔甲”“扶正头纱/肩章/帽檐/披风”等暗示，必须判定对应特殊着装已经存在，并将其作为不同着装状态的独立角色抽取；不得仍并入常服基态角色。
 - 换装独立实体强制（Mandatory）：上述着装变化必须直接拆分为独立角色实体；禁止只在同一角色条目里改 `clothing` 字段或在 `generation_prompt` 中临时追加“现在穿另一套衣服”。
 - 一角双衣绝对禁令（Mandatory）：绝对禁止在同一个角色条目、同一个 `clothing` 字段、同一个 `anchor_description` 或同一个 `generation_prompt` 中并列写入两套或以上着装状态。只要出现“日间装 + 夜间装”“白天制服 + 晚上睡衣”“外出装 + 居家装”这类双套描述，就必须复制为两个独立角色，分别承载各自服装版本。
-- `clothing` 外部衣着声明规则（Mandatory）：每个角色 JSON 的 `clothing` 字段必须同时回答两件事：1) 当前这个角色条目此刻唯一生效的服装版本是什么；2) 剧本里是否还出现过该人物的其他衣着描述。固定写法要求为“当前服装：...。其他剧本衣着描述：无。”或“当前服装：...。其他剧本衣着描述：有；另见 CHAR:[@OtherOutfit]（...）。”；即使没有其他服装版本，也不得省略“其他剧本衣着描述：无”。
+- `clothing` 外部衣着声明规则（Mandatory）：每个角色 JSON 的 `clothing` 字段必须同时回答三件事：1) 当前这个角色条目此刻唯一生效的服装版本是什么；2) 该服装的时尚对标是什么；3) 剧本里是否还出现过该人物的其他衣着描述。固定写法要求为“当前服装：...。时尚对标：角色定位=...；当代风格参考=...；版型/材质/配色关键词=...。其他剧本衣着描述：无。”或“当前服装：...。时尚对标：角色定位=...；当代风格参考=...；版型/材质/配色关键词=...。其他剧本衣着描述：有；另见 CHAR:[@OtherOutfit]（...）。”；三部分都不得省略。
 - 换装依赖建模规则（Mandatory）：换装后的独立角色实体必须依赖原角色建立继承链；若该换装同时依赖明确的服饰/装备道具（如面具、盔甲、制服外套、礼帽、雨衣、围巾、工牌），则必须在依赖说明中写清“继承原角色稳定锚点 + 叠加/替换哪些服饰道具”，必要时把相关 `PROP:[...]` 一并纳入 `visual_dependencies` 或在 `dependency_strategy.logic` 中逐项点名。
 - 身份形态拆分强制：分身/易容/年龄态/特殊形态必须拆成独立 `characters` 条目。
 - 换装拆分并列强制（Mandatory）：明确换装、脱去关键外层、穿上职业制服/防护装备、增加或移除显著配饰后，只要角色可见轮廓或身份阅读发生变化，也必须像年龄态/易容一样拆成独立 `characters` 条目，不得视作同一角色的轻微连续状态。
@@ -397,13 +402,13 @@ Important:
       "gender": "F",
       "role": "Investigative Reporter",
       "archetype": "Calm Truth Seeker",
-      "appearance_cn": "28岁，东亚女性，身高约168cm，头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
-      "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。其他剧本衣着描述：无。",
+      "appearance_cn": "28岁，东亚女性，身高约178cm，头身比约1:9，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
+      "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。时尚对标：角色定位=女性调查记者；当代风格参考=都市专业女性的克制功能时装通勤路线，强调利落长线条、低饱和冷色层次与轻度老钱感新闻从业者穿搭；版型/材质/配色关键词=中长风衣、挺括衬衫、修身直筒裤、哑光技术面料、海军蓝+白+炭灰。其他剧本衣着描述：无。",
       "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
-      "generation_prompt_cn": "写实现代剧情风格，林月四视图角色设定图，四个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
+      "generation_prompt_cn": "写实现代剧情风格，林月四视图角色设定图，四个面板保持同一身份与服装一致。她约28岁，身高约178cm，头身比约1:9，整体比例高挑修长且镜头友好。角色服装塑造遵循女性调查记者的当代时尚对标：克制专业的都市功能时装通勤路线，强调利落长线条、海军蓝与炭灰低饱和层次、挺括衬衫结构与轻度老钱感完成度。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。版式固定为第一宫左侧居中特写大宫格：特写约占总画布宽度 40%，脸部必须位于第一宫中间，头部整体约占该宫格高度的 78% 到 88%，发型外轮廓、下巴与颈部过渡都要完整，不得裁切；右侧剩余约 60% 宽度均分为三张等大的纵向宫格，依次放正面全身、侧面全身、反面全身。右侧三张必须使用完全一致的构图尺度和留白逻辑，顶部留白和脚下留白都尽量小且必须统一，左右留白进一步压缩，让人物在不裁切的前提下显得更大，人物高度约占各自宫格高度的 84% 到 89%。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见，四宫都必须完整，不得出现任何出框或裁切。宫格之间必须零留白、零边框、零白线、零黑线，不得出现任何可见分界线或拼贴缝。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。稳定锚点保持精简并覆盖身份、相貌与更有区分度的姿态特征：female investigative reporter、清晰下颌线、不对称刘海轮廓、停顿后再移动的克制站姿。背景纯白，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Lin Yue with one fixed studio observer position at chest height. She reads as about 28 years old, about 178 cm tall, with an approximately 1:9 head-to-body proportion and a tall camera-friendly silhouette. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. Place the Close-up as the FIRST large full-height LEFT panel occupying about 40% of the canvas width, keep the face centered in the middle of that panel, and let the head occupy about 78% to 88% of that panel height. Stack the Front, Side, and Back on the RIGHT as three equal panels sharing the remaining 60%, and keep the same framing scale with uniformly minimal top and foot margins while tightening the left-right padding further so each figure reads larger without cropping, with the figure occupying about 84% to 89% of each panel height. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system, and all four views must remain complete and uncropped. Keep zero gutter and no visible divider line, white seam, black seam, or border. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
       "negative_prompt_en": "waxy skin, CGI look, toy-like proportions, oversmoothed pores, cropped feet, missing shoes, text, watermark",
-      "anchor_description": "sharp jawline, asymmetric fringe, silver index ring, calm focused gaze",
+      "anchor_description": "female investigative reporter, clean jawline, asymmetrical fringe silhouette, measured pause-before-motion stance",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original",

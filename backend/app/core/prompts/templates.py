@@ -72,10 +72,13 @@ CHARACTER_PROMPT_TEMPLATE = """
 3. Full-body Side: strict head-to-toe true side standing pose, including footwear, ear, hairline, shoulder slope, and body profile.
 4. Full-body Back: strict head-to-toe rear standing pose, showing clothing seams, skirt hem, shoes, collar, and overall back silhouette.
 
-Height: 【cm】; head-to-body ratio: 【ratio】.
-Clothing: 【layers, materials, colors, wear】; include footwear and skirt fit.
+Height: 【cm】; head-to-body ratio: 【ratio】. For named major adult roles, both fields are mandatory and must be explicit; if the script does not lock a different body type, default to a tall, camera-friendly silhouette at about 1:9.
+Basic role positioning: 【role positioning, e.g. female teacher / male detective / young conservatory pianist】.
+Clothing: 【layers, materials, colors, wear】; include footwear and skirt fit. Also include a concise fashion benchmark that is compatible with the role positioning and project language context: specify current mainstream style direction, silhouette/material/color references, and contemporary wardrobe keywords grounded in present-day fashion knowledge rather than generic "stylish" wording.
 Distinctive anchors: 【scar, tattoo, accessory, emblem】 at 【location】.
 Stable-anchor rule (mandatory): choose identity-stable, cross-shot persistent anchors only (e.g., bone/facial structure, fixed hairstyle silhouette, permanent marks, stable body proportion cues, long-term fixed accessories/garment structure). Do NOT use unstable cues as anchors: expressions, transient emotions, temporary poses/gestures, lighting/shadow artifacts, viewpoint-angle-dependent appearance changes, motion blur, or occlusion shapes.
+Anchor compactness rule (mandatory): keep anchor_description concise and information-dense, usually 3 to 5 short English anchor phrases only. It should briefly cover the entity's core identity for reference-image retrieval: basic role positioning or identity, one or two stable appearance cues (face shape / hair silhouette / body outline), and only the most discriminative wardrobe or accessory cue when that cue genuinely helps distinguish the subject. The first anchor should usually be the subject's basic role positioning in English (for example: female teacher, female investigative reporter, male chef), followed by only the most stable visual identifiers.
+Shared-wardrobe avoidance rule (mandatory): when multiple interacting characters plausibly wear the same wardrobe class, such as suits, uniforms, school uniforms, lab coats, or other group clothing, do not waste anchor slots on generic phrases like black suit or standard uniform. Shift anchor_description toward more discriminative cues first, such as face shape, hairstyle silhouette, body outline, signature accessory, shoe profile, wearing method, or uniquely readable garment construction details. Only keep wardrobe language when the garment itself has a clearly distinctive cut/detail.
 Expression usage boundary: expressions in view instructions are display-only for shot variety and must never be treated as identity anchors.
 Action traits: poised, controlled movements.
 Lighting design: key light 【source position + quality (soft/hard) + intensity + color temperature】, fill light 【ratio/intensity】, rim/back light 【direction】; keep face readable and silhouette separated. For protagonist shaping, prioritize beauty-lighting setups (e.g., butterfly/paramount light, clamshell fill, soft frontal diffusion, controlled catchlights) to enhance facial attractiveness while preserving realism.
@@ -83,9 +86,14 @@ Lens & focus: 【focal length / equivalent lens, e.g. 35mm / 50mm / 85mm】 + �
 Texture/noise: 【film grain level, e.g. clean digital / fine film grain / medium grain】, skin texture retention 【level】, avoid over-smoothing.
 Style adaptation by script type: if [Global Style] indicates live-action / realistic drama, enforce photoreal human anatomy, natural pores and micro-texture, realistic eye specular highlights, physically plausible subsurface skin response, and avoid CGI/plastic look. In this mode, protagonist close/medium shots should default to refined beauty-lighting first, then adjust contrast by genre mood.
 Background: white.
-anchor_description：【thumbnail_readability】.
+anchor_description：【concise identity + appearance + wardrobe retrieval anchors】.
 Style: follow [Global Style].
-Structure: 4-view layout (Close-up, Full-body Front, Full-body Side, Full-body Back).
+Layout rule: asymmetrical 4-panel sheet. The Close-up must sit in the FIRST panel on the LEFT as a large full-height panel occupying about 40% of the total canvas width. The remaining 60% on the RIGHT must be split into three equal stacked panels in the strict order Full-body Front, Full-body Side, Full-body Back. All four views must stay fully inside their own panels with complete silhouettes and zero cropping.
+Minor-safety rule: if the character is a minor, the layout requirement does NOT change. Still render the exact same 4-view character sheet with Close-up, Full-body Front, Full-body Side, and Full-body Back; do not downgrade to a single portrait, a single full-body concept image, or a looser child-only composition. The only minor-specific adaptation is safety: keep wardrobe, pose, camera intent, and wording fully age-appropriate, non-sexualized, non-fetishized, and strictly non-NSFW.
+Close-up crop rule: in the FIRST LEFT close-up panel, the face must sit centered in the panel, not drifting to the top, bottom, or side. The head should occupy about 78% to 88% of the panel height so the close-up reads clearly larger than the other three views, while the full hair silhouette, chin line, and neck transition remain complete. Keep background margin tight and balanced on all sides rather than leaving empty white space.
+Right-panel framing rule: the three RIGHT full-body panels must use the same framing scale and the same padding logic. Make them slightly smaller than the close-up in visual dominance, but keep top margin and foot margin uniformly minimal while reducing left-right padding further so each figure reads larger without cropping. Each figure should occupy about 84% to 89% of each panel height, with head, feet, footwear, hems, and outer silhouette fully visible and never cropped.
+Structure: 4-view layout (First panel = larger centered Close-up on the left; right column = Full-body Front, Full-body Side, Full-body Back).
+Panel finish rule: zero gutter, zero blank spacing, no collage seam, no divider line, no white border, no black border, no framing bar; the panel boundaries may exist compositionally but must not render as visible lines.
 Output: four high-resolution PNGs or a 4-panel composite; include a simple scale marker; no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
 """
 
@@ -108,6 +116,10 @@ Grain/noise strategy: 【clean digital / fine film grain / medium grain】 with 
 Style adaptation by script type: live-action/realistic drama must enforce physically plausible material response (metal specular, fabric fibers, roughness variation), true-to-scale wear, and avoid toy-like/plastic CGI look.
 anchor_description：【thumbnail_readability】.
 Background: white.
+Layout rule: asymmetrical 4-panel sheet. The Close-up must sit in the FIRST panel on the LEFT as a large full-height panel occupying about 40% of the total canvas width. The remaining 60% on the RIGHT must be split into three equal stacked panels in the strict order Front, Side, Back. All four views must stay fully inside their own panels with complete silhouettes and zero cropping.
+Close-up crop rule: in the FIRST LEFT close-up panel, the key detail area should sit centered in the panel and occupy about 78% to 88% of the panel height, reading larger than the other three views without clipping outer edges or material contours.
+Right-panel framing rule: the three RIGHT panels must use the same framing scale and the same padding logic so the object reads as one unified sheet rather than three mismatched crops. Keep top and bottom whitespace as small and as uniform as possible, and keep side whitespace tighter as well, while preserving the full object contour in every panel.
+Panel finish rule: zero gutter, zero blank spacing, no collage seam, no divider line, no white border, no black border, no framing bar; the panel boundaries may exist compositionally but must not render as visible lines.
 **Strictly Object Only: No characters, no hands, no body parts visible.**
 Output: four high-resolution PNGs or a 4-panel composite; include a simple, unobtrusive scale marker (no numbers/text); no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
 """

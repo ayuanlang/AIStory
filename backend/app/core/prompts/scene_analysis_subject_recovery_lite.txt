@@ -36,7 +36,10 @@
 - 场景最高审美具体约束（Mandatory）：缺失 environment 时，必须优先补全主次锚点、材质层级、主辅配色、光源动机、陈设秩序与氛围层次。即使该空间是低配、破旧、压抑、狭窄或贫穷，也必须是“剧情允许下最好看、最可拍、最有控制力”的版本，不得堆随机杂物或做成廉价空壳。
 - 角色最高审美具体约束（Mandatory）：缺失 character 时，必须在不违背身份现实的前提下，同时优化轮廓可读性、发型组织、肤色与肤质层次、肩颈体态、服装版型、鞋履/配件完成度与镜头友好布光。即使人物设定普通、疲惫、底层或狼狈，也应补成其命运条件下的最好看版本，而不是粗糙、土气、没精神的默认模板。
 - 角色默认主角化基线（Mandatory）：对有具体姓名且承担主要叙事功能的成年角色，若当前补全输入未明确给出外貌、体型或着装限制，则必须主动补全为“现代、新潮、高级、大气、镜头友好”的主角级设计，但仍需服从题材、时代、职业、阶层与写实度。女性默认优先高挑修长、肩颈线舒展、比例利落；男性默认优先挺拔健壮、肩背展开、线条结实。主角的肤色呈现默认应更白净、细腻、明亮，通常可落在白皙至偏白净的上镜范围，但不得违背人物族裔、地域语境、职业状态与剧情现实度。若原剧本或上游已明确给出相反体态、特殊身体条件或年龄阶段，则以上游与原文为准；未成年角色不得按成人化模板设计。
+- 未成年角色四视图与安全表达规则（Mandatory）：若补全对象是未成年角色，仍必须补成统一的角色四视图/四宫格设定图，不能因为年龄较小或需要强调脆弱感而改写成单张人像、单张全身像或其他宽松构图。未成年专属调整仅限安全边界：必须年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；服装、姿态、镜头语言与措辞都要保持儿童安全表达。
+- 主角色身高与头身比硬规则（Mandatory）：所有有姓名且承担主要叙事功能的成年角色，在补全过程中都必须显式写出身高与头身比，并同步写入 `appearance_cn` 与 `generation_prompt_cn/en`；不得只写“高挑”“修长”等抽象词。若当前输入没有相反证据，默认按高挑、镜头友好、约 1:9 头身的主角色比例补全；若上游或原剧本已锁定不同体态，则以其为准。
 - 发型与肤色识别强化（Mandatory）：主要角色必须把发型组织与肤色层次作为稳定识别锚点的一部分。发型必须落实到分线方式、发长区间、卷直关系、厚薄蓬贴、刘海或束发轮廓；肤色必须落实到白皙、偏白净、暖白、冷白、浅蜜色、健康麦色等可拍的真实区间，并与项目语境、年龄和职业状态保持一致。
+- 人物类型先判定硬规则（Mandatory）：若当前补全输入没有充分写明角色外形，补全前必须先判断人物类型与生活系统，再进入外观设计；至少先判断年龄段、社会阶层、职业/功能位、生活方式、审美取向与可见消费层级，然后据此组织发型、肤色、服装、鞋履与配件。禁止把所有有姓名角色默认收敛成同一种都市职场模板；若剧情没有明确限制，必须主动分流到更匹配的人物类型并保持可复现差异。
 - 禁止模板抄袭式设计（Hard Rule）：示例、模板、规则中的职业、人种、年龄、服装、道具、环境名、空间结构、镜头话术都只能作为格式参考，不能直接作为真实输出的设计内容。每次补全都必须基于当前输入重新设计实体形象、材质、空间与细节；若输出仍残留示例里的默认角色类型、默认空间、默认道具或默认视觉组合，判为无效并必须重写。
 - 名称冻结：Environment / Character / Prop 名称一旦确定，不得改写（大小写、空格、符号、拼写、全半角、分隔符）。
 - 锚点冻结（Immutable Anchors, 强制）：`anchor_description` 与已定稿身份锚点一经确定即只读，补全过程仅可继承引用，不得增删改或语义改写。
@@ -50,6 +53,7 @@
 - 现有 Subjects 复用硬规则（强制）：若输入片段已携带当前项目已有 subjects 清单（名称、subject_ref、anchor_description、description/hint），补全过程必须把它们视为权威可复用资产，优先引用，不得重命名、重定义或重复补出同名/近义新实体。
 - 模板来源策略：`scene_analysis*.txt` 内嵌模板为唯一权威来源（Merged In-File）。补全过程不得依赖外部 `templates.py` 注入。
 - `0) 生图提示词清晰性`：每个实体 `generation_prompt_en` 必须显式含 `Viewpoint Anchor` + `Viewing Direction`。
+- Subject 画幅职责规则（强制）：补全缺失 subject 时，`generation_prompt_cn/generation_prompt_en` 统一不得描述或暗示固定画幅比，不得写 `16:9 / 3:2 / 1:1 / vertical / landscape / square canvas` 这类画幅指令。实际提交给 API 的画幅参数由系统面板中的运行设置统一控制，而不是由 subject 提示词控制。
 - 自然语言优先（Natural-Prose First, Mandatory）：`Viewpoint Anchor / Viewing Direction / Viewpoint Setup` 是内部约束语义，最终 `generation_prompt_en` 应优先写成自然流动的画面描述句，而不是连续字段栏目。
 - `0.5) Imagen 兼容质量规范`：自然英文、无引擎参数、无元说明、语义顺序清晰、负向词可执行。
 - 负面提示精简原则（Negative Prompt Compactness, Mandatory）：`negative_prompt_en` 必须短而自适应，禁止堆叠长串同义负面词；对单画幅提示词不得反复列举 `split-screen / multi-panel / collage / tiled`，如确有需要，最多保留一条简洁概括。
@@ -79,7 +83,7 @@
 - 换装补全硬规则（Mandatory）：若缺失 subject 涉及同一人物的不同着装版本，必须把该着装差异视为重大状态变化，补成独立角色实体；不得把“制服版/便装版/脱外套版/戴头盔版”回填到同一角色条目里。
 - 服装暗示补全规则（Mandatory）：若原文虽未直接写出服装名，但出现“摸了下婚纱”“整了整将军服”“提起裙摆”“扯正领带”“扶正头纱/肩章/帽檐/披风”等足以锁定特殊服装状态的动作，补全时必须恢复对应着装状态角色，并与常服基态角色拆分为独立实体。
 - 一角双衣补全禁令（Mandatory）：补全时绝对禁止把两个服装版本塞回同一个角色条目。若候选描述出现“日间简约复古裙装，夜间棉质睡衣”这类日夜双着装并列，必须拆成两个独立角色实体，分别输出各自 clothing / prompt / dependency 信息。
-- clothing 外部衣着补全声明（Mandatory）：补全 characters 时，每个角色 JSON 的 `clothing` 字段都必须显式写明“其他剧本衣着描述：无/有”。若有其他服装版本，必须在当前角色条目的 clothing 中写成“其他剧本衣着描述：有；另见 CHAR:[@OtherOutfit]（...）。”，以便下游识别这不是唯一衣着版本。
+- clothing 外部衣着补全声明（Mandatory）：补全 characters 时，每个角色 JSON 的 `clothing` 字段都必须显式写明三部分：1) 当前服装；2) 时尚对标；3) 其他剧本衣着描述。固定写法为“当前服装：...。时尚对标：角色定位=...；当代风格参考=...；版型/材质/配色关键词=...。其他剧本衣着描述：无。”；若有其他服装版本，则写成“当前服装：...。时尚对标：角色定位=...；当代风格参考=...；版型/材质/配色关键词=...。其他剧本衣着描述：有；另见 CHAR:[@OtherOutfit]（...）。”。不得省略时尚对标，也不得只写“时尚/高级/干练”这类空泛词。
 - 换装依赖补全规则（Mandatory）：补全换装角色时，必须依赖原角色建立 `visual_dependencies + dependency_strategy` 继承链；若换装对应明确服饰/装备道具，也必须在依赖逻辑中写清这些道具与角色版本的关系。
 - 失败重写示例（Failure -> Rewrite -> Downgraded Good, Mandatory Reference）：
   - Bad recovery draft: `Add a new woman character with similar style.` → 名称漂移、锚点缺失、未基于输入命名体系。
@@ -143,7 +147,7 @@
 - 状态变化实体化规则：若补全过程需要输出状态差异，不得只写 `messier room`、`older version`、`broken state` 这类抽象词；必须写为 `具体实体 + 可见差异 + 所在层级/位置`。
 
 ### 2) Character Prompt Template
-`[Global Style] 4-view character sheet for 【Name】. Describe the fixed studio observer placement and the required Close-up/Front full-body/Side full-body/Back full-body views in smooth natural prose, while keeping the view order strict, shoes fully visible in the three full-body panels, lighting setup, lens baseline, grain strategy, attire, and signature anchors explicit. Background: White.`
+`[Global Style] 4-view character sheet for 【Name】. Describe the fixed studio observer placement and the required Close-up/Front full-body/Side full-body/Back full-body views in smooth natural prose, while keeping the Close-up as the FIRST larger full-height LEFT panel at about 40% width with the face centered in that panel and the head occupying about 78% to 88% of that panel height, the other three views as equal RIGHT panels sharing the remaining 60% with uniformly minimal top and foot margins plus tighter left-right padding so the figure reads larger without cropping, complete uncropped silhouettes, shoes fully visible in the three full-body panels, and zero visible divider lines, seams, or borders. Background: White.`
 
 - 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
@@ -151,6 +155,8 @@
 - 锚点只读硬规则（Mandatory）：`anchor_description` 与角色身份锚点是不可变更锚点（immutable anchors）；补全过程只能逐字符继承，不得重写、扩写、弱化、同义替换或风格化改写。
 - 视觉舒适度硬规则（Mandatory）：角色 `generation_prompt_cn/en`、`description`、`appearance` 与相关说明默认必须保持克制、可播出、非图形化表达。尽量不要出现血腥、喷溅、开放性伤口、暴露组织、腐烂、残缺、体液污渍等强视觉不适内容；若剧情确实要求人物状态变化，优先使用“疲惫、凌乱、淋湿、沾灰、轻微擦痕、衣物破损但不露创口”等温和且可识别的写法。
 - 锚点内容白名单（Mandatory）：`anchor_description` 只允许写稳定身份锚点，例如脸型、发型轮廓、体态、服装版型、配色、饰品、鞋履、非图形化小痕迹；不得把受伤细节、血迹位置、瘀伤扩散、创口形态、残缺状态等写成锚点。
+- 锚点精简与检索清晰度规则（Mandatory）：`anchor_description` 的目标是让大模型能用少量文字快速定位参考图中的同一实体，因此必须精简为少量高密度英文短语，通常控制在 3 到 5 个锚点内。对 character，锚点内容应优先覆盖三类核心识别信息：1) 身份/角色定位；2) 相貌或轮廓特征，如脸型、发型轮廓、体态；3) 仅在确有区分价值时才补服饰或固定配件识别点，如独特外套轮廓、鞋履、长期佩戴饰品。第一个锚点通常应是基本角色定位/身份定位的英文短语，如 `female teacher`、`female investigative reporter`、`male chef`；其余锚点仅保留最稳定且最有区分度的相貌、轮廓与服饰识别点。
+- 同类服饰避让规则（Mandatory）：当对戏角色或同场角色可能共享同类服饰，例如西装、制服、校服、白大褂、工装等时，`anchor_description` 不得把这类共性服饰直接写成主描点，也不应使用 `black suit`、`school uniform`、`standard uniform`、`lab coat` 这类弱区分词占用锚点位。此时应优先改用更能区分个体的描点，如脸型、发型轮廓、体态、肩颈线、固定饰品、鞋型、穿着方式，或服装上真正独特的结构细节。
 
 ### 3) Prop Prompt Template
 `[Global Style] Prop Asset: 【Name】. Describe the object-relative observer placement and required Front/Reverse/Side/Top or Isometric view in natural prose, while keeping lighting setup, lens/focus baseline, grain strategy, material texture, wear state, and white background explicit.`
@@ -244,13 +250,13 @@ Part 2A:
       "gender": "F",
       "role": "Investigative Reporter",
       "archetype": "Calm Truth Seeker",
-      "appearance_cn": "28岁，东亚女性，身高约168cm，头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
-      "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。其他剧本衣着描述：无。",
+      "appearance_cn": "28岁，东亚女性，身高约178cm，头身比约1:9，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
+      "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。时尚对标：角色定位=女性调查记者；当代风格参考=都市专业女性的克制功能时装通勤路线，强调利落长线条、低饱和冷色层次与轻度老钱感新闻从业者穿搭；版型/材质/配色关键词=中长风衣、挺括衬衫、修身直筒裤、哑光技术面料、海军蓝+白+炭灰。其他剧本衣着描述：无。",
       "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
-      "generation_prompt_cn": "写实现代剧情风格，林月四视图角色设定图，四个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
+      "generation_prompt_cn": "写实现代剧情风格，林月四视图角色设定图，四个面板保持同一身份与服装一致。她约28岁，身高约178cm，头身比约1:9，整体比例高挑修长且镜头友好。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。版式固定为第一宫左侧居中特写大宫格：特写约占总画布宽度 40%，脸部必须位于第一宫中间，头部整体约占该宫格高度的 78% 到 88%，发型外轮廓、下巴与颈部过渡都要完整，不得裁切；右侧剩余约 60% 宽度均分为三张等大的纵向宫格，依次放正面全身、侧面全身、反面全身。右侧三张必须使用完全一致的构图尺度和留白逻辑，顶部留白和脚下留白都尽量小且必须统一，左右留白进一步压缩，让人物在不裁切的前提下显得更大，人物高度约占各自宫格高度的 84% 到 89%。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见，四宫都必须完整，不得出现任何出框或裁切。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Lin Yue with one fixed studio observer position at chest height. She reads as about 28 years old, about 178 cm tall, with an approximately 1:9 head-to-body proportion and a tall camera-friendly silhouette. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
       "negative_prompt_en": "plastic skin, waxy face, CGI look, toy-like proportions, oversmoothed pores, extra fingers, broken anatomy, text watermark",
-      "anchor_description": "sharp jawline, asymmetrical fringe, fine scar below right brow, silver ring on left index finger, navy trench silhouette, black ankle boots",
+      "anchor_description": "female investigative reporter, clean jawline, asymmetrical fringe silhouette, measured pause-before-motion stance",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original",
