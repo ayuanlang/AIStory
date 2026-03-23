@@ -412,6 +412,41 @@ def _apply_cors_headers_to_response(request: Request, response: Response) -> Res
     return response
 
 
+class _CorsPreflightMiddleware:
+    """Answer allowed CORS preflight requests before deeper middleware/auth layers.
+
+    Some runtime error paths and outer ASGI middleware can still cause browsers to
+    see missing CORS headers on OPTIONS. Short-circuiting valid preflights here
+    keeps authenticated polling endpoints reachable from the frontend.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = str(scope.get("method") or "").upper()
+        if method != "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive=receive)
+        origin = str(request.headers.get("origin") or "").strip()
+        requested_method = str(request.headers.get("access-control-request-method") or "").strip()
+
+        if not origin or not requested_method or not _origin_is_cors_allowed(origin):
+            await self.app(scope, receive, send)
+            return
+
+        response = Response(status_code=204)
+        response = _apply_cors_headers_to_response(request, response)
+        await response(scope, receive, send)
+        return
+
+
 _MAINTENANCE_CATEGORY = "System_Maintenance"
 _MAINTENANCE_PROVIDER = "maintenance_mode"
 _MAINTENANCE_INTERCEPT_ENABLED = os.getenv("MAINTENANCE_INTERCEPT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -676,6 +711,7 @@ if _MAINTENANCE_INTERCEPT_ENABLED:
 else:
     logger.warning("MAINTENANCE_INTERCEPT_ENABLED is disabled; skipping maintenance interception")
 app.add_middleware(_SecurityHeadersMiddleware)
+app.add_middleware(_CorsPreflightMiddleware)
 
 app.include_router(endpoints.router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)
