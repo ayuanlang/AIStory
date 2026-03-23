@@ -8345,6 +8345,22 @@ def _list_config_sync_exportable_system_rows(db: Session) -> Tuple[List[SystemAP
     return exportable_rows, excluded_deprecated
 
 
+def _list_config_sync_exportable_billing_rules(
+    db: Session,
+    exportable_system_api_ids: List[int],
+) -> List[SystemAPIBillingRule]:
+    exportable_ids = sorted({int(row_id) for row_id in exportable_system_api_ids if int(row_id) > 0})
+    if not exportable_ids or not _db_has_table(db, "system_api_billing_rules"):
+        return []
+
+    return db.query(SystemAPIBillingRule).filter(
+        SystemAPIBillingRule.system_api_id.in_(exportable_ids),
+    ).order_by(
+        SystemAPIBillingRule.system_api_id.asc(),
+        SystemAPIBillingRule.id.asc(),
+    ).all()
+
+
 def _build_provider_bundle_export_payload(db: Session, rows: List[SystemAPISetting]) -> List[Dict[str, Any]]:
     grouped: Dict[str, List[SystemAPISetting]] = {}
     for row in rows:
@@ -8807,10 +8823,10 @@ def export_system_config_sync_bundle_for_manage(
 
     billing_rules_payload: List[Dict[str, Any]] = []
     if _db_has_table(db, "system_api_billing_rules"):
-        rule_rows = db.query(SystemAPIBillingRule).order_by(
-            SystemAPIBillingRule.system_api_id.asc(),
-            SystemAPIBillingRule.id.asc(),
-        ).all()
+        rule_rows = _list_config_sync_exportable_billing_rules(
+            db,
+            list(system_map.keys()),
+        )
         for rule in rule_rows:
             api_row = system_map.get(int(rule.system_api_id))
             if not api_row:
