@@ -635,6 +635,16 @@ function getEpisodePreferredAspectRatio(episodeInfoLike) {
     );
 }
 
+function getProjectPreferredImageSize(projectInfoLike, episodeInfoLike) {
+    return getEpisodePreferredImageSize(projectInfoLike)
+        || getEpisodePreferredImageSize(episodeInfoLike);
+}
+
+function getProjectPreferredAspectRatio(projectInfoLike, episodeInfoLike) {
+    return getEpisodePreferredAspectRatio(projectInfoLike)
+        || getEpisodePreferredAspectRatio(episodeInfoLike);
+}
+
 function buildShotDiptychPlan(aspectRatio) {
     const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
     const ratioValue = parts.widthPart / parts.heightPart;
@@ -20234,8 +20244,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             throw new Error('Missing shot context for joint diptych result');
         }
 
-        const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info) || '16:9';
-        const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+        const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
+        const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
         const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
         const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
 
@@ -20311,7 +20321,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setEditingShot(prev => (prev && String(prev.id) === targetShotId ? { ...prev, ...nextData } : prev));
         refreshShotAssetsMeta();
         return nextData;
-    }, [activeEpisode?.episode_info, onUpdateShot, projectId, cropGeneratedPanelToBlob, loadImageElementFromBlob, refreshShotAssetsMeta]);
+    }, [activeEpisode?.episode_info, onUpdateShot, project?.global_info, projectId, cropGeneratedPanelToBlob, loadImageElementFromBlob, refreshShotAssetsMeta]);
 
     const handleGenerateShotDiptychFrames = async (cfgOverride = null) => {
         if (!editingShot) return;
@@ -20353,8 +20363,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const { text: startSubmitPrompt } = injectEntityFeatures(rawStartPrompt, isManualStart, resolvedEntities);
             const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, resolvedEntities);
 
-            const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info) || '16:9';
-            const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+            const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
+            const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
             const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
             const requestAspectRatio = selectBestShotDiptychRequestAspectRatio({
                 diptychPlan,
@@ -22486,8 +22496,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
-                const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
-                const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info);
+                const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
+                const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
 
                 const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
                     project_id: projectId,
@@ -22595,8 +22605,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
-                const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
-                const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info);
+                const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
+                const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
 
                 const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                     project_id: projectId,
@@ -23393,8 +23403,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         const normalizedEndPrompt = String(rawEndPrompt || '').trim().toUpperCase();
         const endPromptIsNoLike = ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt);
         const startPromptIsInherited = isStartFrameInheritPrompt(rawStartPrompt);
-        const preferredAspectRatio = getEpisodePreferredAspectRatio(activeEpisode?.episode_info) || '16:9';
-        const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
+        const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
+        const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
 
         let startUrl = String(workingShot.image_url || '').trim();
         let endUrl = String(techNotes.end_frame_url || '').trim();
@@ -23590,7 +23600,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setShotGeneratingState(stableShotId, 'start', false);
             setShotGeneratingState(stableShotId, 'end', false);
         }
-    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, projectId, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
 
     const runLocalKeyframeBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
