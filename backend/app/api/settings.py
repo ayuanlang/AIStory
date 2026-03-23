@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, load_only
-from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData, bindparam
+from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData, bindparam, literal
 from sqlalchemy.exc import OperationalError
 import logging
 import csv
@@ -137,6 +137,11 @@ _provider_pool_cache = {
     "runtime_key_map": {},
     "alias_map": {},
 }
+_SYSTEM_API_SETTINGS_COLUMNS_CACHE_TTL_SECONDS = 30.0
+_system_api_settings_columns_cache = {
+    "ts": 0.0,
+    "columns": set(),
+}
 _settings_system_indexes_ensured = False
 _api_settings_binding_columns_ensured = False
 _kie_standard_tables_ensured = False
@@ -175,6 +180,48 @@ def _invalidate_provider_pool_cache() -> None:
     _provider_pool_cache["runtime_key_map"] = {}
     _provider_pool_cache["alias_map"] = {}
     _provider_pool_cache["row_count"] = 0
+
+
+def _get_system_api_settings_existing_columns(db: Session) -> set[str]:
+    now_ts = time.time()
+    cached_ts = float(_system_api_settings_columns_cache.get("ts") or 0.0)
+    cached_cols = _system_api_settings_columns_cache.get("columns")
+    if isinstance(cached_cols, set) and cached_cols and (now_ts - cached_ts) < _SYSTEM_API_SETTINGS_COLUMNS_CACHE_TTL_SECONDS:
+        return set(cached_cols)
+
+    columns: set[str] = set()
+    try:
+        bind = db.get_bind()
+        if inspect(bind).has_table("system_api_settings"):
+            columns = {
+                str(col.get("name") or "").strip()
+                for col in inspect(bind).get_columns("system_api_settings")
+                if isinstance(col, dict) and str(col.get("name") or "").strip()
+            }
+    except Exception as exc:
+        logger.warning("settings.system.schema_probe_failed err=%s", str(exc)[:300])
+        columns = set()
+
+    _system_api_settings_columns_cache["ts"] = now_ts
+    _system_api_settings_columns_cache["columns"] = set(columns)
+
+    expected_cols = {
+        "deprecated", "config", "is_active", "base_model", "tags", "supplier_info",
+        "price_avg_cost", "price_source", "price_min_cost", "price_max_cost",
+        "provider_price_avg_cost", "provider_price_source", "provider_price_min_cost", "provider_price_max_cost",
+    }
+    missing = sorted(col for col in expected_cols if col not in columns)
+    if missing:
+        logger.warning("settings.system.schema_drift detected_missing_columns=%s", ",".join(missing))
+
+    return set(columns)
+
+
+def _system_api_setting_col(existing_cols: set[str], column_name: str, *, label: Optional[str] = None):
+    if column_name in existing_cols:
+        expr = getattr(SystemAPISetting, column_name)
+        return expr.label(label) if label else expr
+    return literal(None).label(label or column_name)
 
 
 def _invalidate_system_api_runtime_cache(refresh: bool = False) -> None:
@@ -1364,6 +1411,9 @@ def _normalize_api_keys(values) -> List[str]:
 
 
 def _get_provider_pool_runtime_maps(db: Session) -> Tuple[Dict[str, str], Dict[str, Optional[str]], int]:
+    if not _db_has_table(db, "provider_key_pool"):
+        return {}, {}, 0
+
     now_ts = time.time()
     cached_ts = float(_provider_pool_cache.get("ts") or 0.0)
     if (now_ts - cached_ts) < _PROVIDER_POOL_CACHE_TTL_SECONDS:
@@ -2702,6 +2752,8 @@ def _collect_manage_setting_billing_state(db: Session, system_api_ids: List[int]
     ids = sorted({int(sid) for sid in (system_api_ids or []) if int(sid or 0) > 0})
     if not ids:
         return {}, set()
+    if not _db_has_table(db, "system_api_billing_rules"):
+        return {}, set()
 
     rows = db.query(SystemAPIBillingRule).filter(
         SystemAPIBillingRule.system_api_id.in_(ids),
@@ -2797,21 +2849,22 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
 
 
 def _query_system_settings_manage_rows(db: Session):
+    existing_cols = _get_system_api_settings_existing_columns(db)
     return db.query(
-        SystemAPISetting.id,
-        SystemAPISetting.name,
-        SystemAPISetting.category,
-        SystemAPISetting.provider,
-        SystemAPISetting.api_key,
-        SystemAPISetting.base_url,
-        SystemAPISetting.model,
-        SystemAPISetting.base_model,
-        SystemAPISetting.modality,
-        SystemAPISetting.tags,
-        SystemAPISetting.supplier_info,
-        SystemAPISetting.deprecated,
-        SystemAPISetting.config,
-        SystemAPISetting.is_active,
+        _system_api_setting_col(existing_cols, "id"),
+        _system_api_setting_col(existing_cols, "name"),
+        _system_api_setting_col(existing_cols, "category"),
+        _system_api_setting_col(existing_cols, "provider"),
+        _system_api_setting_col(existing_cols, "api_key"),
+        _system_api_setting_col(existing_cols, "base_url"),
+        _system_api_setting_col(existing_cols, "model"),
+        _system_api_setting_col(existing_cols, "base_model"),
+        _system_api_setting_col(existing_cols, "modality"),
+        _system_api_setting_col(existing_cols, "tags"),
+        _system_api_setting_col(existing_cols, "supplier_info"),
+        _system_api_setting_col(existing_cols, "deprecated"),
+        _system_api_setting_col(existing_cols, "config"),
+        _system_api_setting_col(existing_cols, "is_active"),
     ).filter(
         ~SystemAPISetting.category.like("System_%"),
     ).order_by(
@@ -3108,6 +3161,17 @@ def _batch_system_api_pricing_from_rules_and_audit(
     normalized_ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
     if not normalized_ids:
         return {}
+    if not _db_has_table(db, "system_api_billing_rules"):
+        return {
+            sid: {
+                "average_cost": 0,
+                "source": "billing_rules_table_missing",
+                "min_cost": 0,
+                "max_cost": 0,
+                "sample_prices": [],
+            }
+            for sid in normalized_ids
+        }
 
     id_set = set(normalized_ids)
     default_value = {
@@ -3186,6 +3250,8 @@ def _batch_system_api_primary_billing_unit_type(
 ) -> Dict[int, str]:
     normalized_ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
     if not normalized_ids:
+        return {}
+    if not _db_has_table(db, "system_api_billing_rules"):
         return {}
 
     rows = db.query(
@@ -3550,6 +3616,58 @@ def _refresh_settings_provider_price_cache_for_system_apis(db: Session, system_a
             changed += 1
 
     return changed
+
+
+def _build_effective_provider_price_summary_map(
+    system_settings: List[Any],
+    pricing_by_id: Optional[Dict[int, Dict[str, Any]]] = None,
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    grouped_rows: Dict[Tuple[str, str], List[Any]] = defaultdict(list)
+    for row in system_settings or []:
+        provider_key = str(getattr(row, "provider", "") or "").strip().lower()
+        category_key = str(getattr(row, "category", "") or "").strip().lower()
+        if not provider_key or not category_key:
+            continue
+        grouped_rows[(provider_key, category_key)].append(row)
+
+    result: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for key, rows in grouped_rows.items():
+        active_rows = [
+            row
+            for row in rows
+            if not _is_setting_deprecated(getattr(row, "config", None), getattr(row, "deprecated_flag", getattr(row, "deprecated", None)))
+        ]
+        min_candidates: List[int] = []
+        max_candidates: List[int] = []
+        sample_candidates: List[int] = []
+
+        for row in active_rows:
+            sid = _safe_int(getattr(row, "id", 0), 0)
+            if sid <= 0:
+                continue
+            pricing = (pricing_by_id or {}).get(sid) or _read_settings_price_cache_from_row(row)
+            min_cost = _safe_int(pricing.get("min_cost"), 0)
+            max_cost = _safe_int(pricing.get("max_cost"), 0)
+            if min_cost > 0:
+                min_candidates.append(min_cost)
+            if max_cost > 0:
+                max_candidates.append(max_cost)
+            for value in (pricing.get("sample_prices") or []):
+                parsed = _safe_int(value, 0)
+                if parsed > 0:
+                    sample_candidates.append(parsed)
+
+        sample_prices = sorted(set(sample_candidates))[:5] if sample_candidates else []
+        average_cost = int(round(sum(sample_candidates) / float(len(sample_candidates)))) if sample_candidates else 0
+        result[key] = {
+            "average_cost": max(0, int(average_cost)),
+            "source": "effective_provider_range_from_rules",
+            "min_cost": int(min(min_candidates)) if min_candidates else 0,
+            "max_cost": int(max(max_candidates)) if max_candidates else 0,
+            "sample_prices": [int(v) for v in sample_prices if int(v) > 0],
+        }
+
+    return result
 
 
 def _compute_cost_scaled_multiplier(cost_score: int, min_cost: int, max_cost: int, min_multiplier: float, max_multiplier: float) -> float:
@@ -4271,41 +4389,67 @@ def get_system_settings(
         return []
 
     try:
-        _ensure_api_settings_binding_columns(db)
-        _ensure_settings_system_indexes(db)
         can_view_pricing = bool(getattr(current_user, "is_superuser", False))
         t0 = time.perf_counter()
         t_prev = t0
         visible_categories = ("LLM", "Image", "Video", "Vision")
+        existing_cols = _get_system_api_settings_existing_columns(db)
         def _query_system_settings_rows():
-            return db.query(
-                SystemAPISetting.id,
-                SystemAPISetting.name,
-                SystemAPISetting.provider,
-                SystemAPISetting.category,
-                SystemAPISetting.model,
-                SystemAPISetting.base_url,
-                SystemAPISetting.api_key,
-                SystemAPISetting.deprecated.label("deprecated_flag"),
-                SystemAPISetting.tags,
-                SystemAPISetting.config,
+            query = db.query(
+                _system_api_setting_col(existing_cols, "id"),
+                _system_api_setting_col(existing_cols, "name"),
+                _system_api_setting_col(existing_cols, "provider"),
+                _system_api_setting_col(existing_cols, "category"),
+                _system_api_setting_col(existing_cols, "model"),
+                _system_api_setting_col(existing_cols, "base_url"),
+                _system_api_setting_col(existing_cols, "api_key"),
+                _system_api_setting_col(existing_cols, "deprecated", label="deprecated_flag"),
+                _system_api_setting_col(existing_cols, "tags"),
+                _system_api_setting_col(existing_cols, "config"),
+                _system_api_setting_col(existing_cols, "modality"),
+                _system_api_setting_col(existing_cols, "price_avg_cost"),
+                _system_api_setting_col(existing_cols, "price_source"),
+                _system_api_setting_col(existing_cols, "price_min_cost"),
+                _system_api_setting_col(existing_cols, "price_max_cost"),
+                _system_api_setting_col(existing_cols, "price_sample_prices"),
+                _system_api_setting_col(existing_cols, "price_updated_at"),
+                _system_api_setting_col(existing_cols, "provider_price_avg_cost"),
+                _system_api_setting_col(existing_cols, "provider_price_source"),
+                _system_api_setting_col(existing_cols, "provider_price_min_cost"),
+                _system_api_setting_col(existing_cols, "provider_price_max_cost"),
+                _system_api_setting_col(existing_cols, "provider_price_sample_prices"),
+                _system_api_setting_col(existing_cols, "provider_price_updated_at"),
             ).filter(
                 ~SystemAPISetting.category.like("System_%"),
                 SystemAPISetting.category.in_(visible_categories),
-                or_(SystemAPISetting.deprecated.is_(False), SystemAPISetting.deprecated.is_(None)),
-            ).all()
+            )
+            if "deprecated" in existing_cols:
+                query = query.filter(or_(SystemAPISetting.deprecated.is_(False), SystemAPISetting.deprecated.is_(None)))
+            return query.all()
 
         system_settings = _query_system_settings_rows()
+        effective_price_by_id: Dict[int, Dict[str, Any]] = {}
+        effective_provider_price_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
         stale_price_ids = [
             int(getattr(item, "id", 0) or 0)
             for item in system_settings
             if int(getattr(item, "id", 0) or 0) > 0 and _settings_price_cache_is_legacy(getattr(item, "config", None))
         ]
-        if stale_price_ids:
-            _refresh_settings_price_cache_for_system_apis(db, stale_price_ids)
-            _refresh_settings_provider_price_cache_for_system_apis(db, stale_price_ids)
-            db.commit()
-            system_settings = _query_system_settings_rows()
+        if can_view_pricing and stale_price_ids:
+            effective_price_by_id = _batch_system_api_pricing_from_rules_and_audit(
+                db,
+                stale_price_ids,
+                include_audit=False,
+            )
+            effective_provider_price_by_key = _build_effective_provider_price_summary_map(
+                system_settings,
+                pricing_by_id=effective_price_by_id,
+            )
+            logger.info(
+                "settings.system.serve_without_cache_write user_id=%s stale_rows=%s",
+                getattr(current_user, "id", None),
+                len(stale_price_ids),
+            )
         t_query_system_settings_ms = int((time.perf_counter() - t_prev) * 1000)
         t_prev = time.perf_counter()
 
@@ -4345,10 +4489,14 @@ def get_system_settings(
             provider = item.provider or "unknown"
             category = item.category or "LLM"
             webhook_url, _avg_pricing_from_cfg = _extract_webhook_and_price_cache(getattr(item, "config", None))
-            avg_pricing = _read_settings_price_cache_from_row(item) if can_view_pricing else {}
+            item_id = int(getattr(item, "id", 0) or 0)
+            avg_pricing = ((effective_price_by_id.get(item_id) or _read_settings_price_cache_from_row(item)) if can_view_pricing else {})
             key = (provider, category)
             if key not in grouped:
-                provider_pricing = _read_settings_provider_price_cache_from_row(item) if can_view_pricing else {}
+                provider_pricing = (
+                    effective_provider_price_by_key.get((str(provider or "").strip().lower(), str(category or "").strip().lower()))
+                    or _read_settings_provider_price_cache_from_row(item)
+                ) if can_view_pricing else {}
                 grouped[key] = {
                     "provider": provider,
                     "provider_alias": provider_alias_map.get(str(provider or "").strip().lower()),
@@ -4573,11 +4721,18 @@ def list_system_settings_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
+    t0 = time.perf_counter()
     rows = _query_system_settings_manage_rows(db)
+    t_query_rows_ms = int((time.perf_counter() - t0) * 1000)
     row_ids = [int(getattr(row, "id", 0) or 0) for row in rows if int(getattr(row, "id", 0) or 0) > 0]
+    t_prev = time.perf_counter()
     billing_by_id, granular_rule_ids = _collect_manage_setting_billing_state(db, row_ids)
+    t_billing_ms = int((time.perf_counter() - t_prev) * 1000)
+    t_prev = time.perf_counter()
     task_default_setting_ids = list_task_default_system_setting_ids(db)
-    return [
+    t_task_defaults_ms = int((time.perf_counter() - t_prev) * 1000)
+    t_prev = time.perf_counter()
+    result = [
         _setting_row_to_out_prefetched(
             row,
             billing_by_id=billing_by_id,
@@ -4586,6 +4741,22 @@ def list_system_settings_for_manage(
         )
         for row in rows
     ]
+    t_build_ms = int((time.perf_counter() - t_prev) * 1000)
+    total_ms = int((time.perf_counter() - t0) * 1000)
+    logger.info(
+        "settings.system.manage.timing user_id=%s total_ms=%s query_rows_ms=%s billing_ms=%s task_defaults_ms=%s build_ms=%s row_count=%s billing_count=%s granular_count=%s task_defaults_count=%s",
+        getattr(current_user, "id", None),
+        total_ms,
+        t_query_rows_ms,
+        t_billing_ms,
+        t_task_defaults_ms,
+        t_build_ms,
+        len(rows),
+        len(billing_by_id),
+        len(granular_rule_ids),
+        len(task_default_setting_ids),
+    )
+    return result
 
 
 @router.get("/settings/system/manage/missing-billing-rules", response_model=List[SystemAPIMissingBillingRuleOut])

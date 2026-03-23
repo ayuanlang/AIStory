@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional
+from threading import Lock
+import time
 
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session, load_only
@@ -9,17 +11,45 @@ from app.models.all_models import SystemAPISetting, TaskDefaultSystemAPI
 from app.core.time_utils import now_bj_iso
 
 
+_TASK_DEFAULTS_TABLE_CACHE_TTL_SECONDS = 30.0
+_task_defaults_table_cache = {
+    "ts": 0.0,
+    "value": None,
+}
+_task_defaults_table_cache_lock = Lock()
+
+
+def _set_task_defaults_table_cache(value: bool) -> None:
+    _task_defaults_table_cache["ts"] = time.time()
+    _task_defaults_table_cache["value"] = bool(value)
+
+
 def _task_defaults_table_exists(db: Session) -> bool:
     # Use both inspector and a direct probe query; some legacy deployments can
     # report stale table metadata around migrations/replaces.
-    try:
-        bind = db.get_bind()
-        if not bool(inspect(bind).has_table("system_task_default_apis")):
-            return False
-        db.execute(text("SELECT 1 FROM system_task_default_apis LIMIT 1"))
-        return True
-    except Exception:
-        return False
+    now_ts = time.time()
+    cached_ts = float(_task_defaults_table_cache.get("ts") or 0.0)
+    cached_value = _task_defaults_table_cache.get("value")
+    if cached_value is not None and (now_ts - cached_ts) < _TASK_DEFAULTS_TABLE_CACHE_TTL_SECONDS:
+        return bool(cached_value)
+
+    with _task_defaults_table_cache_lock:
+        cached_ts = float(_task_defaults_table_cache.get("ts") or 0.0)
+        cached_value = _task_defaults_table_cache.get("value")
+        if cached_value is not None and (time.time() - cached_ts) < _TASK_DEFAULTS_TABLE_CACHE_TTL_SECONDS:
+            return bool(cached_value)
+
+        exists = False
+        try:
+            bind = db.get_bind()
+            if bool(inspect(bind).has_table("system_task_default_apis")):
+                db.execute(text("SELECT 1 FROM system_task_default_apis LIMIT 1"))
+                exists = True
+        except Exception:
+            exists = False
+
+        _set_task_defaults_table_cache(exists)
+        return exists
 
 
 def normalize_task_category(value: Optional[str]) -> str:

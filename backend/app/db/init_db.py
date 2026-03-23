@@ -458,6 +458,11 @@ def check_and_migrate_tables(*, critical_only: bool = False):
 
         _ensure_minimum_runtime_schema(is_postgres=is_postgres)
 
+        try:
+            _ensure_missing_table_columns("system_api_settings", SystemAPISetting, is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure critical system_api_settings columns: {e}")
+
         if critical_only:
             logger.info("Skipping non-critical legacy migrations during startup bootstrap")
             return
