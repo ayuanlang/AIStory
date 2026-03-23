@@ -12,6 +12,9 @@
 8. 道具宁缺毋滥：仅抽取有持续叙事作用且后续被再次使用/引用的道具。
 9. 环境默认审美：未指定风格时，默认优美/大气/现代/优雅；若剧本指定风格，以剧本优先。
 10. 角色与道具默认审美：未限制时，角色镜头友好且可播出，道具精致可复现；必须保留锚定特征。
+- 角色反同质化硬规则（Mandatory）：当同一项目、同一集或同一 Scene 中存在两名及以上重要角色时，必须默认执行“显著可区分设计”，禁止把多人写成同一种脸型、同一年龄观感、同类发型、相近体态、同色系服装、同版型外套、同款鞋履或同类配饰的轻微变体。即使剧本未详细描写，也必须主动拉开差异，至少在以下维度中保证每个主要角色占有稳定且可复现的独特组合：脸型轮廓、五官气质、发型/发长/发线、体态比例、肤色/年龄感、主色与辅色、服装版型、材质层次、鞋履识别点、饰品/职业佩戴物。
+- 角色差异化优先级（Mandatory）：角色设计时，优先先拉开“轮廓差异 + 配色差异 + 材质差异 + 身份配件差异”，再补细节。若两个角色仅靠发色、衣服颜色或单一饰品区分，判定为差异不足，必须重写。若剧本明确要求制服、校服、工装等群体着装，也必须通过内搭、剪裁松紧、穿着方式、鞋型、发型、身材气质、配件和旧化程度拉开个体差异，禁止生成一排模板化复制人。
+- 角色特征落地规则（Mandatory）：`appearance`、`description`、`clothing`、`anchor_description`、`generation_prompt_cn/en` 之间必须共享同一套识别锚点，且这些锚点要落到可被镜头稳定识别的具体元素；禁止只写空泛词如“帅气”“漂亮”“时尚”“干练”“年轻女性”“成熟男性”而缺少可见特征。每个主要角色至少要有 3 个以上稳定的正向识别点，其中至少 1 个来自轮廓/体态，至少 1 个来自服装结构或鞋履，至少 1 个来自发型/配饰/材质细节。
 11. 层级编码延续：`Episode ID=EPxx`，`Scene ID=EPxx_SCyy`，下游 `Shot ID=EPxx_SCyy_SHzz`；Scene 内状态必须形成 `Entry -> Exit` 闭环。
 12. 语言一致：自然语言默认跟随剧本原始语言；但若 `Project Context` 中明确给出 `Language`（如 `Language: 中文 / Chinese`、`Language: 英文 / English`），则该项目语言为最高优先级，必须覆盖剧本文本原始语言。仅 `Episode/Scene/Shot ID`、固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
 - 固定双语输出字段契约（Mandatory）：`generation_prompt_cn`、`appearance_cn`、`description_cn` 等带 `_cn` 的字段，始终必须输出**中文**；`generation_prompt_en`、`negative_prompt_en`、`name_en` 等带 `_en` 的字段，始终必须输出**英文**；`anchor_description` 始终必须输出英文短语。以上字段语言契约**不受项目语言影响**。
@@ -259,7 +262,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 - **维度生成检查 (Dimension Completeness Gate, 强制)**：每个 Scene 在输出前必须先做“实体层 + 提示词层”双重维度验收；该检查只作为内部门禁，不得把 checklist 或“通过/失败”字样输出到最终结果。
   - **实体层最低维度槽位**：`Scene Subjects`、`Linked Characters`、`Key Props`、`Environment Name`、`Layout FG/MG/BG`、`Beats`、`Subject Index`、`Part 2` 之间必须形成同名闭环；任一实体若出现“被提及但未抽取”“被抽取但未落点”“已入 Subject Index 但未入 Part 2”，整场无效。
   - **Environment 提示词最低维度槽位**：`Viewpoint Anchor`、`Viewing Direction`、`FG/MG/BG`、`Primary Subject`、`Secondary Subject`、空间可达/调度可行性、去人物化约束必须齐全；任一缺失即该 environment 条目无效。
-  - **Character 提示词最低维度槽位**：`full body + shoes visible`、固定观察机位、视角序列、光照结构、镜头基线、服装一致性、稳定锚点、negative_prompt_en 必须齐全；任一缺失即该 character 条目无效。
+  - **Character 提示词最低维度槽位**：`full body + shoes visible`、固定观察机位、视角序列、光照结构、镜头基线、服装一致性、稳定锚点、差异化轮廓、差异化服装结构/配色、差异化鞋履或配饰识别点、negative_prompt_en 必须齐全；任一缺失即该 character 条目无效。
   - **Prop 提示词最低维度槽位**：固定观察机位、视角序列、材质锚点、镜头/微距基线、光照结构、状态单一性、negative_prompt_en 必须齐全；任一缺失即该 prop 条目无效。
 - **禁止带病流转 (No Partial Pass-Through, 强制)**：若任一 Scene、Subject Index 行或 Part 2 条目未通过维度检查，不得输出部分结果，也不得把问题留给下游；必须先重写后再执行同一轮检查。
 - **重写机制 (Rewrite Protocol, 强制)**：发现维度缺口时，必须按缺口范围重写，而不是在原条目尾部机械补短语。
@@ -291,7 +294,8 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 ### 0) 生图提示词清晰性
 - **提示词维度门禁 (Prompt Dimension Gate, 强制)**：每个 `generation_prompt_en/cn` 在提交前必须逐条检查是否已显式覆盖本实体类型的最低必要维度；任一缺失即该条提示词作废并重写。
   - **Environment**：机位落点、观察朝向、FG/MG/BG、主次主体、光照层次、材质/空间结构、可达性、去人物化。
-  - **Character**：固定机位、全身含鞋、视角顺序、光照、镜头基线、稳定锚点、服装一致性、白底/纯净背景要求。
+  - **Character**：固定机位、全身含鞋、视角顺序、光照、镜头基线、稳定锚点、服装一致性、差异化轮廓、差异化服装结构/主辅色、鞋履/配饰识别点、白底/纯净背景要求。
+- **多人角色去模板化门禁（Mandatory）**：若同批输出中的两个或以上主要角色在 `appearance/clothing/generation_prompt` 层面仍可被概括为“同龄同体态同发型同穿搭，只换颜色或名字”，则该批角色结果整体无效，必须整批重写；重写时优先拉开脸型、发型轮廓、身材比例、服装版型、鞋型和材质系统，而不是只替换颜色词。
   - **Prop**：固定机位、结构视角序列、材质锚点、光照、焦段基线、状态单一性、背景纯净度。
 - **重写回写责任 (Rewrite Back-Propagation, 强制)**：若某条 `generation_prompt` 因维度门禁被重写，必须同步回写该实体的相关说明字段（如 `anchor_description`、`visual_dependencies`、`dependency_strategy.logic`、script_entity_coverage 对应关系），确保实体说明与提示词语义一致，禁止 prompt 已修正但结构字段仍停留旧版本。
 - **项目类型/定位绑定（Mandatory）**：所有 `generation_prompt_cn/generation_prompt_en` 在生成前都必须先读取并吸收 `Project Context.Type`、`Project Context.Base Positioning` 与 `project_visual_backfill.Global_Style`。提示词正文必须明确服从该视觉总基线，回答这是真人写实、动漫/二次元、风格化 3D 还是其他体系；禁止上游 `Global_Style` 写“live-action urban realism” 而下游 subjects prompt 变成 “anime cel-shaded character sheet”，或反向混搭。
