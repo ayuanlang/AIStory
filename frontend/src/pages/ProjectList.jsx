@@ -1034,7 +1034,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             return;
         }
         if (!reviewThreadForm.entity_required && !reviewThreadForm.shot_required) {
-            setToast({ type: 'error', message: t('至少选择实体或镜头审核', 'Choose entity or shot review at minimum') });
+            setToast({ type: 'error', message: t('至少选择资产或镜头审核', 'Choose asset or shot review at minimum') });
             setTimeout(() => setToast(null), 2500);
             return;
         }
@@ -1068,7 +1068,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const handleCreateReviewRound = async () => {
         if (!selectedReviewThreadId) return;
         if (!reviewRoundForm.entity_required && !reviewRoundForm.shot_required) {
-            setToast({ type: 'error', message: t('至少选择实体或镜头审核', 'Choose entity or shot review at minimum') });
+            setToast({ type: 'error', message: t('至少选择资产或镜头审核', 'Choose asset or shot review at minimum') });
             setTimeout(() => setToast(null), 2500);
             return;
         }
@@ -1885,7 +1885,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                         <div className="mb-4 flex items-center justify-between">
                             <div>
                                 <h3 className="text-lg font-semibold">{t('项目协作', 'Project Collaboration')} · {shareModalProject.title}</h3>
-                                <div className="mt-1 text-xs text-muted-foreground">{t('管理共享角色，并发起或处理实体/镜头审核。', 'Manage share roles and create or respond to entity/shot reviews.')}</div>
+                                <div className="mt-1 text-xs text-muted-foreground">{t('管理共享角色，并发起或处理资产/镜头审核。', 'Manage share roles and create or respond to asset/shot reviews.')}</div>
                             </div>
                             <button className="rounded p-1 text-muted-foreground hover:bg-secondary" onClick={() => setShareModalProject(null)}>
                                 <X className="h-4 w-4" />
@@ -2084,7 +2084,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 checked={!!reviewThreadForm.entity_required}
                                                                 onChange={(e) => setReviewThreadForm((prev) => ({ ...prev, entity_required: e.target.checked }))}
                                                             />
-                                                            {t('实体审核', 'Entity review')}
+                                                            {t('资产审核', 'Asset review')}
                                                         </label>
                                                         <label className="flex items-center gap-2">
                                                             <input
@@ -2189,7 +2189,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 </div>
                                                                 <div className="mt-1 text-xs text-muted-foreground">{round.initiated_by_username || '-'}</div>
                                                                 <div className="mt-1 grid gap-1 text-[11px] text-muted-foreground">
-                                                                    {round.entity_required && <div>{t('实体', 'Entity')}: {getReviewDecisionLabel(round.entity_decision, t)}</div>}
+                                                                    {round.entity_required && <div>{t('资产', 'Asset')}: {getReviewDecisionLabel(round.entity_decision, t)}</div>}
                                                                     {round.shot_required && <div>{t('镜头', 'Shot')}: {getReviewDecisionLabel(round.shot_decision, t)}</div>}
                                                                 </div>
                                                             </button>
@@ -2204,10 +2204,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                             <div className="grid gap-2 text-sm text-muted-foreground">
                                                                 {selectedReviewRound.request_message && <div>{selectedReviewRound.request_message}</div>}
                                                                 <div className="flex flex-wrap gap-4 text-xs">
-                                                                    {selectedReviewRound.entity_required && <span>{t('实体', 'Entity')}: {getReviewDecisionLabel(selectedReviewRound.entity_decision, t)}</span>}
+                                                                    {selectedReviewRound.entity_required && <span>{t('资产', 'Asset')}: {getReviewDecisionLabel(selectedReviewRound.entity_decision, t)}</span>}
                                                                     {selectedReviewRound.shot_required && <span>{t('镜头', 'Shot')}: {getReviewDecisionLabel(selectedReviewRound.shot_decision, t)}</span>}
                                                                 </div>
-                                                                {selectedReviewRound.entity_feedback && <div><span className="text-foreground">{t('实体意见', 'Entity feedback')}:</span> {selectedReviewRound.entity_feedback}</div>}
+                                                                {selectedReviewRound.entity_feedback && <div><span className="text-foreground">{t('资产意见', 'Asset feedback')}:</span> {selectedReviewRound.entity_feedback}</div>}
                                                                 {selectedReviewRound.shot_feedback && <div><span className="text-foreground">{t('镜头意见', 'Shot feedback')}:</span> {selectedReviewRound.shot_feedback}</div>}
                                                             </div>
                                                         </div>
@@ -2229,9 +2229,9 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                     </div>
                                                                     {message.message_text && <div className="text-sm text-foreground">{message.message_text}</div>}
                                                                     <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
-                                                                        {message.entity_decision && message.entity_decision !== 'pending' && <div>{t('实体结论', 'Entity decision')}: {getReviewDecisionLabel(message.entity_decision, t)}</div>}
+                                                                        {message.entity_decision && message.entity_decision !== 'pending' && <div>{t('资产结论', 'Asset decision')}: {getReviewDecisionLabel(message.entity_decision, t)}</div>}
                                                                         {message.shot_decision && message.shot_decision !== 'pending' && <div>{t('镜头结论', 'Shot decision')}: {getReviewDecisionLabel(message.shot_decision, t)}</div>}
-                                                                        {message.entity_feedback && <div>{t('实体意见', 'Entity feedback')}: {message.entity_feedback}</div>}
+                                                                        {message.entity_feedback && <div>{t('资产意见', 'Asset feedback')}: {message.entity_feedback}</div>}
                                                                         {message.shot_feedback && <div>{t('镜头意见', 'Shot feedback')}: {message.shot_feedback}</div>}
                                                                     </div>
                                                                 </div>
@@ -2260,7 +2260,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                                     className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
                                                                                 >
                                                                                     {REVIEW_DECISION_OPTIONS.map((decision) => (
-                                                                                        <option key={decision} value={decision}>{t('实体', 'Entity')} · {getReviewDecisionLabel(decision, t)}</option>
+                                                                                        <option key={decision} value={decision}>{t('资产', 'Asset')} · {getReviewDecisionLabel(decision, t)}</option>
                                                                                     ))}
                                                                                 </select>
                                                                             )}
@@ -2281,7 +2281,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                                 value={reviewMessageForm.entity_feedback}
                                                                                 onChange={(e) => setReviewMessageForm((prev) => ({ ...prev, entity_feedback: e.target.value }))}
                                                                                 rows={2}
-                                                                                placeholder={t('实体审核意见', 'Entity review feedback')}
+                                                                                placeholder={t('资产审核意见', 'Asset review feedback')}
                                                                                 className="rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
                                                                             />
                                                                         )}
@@ -2326,7 +2326,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                             checked={!!reviewRoundForm.entity_required}
                                                                             onChange={(e) => setReviewRoundForm((prev) => ({ ...prev, entity_required: e.target.checked }))}
                                                                         />
-                                                                        {t('实体审核', 'Entity review')}
+                                                                        {t('资产审核', 'Asset review')}
                                                                     </label>
                                                                     <label className="flex items-center gap-2">
                                                                         <input

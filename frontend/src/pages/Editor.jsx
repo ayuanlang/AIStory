@@ -1571,7 +1571,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             return;
         }
         if (!quickReviewDraft.entity_required && !quickReviewDraft.shot_required) {
-            alert(t('至少需要选择实体审核或镜头审核。', 'Please enable entity review or shot review.'));
+            alert(t('至少需要选择资产审核或镜头审核。', 'Please enable asset review or shot review.'));
             return;
         }
         setIsReviewPanelSubmitting(true);
@@ -3235,7 +3235,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         <div>
                             <h3 className="text-lg font-semibold text-primary">{t('项目审核协作', 'Project Review Collaboration')}</h3>
                             <p className="mt-1 text-sm text-muted-foreground">
-                                {t('可直接从项目总览发起实体/镜头审核，不必回到项目列表。', 'Create entity and shot review requests directly from project overview without returning to the project list.')}
+                                {t('可直接从项目总览发起资产/镜头审核，不必回到项目列表。', 'Create asset and shot review requests directly from project overview without returning to the project list.')}
                             </p>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -3278,7 +3278,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                         checked={!!quickReviewDraft.entity_required}
                                         onChange={(e) => setQuickReviewDraft((prev) => ({ ...prev, entity_required: e.target.checked }))}
                                     />
-                                    {t('实体审核', 'Entity Review')}
+                                    {t('资产审核', 'Asset Review')}
                                 </label>
                                 <label className="flex items-center gap-2">
                                     <input
@@ -3374,10 +3374,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                         <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-muted-foreground space-y-2">
                                                             {selectedRound.request_message && <div>{selectedRound.request_message}</div>}
                                                             <div className="flex flex-wrap gap-4">
-                                                                {selectedRound.entity_required && <span>{t('实体', 'Entity')}: {selectedRound.entity_decision || 'pending'}</span>}
+                                                                {selectedRound.entity_required && <span>{t('资产', 'Asset')}: {selectedRound.entity_decision || 'pending'}</span>}
                                                                 {selectedRound.shot_required && <span>{t('镜头', 'Shot')}: {selectedRound.shot_decision || 'pending'}</span>}
                                                             </div>
-                                                            {selectedRound.entity_feedback && <div>{t('实体意见', 'Entity feedback')}: {selectedRound.entity_feedback}</div>}
+                                                            {selectedRound.entity_feedback && <div>{t('资产意见', 'Asset feedback')}: {selectedRound.entity_feedback}</div>}
                                                             {selectedRound.shot_feedback && <div>{t('镜头意见', 'Shot feedback')}: {selectedRound.shot_feedback}</div>}
                                                         </div>
                                                     )}
@@ -3393,9 +3393,9 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                                 </div>
                                                                 {message.message_text && <div className="mt-1 text-sm text-white">{message.message_text}</div>}
                                                                 <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
-                                                                    {message.entity_decision && message.entity_decision !== 'pending' && <div>{t('实体结论', 'Entity decision')}: {message.entity_decision}</div>}
+                                                                    {message.entity_decision && message.entity_decision !== 'pending' && <div>{t('资产结论', 'Asset decision')}: {message.entity_decision}</div>}
                                                                     {message.shot_decision && message.shot_decision !== 'pending' && <div>{t('镜头结论', 'Shot decision')}: {message.shot_decision}</div>}
-                                                                    {message.entity_feedback && <div>{t('实体意见', 'Entity feedback')}: {message.entity_feedback}</div>}
+                                                                    {message.entity_feedback && <div>{t('资产意见', 'Asset feedback')}: {message.entity_feedback}</div>}
                                                                     {message.shot_feedback && <div>{t('镜头意见', 'Shot feedback')}: {message.shot_feedback}</div>}
                                                                 </div>
                                                             </div>
@@ -3419,10 +3419,10 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                                                 onChange={(e) => setQuickReviewReplyDraft((prev) => ({ ...prev, entity_decision: e.target.value }))}
                                                                                 className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
                                                                             >
-                                                                                <option value="pending">{t('实体待定', 'Entity pending')}</option>
-                                                                                <option value="approved">{t('实体通过', 'Entity approved')}</option>
-                                                                                <option value="conditional">{t('实体有条件通过', 'Entity conditional')}</option>
-                                                                                <option value="rejected">{t('实体不通过', 'Entity rejected')}</option>
+                                                                                <option value="pending">{t('资产待定', 'Asset pending')}</option>
+                                                                                <option value="approved">{t('资产通过', 'Asset approved')}</option>
+                                                                                <option value="conditional">{t('资产有条件通过', 'Asset conditional')}</option>
+                                                                                <option value="rejected">{t('资产不通过', 'Asset rejected')}</option>
                                                                             </select>
                                                                         )}
                                                                         {selectedRound.shot_required && (
@@ -3442,7 +3442,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                                                         <textarea
                                                                             value={quickReviewReplyDraft.entity_feedback}
                                                                             onChange={(e) => setQuickReviewReplyDraft((prev) => ({ ...prev, entity_feedback: e.target.value }))}
-                                                                            placeholder={t('实体审核意见', 'Entity review feedback')}
+                                                                            placeholder={t('资产审核意见', 'Asset review feedback')}
                                                                             className="w-full h-20 resize-none rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
                                                                         />
                                                                     )}
@@ -13587,8 +13587,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         return isSceneAiShotsGenerating(stableSceneId)
             || aiShotsPromptPreviewSceneIdsRef.current.has(stableSceneId);
     }, [isSceneAiShotsGenerating]);
-    const closeSceneShotPromptModal = useCallback(() => {
-        const stableSceneId = Number(shotPromptModal?.sceneId || 0);
+    const closeSceneShotPromptModal = useCallback((sceneIdOverride = null) => {
+        const stableSceneId = Number(sceneIdOverride || shotPromptModal?.sceneId || 0);
         if (Number.isFinite(stableSceneId) && stableSceneId > 0) {
             aiShotsPromptPreviewSceneIdsRef.current.delete(stableSceneId);
         }
@@ -13707,7 +13707,13 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                 setShotPromptModal({ open: true, sceneId: sceneId, data: data, loading: false });
             } catch (e) {
                 onLog?.(`SceneManager: Failed to fetch prompt preview - ${e.message}`, 'error');
-                closeSceneShotPromptModal();
+                setAiShotsFlowStatus({
+                    phase: 'failed',
+                    sceneId,
+                    message: t(`AI Shots 预览加载失败：${e.message}`, `Failed to load AI Shots preview: ${e.message}`),
+                });
+                closeSceneShotPromptModal(sceneId);
+                alert(t(`AI Shots 预览加载失败：${e.message}`, `Failed to load AI Shots preview: ${e.message}`));
             }
             return;
         }
