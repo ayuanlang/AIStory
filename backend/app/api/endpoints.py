@@ -14083,6 +14083,48 @@ def _is_maintenance_active_for_login(db: Session) -> bool:
     except Exception:
         return False
 
+
+def _should_block_login_for_maintenance(
+    db: Session,
+    user: User,
+    *,
+    login_identifier: str,
+    client_ip: Optional[str],
+    request_started_at: float,
+    flow_name: str,
+) -> bool:
+    if bool(getattr(user, "is_superuser", False)):
+        _log_login_stage(
+            logging.INFO,
+            f"[login] {flow_name} maintenance check skipped for superuser",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            user_id=getattr(user, "id", None),
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
+        return False
+
+    maintenance_started_at = time.perf_counter()
+    _log_login_stage(
+        logging.INFO,
+        f"[login] {flow_name} maintenance check start",
+        identifier=login_identifier,
+        client_ip=client_ip,
+        user_id=getattr(user, "id", None),
+    )
+    is_active = _is_maintenance_active_for_login(db)
+    _log_login_stage(
+        logging.INFO,
+        f"[login] {flow_name} maintenance check finished",
+        identifier=login_identifier,
+        client_ip=client_ip,
+        user_id=getattr(user, "id", None),
+        is_active=is_active,
+        elapsed_ms=int((time.perf_counter() - maintenance_started_at) * 1000),
+        request_elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+    )
+    return is_active
+
 @router.post("/login/access-token", response_model=Token)
 @limiter.limit(settings.RATE_LIMIT_LOGIN)
 def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -14111,7 +14153,14 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
         )
         raise HTTPException(status_code=400, detail="Incorrect email or password")
     _log_login_is_active_diagnostics(db, user, login_identifier, "access-token-authenticated")
-    if _is_maintenance_active_for_login(db) and (not bool(getattr(user, "is_superuser", False))):
+    if _should_block_login_for_maintenance(
+        db,
+        user,
+        login_identifier=login_identifier,
+        client_ip=client_ip,
+        request_started_at=request_started_at,
+        flow_name="access-token",
+    ):
         _log_login_stage(
             logging.WARNING,
             "[login] access-token rejected: maintenance mode",
@@ -14231,7 +14280,14 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
         )
         raise HTTPException(status_code=400, detail="Incorrect email or password")
     _log_login_is_active_diagnostics(db, user, login_identifier, "json-authenticated")
-    if _is_maintenance_active_for_login(db) and (not bool(getattr(user, "is_superuser", False))):
+    if _should_block_login_for_maintenance(
+        db,
+        user,
+        login_identifier=login_identifier,
+        client_ip=client_ip,
+        request_started_at=request_started_at,
+        flow_name="json",
+    ):
         _log_login_stage(
             logging.WARNING,
             "[login] json rejected: maintenance mode",

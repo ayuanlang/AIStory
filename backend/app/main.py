@@ -55,6 +55,7 @@ def _run_critical_db_bootstrap_steps() -> None:
 def _get_minimum_schema_readiness_issue() -> str | None:
     try:
         inspector = inspect(engine)
+        dialect_name = str(getattr(engine.dialect, "name", "") or "").lower()
         if not inspector.has_table("users"):
             return "users table missing"
         user_cols = {col["name"]: col for col in inspector.get_columns("users")}
@@ -63,7 +64,13 @@ def _get_minimum_schema_readiness_issue() -> str | None:
             return "users.is_active column missing"
         is_active_type = str(is_active_col.get("type") or "").lower()
         if "bool" in is_active_type:
-            return f"users.is_active still boolean ({is_active_type})"
+            if dialect_name == "postgresql":
+                return f"users.is_active still boolean ({is_active_type})"
+            logger.warning(
+                "DB bootstrap readiness: accepting users.is_active boolean for dialect=%s type=%s due compatible runtime coercion",
+                dialect_name or "unknown",
+                is_active_type,
+            )
 
         if inspector.has_table("project_shares"):
             share_cols = {col["name"] for col in inspector.get_columns("project_shares")}
