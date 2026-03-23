@@ -7,24 +7,22 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 	"characters": {
 		"en_required": [
 			"[Global Style]",
-			"6-view character sheet",
-			"Structure: 6-view layout",
-			"Front",
-			"Back",
-			"Side",
-			"3/4",
+			"4-view character sheet",
+			"Structure: 4-view layout",
 			"Close-up",
-			"Detail",
+			"Front",
+			"Side",
+			"Back",
+			"full-body",
 			"Background: white",
 		],
 		"cn_required": [
-			"六视图",
-			"正面",
-			"背面",
-			"侧面",
-			"四分之三",
+			"四视图",
 			"特写",
-			"细节",
+			"正面",
+			"侧面",
+			"反面",
+			"全身",
 			"背景",
 			"纯白",
 		],
@@ -32,26 +30,22 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 	"props": {
 		"en_required": [
 			"[Global Style] Prop:",
-			"6-view prop sheet",
-			"Structure: 6-view layout",
-			"Front",
-			"Back",
-			"Side",
-			"3/4",
+			"4-view prop sheet",
+			"Structure: 4-view layout",
 			"Close-up",
-			"Detail",
+			"Front",
+			"Side",
+			"Back",
 			"Background: white",
 			"Strictly Object Only",
 		],
 		"cn_required": [
 			"道具",
-			"六视图",
-			"正面",
-			"背面",
-			"侧面",
-			"四分之三",
+			"四视图",
 			"特写",
-			"细节",
+			"正面",
+			"侧面",
+			"反面",
 			"仅物体",
 			"背景",
 			"纯白",
@@ -71,14 +65,12 @@ PROMPT_TEMPLATE_SYNTAX_RULES = {
 }
 
 CHARACTER_PROMPT_TEMPLATE = """
-[Global Style], 6-view character sheet — all six views must show the same character, outfit, proportions, and anchors consistently.
+[Global Style], 4-view character sheet — all four views must show the same character, outfit, proportions, and anchors consistently, in the strict order: Close-up, Full-body Front, Full-body Side, Full-body Back.
 
-1. Full-body Front: standing pose with 【Expression 1: Character's Core Trait】, including footwear, face visible, key facial features.
-2. Full-body Back: rear standing pose, showing clothing seams, skirt hem, shoes, collar, and necklace placement.
-3. Half-body (Waist-up): torso view with 【Expression 2: Plot-relevant Emotion A】, shirt opening, necklace, hand position, fabric texture.
-4. Close-up: facial close-up with Neutral/Standard expression (Mandatory for reference), clear eyes, lips, makeup, and skin detail.
-5. Side Profile: true side view with 【Expression 3: Plot-relevant Emotion B】, showing full facial profile, ear, hairline, and shoulder slope.
-6. Back Detail: rear detail of upper back and collar area, showing collar turn-out, necklace, and stitching.
+1. Close-up: facial close-up with Neutral/Standard expression (Mandatory for reference), clear eyes, lips, makeup, and skin detail.
+2. Full-body Front: strict head-to-toe front standing pose, including footwear, face visible, key facial features.
+3. Full-body Side: strict head-to-toe true side standing pose, including footwear, ear, hairline, shoulder slope, and body profile.
+4. Full-body Back: strict head-to-toe rear standing pose, showing clothing seams, skirt hem, shoes, collar, and overall back silhouette.
 
 Height: 【cm】; head-to-body ratio: 【ratio】.
 Clothing: 【layers, materials, colors, wear】; include footwear and skirt fit.
@@ -93,20 +85,19 @@ Style adaptation by script type: if [Global Style] indicates live-action / reali
 Background: white.
 anchor_description：【thumbnail_readability】.
 Style: follow [Global Style].
-Output: six high-resolution PNGs or a 6-panel composite; include a neutral T-pose reference and a simple scale marker; no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
+Structure: 4-view layout (Close-up, Full-body Front, Full-body Side, Full-body Back).
+Output: four high-resolution PNGs or a 4-panel composite; include a simple scale marker; no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
 """
 
 PROP_PROMPT_TEMPLATE = """
-[Global Style] Prop: 【PropName (state)】, 6-view prop sheet — all six views must show the same object identity, proportions, material response, and anchor details consistently.
+[Global Style] Prop: 【PropName (state)】, 4-view prop sheet — all four views must show the same object identity, proportions, material response, and anchor details consistently, in the strict order: Close-up, Front, Side, Back.
 
-1. Full Front: full object front view with complete silhouette and readable major geometry.
-2. Full Back: full object rear view with seams, back panel, and structure continuity.
+1. Close-up: macro close-up of key surface/material detail (texture, wear, marking, label).
+2. Full Front: full object front view with complete silhouette and readable major geometry.
 3. Full Side: true side profile showing thickness/depth and contour.
-4. 3/4 View: front three-quarter view for volume and edge readability.
-5. Close-up: macro close-up of key surface/material detail (texture, wear, marking, label).
-6. Detail View: close detail of a critical anchor part (e.g., handle/joint/corner/fastener).
+4. Full Back: full object rear view with seams, back panel, and structure continuity.
 
-Structure: 6-view layout (Front, Back, Side, 3/4, Close-up, Detail).
+Structure: 4-view layout (Close-up, Front, Side, Back).
 Material: 【primary_material】; secondary materials: 【list】.
 Size: ~【dimensions cm or relative to reference】.
 Relative scale reference: 【reference_subject e.g., belt buckle, chair】.
@@ -118,7 +109,7 @@ Style adaptation by script type: live-action/realistic drama must enforce physic
 anchor_description：【thumbnail_readability】.
 Background: white.
 **Strictly Object Only: No characters, no hands, no body parts visible.**
-Output: six high-resolution PNGs or a 6-panel composite; include a simple, unobtrusive scale marker (no numbers/text); no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
+Output: four high-resolution PNGs or a 4-panel composite; include a simple, unobtrusive scale marker (no numbers/text); no labels, no captions, no watermark; End note: white background, high quality, large files, no text.
 """
 
 ENVIRONMENT_PROMPT_TEMPLATE = """

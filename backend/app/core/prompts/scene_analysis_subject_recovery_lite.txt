@@ -32,6 +32,11 @@
 - 项目语言驱动的视觉设计语境（Mandatory）：`Project Context.Language` 不仅约束文字输出语言，也约束角色 / 道具 / 环境的默认视觉设计语境。若剧本未明确给出人物族裔/地域、道具产地/品牌体系、建筑地域/城市语境、标识系统或生活方式线索，则必须优先按项目语言对应的常识性现实语境补全设计基线，而不是套用示例中的人种、服装、道具、建筑或空间风格。
 - 英文项目默认设计基线（Mandatory）：当项目语言为英文且剧本没有明确给出相反证据时，角色默认按英语语境下的英美人物与生活系统进行设计基线补全；道具、服装剪裁、室内陈设、街道标识、办公/家居环境、印刷物与 UI 语言也应默认匹配英美语境。禁止在无剧本依据时，把英文项目默认设计成中文语境人物、中国式生活道具/空间，或直接照抄示例中的东亚人物设定。
 - 中文及其他项目语言设计对齐（Mandatory）：当项目语言为中文或其他明确语言时，同样必须让角色外观基线、服装组织方式、道具系统、环境构造、招牌/文字与日常生活细节优先匹配该语言对应的现实语境；除非剧本已明确指定跨文化/跨地域设定，否则不得混入无依据的异语种生活系统。
+- 最高审美冲突规则（Mandatory）：补全缺失 subject 时，角色、环境、道具都必须在不违背剧情事实、时代、身份、职业、阶层、地域语境与写实度的前提下，自动收束到该条件下的最高审美版本。若审美优化与事实冲突，以事实为准；若不冲突，则不得输出平庸、廉价、随机拼贴或无设计控制的方案。
+- 场景最高审美具体约束（Mandatory）：缺失 environment 时，必须优先补全主次锚点、材质层级、主辅配色、光源动机、陈设秩序与氛围层次。即使该空间是低配、破旧、压抑、狭窄或贫穷，也必须是“剧情允许下最好看、最可拍、最有控制力”的版本，不得堆随机杂物或做成廉价空壳。
+- 角色最高审美具体约束（Mandatory）：缺失 character 时，必须在不违背身份现实的前提下，同时优化轮廓可读性、发型组织、肤色与肤质层次、肩颈体态、服装版型、鞋履/配件完成度与镜头友好布光。即使人物设定普通、疲惫、底层或狼狈，也应补成其命运条件下的最好看版本，而不是粗糙、土气、没精神的默认模板。
+- 角色默认主角化基线（Mandatory）：对有具体姓名且承担主要叙事功能的成年角色，若当前补全输入未明确给出外貌、体型或着装限制，则必须主动补全为“现代、新潮、高级、大气、镜头友好”的主角级设计，但仍需服从题材、时代、职业、阶层与写实度。女性默认优先高挑修长、肩颈线舒展、比例利落；男性默认优先挺拔健壮、肩背展开、线条结实。主角的肤色呈现默认应更白净、细腻、明亮，通常可落在白皙至偏白净的上镜范围，但不得违背人物族裔、地域语境、职业状态与剧情现实度。若原剧本或上游已明确给出相反体态、特殊身体条件或年龄阶段，则以上游与原文为准；未成年角色不得按成人化模板设计。
+- 发型与肤色识别强化（Mandatory）：主要角色必须把发型组织与肤色层次作为稳定识别锚点的一部分。发型必须落实到分线方式、发长区间、卷直关系、厚薄蓬贴、刘海或束发轮廓；肤色必须落实到白皙、偏白净、暖白、冷白、浅蜜色、健康麦色等可拍的真实区间，并与项目语境、年龄和职业状态保持一致。
 - 禁止模板抄袭式设计（Hard Rule）：示例、模板、规则中的职业、人种、年龄、服装、道具、环境名、空间结构、镜头话术都只能作为格式参考，不能直接作为真实输出的设计内容。每次补全都必须基于当前输入重新设计实体形象、材质、空间与细节；若输出仍残留示例里的默认角色类型、默认空间、默认道具或默认视觉组合，判为无效并必须重写。
 - 名称冻结：Environment / Character / Prop 名称一旦确定，不得改写（大小写、空格、符号、拼写、全半角、分隔符）。
 - 锚点冻结（Immutable Anchors, 强制）：`anchor_description` 与已定稿身份锚点一经确定即只读，补全过程仅可继承引用，不得增删改或语义改写。
@@ -48,9 +53,9 @@
 - 自然语言优先（Natural-Prose First, Mandatory）：`Viewpoint Anchor / Viewing Direction / Viewpoint Setup` 是内部约束语义，最终 `generation_prompt_en` 应优先写成自然流动的画面描述句，而不是连续字段栏目。
 - `0.5) Imagen 兼容质量规范`：自然英文、无引擎参数、无元说明、语义顺序清晰、负向词可执行。
 - 负面提示精简原则（Negative Prompt Compactness, Mandatory）：`negative_prompt_en` 必须短而自适应，禁止堆叠长串同义负面词；对单画幅提示词不得反复列举 `split-screen / multi-panel / collage / tiled`，如确有需要，最多保留一条简洁概括。
-- 资产表例外（Asset-Sheet Exception, Mandatory）：角色六视图、道具六视图等天然多视图任务，禁止注入 `no multi-panel / no split-screen` 类负面词。
+- 资产表例外（Asset-Sheet Exception, Mandatory）：角色四视图、道具四视图等天然多视图任务，禁止注入 `no multi-panel / no split-screen` 类负面词。
 - `1) Environment Prompt Template`：空场景、Base+Delta 思路、可执行空间、机位/光照/焦距与材质信息完整。
-- `2) Character Prompt Template`：六视图一致性、风格驱动光学与颗粒、稳定锚点、真人感约束（真人剧）。
+- `2) Character Prompt Template`：四视图一致性、严格顺序（特写→正面全身→侧面全身→反面全身）、风格驱动光学与颗粒、稳定锚点、真人感约束（真人剧）。
 - `3) Prop Prompt Template`：独立资产、材质与磨损可读、风格映射与稳定锚点。
 - OTS 一致性（强制）：若输入片段已体现 OTS 正反切换（`A over B` ↔ `B over A`）并标注了不同 Scene/Environment 变体，补全资产时必须保持该分场结果，不得跨场景合并命名或回写为同一环境。
 - OTS 分场触发一致性（强制）：若输入片段明确包含“轴线跨越/反转、背景主集合变化、观察方向重构、门内看外↔门外看内”等触发条件，补全阶段必须沿用其 `新 Scene + 新 Environment 变体` 结论；禁止生成会暗示“同 Scene 内硬反打”的资产描述。
@@ -138,7 +143,7 @@
 - 状态变化实体化规则：若补全过程需要输出状态差异，不得只写 `messier room`、`older version`、`broken state` 这类抽象词；必须写为 `具体实体 + 可见差异 + 所在层级/位置`。
 
 ### 2) Character Prompt Template
-`[Global Style] 6-view character sheet for 【Name】. Describe the fixed studio observer placement and the required Front/Back/Side/3/4/Close-up/Detail views in smooth natural prose, while keeping full-body framing, shoes fully visible in structural panels, lighting setup, lens baseline, grain strategy, attire, and signature anchors explicit. Background: White.`
+`[Global Style] 4-view character sheet for 【Name】. Describe the fixed studio observer placement and the required Close-up/Front full-body/Side full-body/Back full-body views in smooth natural prose, while keeping the view order strict, shoes fully visible in the three full-body panels, lighting setup, lens baseline, grain strategy, attire, and signature anchors explicit. Background: White.`
 
 - 全身像硬规则（Mandatory）：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 鞋子可见硬规则（Mandatory）：不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
@@ -242,8 +247,8 @@ Part 2A:
       "appearance_cn": "28岁，东亚女性，身高约168cm，头身比约1:7.2，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
       "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。其他剧本衣着描述：无。",
       "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
-      "generation_prompt_cn": "写实现代剧情风格，林月六视图角色设定图，六个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位，完整全身入镜且鞋子清晰可见。视角顺序为正面、背面、侧面、四分之三、面部特写、关键细节。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary drama style, six-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep every structural panel full-body with shoes fully visible, then move through Front, Back, Side, 3/4, facial Close-up, and anchor Detail views while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
+      "generation_prompt_cn": "写实现代剧情风格，林月四视图角色设定图，四个面板保持同一身份与服装一致。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Lin Yue with one fixed studio observer position at chest height. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
       "negative_prompt_en": "plastic skin, waxy face, CGI look, toy-like proportions, oversmoothed pores, extra fingers, broken anatomy, text watermark",
       "anchor_description": "sharp jawline, asymmetrical fringe, fine scar below right brow, silver ring on left index finger, navy trench silhouette, black ankle boots",
       "visual_dependencies": [],
@@ -264,8 +269,8 @@ Part 2B:
       "name_en": "Antique Pocket Watch",
       "type": "held/static",
       "description_cn": "黄铜材质古董怀表，表壳边缘有细小磕碰，镜面有轻微划痕，内盖有雕刻纹路，可开合铰链结构完整。",
-      "generation_prompt_cn": "写实道具六视图：古董怀表，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角依次为正面、背面、侧面、四分之三、微距特写、铰链细节。材质表现为拉丝黄铜与轻微氧化，镜面有细碎划痕，内盖雕刻清晰。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓与阴影细节可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率。",
-      "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, rendered as a strict object-only six-view study from a camera centered on the turntable and slightly above the midline. Move cleanly through Front, Back, Side, 3/4, macro Close-up, and hinge Detail views while preserving brushed brass texture, mild oxidation, scratched crystal, and engraved inner lid readability. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep silhouette and material depth clear. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
+      "generation_prompt_cn": "写实道具四视图：古董怀表，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角顺序严格为微距特写、正面、侧面、反面。材质表现为拉丝黄铜与轻微氧化，镜面有细碎划痕，内盖雕刻清晰。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓与阴影细节可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率。",
+      "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, rendered as a strict object-only 4-view study from a camera centered on the turntable and slightly above the midline. Keep the panels in the strict order macro Close-up, Front, Side, Back while preserving brushed brass texture, mild oxidation, scratched crystal, and engraved inner lid readability. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep silhouette and material depth clear. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
       "negative_prompt_en": "plastic material feel, fake miniature look, game-like render, unreal scale, extra duplicate parts, text watermark, human hands in frame",
       "anchor_description": "brushed brass case, light oxidation bloom, scratched crystal, engraved inner lid, intact hinge arc",
       "visual_dependencies": [],

@@ -663,6 +663,12 @@ function buildShotDiptychPlan(aspectRatio) {
     };
 }
 
+function getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight) {
+    const seamSourceSpan = layout === 'horizontal' ? sourceWidth : sourceHeight;
+    if (!Number.isFinite(seamSourceSpan) || seamSourceSpan <= 0) return 1;
+    return Math.max(1, Math.min(4, Math.round(seamSourceSpan / 1024)));
+}
+
 function collectSupportedAspectRatioOptions(values) {
     const out = [];
     const seen = new Set();
@@ -20196,13 +20202,26 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         let panelY = 0;
         let panelWidth = sourceWidth;
         let panelHeight = sourceHeight;
+        const seamTrimPx = getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight);
 
         if (layout === 'horizontal') {
-            panelWidth = sourceWidth / 2;
-            panelX = panelIndex === 0 ? 0 : panelWidth;
+            const halfWidth = sourceWidth / 2;
+            if (panelIndex === 0) {
+                panelX = 0;
+                panelWidth = Math.max(1, Math.floor(halfWidth - seamTrimPx));
+            } else {
+                panelX = Math.min(sourceWidth - 1, Math.ceil(halfWidth + seamTrimPx));
+                panelWidth = Math.max(1, sourceWidth - panelX);
+            }
         } else {
-            panelHeight = sourceHeight / 2;
-            panelY = panelIndex === 0 ? 0 : panelHeight;
+            const halfHeight = sourceHeight / 2;
+            if (panelIndex === 0) {
+                panelY = 0;
+                panelHeight = Math.max(1, Math.floor(halfHeight - seamTrimPx));
+            } else {
+                panelY = Math.min(sourceHeight - 1, Math.ceil(halfHeight + seamTrimPx));
+                panelHeight = Math.max(1, sourceHeight - panelY);
+            }
         }
 
         const panelRatio = panelWidth / panelHeight;
@@ -20228,6 +20247,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!ctx) {
             throw new Error('canvas context unavailable during split crop');
         }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
 
         ctx.drawImage(
             image,
@@ -20390,12 +20411,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                 ? [
-                    `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
+                    `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。两格之间只允许自然构图分区，不要出现可见的白线、黑线、高亮边框、描边、相框感、拼贴缝或明显分界条。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
                     `第一格（起始帧）：${startSubmitPrompt}`,
                     `第二格（结束帧）：${endSubmitPrompt}`,
                 ].join('\n\n')
                 : [
-                    `Create one single-canvas two-panel diptych for later post-split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels arranged ${diptychPlan.layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom'} with a narrow clean divider. The final single-frame delivery target is ${diptychPlan.targetAspectRatio}, so compose each panel with extra bleed and crop-safe margin so it can be split and lightly center-cropped into an independent ${diptychPlan.targetAspectRatio} frame. Keep faces, hands, props, and key action away from the seam and outer edges. Do not add a third panel, text labels, numbering, speech bubbles, or collage elements. Maintain identity, environment continuity, lighting continuity, and scene geography across both panels. Panel A is the shot start frame. Panel B is the shot end frame.`,
+                    `Create one single-canvas two-panel diptych for later post-split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels arranged ${diptychPlan.layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom'}. The final single-frame delivery target is ${diptychPlan.targetAspectRatio}, so compose each panel with extra bleed and crop-safe margin so it can be split and lightly center-cropped into an independent ${diptychPlan.targetAspectRatio} frame. Between the two panels, allow only natural compositional separation and do not render any visible white line, black line, bright edge, border, frame, collage seam, or explicit divider bar. Keep faces, hands, props, and key action away from the seam and outer edges. Do not add a third panel, text labels, numbering, speech bubbles, or collage elements. Maintain identity, environment continuity, lighting continuity, and scene geography across both panels. Panel A is the shot start frame. Panel B is the shot end frame.`,
                     `Panel A (Start Frame): ${startSubmitPrompt}`,
                     `Panel B (End Frame): ${endSubmitPrompt}`,
                 ].join('\n\n');
@@ -20407,7 +20428,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const finalPrompt = shouldApplyGlobalCtx ? `${combinedPrompt}${globalCtx}` : combinedPrompt;
             const jointNegativePrompt = [
                 buildEntityNegativePrompt(`${rawStartPrompt}\n${rawEndPrompt}`, null, resolvedEntities),
-                'more than two panels, extra frame, uneven split, contact sheet, text label, numbering, caption, comic bubble',
+                'more than two panels, extra frame, uneven split, visible divider line, white seam, black seam, border, frame, contact sheet, text label, numbering, caption, comic bubble',
             ].filter(Boolean).join(', ');
 
             onLog?.(t('正在联合生成首尾帧两宫格...', 'Generating joint start/end diptych...'), 'info');
@@ -23425,7 +23446,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         let endUrl = String(techNotes.end_frame_url || '').trim();
 
         setShotGeneratingState(stableShotId, 'start', true);
-        setShotGeneratingState(stableShotId, 'end', true);
+        setShotGeneratingState(stableShotId, 'end', false);
 
         try {
             if (!startUrl && startPromptIsInherited) {
@@ -23435,91 +23456,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
                 startUrl = inheritedUrl;
                 workingShot = { ...workingShot, image_url: inheritedUrl };
-            }
-
-            const needsJointDiptych = !startPromptIsInherited
-                && !endPromptIsNoLike
-                && !startUrl
-                && !endUrl;
-
-            if (needsJointDiptych) {
-                const isManualStart = techNotes.manual_start_frame === true;
-                const isManualEnd = techNotes.manual_end_frame === true;
-                const { text: startSubmitPrompt } = injectEntityFeatures(rawStartPrompt, isManualStart, resolvedEntities);
-                const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, resolvedEntities);
-                const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
-                const requestAspectRatio = selectBestShotDiptychRequestAspectRatio({
-                    diptychPlan,
-                    allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
-                });
-                const combinedRefs = resolveJointShotDiptychRefs(workingShot);
-                const combinedPrompt = resolvedPromptSubmitLang === 'cn'
-                    ? [
-                        `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
-                        `第一格（起始帧）：${startSubmitPrompt}`,
-                        `第二格（结束帧）：${endSubmitPrompt}`,
-                    ].join('\n\n')
-                    : [
-                        `Create one single-canvas two-panel diptych for later post-split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels arranged ${diptychPlan.layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom'} with a narrow clean divider. The final single-frame delivery target is ${diptychPlan.targetAspectRatio}, so compose each panel with extra bleed and crop-safe margin so it can be split and lightly center-cropped into an independent ${diptychPlan.targetAspectRatio} frame. Keep faces, hands, props, and key action away from the seam and outer edges. Do not add a third panel, text labels, numbering, speech bubbles, or collage elements. Maintain identity, environment continuity, lighting continuity, and scene geography across both panels. Panel A is the shot start frame. Panel B is the shot end frame.`,
-                        `Panel A (Start Frame): ${startSubmitPrompt}`,
-                        `Panel B (End Frame): ${endSubmitPrompt}`,
-                    ].join('\n\n');
-                const shouldApplyGlobalCtx = !(isManualStart && isManualEnd);
-                const globalCtx = shouldApplyGlobalCtx
-                    ? getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(combinedPrompt) })
-                    : '';
-                const finalPrompt = shouldApplyGlobalCtx ? `${combinedPrompt}${globalCtx}` : combinedPrompt;
-                const jointNegativePrompt = [
-                    buildEntityNegativePrompt(`${rawStartPrompt}\n${rawEndPrompt}`, null, resolvedEntities),
-                    'more than two panels, extra frame, uneven split, contact sheet, text label, numbering, caption, comic bubble',
-                ].filter(Boolean).join(', ');
-
-                const compositeResult = await generateImage(finalPrompt, null, combinedRefs.length > 0 ? combinedRefs : null, {
-                    project_id: projectId,
-                    episode_id: activeEpisode?.id,
-                    shot_id: stableShotId,
-                    shot_number: workingShot.shot_id,
-                    shot_name: workingShot.shot_name,
-                    prompt_language: resolvedPromptSubmitLang,
-                    asset_type: 'start_frame',
-                    aspect_ratio: requestAspectRatio,
-                    ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                    negative_prompt: jointNegativePrompt,
-                    on_job_created: (jobId) => {
-                        const stableJobId = String(jobId || '').trim();
-                        if (!stableJobId) return;
-                        setPendingJointDiptychImageJob(stableShotId, stableJobId);
-                    },
-                });
-
-                if (!compositeResult?.url) {
-                    throw new Error('No composite image URL returned');
-                }
-
-                const nextData = await applyJointShotDiptychResult({
-                    shotRecord: {
-                        ...workingShot,
-                        start_frame: rawStartPrompt,
-                        end_frame: rawEndPrompt,
-                    },
-                    compositeUrl: compositeResult.url,
-                });
-
-                const nextTech = (() => {
-                    try {
-                        return JSON.parse(nextData?.technical_notes || '{}');
-                    } catch {
-                        return {};
-                    }
-                })();
-
-                return {
-                    shotId: stableShotId,
-                    shotLabel: String(workingShot.shot_id || workingShot.shot_name || `#${stableShotId}`),
-                    shotPatch: nextData,
-                    startUrl: String(nextData?.image_url || '').trim(),
-                    endUrl: String(nextTech?.end_frame_url || '').trim(),
-                };
             }
 
             if (!startUrl && !startPromptIsInherited) {
@@ -23551,6 +23487,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 startUrl = String(startResult.url || '').trim();
                 workingShot = { ...workingShot, image_url: startUrl };
             }
+
+            clearPendingImageJob(stableShotId, 'start');
+            setShotGeneratingState(stableShotId, 'start', false);
+            setShotGeneratingState(stableShotId, 'end', true);
 
             if (!endUrl) {
                 if (endPromptIsNoLike) {
@@ -23634,8 +23574,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const ok = await confirmUiMessage(
             t(
-                `将为 ${targetShots.length} 个镜头批量生成缺失关键帧。系统会按依赖关系分批执行，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个，并优先使用首尾联合生图。是否继续？`,
-                `Generate missing keyframes for ${targetShots.length} shots. The scheduler will respect dependencies, run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave, and prefer joint start/end generation. Continue?`
+                `将为 ${targetShots.length} 个镜头批量生成缺失关键帧。系统会按依赖关系分批执行，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个，并对每个 shot 按“先起始帧、后结束帧”的顺序执行。是否继续？`,
+                `Generate missing keyframes for ${targetShots.length} shots. The scheduler will respect dependencies, run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave, and process each shot in start-frame then end-frame order. Continue?`
             )
         );
         if (!ok) return;
@@ -23675,7 +23615,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             status: t('关键帧批量任务准备中...', 'Preparing keyframe batch...'),
             stopRequested: false,
             currentShotLabel: '',
-            currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+            currentAssetLabel: t('起始帧 → 结束帧', 'Start Frame -> End Frame'),
             mode: 'keyframes-local',
         });
         onLog?.(t('开始本地关键帧批量任务。', 'Started local keyframe batch.'), 'process');
@@ -23709,7 +23649,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     status: t(`处理中：${batchLabel}`, `Processing: ${batchLabel}`),
                     stopRequested: false,
                     currentShotLabel: batchLabel,
-                    currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+                    currentAssetLabel: t('起始帧 → 结束帧', 'Start Frame -> End Frame'),
                     mode: 'keyframes-local',
                 });
 
@@ -23752,7 +23692,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
                         stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
                         currentShotLabel: String(shot?.shot_id || shot?.shot_name || shot?.id || ''),
-                        currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+                        currentAssetLabel: t('起始帧 → 结束帧', 'Start Frame -> End Frame'),
                         mode: 'keyframes-local',
                     });
                 });
@@ -23766,7 +23706,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     status: t(`关键帧批量已停止：成功 ${success}，失败 ${failed}`, `Keyframe batch stopped: ${success} succeeded, ${failed} failed`),
                     stopRequested: true,
                     currentShotLabel: '',
-                    currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+                    currentAssetLabel: t('起始帧 → 结束帧', 'Start Frame -> End Frame'),
                     mode: 'keyframes-local',
                 });
                 return;
@@ -23779,7 +23719,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 status: t(`关键帧批量完成：成功 ${success}，失败 ${failed}`, `Keyframe batch complete: ${success} succeeded, ${failed} failed`),
                 stopRequested: false,
                 currentShotLabel: '',
-                currentAssetLabel: t('首尾联合生图', 'Joint Start/End'),
+                currentAssetLabel: t('起始帧 → 结束帧', 'Start Frame -> End Frame'),
                 mode: 'keyframes-local',
             });
         } finally {
@@ -23805,7 +23745,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 message: String(batchProgressRef.current?.status || ''),
                 stop_requested: Boolean(batchProgressRef.current?.stopRequested),
                 current_shot_label: String(batchProgressRef.current?.currentShotLabel || ''),
-                current_asset_type: 'joint_diptych',
+                current_asset_type: 'start_end_sequence',
                 current_asset_label: String(batchProgressRef.current?.currentAssetLabel || ''),
                 mode: 'keyframes-local',
             };
