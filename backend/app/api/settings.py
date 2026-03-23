@@ -1756,7 +1756,7 @@ def _pick_provider_runtime_key(db: Session, provider: str, fallback_key: str = "
 
 
 def _can_use_system_settings(user: User) -> bool:
-    return bool(user and user.is_active)
+    return bool(user) and int(getattr(user, "is_active", 1) or 0) > 0
 
 
 def _can_manage_system_settings(user: User) -> bool:

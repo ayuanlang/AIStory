@@ -2274,7 +2274,7 @@ Output ONLY the JSON object now."""
         project_id: Optional[int],
         policy: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
-        if not user or not bool(getattr(user, "is_active", False)):
+        if not user or int(getattr(user, "is_active", 1) or 0) <= 0:
             return "User is not active"
 
         resolved_policy = policy or self._default_agent_tool_policy()

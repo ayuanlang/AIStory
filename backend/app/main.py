@@ -537,6 +537,9 @@ def _is_superuser_request(request: Request) -> bool:
     except JWTError:
         return False
 
+    if bool(payload.get("is_superuser") or payload.get("superuser")):
+        return True
+
     uid = payload.get("uid")
     username = str(payload.get("uname") or payload.get("sub") or "").strip()
 

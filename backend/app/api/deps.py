@@ -67,6 +67,37 @@ def _build_cached_principal(user: User) -> dict:
     }
 
 
+def _build_cached_principal_from_payload(payload: dict) -> dict:
+    now = time.time()
+    email_value = payload.get("email")
+    if email_value is not None:
+        email_value = str(email_value).strip() or None
+    full_name_value = payload.get("full_name")
+    if full_name_value is not None:
+        full_name_value = str(full_name_value).strip() or None
+    avatar_value = payload.get("avatar_url")
+    if avatar_value is not None:
+        avatar_value = str(avatar_value).strip() or None
+    return {
+        "id": int(payload.get("uid") or payload.get("id") or 0),
+        "username": str(payload.get("sub") or payload.get("uname") or "").strip(),
+        "email": email_value,
+        "full_name": full_name_value,
+        "avatar_url": avatar_value,
+        "is_active": _normalize_user_active_level(payload.get("is_active", 1), 1),
+        "is_superuser": bool(payload.get("is_superuser", False)),
+        "is_authorized": bool(payload.get("is_authorized", False)),
+        "is_system": bool(payload.get("is_system", False)),
+        "account_status": int(payload.get("account_status") or 1),
+        "email_verified": bool(payload.get("email_verified", False)),
+        "credits": int(payload.get("credits", 0) or 0),
+        "cached_at": now,
+        "expires_at": now + max(1, _USER_AUTH_CACHE_TTL_SECONDS),
+        "stale_until": now + max(1, _USER_AUTH_CACHE_TTL_SECONDS + _USER_AUTH_CACHE_STALE_GRACE_SECONDS),
+        "source": "token",
+    }
+
+
 def _cache_user_entry(entry: dict) -> None:
     username = str(entry.get("username") or "").strip()
     uid = int(entry.get("id") or 0)
@@ -98,6 +129,39 @@ def cache_user_identity(user: User) -> None:
     except Exception:
         # Never block auth flow due to cache failure.
         return
+
+
+def invalidate_cached_user_identity(*, user_id: int = 0, username: str = "") -> None:
+    normalized_username = str(username or "").strip()
+    normalized_uid = int(user_id or 0)
+    with _user_auth_cache_lock:
+        if normalized_username:
+            entry = _user_auth_cache["by_username"].pop(normalized_username, None)
+            if entry is not None and normalized_uid <= 0:
+                try:
+                    normalized_uid = int(entry.get("id") or 0)
+                except Exception:
+                    normalized_uid = 0
+        if normalized_uid > 0:
+            entry = _user_auth_cache["by_uid"].pop(normalized_uid, None)
+            if entry is not None and not normalized_username:
+                cached_username = str(entry.get("username") or "").strip()
+                if cached_username:
+                    _user_auth_cache["by_username"].pop(cached_username, None)
+
+
+def list_cached_user_entries() -> list[dict]:
+    now = time.time()
+    with _user_auth_cache_lock:
+        rows = []
+        for entry in _user_auth_cache["by_uid"].values():
+            if not entry:
+                continue
+            if now > float(entry.get("stale_until") or 0.0):
+                continue
+            rows.append(dict(entry))
+    rows.sort(key=lambda item: int(item.get("id") or 0))
+    return rows
 
 
 def _entry_to_principal(entry: dict) -> SimpleNamespace:
@@ -198,6 +262,12 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     except JWTError:
         raise credentials_exception
 
+    token_principal_entry = {}
+    if int(payload.get("pv") or 0) == 1:
+        token_principal_entry = _build_cached_principal_from_payload(payload)
+        if token_principal_entry.get("username") and int(token_principal_entry.get("id") or 0) > 0:
+            _cache_user_entry(token_principal_entry)
+
     cached_entry = _read_cached_entry(str(username or "").strip(), token_uid)
     if cached_entry and time.time() <= float(cached_entry.get("expires_at") or 0.0):
         return _entry_to_principal(cached_entry)
@@ -216,6 +286,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         stale_entry = _read_cached_entry(str(username or "").strip(), token_uid)
         if stale_entry:
             return _entry_to_principal(stale_entry)
+        if token_principal_entry:
+            return _entry_to_principal(token_principal_entry)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable, please retry",

@@ -26,7 +26,7 @@ import os
 
 from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
-from app.api.deps import get_current_user, cache_user_identity  # Import dependency
+from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING
 from pydantic import BaseModel
@@ -13853,6 +13853,7 @@ def confirm_user_verification_code(
     user.email_verification_expires_at = None
     db.commit()
     db.refresh(user)
+    _refresh_user_identity_cache(user)
 
     try:
         if granted_credits > 0:
@@ -13955,6 +13956,51 @@ def _log_login_stage(level: int, message: str, **fields: Any) -> None:
         logger.log(level, "%s | %s", message, payload)
         return
     logger.log(level, "%s", message)
+
+
+def _refresh_user_identity_cache(user: Optional[User], *, old_username: Optional[str] = None) -> None:
+    if user is None:
+        return
+    invalidate_cached_user_identity(
+        user_id=int(getattr(user, "id", 0) or 0),
+        username=str(old_username or "").strip(),
+    )
+    cache_user_identity(user)
+
+
+def _mask_secret_for_log(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) <= 8:
+        return "*" * len(raw)
+    return f"{raw[:4]}***{raw[-4:]}"
+
+
+def _sanitize_generation_runtime_config_for_log(value: Any) -> Any:
+    secret_keys = {
+        "api_key",
+        "apikey",
+        "authorization",
+        "x-api-key",
+        "access_token",
+        "refresh_token",
+        "private_key",
+    }
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            key_text = str(key or "").strip().lower()
+            if key_text in secret_keys:
+                sanitized[key] = _mask_secret_for_log(item)
+            else:
+                sanitized[key] = _sanitize_generation_runtime_config_for_log(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_generation_runtime_config_for_log(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_generation_runtime_config_for_log(item) for item in value)
+    return value
 
 
 def _get_users_is_active_schema_snapshot(db: Session) -> Dict[str, Any]:
@@ -14078,7 +14124,7 @@ def authenticate_user(db: Session, username: str, password: str):
 
 def _is_maintenance_active_for_login(db: Session) -> bool:
     try:
-        status = _resolve_maintenance_config_raw(db)
+        status = _get_login_maintenance_status_cached()
         return bool(status.get("is_active", False))
     except Exception:
         return False
@@ -14235,8 +14281,18 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
         data={
             "sub": user.username,
             "uid": user.id,
+            "pv": 1,
             "uname": user.username,
+            "email": getattr(user, "email", None),
+            "full_name": getattr(user, "full_name", None),
+            "avatar_url": getattr(user, "avatar_url", None),
+            "is_active": _normalize_user_active_level(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT), USER_ACTIVE_LEVEL_DEFAULT),
+            "account_status": int(getattr(user, "account_status", 1) or 1),
+            "email_verified": bool(getattr(user, "email_verified", False)),
             "is_superuser": bool(getattr(user, "is_superuser", False)),
+            "is_authorized": bool(getattr(user, "is_authorized", False)),
+            "is_system": bool(getattr(user, "is_system", False)),
+            "credits": int(getattr(user, "credits", 0) or 0),
         },
         expires_delta=access_token_expires
     )
@@ -14362,8 +14418,18 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
         data={
             "sub": user.username,
             "uid": user.id,
+            "pv": 1,
             "uname": user.username,
+            "email": getattr(user, "email", None),
+            "full_name": getattr(user, "full_name", None),
+            "avatar_url": getattr(user, "avatar_url", None),
+            "is_active": _normalize_user_active_level(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT), USER_ACTIVE_LEVEL_DEFAULT),
+            "account_status": int(getattr(user, "account_status", 1) or 1),
+            "email_verified": bool(getattr(user, "email_verified", False)),
             "is_superuser": bool(getattr(user, "is_superuser", False)),
+            "is_authorized": bool(getattr(user, "is_authorized", False)),
+            "is_system": bool(getattr(user, "is_system", False)),
+            "credits": int(getattr(user, "credits", 0) or 0),
         },
         expires_delta=access_token_expires
     )
@@ -15674,6 +15740,33 @@ class MaintenanceStatusOut(BaseModel):
 
 _MAINTENANCE_CATEGORY = "System_Maintenance"
 _MAINTENANCE_PROVIDER = "maintenance_mode"
+_LOGIN_MAINTENANCE_CACHE_TTL_SECONDS = max(5.0, float(os.getenv("LOGIN_MAINTENANCE_CACHE_TTL_SECONDS", "15") or 15.0))
+_LOGIN_MAINTENANCE_FAILURE_COOLDOWN_SECONDS = max(_LOGIN_MAINTENANCE_CACHE_TTL_SECONDS, float(os.getenv("LOGIN_MAINTENANCE_FAILURE_COOLDOWN_SECONDS", "60") or 60.0))
+_LOGIN_MAINTENANCE_FAILURE_CIRCUIT_THRESHOLD = max(1, int(os.getenv("LOGIN_MAINTENANCE_FAILURE_CIRCUIT_THRESHOLD", "2") or 2))
+_LOGIN_MAINTENANCE_FAILURE_CIRCUIT_OPEN_SECONDS = max(_LOGIN_MAINTENANCE_FAILURE_COOLDOWN_SECONDS, float(os.getenv("LOGIN_MAINTENANCE_FAILURE_CIRCUIT_OPEN_SECONDS", "600") or 600.0))
+_LOGIN_MAINTENANCE_CACHE_LOCK = threading.Lock()
+_LOGIN_MAINTENANCE_CACHE = {
+    "checked_at": 0.0,
+    "last_read_failed": False,
+    "consecutive_failures": 0,
+    "circuit_open_until": 0.0,
+    "refresh_in_progress": False,
+    "status": {
+        "enabled": False,
+        "is_active": False,
+        "ends_at": None,
+        "message": "系统正在维护",
+    },
+}
+
+
+def _default_maintenance_status_payload() -> Dict[str, Any]:
+    return {
+        "enabled": False,
+        "is_active": False,
+        "ends_at": None,
+        "message": "系统正在维护",
+    }
 
 
 def _parse_iso_datetime_safe(value: Any) -> Optional[datetime]:
@@ -15690,20 +15783,7 @@ def _parse_iso_datetime_safe(value: Any) -> Optional[datetime]:
         return None
 
 
-def _resolve_maintenance_config_raw(db: Session) -> Dict[str, Any]:
-    row = db.execute(text("""
-        SELECT config
-        FROM system_api_settings
-        WHERE category = :category
-          AND provider = :provider
-        ORDER BY id DESC
-        LIMIT 1
-    """), {
-        "category": _MAINTENANCE_CATEGORY,
-        "provider": _MAINTENANCE_PROVIDER,
-    }).mappings().first()
-
-    cfg_raw = row.get("config") if row else None
+def _build_maintenance_status_payload(cfg_raw: Any) -> Dict[str, Any]:
     if isinstance(cfg_raw, dict):
         cfg = dict(cfg_raw)
     elif isinstance(cfg_raw, str) and cfg_raw.strip():
@@ -15714,6 +15794,7 @@ def _resolve_maintenance_config_raw(db: Session) -> Dict[str, Any]:
             cfg = {}
     else:
         cfg = {}
+
     enabled = bool(cfg.get("enabled", False))
     ends_at_raw = str(cfg.get("ends_at") or "").strip()
     message = str(cfg.get("message") or "").strip()
@@ -15729,6 +15810,111 @@ def _resolve_maintenance_config_raw(db: Session) -> Dict[str, Any]:
         "ends_at": ends_at_raw or None,
         "message": message,
     }
+
+
+def _store_login_maintenance_cache(status: Dict[str, Any], *, read_failed: bool, checked_at: Optional[float] = None) -> Dict[str, Any]:
+    now_ts = float(checked_at or time.time())
+    normalized = {
+        "enabled": bool(status.get("enabled", False)),
+        "is_active": bool(status.get("is_active", False)),
+        "ends_at": status.get("ends_at"),
+        "message": str(status.get("message") or "系统正在维护").strip() or "系统正在维护",
+    }
+    with _LOGIN_MAINTENANCE_CACHE_LOCK:
+        _LOGIN_MAINTENANCE_CACHE["status"] = normalized
+        _LOGIN_MAINTENANCE_CACHE["last_read_failed"] = bool(read_failed)
+        if read_failed:
+            failures = int(_LOGIN_MAINTENANCE_CACHE.get("consecutive_failures", 0)) + 1
+            _LOGIN_MAINTENANCE_CACHE["consecutive_failures"] = failures
+            if failures >= _LOGIN_MAINTENANCE_FAILURE_CIRCUIT_THRESHOLD:
+                _LOGIN_MAINTENANCE_CACHE["circuit_open_until"] = now_ts + _LOGIN_MAINTENANCE_FAILURE_CIRCUIT_OPEN_SECONDS
+        else:
+            _LOGIN_MAINTENANCE_CACHE["consecutive_failures"] = 0
+            _LOGIN_MAINTENANCE_CACHE["circuit_open_until"] = 0.0
+        _LOGIN_MAINTENANCE_CACHE["checked_at"] = now_ts
+    return normalized
+
+
+def _resolve_maintenance_config_raw(db: Session) -> Dict[str, Any]:
+    row = db.execute(text("""
+        SELECT config
+        FROM system_api_settings
+        WHERE category = :category
+          AND provider = :provider
+        ORDER BY id DESC
+        LIMIT 1
+    """), {
+        "category": _MAINTENANCE_CATEGORY,
+        "provider": _MAINTENANCE_PROVIDER,
+    }).mappings().first()
+
+    return _build_maintenance_status_payload(row.get("config") if row else None)
+
+
+def _refresh_login_maintenance_cache_sync() -> Dict[str, Any]:
+    started_at = time.perf_counter()
+    try:
+        with SessionLocal() as maintenance_db:
+            status = _resolve_maintenance_config_raw(maintenance_db)
+        cached = _store_login_maintenance_cache(status, read_failed=False)
+        logger.info(
+            "[login] maintenance cache refreshed | is_active=%s elapsed_ms=%s",
+            bool(cached.get("is_active", False)),
+            int((time.perf_counter() - started_at) * 1000),
+        )
+        return cached
+    except Exception as exc:
+        cached = _store_login_maintenance_cache(_default_maintenance_status_payload(), read_failed=True)
+        logger.warning(
+            "[login] maintenance cache refresh failed | elapsed_ms=%s error=%s",
+            int((time.perf_counter() - started_at) * 1000),
+            exc,
+        )
+        return cached
+
+
+def _schedule_login_maintenance_cache_refresh() -> None:
+    should_start = False
+    with _LOGIN_MAINTENANCE_CACHE_LOCK:
+        if not bool(_LOGIN_MAINTENANCE_CACHE.get("refresh_in_progress", False)):
+            _LOGIN_MAINTENANCE_CACHE["refresh_in_progress"] = True
+            should_start = True
+    if not should_start:
+        return
+
+    def _runner() -> None:
+        try:
+            _refresh_login_maintenance_cache_sync()
+        finally:
+            with _LOGIN_MAINTENANCE_CACHE_LOCK:
+                _LOGIN_MAINTENANCE_CACHE["refresh_in_progress"] = False
+
+    refresh_thread = threading.Thread(
+        target=_runner,
+        name="login-maintenance-cache-refresh",
+        daemon=True,
+    )
+    refresh_thread.start()
+
+
+def _get_login_maintenance_status_cached() -> Dict[str, Any]:
+    now_ts = time.time()
+    with _LOGIN_MAINTENANCE_CACHE_LOCK:
+        status = dict(_LOGIN_MAINTENANCE_CACHE.get("status") or _default_maintenance_status_payload())
+        circuit_open_until = float(_LOGIN_MAINTENANCE_CACHE.get("circuit_open_until", 0.0) or 0.0)
+        checked_at = float(_LOGIN_MAINTENANCE_CACHE.get("checked_at", 0.0) or 0.0)
+        last_read_failed = bool(_LOGIN_MAINTENANCE_CACHE.get("last_read_failed", False))
+
+    if now_ts >= circuit_open_until:
+        cached_ttl = (
+            _LOGIN_MAINTENANCE_FAILURE_COOLDOWN_SECONDS
+            if last_read_failed
+            else _LOGIN_MAINTENANCE_CACHE_TTL_SECONDS
+        )
+        if (now_ts - checked_at) > cached_ttl:
+            _schedule_login_maintenance_cache_refresh()
+
+    return status
 
 
 def _get_active_wechat_config(db: Session) -> Optional[WechatPayConfig]:
@@ -16102,6 +16288,10 @@ def update_maintenance_config(
         })
 
     db.commit()
+    _store_login_maintenance_cache(
+        _build_maintenance_status_payload(next_config),
+        read_failed=False,
+    )
 
     return MaintenanceConfig(
         enabled=bool(next_config.get("enabled", False)),
@@ -19950,9 +20140,16 @@ def read_users_me(
     """
     uid = int(getattr(current_user, "id", 0) or 0)
     if uid > 0:
-        db_user = db.query(User).filter(User.id == uid).first()
-        if db_user is not None:
-            return db_user
+        try:
+            db_user = db.query(User).filter(User.id == uid).first()
+            if db_user is not None:
+                return db_user
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.warning("read_users_me fallback to principal | user_id=%s error=%s", uid, type(exc).__name__)
 
     # Fallback for transient DB issues: build a schema-safe payload from principal.
     return {
@@ -19986,6 +20183,7 @@ def update_my_profile(
 
     db.commit()
     db.refresh(user)
+    _refresh_user_identity_cache(user)
     return user
 
 
@@ -20047,6 +20245,7 @@ async def update_my_avatar(
     user.avatar_url = f"/uploads/{relative_path}"
     db.commit()
     db.refresh(user)
+    _refresh_user_identity_cache(user)
     return user
 
 @router.get("/users", response_model=List[UserOut])
@@ -20076,14 +20275,41 @@ def get_users_page(
     safe_page_size = max(1, min(int(page_size or 20), 200))
     skip = (safe_page - 1) * safe_page_size
 
-    total = int(db.query(User).count())
-    items = (
-        db.query(User)
-        .order_by(User.id.asc())
-        .offset(skip)
-        .limit(safe_page_size)
-        .all()
-    )
+    try:
+        total = int(db.query(User).count())
+        items = (
+            db.query(User)
+            .order_by(User.id.asc())
+            .offset(skip)
+            .limit(safe_page_size)
+            .all()
+        )
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("get_users_page fallback to cached principals | user_id=%s error=%s", getattr(current_user, "id", None), type(exc).__name__)
+        cached_entries = list_cached_user_entries()
+        total = len(cached_entries)
+        window = cached_entries[skip: skip + safe_page_size]
+        items = [
+            {
+                "id": int(entry.get("id") or 0),
+                "username": str(entry.get("username") or ""),
+                "email": entry.get("email"),
+                "full_name": entry.get("full_name"),
+                "avatar_url": entry.get("avatar_url"),
+                "is_active": _normalize_user_active_level(entry.get("is_active", USER_ACTIVE_LEVEL_DEFAULT), USER_ACTIVE_LEVEL_DEFAULT),
+                "account_status": int(entry.get("account_status") or 1),
+                "email_verified": bool(entry.get("email_verified", False)),
+                "is_superuser": bool(entry.get("is_superuser", False)),
+                "is_authorized": bool(entry.get("is_authorized", False)),
+                "is_system": bool(entry.get("is_system", False)),
+                "credits": int(entry.get("credits", 0) or 0),
+            }
+            for entry in window
+        ]
     return {
         "items": items,
         "total": total,
@@ -20105,6 +20331,8 @@ def update_user(
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+
+        old_username = str(getattr(user, "username", "") or "").strip()
 
         if user_in.username is not None:
             next_username = (user_in.username or "").strip()
@@ -20154,6 +20382,7 @@ def update_user(
 
         db.commit()
         db.refresh(user)
+        _refresh_user_identity_cache(user, old_username=old_username)
         return user
 
     return _run_with_schema_self_heal(db, _persist_update, context="update_user")
@@ -21509,13 +21738,11 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
                 stable_meta["negative_prompt_submitted"] = effective_negative_prompt
             stable_meta["negative_prompt_source"] = negative_prompt_source
             result["metadata"] = stable_meta
-        print(
-            "[GenerateVideo][Config] req_provider=%s req_model=%s runtime_llm_config=%s"
-            % (
-                req.provider,
-                req.model,
-                runtime_llm_config,
-            )
+        logger.info(
+            "[GenerateVideo][Config] req_provider=%s req_model=%s runtime_llm_config=%s",
+            req.provider,
+            req.model,
+            _sanitize_generation_runtime_config_for_log(runtime_llm_config),
         )
         if "error" in result:
              detail = _format_generation_failure_detail(result, "Video generation failed")
@@ -21538,6 +21765,20 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             logger.error("[GenerateVideo] Failed: %s | result=%s", detail, result)
             billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, detail)
             raise HTTPException(status_code=502, detail=detail)
+
+        final_meta = result.get("metadata") if isinstance(result, dict) else {}
+        final_meta = final_meta if isinstance(final_meta, dict) else {}
+        final_smart_meta = final_meta.get("smart_routing") if isinstance(final_meta.get("smart_routing"), dict) else {}
+        logger.info(
+            "[GenerateVideo] Success | user_id=%s project_id=%s episode_id=%s shot_id=%s provider=%s model=%s url=%s",
+            current_user.id,
+            getattr(req, "project_id", None),
+            getattr(req, "episode_id", None),
+            getattr(req, "shot_id", None),
+            final_meta.get("provider") or final_smart_meta.get("provider") or req.provider,
+            final_meta.get("model") or final_smart_meta.get("model") or req.model,
+            result.get("url"),
+        )
 
         _log_api_switch_regenerate_if_needed(
             db=db,
