@@ -190,15 +190,7 @@ const collectMatchedEntitiesFromPrompt = ({
         });
 
     return entities.filter((entity) => {
-        const nameCn = normalizeEntityToken(entity?.name || '');
-        const nameEn = normalizeEntityToken(entity?.name_en || '');
-        if (!nameCn && !nameEn) return false;
-
-        return Array.from(candidates).some((candidate) => {
-            if (nameCn && candidate === nameCn) return true;
-            if (nameEn && candidate === nameEn) return true;
-            return false;
-        });
+        return Array.from(candidates).some((candidate) => entityTokenMatchesName(entity, candidate));
     });
 };
 
@@ -882,7 +874,6 @@ function buildVoicePromptWithEntityContext(videoPrompt, entityList = [], project
     }
 
     const sourceText = String(videoPrompt || '');
-    const normalizedSource = normalizeEntityToken(sourceText);
     const tokens = new Set();
 
     const addToken = (value) => {
@@ -930,12 +921,8 @@ function buildVoicePromptWithEntityContext(videoPrompt, entityList = [], project
     const seenEntityIds = new Set();
     (Array.isArray(entityList) ? entityList : []).forEach((entity) => {
         const id = String(entity?.id || '').trim();
-        const nameCn = normalizeEntityToken(entity?.name || '');
-        const nameEn = normalizeEntityToken(entity?.name_en || '');
-
-        const explicitMatched = Array.from(tokens).some((token) => token === nameCn || (nameEn && token === nameEn));
-        const fuzzyMatched = (!explicitMatched && nameCn && nameCn.length >= 2 && normalizedSource.includes(nameCn))
-            || (!explicitMatched && nameEn && nameEn.length >= 2 && normalizedSource.includes(nameEn));
+        const explicitMatched = Array.from(tokens).some((token) => entityTokenMatchesName(entity, token));
+        const fuzzyMatched = !explicitMatched && entityNameAppearsInText(entity, sourceText);
 
         if (!explicitMatched && !fuzzyMatched) return;
         if (id && seenEntityIds.has(id)) return;
@@ -1126,7 +1113,7 @@ import {
 
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../lib/promptUtils';
-import { normalizeEntityToken } from '../lib/entityToken';
+import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../lib/entityToken';
 import SettingsPage from './Settings';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
@@ -11579,6 +11566,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     const [shotSupplementImportReport, setShotSupplementImportReport] = useState(null);
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
     const aiShotsBusySceneIdsRef = useRef(new Set());
+    const aiShotsPromptPreviewSceneIdsRef = useRef(new Set());
     const [batchAiShotsProgress, setBatchAiShotsProgress] = useState(() => createBatchAiShotsProgressState());
     const [isSceneBatchProgressDismissed, setIsSceneBatchProgressDismissed] = useState(false);
     const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
@@ -13580,19 +13568,23 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     }, [activeEpisode?.id, consumeAiShotsAutoSwitchTicket, onLog, onSwitchToShots, scenes, t]);
 
     const isAiShotsFlowActive = ['preparing', 'generating', 'importing'].includes(String(aiShotsFlowStatus?.phase || '').toLowerCase());
-    const isSceneAiShotsBusy = useCallback((sceneId) => {
+    const isSceneAiShotsGenerating = useCallback((sceneId) => {
         const stableSceneId = Number(sceneId || 0);
         if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) return false;
         const activeFlowSceneId = Number(aiShotsFlowStatus?.sceneId || 0);
-        const modalSceneId = Number(shotPromptModal?.sceneId || 0);
         return aiShotsBusySceneIdsRef.current.has(stableSceneId)
-            || (isAiShotsFlowActive && activeFlowSceneId === stableSceneId)
-            || (Boolean(shotPromptModal?.loading) && modalSceneId === stableSceneId);
-    }, [aiShotsFlowStatus?.sceneId, isAiShotsFlowActive, shotPromptModal?.loading, shotPromptModal?.sceneId]);
+            || (isAiShotsFlowActive && activeFlowSceneId === stableSceneId);
+    }, [aiShotsFlowStatus?.sceneId, isAiShotsFlowActive]);
+    const isSceneAiShotsBusy = useCallback((sceneId) => {
+        const stableSceneId = Number(sceneId || 0);
+        if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) return false;
+        return isSceneAiShotsGenerating(stableSceneId)
+            || aiShotsPromptPreviewSceneIdsRef.current.has(stableSceneId);
+    }, [isSceneAiShotsGenerating]);
     const closeSceneShotPromptModal = useCallback(() => {
         const stableSceneId = Number(shotPromptModal?.sceneId || 0);
         if (Number.isFinite(stableSceneId) && stableSceneId > 0) {
-            aiShotsBusySceneIdsRef.current.delete(stableSceneId);
+            aiShotsPromptPreviewSceneIdsRef.current.delete(stableSceneId);
         }
         setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
     }, [shotPromptModal?.sceneId]);
@@ -13646,8 +13638,9 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     const executeGenerateShots = async ({ sceneId, promptData }) => {
         const stableSceneId = Number(sceneId || 0);
         if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) return;
-        if (isSceneAiShotsBusy(stableSceneId)) return;
+        if (isSceneAiShotsGenerating(stableSceneId)) return;
 
+        aiShotsPromptPreviewSceneIdsRef.current.delete(stableSceneId);
         aiShotsBusySceneIdsRef.current.add(stableSceneId);
         armAiShotsAutoSwitchTicket(activeEpisode?.id, sceneId);
         setAiShotsFlowStatus({
@@ -13701,7 +13694,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         }
 
         if (isSuperuser) {
-            aiShotsBusySceneIdsRef.current.add(Number(sceneId));
+            aiShotsPromptPreviewSceneIdsRef.current.add(Number(sceneId));
             setShotPromptModal({ open: true, sceneId: sceneId, data: null, loading: true });
             try {
                 const data = await fetchSceneShotsPrompt(sceneId);
@@ -13709,7 +13702,6 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
             } catch (e) {
                 onLog?.(`SceneManager: Failed to fetch prompt preview - ${e.message}`, 'error');
                 closeSceneShotPromptModal();
-                aiShotsBusySceneIdsRef.current.delete(Number(sceneId));
             }
             return;
         }
@@ -14503,9 +14495,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
 
         const handleConfirmGenerateShots = async () => {
             const { sceneId, data } = shotPromptModal;
-            if (!sceneId || isSceneAiShotsBusy(sceneId)) return;
+            if (!sceneId || isSceneAiShotsGenerating(sceneId)) return;
             if (!await confirmUiMessage("This will overwrite existing shots for this scene. Continue?")) {
-               aiShotsBusySceneIdsRef.current.delete(Number(sceneId || 0));
                setShotPromptModal(prev => ({ ...prev, loading: false }));
                return;
             }
@@ -22384,10 +22375,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (candidates.length === 0) return [];
 
         return entityPool.filter((entity) => {
-            const nameCn = normalizeName(entity?.name || '');
-            const nameEn = normalizeName(entity?.name_en || '');
-            if (!nameCn && !nameEn) return false;
-            return candidates.some((candidate) => candidate === nameCn || (nameEn && candidate === nameEn));
+            return candidates.some((candidate) => entityTokenMatchesName(entity, candidate));
         });
     }, [entities]);
 
@@ -22703,20 +22691,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         };
 
         const resolveEntityByToken = (cleanKey) => {
-            return (Array.isArray(entList) ? entList : []).find(e => {
-                const cn = normalizeEntityToken(e?.name || '');
-                const en = normalizeEntityToken(e?.name_en || '');
-
-                let fallbackEn = '';
-                if (!en && e?.description) {
-                    const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                    if (enMatch && enMatch[1]) {
-                        fallbackEn = normalizeEntityToken(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]);
-                    }
-                }
-
-                return (cn === cleanKey) || (en === cleanKey) || (fallbackEn === cleanKey);
-            });
+            return (Array.isArray(entList) ? entList : []).find((entity) => entityTokenMatchesName(entity, cleanKey));
         };
 
         const computeSubjectRefIndexMap = (sourceText = '') => {

@@ -20,6 +20,7 @@
 ### 1. 基本约束
 - **实体引用**：严格使用输入实体，实体名必须与 `Linked Characters`、`Key Props`、`Environment Anchor` 完全一致（含括号内容、大小写、分隔符、全半角），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。在英文提示词中引用实体时，统一使用后文定义的类型化写法：角色写 `CHAR:[@Name]`，环境写 `ENV:[Name]`，道具写 `PROP:[Name]`。**每个 Shot 的 `Start Frame`、`Video Content` 与 `End Frame` 都必须显式包含 `[Environment Anchor]`。**
 - **实体名称冻结 (Entity Name Freeze, 强制)**：本阶段只允许“引用”上游已提供实体名（来自 Scene Analysis / 输入字段）。禁止任何名称改写或归一化：不得改变大小写、下划线/连字符/空格、括号、全半角、拼写与分隔符。
+- **实体名称冻结示例 (Freeze Examples, 强制)**：若上游实体名是 `Officer Valerius`，则 `Officer_Valerius`、`Officer-Valerius`、`Officer Valerius (alert)`、`Valerius` 都视为错误；输出中只能逐字符复用 `Officer Valerius`。
 - **角色/道具同权规则 (Character/Prop Parity, 强制)**：角色与道具与环境执行完全相同的名称继承规则；不得使用别名、同义词、翻译名或简写替代上游规范名。
 - **环境继承权威 (Scene-to-Shot Environment Inheritance, 强制)**：环境在 Scene 阶段已定稿（名称/视角语义/Entry-Exit 连续性）。Shot 阶段只能继承，不得重命名、重定义或新建环境。
 - **环境变更回退规则 (Environment Change Fallback, 强制)**：若某镜头需求导致背景集合显著变化、轴线跨越/反转、观察方向重构或已超出当前 Scene 环境语义，不得在 Shot 内临时改环境；必须回退到 Scene 层新增 Scene + Environment 变体后再生成该 Shot。
@@ -594,6 +595,8 @@
   - **subjects 数量上限 (Subject Count Cap, 强制)**：`Associated Entities` 中除 `[Environment Anchor]` 外，优先只保留 **不超过 3 个 subjects**。若镜头内确有更多实体参与，仍只列对首尾帧构图与动作承接真正关键的 1-3 个核心 subjects；背景群众、非关键陪体、纯氛围陪衬不得一并塞入清单。
   - **一致性**：实体名必须与输入实体（Linked Characters/Key Props/Environment Anchor）大小写与括号内容完全一致。
   - **逐字符继承**：`Associated Entities` 中每个实体名必须与上游权威实体名逐字符一致（含大小写与分隔符）；禁止等价改写（如大小写变化、`_`/`-`/空格互换、简写或翻译变体）。
+  - **禁止状态拼接**：`Associated Entities` 里只能填写实体名本体，禁止在 Shot 阶段临时写成“实体名 + 状态/姿态/备注”组合，如 `Officer Valerius wounded`、`Officer_Valerius alert`、`[Officer Valerius | angry]`。原因是下游实体识别需要先锁定“谁”，状态应写在 `Shot Logic` / `Start Frame` / `Video Content` / `End Frame` 中；若把状态焊进名字，会把“同一实体的当前状态”误变成“另一个名字不同的新实体”，导致匹配歧义与资产断链。
+  - **正式版本新增路径**：如果业务上确实需要把“同一基础实体的不同资产版本”当成不同实体使用，例如不同 costume / age-up / injury version / monster form / battle-damage variant，则必须回到上游实体层正式新增实体，并给出稳定、唯一、可长期复用的权威名字（例如 `Officer Valerius (Wounded Version)` 作为正式资产名）。Shot 阶段只允许逐字符引用这个上游新增后的正式名字，禁止现场临时拼接一个新后缀来冒充新实体。
   - **Packet 消费闭环 (Packet Consumption Closure, 强制)**：`Associated Entities` 一旦确定，该镜头必须消费对应的 `Relevant Subject Packets` / `Entity Reference`。凡 packet 中与当前镜头动作、构图、状态、空间关系直接相关的描述，都必须在 Shot Logic 与 Start/Video/End 中得到承接；禁止 `Associated Entities` 只列名不继承描述。
 
 ### 2. 画面描述规范 (Visual Description)

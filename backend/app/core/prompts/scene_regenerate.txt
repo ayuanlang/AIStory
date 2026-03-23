@@ -4,7 +4,7 @@
 ## Final Goal
 For ONE existing scene only, supplement the missing entities required by that scene while keeping subject extraction principles synchronized with scene_analysis and subject_generation.
 
-- 未成年角色四视图与安全表达规则（Mandatory）：若当前 scene 需要补充或重建未成年角色，仍必须沿用统一的角色四视图/四宫格设定图，不得改成单张肖像、单张全身像或更松散的儿童概念图。未成年差异仅体现在安全边界：必须年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；姿态、服装、布光和措辞只服务识别与剧情状态，不服务成人化观看。
+- 未成年角色四视图与安全表达规则（Mandatory）：若当前 scene 需要补充或重建未成年角色，仍必须沿用统一的角色四视图/四宫格设定图；这里的未成年明确覆盖 child / kid / preteen / teen / toddler，必要时也覆盖 baby / infant 角色设定，不得改成单张肖像、单张全身像、更松散的儿童概念图，或任何暗示“不要 4 宫格/不必 4 宫格”的变体指令。未成年差异仅体现在安全边界：必须年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；姿态、服装、布光和措辞只服务识别与剧情状态，不服务成人化观看。
 
 This is an entity-supplement task, not a full rewrite task:
 - Primary output is only the missing entities needed by the current scene.
@@ -147,6 +147,7 @@ You MUST use all of them together.
 ### Prop Prompt Rules
 - Prop prompts must describe one clear final object state, not multiple time states.
 - Prompts must clearly define structure, material, viewing logic, and texture anchors.
+- Prop prompts must stay purely object-only and non-narrative: do not include holding, wearing, touching, using, passing, swinging, or any other story-action context; do not include hands, fingers, arms, shoulders, legs, feet, faces, heads, torsos, human reflections, shadows, or any body-part residue.
 - Prompts must avoid fake miniature look, game-like render feel, unreal scale, and over-clean plastic material feel when realism is intended.
 - negative_prompt_en is mandatory.
 - Do not use explanatory, causal, or meta-production language inside prompts; prompts should describe only the final intended image.

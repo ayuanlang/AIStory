@@ -1,5 +1,5 @@
 
-import { normalizeEntityToken } from './entityToken';
+import { entityTokenMatchesName, normalizeEntityToken } from './entityToken';
 
 /**
  * Processes a prompt string by replacing variables.
@@ -62,20 +62,7 @@ export const processPrompt = (prompt, episodeInfo, entities) => {
          // Match against entities
          // Requirement: "Input chinese or english name can match"
          const safeEntities = Array.isArray(entities) ? entities : [];
-         const target = safeEntities.find(e => {
-            const cn = normalizeEntityToken(e?.name || '');
-            const en = normalizeEntityToken(e?.name_en || '');
-
-            let fallbackEn = '';
-            if (!en && e?.description) {
-                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                if (enMatch && enMatch[1]) {
-                    fallbackEn = normalizeEntityToken(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]);
-                }
-            }
-
-            return cleanKey && (cn === cleanKey || en === cleanKey || fallbackEn === cleanKey);
-         });
+         const target = safeEntities.find((entity) => cleanKey && entityTokenMatchesName(entity, cleanKey));
          
          if (target) {
              const anchor = target.anchor_description || target.description || "";

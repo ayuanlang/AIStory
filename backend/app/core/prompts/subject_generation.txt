@@ -10,7 +10,7 @@
 - 场景最高审美具体约束（Mandatory）：环境相关 subject 必须优先做到主次锚点明确、材质层级清晰、主辅配色克制统一、光源动机明确、陈设组织有秩序且服务动作。即使是低配、老旧、压抑或破败空间，也必须是“有电影控制力的低配/老旧/破败”，禁止脏乱堆砌、廉价素材感、空洞样板间感。
 - 角色最高审美具体约束（Mandatory）：character subject 必须在不违背身份现实的前提下，尽量同时优化轮廓可读性、发型组织、肤色与肤质层次、肩颈体态、服装版型、鞋履/配件完成度与镜头友好布光。即使角色设定普通、疲惫、底层或克制，也要生成其生活条件允许下的最好看版本，不得默认敷衍成土、乱、垮、没精神。
 - 角色默认主角化基线（Mandatory）：对有具体姓名且承担主要叙事功能的成年角色，若输入未明确给出外形、体型或着装限制，则必须主动补全为“现代、新潮、高级、大气、镜头友好”的主角级设计，但仍需服从题材、时代、职业、阶层与写实度。女性默认优先高挑修长、肩颈线舒展、比例利落；男性默认优先挺拔健壮、肩背展开、线条结实。主角的肤色呈现默认应更白净、细腻、明亮，通常可落在白皙至偏白净的上镜范围，但不得违背人物族裔、地域语境、职业状态与剧情现实度。若剧本明确要求相反体态、特殊身体条件或年龄阶段，则以剧本为准；未成年角色不得按成人化模板美化。
-- 未成年角色四视图与安全表达规则（Mandatory）：未成年角色仍然必须生成统一的角色四视图/四宫格设定图，不得因“儿童”“幼态”“脆弱”“需要突出状态”等理由退化为单张概念图、单张全身像或自由姿态海报。未成年相关差异只能体现在安全边界上：必须年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；姿态、布光、服装和措辞只用于清楚交代身份与状态，不得导向成人化观看。
+- 未成年角色四视图与安全表达规则（Mandatory）：未成年角色仍然必须生成统一的角色四视图/四宫格设定图，这里的未成年明确覆盖儿童、幼儿、低龄孩子、学龄前儿童、青少年，必要时也覆盖婴儿/宝宝角色设定；不得因“儿童”“幼态”“脆弱”“需要突出状态”等理由退化为单张概念图、单张全身像、儿童海报式构图，或任何“不要 4 宫格/不必 4 宫格”的变体要求。未成年相关差异只能体现在安全边界上：必须年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；姿态、布光、服装和措辞只用于清楚交代身份与状态，不得导向成人化观看。
 - 主角色身高与头身比强制（Mandatory）：所有有姓名且承担主要叙事功能的成年角色，必须在 `appearance_cn`、`generation_prompt_cn`、`generation_prompt_en` 中显式写出身高与头身比，不得省略。若剧本未明确给出相反证据，默认按高挑、修长、镜头友好的主角色体态设计，头身比约为 1:9；只有当剧情事实、年龄、职业体态、病理条件或写实边界明确要求不同，才允许偏离。
 - 发型与肤色识别强化（Mandatory）：主要角色必须把发型组织与肤色层次写入 `appearance_cn`、`anchor_description` 与 `generation_prompt_cn/en` 的稳定识别锚点。发型不能只写“长发/短发”，必须落实到分线、长度、卷直、厚薄、刘海、束发和轮廓；肤色不能只写“白”或“正常”，必须写到白皙、偏白净、暖白、冷白、浅蜜色、健康麦色等真实上镜区间，并保持与项目语境一致。
 - 人物类型先判定硬规则（Mandatory）：若输入没有充分写明角色外形，生成前必须先判断人物类型与生活系统，再组织外观方案；至少先判断年龄段、阶层、职业/功能位、生活方式、审美取向与可见消费层级，然后据此确定发型、肤色、服装版型、鞋履与配件。禁止把所有有姓名角色，尤其女性角色，默认生成成同一种都市职场干练模板；必须根据剧本事实主动分流到更合适的人物类型，如贵气、文艺、松弛、冷峻、功能主义、朴素或潮流等方向。
@@ -253,6 +253,7 @@
 ### 3) Prop Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。
 - 道具模板与规则在本文件内统一维护，避免外部模板漂移。
+- 道具纯物体隔离规则（Mandatory）：道具 `generation_prompt_cn/generation_prompt_en` 必须把 prop 作为纯物体资产来写，不得混入剧情中的动作环节或人物介入。禁止出现角色正在持握、穿戴、触摸、使用、递交、佩戴、挎着、挥舞等叙事动作；禁止手、手指、手臂、肩膀、腿、脚、面部、嘴部、头部、躯干、人物倒影、人物影子或任何身体部位/人物残留。若需要表现“这个物体曾被谁使用”，只能通过物体本身的结构、磨损、材质与状态来表达，不能把人带进画面。
 - 具体示例（仅示范写法，不可照抄值）：
   - generation_prompt_en 示例：Photoreal prop sheet for PROP:[AntiquePocketWatch], rendered as a strict object-only 4-view study from a camera centered on the turntable and slightly above the midline. Keep the panels in the strict order macro Close-up, Front, Side, Back while preserving brushed brass texture, light oxidation, scratched crystal, and engraved inner lid readability. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep silhouette and material depth clear. Use 50mm for structure views and 70mm macro for the close-up while preserving texture readability in the shadows. White background, high-resolution output.
   - generation_prompt_cn 示例：写实道具四视图：PROP:[AntiquePocketWatch]，仅物体入镜。机位锚点位于转台中心，镜头略高于物体中线。视角顺序严格为微距特写、正面、侧面、反面。材质表现为拉丝黄铜并带轻微氧化，表镜有细碎划痕，内盖有雕刻纹理。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证轮廓分离与阴影细节可读。镜头与对焦为结构面板 50mm、特写面板 70mm 微距。仅允许中性支撑底座用于比例参照，禁止人物、手部或身体部位入画。纯白背景，高分辨率输出。

@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { API_URL, BASE_URL, FALLBACK_API_URL } from '../config';
-import { normalizeEntityToken } from '../lib/entityToken';
+import { entityTokenMatchesName, normalizeEntityToken } from '../lib/entityToken';
 
 // Use API_URL from config which supports production env vars
 export const api = axios.create({
@@ -2763,20 +2763,7 @@ export const injectEntityFeatures = (prompt, entities = []) => {
         if (/^\s*[\(（]/.test(tail)) return match;
 
         const safeEntities = Array.isArray(entities) ? entities : [];
-        const entity = safeEntities.find(e => {
-            const cn = normalizeEntityToken(e?.name || '');
-            const en = normalizeEntityToken(e?.name_en || '');
-
-            let fallbackEn = '';
-            if (!en && e?.description) {
-                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                if (enMatch && enMatch[1]) {
-                    fallbackEn = normalizeEntityToken(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]);
-                }
-            }
-
-            return cn === cleanKey || en === cleanKey || fallbackEn === cleanKey;
-        });
+        const entity = safeEntities.find((candidate) => entityTokenMatchesName(candidate, cleanKey));
 
         if (!entity) return match;
 
