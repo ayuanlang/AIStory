@@ -19025,12 +19025,17 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
             return (w, h)
 
         req_aspect_ratio = str(getattr(req, "aspect_ratio", "") or "").strip() or None
+        request_meta = _safe_json_dict(
+            getattr(req, "metadata", None)
+            or getattr(req, "meta_info", None)
+            or getattr(req, "meta", None)
+        )
         is_subject_generation = str(getattr(req, "asset_type", "") or "").strip().lower() == "subject"
         resolved_subject_type = _normalize_entity_type(
             getattr(req, "subject_type", None)
             or getattr(req, "entity_type", None)
-            or meta.get("subject_type")
-            or meta.get("entity_type")
+            or request_meta.get("subject_type")
+            or request_meta.get("entity_type")
         )
         aspect_ratio = req_aspect_ratio
         width = None

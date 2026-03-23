@@ -5671,6 +5671,20 @@ class MediaGenerationService:
 
         submit_url = endpoint if re.match(r"^https?://", endpoint, flags=re.IGNORECASE) else f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
 
+        def _sanitize_video_prompt_if_needed(raw_prompt: Any, raw_negative_prompt: Optional[str] = None, resolved_model_name: Optional[str] = None) -> str:
+            merged_prompt = self._merge_negative_prompt(raw_prompt, raw_negative_prompt)
+            model_name = str(resolved_model_name or model or "").strip().lower()
+            if not model_name.startswith("sora"):
+                return merged_prompt
+            sanitized_prompt = self._sanitize_sora_prompt_mentions(merged_prompt)
+            if sanitized_prompt and sanitized_prompt != str(merged_prompt or ""):
+                logger.warning(
+                    "APIYI Sora prompt mention sanitizer applied | model=%s removed_at_mentions=%s",
+                    resolved_model_name or model,
+                    str(merged_prompt or "").count("@"),
+                )
+            return sanitized_prompt
+
         if gen_type == "image":
             endpoint_lower = endpoint.lower()
             if "/v1/images/generations" not in endpoint_lower:
@@ -5735,7 +5749,7 @@ class MediaGenerationService:
                     prefer_public_upload_url=True,
                 ) if ref_image else []
                 content_payload: List[Dict[str, Any]] = []
-                merged_prompt = self._merge_negative_prompt(prompt, negative_prompt)
+                merged_prompt = _sanitize_video_prompt_if_needed(prompt, negative_prompt, resolved_model)
                 if merged_prompt:
                     content_payload.append({"type": "text", "text": merged_prompt})
                 if resolved_refs:
@@ -5776,7 +5790,7 @@ class MediaGenerationService:
 
             payload = {
                 "model": model,
-                "prompt": self._merge_negative_prompt(prompt, negative_prompt),
+                "prompt": _sanitize_video_prompt_if_needed(prompt, negative_prompt, model),
                 "seconds": str(int(duration or tool_conf.get("seconds") or 4)),
                 "size": str(tool_conf.get("size") or "1280x720"),
             }
