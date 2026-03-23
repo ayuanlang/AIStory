@@ -766,7 +766,7 @@ const Settings = () => {
         ];
 
         return orderedKeys.map((category) => {
-            const sourceGroups = (grouped[category] || []).filter((item) => !!item?.shared_key_configured);
+            const sourceGroups = grouped[category] || [];
             const mergedByProvider = sourceGroups.reduce((bucket, item) => {
                 const providerKey = `${String(item?.provider || '').trim().toLowerCase()}::${String(item?.provider_alias || '').trim().toLowerCase()}`;
                 const currentModels = Array.isArray(item?.models) ? item.models : [];
@@ -2194,6 +2194,11 @@ const Settings = () => {
                             <p className="text-xs text-muted-foreground">
                                 {t('在每个类别中选择一个默认激活配置。调用时将按你当前激活项生效。', 'Pick one default active config per category. Calls will use your currently active selection.')}
                             </p>
+                            {!isSystemSettingsLoading && systemSettings.length > 0 && categorizedSystemSettings.length === 0 ? (
+                                <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-200">
+                                    {t('已读取到系统 API 数据，但当前提供方尚未配置可用共享密钥，所以默认激活列表为空。请到管理面板检查 provider key pool 或 system_api_settings.api_key。', 'System API data was loaded, but no provider currently has a usable shared key configured, so the activation list is empty. Check provider key pools or system_api_settings.api_key in the admin panel.')}
+                                </div>
+                            ) : null}
 
                             <div className="grid grid-cols-1 gap-3 rounded-lg border border-white/10 bg-white/5 p-3">
                                 <div className="text-xs text-muted-foreground">
