@@ -20141,6 +20141,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return refs.filter(Boolean);
     };
 
+    const resolveJointShotDiptychRefs = useCallback((shotSnapshot) => {
+        const tech = (() => {
+            try {
+                return JSON.parse(shotSnapshot?.technical_notes || '{}');
+            } catch {
+                return {};
+            }
+        })();
+
+        const startFrameUrl = String(shotSnapshot?.image_url || '').trim();
+        const endFrameUrl = String(tech?.end_frame_url || '').trim();
+
+        return [...new Set([startFrameUrl, endFrameUrl].filter(Boolean))];
+    }, []);
+
     const loadImageElementFromBlob = useCallback((blob) => {
         return new Promise((resolve, reject) => {
             const objectUrl = URL.createObjectURL(blob);
@@ -20371,7 +20386,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
             });
             const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
-            const combinedRefs = resolveShotStartFrameRefs(shotSnapshot, rawStartPrompt, resolvedEntities);
+            const combinedRefs = resolveJointShotDiptychRefs(shotSnapshot);
 
             const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                 ? [
@@ -23437,7 +23452,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     diptychPlan,
                     allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
                 });
-                const combinedRefs = resolveShotStartFrameRefs(workingShot, rawStartPrompt, resolvedEntities);
+                const combinedRefs = resolveJointShotDiptychRefs(workingShot);
                 const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                     ? [
                         `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
@@ -23600,7 +23615,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setShotGeneratingState(stableShotId, 'start', false);
             setShotGeneratingState(stableShotId, 'end', false);
         }
-    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
 
     const runLocalKeyframeBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
