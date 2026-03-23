@@ -30,6 +30,9 @@ services:
         --timeout ${GUNICORN_TIMEOUT:-180} \
         --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-180} \
         --keep-alive ${GUNICORN_KEEPALIVE:-15} \
+        --access-logfile - \
+        --error-logfile - \
+        --access-logformat '%(h)s %(l)s %(u)s [%(t)s] "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" req_time=%(D)sus pid=%(p)s' \
         --max-requests ${GUNICORN_MAX_REQUESTS:-2000} \
         --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-200}
     envVars:

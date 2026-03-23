@@ -679,6 +679,27 @@ def root():
 def healthz():
     return {"status": "ok"}
 
+
+@app.post(f"{settings.API_V1_STR}/diag/post-ping")
+async def diag_post_ping(request: Request):
+    body = await request.body()
+    content_type = str(request.headers.get("content-type") or "").strip() or None
+    user_agent = str(request.headers.get("user-agent") or "").strip() or None
+    preview = body[:120].decode("utf-8", errors="replace") if body else ""
+    logger.info(
+        "diag.post_ping | content_type=%s body_len=%s preview=%s",
+        content_type,
+        len(body),
+        preview.replace("\n", "\\n"),
+    )
+    return {
+        "ok": True,
+        "content_type": content_type,
+        "body_len": len(body),
+        "body_preview": preview,
+        "user_agent": user_agent,
+    }
+
 if __name__ == "__main__":
     import uvicorn
     # Use import string to enable reload

@@ -297,8 +297,15 @@ def _ensure_user_runtime_schema(*, is_postgres: bool) -> None:
             existing_user_cols_meta = {c['name']: c for c in inspector.get_columns('users')}
             is_active_col = existing_user_cols_meta.get('is_active') or {}
             is_active_type_name = str(is_active_col.get('type') or '').lower()
+            logger.info(
+                "User runtime schema check | users.is_active type=%s nullable=%s default=%s",
+                is_active_type_name or None,
+                is_active_col.get('nullable'),
+                is_active_col.get('default'),
+            )
             if 'bool' in is_active_type_name:
                 try:
+                    logger.warning("users.is_active is boolean on startup; attempting ALTER COLUMN TYPE to INTEGER")
                     with engine.begin() as conn:
                         conn.execute(text("""
                             ALTER TABLE users
@@ -340,6 +347,12 @@ def _ensure_user_runtime_schema(*, is_postgres: bool) -> None:
 
             final_user_cols_meta = {c['name']: c for c in inspect(engine).get_columns('users')}
             final_type_name = str((final_user_cols_meta.get('is_active') or {}).get('type') or '').lower()
+            logger.info(
+                "User runtime schema normalized | users.is_active final_type=%s final_nullable=%s final_default=%s",
+                final_type_name or None,
+                (final_user_cols_meta.get('is_active') or {}).get('nullable'),
+                (final_user_cols_meta.get('is_active') or {}).get('default'),
+            )
             if 'bool' in final_type_name:
                 raise RuntimeError(f"users.is_active remains non-integer after migration: {final_type_name}")
         except Exception as e:

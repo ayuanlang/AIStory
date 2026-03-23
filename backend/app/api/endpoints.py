@@ -13924,29 +13924,155 @@ def send_password_reset_email(to_email: str, reset_link: str) -> None:
     )
     _send_email_via_runtime_smtp(to_email, "AI Story Password Reset", content)
 
+
+def _describe_login_identifier(identifier: str) -> str:
+    raw = str(identifier or "").strip()
+    if not raw:
+        return "empty"
+    if "@" in raw:
+        local_part, _, domain_part = raw.partition("@")
+        masked_local = (local_part[:2] + "***") if local_part else "***"
+        return f"email:{masked_local}@{domain_part or 'unknown'}"
+    if len(raw) <= 3:
+        return f"username:{raw[0]}***"
+    return f"username:{raw[:3]}***"
+
+
+def _get_request_client_ip(request: Optional[Request]) -> Optional[str]:
+    if request is None:
+        return None
+    forwarded_for = str(request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip() or None
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", None)
+    return str(host).strip() or None if host else None
+
+
+def _log_login_stage(level: int, message: str, **fields: Any) -> None:
+    payload = " ".join(f"{key}={fields[key]}" for key in sorted(fields))
+    if payload:
+        logger.log(level, "%s | %s", message, payload)
+        return
+    logger.log(level, "%s", message)
+
+
+def _get_users_is_active_schema_snapshot(db: Session) -> Dict[str, Any]:
+    try:
+        bind = db.get_bind()
+        if bind is None:
+            return {"available": False, "reason": "no_bind"}
+        columns = {col["name"]: col for col in inspect(bind).get_columns("users")}
+        is_active_col = columns.get("is_active") or {}
+        return {
+            "available": bool(is_active_col),
+            "type": str(is_active_col.get("type") or "").lower() or None,
+            "nullable": is_active_col.get("nullable"),
+            "default": str(is_active_col.get("default") or "") or None,
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "reason": type(exc).__name__,
+        }
+
+
+def _log_login_is_active_diagnostics(db: Session, user: User, identifier: str, stage: str) -> None:
+    schema = _get_users_is_active_schema_snapshot(db)
+    raw_value = getattr(user, "is_active", None)
+    _log_login_stage(
+        logging.INFO,
+        "[login] is_active diagnostics",
+        stage=stage,
+        identifier=identifier,
+        user_id=getattr(user, "id", None),
+        user_is_active_value=repr(raw_value),
+        user_is_active_python_type=type(raw_value).__name__,
+        normalized_is_active=_normalize_user_active_level(raw_value, USER_ACTIVE_LEVEL_DEFAULT),
+        account_status=getattr(user, "account_status", None),
+        schema_available=schema.get("available"),
+        schema_type=schema.get("type"),
+        schema_nullable=schema.get("nullable"),
+        schema_default=schema.get("default"),
+        schema_reason=schema.get("reason"),
+    )
+
 def authenticate_user(db: Session, username: str, password: str):
     username = str(username or "").strip()
+    login_started_at = time.perf_counter()
+    login_identifier = _describe_login_identifier(username)
+    _log_login_stage(logging.INFO, "[login] authenticate_user start", identifier=login_identifier)
     try:
         # Try by username
+        lookup_started_at = time.perf_counter()
         user = db.query(User).filter(User.username == username).first()
+        _log_login_stage(
+            logging.INFO,
+            "[login] username lookup finished",
+            identifier=login_identifier,
+            found=bool(user),
+            elapsed_ms=int((time.perf_counter() - lookup_started_at) * 1000),
+        )
         if not user:
             # Try by email
+            email_lookup_started_at = time.perf_counter()
             user = db.query(User).filter(User.email == str(username or "").strip().lower()).first()
+            _log_login_stage(
+                logging.INFO,
+                "[login] email lookup finished",
+                identifier=login_identifier,
+                found=bool(user),
+                elapsed_ms=int((time.perf_counter() - email_lookup_started_at) * 1000),
+            )
     except Exception as exc:
         try:
             db.rollback()
         except Exception:
             pass
-        logger.error("DB lookup failed in authenticate_user: %s", type(exc).__name__)
+        logger.exception(
+            "DB lookup failed in authenticate_user | identifier=%s elapsed_ms=%s error=%s",
+            login_identifier,
+            int((time.perf_counter() - login_started_at) * 1000),
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=503,
             detail="Database temporarily unavailable, please retry",
         )
     
     if not user:
+        _log_login_stage(
+            logging.WARNING,
+            "[login] user not found during authentication",
+            identifier=login_identifier,
+            elapsed_ms=int((time.perf_counter() - login_started_at) * 1000),
+        )
         return None
+
+    verify_started_at = time.perf_counter()
     if not verify_password(password, user.hashed_password):
+        _log_login_stage(
+            logging.WARNING,
+            "[login] password verification failed",
+            identifier=login_identifier,
+            user_id=getattr(user, "id", None),
+            elapsed_ms=int((time.perf_counter() - login_started_at) * 1000),
+            verify_elapsed_ms=int((time.perf_counter() - verify_started_at) * 1000),
+        )
         return None
+
+    _log_login_stage(
+        logging.INFO,
+        "[login] authenticate_user success",
+        identifier=login_identifier,
+        user_id=getattr(user, "id", None),
+        is_active=getattr(user, "is_active", None),
+        account_status=getattr(user, "account_status", None),
+        is_superuser=bool(getattr(user, "is_superuser", False)),
+        email_verified=bool(getattr(user, "email_verified", False)),
+        elapsed_ms=int((time.perf_counter() - login_started_at) * 1000),
+        verify_elapsed_ms=int((time.perf_counter() - verify_started_at) * 1000),
+    )
     return user
 
 
@@ -13964,29 +14090,95 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
     OAuth2 compatible token login, get an access token for future requests.
     Requires 'username' and 'password' as form fields.
     """
+    request_started_at = time.perf_counter()
+    login_identifier = _describe_login_identifier(form_data.username)
+    client_ip = _get_request_client_ip(request)
+    _log_login_stage(
+        logging.INFO,
+        "[login] access-token request start",
+        identifier=login_identifier,
+        client_ip=client_ip,
+        path=str(getattr(request, "url", "") or ""),
+    )
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
+        _log_login_stage(
+            logging.WARNING,
+            "[login] access-token rejected: invalid credentials",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    _log_login_is_active_diagnostics(db, user, login_identifier, "access-token-authenticated")
     if _is_maintenance_active_for_login(db) and (not bool(getattr(user, "is_superuser", False))):
+        _log_login_stage(
+            logging.WARNING,
+            "[login] access-token rejected: maintenance mode",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            user_id=user.id,
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
         raise HTTPException(status_code=403, detail="System is under maintenance. Only system administrators can login now")
     if (
         user.account_status == -1
         and (not _is_user_enabled(user.is_active))
         and (not bool(getattr(user, "is_superuser", False)))
     ):
+        _log_login_stage(
+            logging.WARNING,
+            "[login] access-token rejected: email verification required",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            user_id=user.id,
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
         raise HTTPException(status_code=403, detail="Email verification required. Please verify your email code before login")
     if not _is_user_enabled(user.is_active):
+        _log_login_stage(
+            logging.WARNING,
+            "[login] access-token rejected: user disabled",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            user_id=user.id,
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
         raise HTTPException(status_code=403, detail="User is disabled")
 
     try:
+        seed_started_at = time.perf_counter()
+        _log_login_stage(logging.INFO, "[login] seeding default settings start", user_id=user.id, identifier=login_identifier)
         _seed_default_system_settings_for_user(db, user.id)
         db.commit()
+        _log_login_stage(
+            logging.INFO,
+            "[login] seeding default settings finished",
+            user_id=user.id,
+            identifier=login_identifier,
+            elapsed_ms=int((time.perf_counter() - seed_started_at) * 1000),
+        )
     except Exception as e:
         db.rollback()
-        logger.warning("Failed to seed default API settings on login | user_id=%s error=%s", user.id, e)
+        logger.exception(
+            "Failed to seed default API settings on login | user_id=%s identifier=%s elapsed_ms=%s error=%s",
+            user.id,
+            login_identifier,
+            int((time.perf_counter() - request_started_at) * 1000),
+            e,
+        )
     
     # Log Successful Login
+    audit_started_at = time.perf_counter()
+    _log_login_stage(logging.INFO, "[login] audit log write start", user_id=user.id, identifier=login_identifier)
     log_action(db, user_id=user.id, user_name=user.username, action="LOGIN", details="User logged in via OAuth2 Form")
+    _log_login_stage(
+        logging.INFO,
+        "[login] audit log write finished",
+        user_id=user.id,
+        identifier=login_identifier,
+        elapsed_ms=int((time.perf_counter() - audit_started_at) * 1000),
+    )
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     cache_user_identity(user)
@@ -13999,6 +14191,14 @@ def login_access_token(request: Request, form_data: OAuth2PasswordRequestForm = 
         },
         expires_delta=access_token_expires
     )
+    _log_login_stage(
+        logging.INFO,
+        "[login] access-token request success",
+        identifier=login_identifier,
+        client_ip=client_ip,
+        user_id=user.id,
+        elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+    )
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/login", response_model=Token)
@@ -14008,31 +14208,97 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
     JSON compatible login endpoint. 
     Accepts {"username": "...", "password": "..."} in body.
     """
+    request_started_at = time.perf_counter()
+    login_identifier = _describe_login_identifier(login_data.username)
+    client_ip = _get_request_client_ip(request)
+    _log_login_stage(
+        logging.INFO,
+        "[login] json request start",
+        identifier=login_identifier,
+        client_ip=client_ip,
+        path=str(getattr(request, "url", "") or ""),
+    )
     user = authenticate_user(db, login_data.username, login_data.password)
     if not user:
         # Optional: Log failed login attempts?
         # log_action(db, user_id=None, user_name=login_data.username, action="LOGIN_FAILED", details="Incorrect password")
+        _log_login_stage(
+            logging.WARNING,
+            "[login] json rejected: invalid credentials",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    _log_login_is_active_diagnostics(db, user, login_identifier, "json-authenticated")
     if _is_maintenance_active_for_login(db) and (not bool(getattr(user, "is_superuser", False))):
+        _log_login_stage(
+            logging.WARNING,
+            "[login] json rejected: maintenance mode",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            user_id=user.id,
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
         raise HTTPException(status_code=403, detail="System is under maintenance. Only system administrators can login now")
     if (
         user.account_status == -1
         and (not _is_user_enabled(user.is_active))
         and (not bool(getattr(user, "is_superuser", False)))
     ):
+        _log_login_stage(
+            logging.WARNING,
+            "[login] json rejected: email verification required",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            user_id=user.id,
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
         raise HTTPException(status_code=403, detail="Email verification required. Please verify your email code before login")
     if not _is_user_enabled(user.is_active):
+        _log_login_stage(
+            logging.WARNING,
+            "[login] json rejected: user disabled",
+            identifier=login_identifier,
+            client_ip=client_ip,
+            user_id=user.id,
+            elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
+        )
         raise HTTPException(status_code=403, detail="User is disabled")
 
     try:
+        seed_started_at = time.perf_counter()
+        _log_login_stage(logging.INFO, "[login] json seed default settings start", user_id=user.id, identifier=login_identifier)
         _seed_default_system_settings_for_user(db, user.id)
         db.commit()
+        _log_login_stage(
+            logging.INFO,
+            "[login] json seed default settings finished",
+            user_id=user.id,
+            identifier=login_identifier,
+            elapsed_ms=int((time.perf_counter() - seed_started_at) * 1000),
+        )
     except Exception as e:
         db.rollback()
-        logger.warning("Failed to seed default API settings on login | user_id=%s error=%s", user.id, e)
+        logger.exception(
+            "Failed to seed default API settings on login | user_id=%s identifier=%s elapsed_ms=%s error=%s",
+            user.id,
+            login_identifier,
+            int((time.perf_counter() - request_started_at) * 1000),
+            e,
+        )
     
     # Log Successful Login
+    audit_started_at = time.perf_counter()
+    _log_login_stage(logging.INFO, "[login] json audit log write start", user_id=user.id, identifier=login_identifier)
     log_action(db, user_id=user.id, user_name=user.username, action="LOGIN", details="User logged in via API")
+    _log_login_stage(
+        logging.INFO,
+        "[login] json audit log write finished",
+        user_id=user.id,
+        identifier=login_identifier,
+        elapsed_ms=int((time.perf_counter() - audit_started_at) * 1000),
+    )
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     cache_user_identity(user)
@@ -14044,6 +14310,14 @@ def login_json(request: Request, login_data: LoginRequest, db: Session = Depends
             "is_superuser": bool(getattr(user, "is_superuser", False)),
         },
         expires_delta=access_token_expires
+    )
+    _log_login_stage(
+        logging.INFO,
+        "[login] json request success",
+        identifier=login_identifier,
+        client_ip=client_ip,
+        user_id=user.id,
+        elapsed_ms=int((time.perf_counter() - request_started_at) * 1000),
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
