@@ -16942,6 +16942,7 @@ class GenerationRequest(BaseModel):
     negative_prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    aspect_ratio: Optional[str] = None
     image_size: Optional[str] = None
     quality: Optional[str] = None
     output_format: Optional[str] = None
@@ -18149,6 +18150,21 @@ def _build_generation_filename_base(req: Any, db: Session) -> str:
 
     return "_".join(parts) if parts else "gen"
 
+
+def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if not text:
+        return None
+    if text in {"character", "char", "role", "人物", "角色"}:
+        return "character"
+    if text in {"environment", "env", "scene", "场景", "环境"}:
+        return "environment"
+    if text in {"prop", "props", "道具", "物件"}:
+        return "prop"
+    return text
+
 def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source_metadata: Dict = None):
     # Handle dict or object
     def get_attr(obj, key):
@@ -18157,20 +18173,6 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
 
     project_id = get_attr(req, "project_id")
     if not project_id: return
-
-    def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
-        if raw is None:
-            return None
-        text = str(raw).strip().lower()
-        if not text:
-            return None
-        if text in {"character", "char", "role", "人物", "角色"}:
-            return "character"
-        if text in {"environment", "env", "scene", "场景", "环境"}:
-            return "environment"
-        if text in {"prop", "props", "道具", "物件"}:
-            return "prop"
-        return text
 
     try:
         # Determine paths
@@ -18996,7 +18998,15 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
                 return (None, None)
             return (w, h)
 
-        aspect_ratio = None
+        req_aspect_ratio = str(getattr(req, "aspect_ratio", "") or "").strip() or None
+        is_subject_generation = str(getattr(req, "asset_type", "") or "").strip().lower() == "subject"
+        resolved_subject_type = _normalize_entity_type(
+            getattr(req, "subject_type", None)
+            or getattr(req, "entity_type", None)
+            or meta.get("subject_type")
+            or meta.get("entity_type")
+        )
+        aspect_ratio = req_aspect_ratio
         width = None
         height = None
         image_size = _normalize_project_image_size(req.image_size)
@@ -19049,6 +19059,15 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
                         else:
                             image_size = "0.5K"
                     break
+
+        if (not width or not height) and aspect_ratio and image_size:
+            inferred_dims = _infer_project_resolution(aspect_ratio, image_size)
+            if inferred_dims:
+                inferred_w, inferred_h = inferred_dims
+                if not width:
+                    width = inferred_w
+                if not height:
+                    height = inferred_h
 
         # Cast to int for safety
         try: width = int(width) if width else 720 
@@ -19326,6 +19345,10 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
         fallback_model_candidate = str(req.fallback_model or req.fallbackModel or "").strip()
         if fallback_model_candidate:
             image_provider_options["fallbackModel"] = fallback_model_candidate
+
+        if is_subject_generation and resolved_subject_type:
+            image_provider_options["__subject_type"] = resolved_subject_type
+            image_provider_options["__asset_type"] = "subject"
 
         if max_images_per_call is not None:
             files_urls = image_provider_options.get("filesUrl")

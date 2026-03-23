@@ -394,10 +394,35 @@ class MediaGenerationService:
                     candidates.append(mirror)
         return candidates
 
+    def _is_retryable_proxy_fallback_error(self, error: Any) -> bool:
+        if isinstance(error, requests.exceptions.ProxyError):
+            return True
+
+        text = self._flatten_text(error).lower()
+        proxy_markers = [
+            "proxyerror",
+            "cannot connect to proxy",
+            "proxy authentication",
+            "tunnel connection failed",
+            "407 proxy",
+            "https proxy",
+            "http proxy",
+        ]
+        if any(marker in text for marker in proxy_markers):
+            return True
+
+        if isinstance(error, requests.exceptions.SSLError):
+            ssl_proxy_markers = [
+                "wrong version number",
+                "tlsv1 alert",
+                "certificate verify failed",
+            ]
+            return any(marker in text for marker in ssl_proxy_markers)
+
+        return False
+
     def _is_ambiguous_submit_transport_error(self, provider_name: str, log_tag: str, error: Any) -> bool:
-        normalized_provider = str(provider_name or "").strip().lower()
-        normalized_tag = str(log_tag or "").strip().lower()
-        if normalized_provider != "n1n" or normalized_tag != "n1n_image":
+        if error is None or self._is_retryable_proxy_fallback_error(error):
             return False
 
         text = self._flatten_text(error).lower()
@@ -408,9 +433,18 @@ class MediaGenerationService:
             "ssleoferror",
             "connection reset by peer",
             "connection aborted",
+            "connection closed",
+            "broken pipe",
             "read timed out",
             "readtimeout",
+            "timed out",
+            "10054",
+            "unexpected eof",
         ]
+        if isinstance(error, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+            return True
+        if isinstance(error, requests.exceptions.SSLError):
+            return any(marker in text for marker in markers)
         return any(marker in text for marker in markers)
 
     def _extract_openai_compatible_image_output(self, data: Any) -> Optional[str]:
@@ -1460,6 +1494,7 @@ class MediaGenerationService:
 
     async def _submit_and_poll_image_task(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
 
         _debug_log(f"[{log_tag}] Submitting to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
 
@@ -1482,13 +1517,20 @@ class MediaGenerationService:
         try:
             try:
                 resp = await asyncio.to_thread(_post, True)
-            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
                 _debug_log(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy (connect_timeout=15s)...", "warning")
                 try:
                     resp = await asyncio.to_thread(_post, False, False, 15)
-                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
+                    return self._build_ambiguous_submit_result(provider_name, log_tag, e2, url, extra_metadata)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e2:
                     _debug_log(f"[{log_tag}] Submit retry without proxy failed ({str(e2)[:120]}), retrying with connection close...", "warning")
-                    resp = await asyncio.to_thread(_post, False, True, 15)
+                    try:
+                        resp = await asyncio.to_thread(_post, False, True, 15)
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e3:
+                        return self._build_ambiguous_submit_result(provider_name, log_tag, e3, url, extra_metadata)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
 
             if resp.status_code not in [200, 201]:
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
@@ -1539,8 +1581,12 @@ class MediaGenerationService:
 
             return {"error": f"Timeout after {poll_timeout_seconds}s"}
         except requests.exceptions.Timeout as e:
+            if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
             return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
         except requests.exceptions.RequestException as e:
+            if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
             details = str(e)
             if "10054" in details or "ConnectionResetError" in details:
                 details = f"{details}. Possible network middlebox/proxy reset on large request body; retried with no-proxy once."
@@ -5678,12 +5724,53 @@ class MediaGenerationService:
 
         if gen_type == "video":
             endpoint_lower = endpoint.lower()
-            # Veo / Sora Reverse models may carry /v1/chat/completions as endpoint_hint
-            # (the sync calling convention).  Rewrite to the async /v1/videos endpoint
-            # so the existing submit-and-poll handler works.
             if "/v1/chat/completions" in endpoint_lower:
-                endpoint = "/v1/videos"
-                submit_url = f"{base_url}/v1/videos"
+                if last_frame_url:
+                    return {"error": f"{provider_name} chat/completions video does not support last-frame control", "submit_failed": True}
+
+                resolved_model = self._resolve_apiyi_chat_video_model(model, aspect_ratio=aspect_ratio, duration=duration)
+                resolved_refs = self._resolve_ref_list_for_api(
+                    ref_image,
+                    force_data_uri_for_local=True,
+                    prefer_public_upload_url=True,
+                ) if ref_image else []
+                content_payload: List[Dict[str, Any]] = []
+                merged_prompt = self._merge_negative_prompt(prompt, negative_prompt)
+                if merged_prompt:
+                    content_payload.append({"type": "text", "text": merged_prompt})
+                if resolved_refs:
+                    content_payload.append({
+                        "type": "image_url",
+                        "image_url": {"url": resolved_refs[0]},
+                    })
+
+                payload = {
+                    "model": resolved_model,
+                    "stream": True,
+                    "messages": [{
+                        "role": "user",
+                        "content": content_payload,
+                    }],
+                }
+                base_metadata = {
+                    "provider": provider_name,
+                    "model": resolved_model,
+                    "requested_model": model,
+                    "prompt": prompt,
+                    "submit_url": submit_url,
+                    "endpoint_family": "/v1/chat/completions",
+                    "requested_duration": int(duration or 0),
+                    "requested_aspect_ratio": str(aspect_ratio or "").strip() or None,
+                    "resolved_reference_count": len(resolved_refs),
+                    "resolved_video_size": self._apiyi_chat_video_size_for_model(resolved_model),
+                }
+                return await self._submit_apiyi_chat_video_stream(
+                    submit_url,
+                    payload,
+                    api_key,
+                    f"{str(provider_name).lower()}_video",
+                    extra_metadata=base_metadata,
+                )
             elif "/v1/videos" not in endpoint_lower:
                 return {"error": f"{provider_name} video endpoint family not supported yet: {endpoint}", "submit_failed": True}
 
@@ -5724,6 +5811,188 @@ class MediaGenerationService:
             return await self._submit_and_poll_video(submit_url, payload, api_key, f"{str(provider_name).lower()}_video", extra_metadata=base_metadata)
 
         return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}
+
+    def _resolve_apiyi_chat_video_model(self, model: str, aspect_ratio: Optional[str] = None, duration: Optional[int] = None) -> str:
+        normalized_model = str(model or "").strip() or "sora_video2"
+        normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
+        try:
+            duration_value = int(duration or 0)
+        except Exception:
+            duration_value = 0
+
+        if normalized_model == "sora-2-pro":
+            return normalized_model
+
+        known_reverse = {
+            "sora_video2",
+            "sora_video2-15s",
+            "sora_video2-landscape",
+            "sora_video2-landscape-15s",
+        }
+        if normalized_model not in known_reverse:
+            return normalized_model
+
+        wants_landscape = normalized_ratio == "16:9" or "landscape" in normalized_model
+        wants_15s = duration_value >= 15 or normalized_model.endswith("-15s")
+
+        resolved_model = "sora_video2-landscape" if wants_landscape else "sora_video2"
+        if wants_15s:
+            resolved_model = f"{resolved_model}-15s"
+        return resolved_model
+
+    def _apiyi_chat_video_size_for_model(self, model: str) -> Optional[str]:
+        normalized_model = str(model or "").strip().lower()
+        size_map = {
+            "sora_video2": "720x1280",
+            "sora_video2-15s": "720x1280",
+            "sora_video2-landscape": "1280x720",
+            "sora_video2-landscape-15s": "1280x720",
+            "sora-2-pro": "1024x1792",
+        }
+        return size_map.get(normalized_model)
+
+    def _extract_apiyi_sse_video_url(self, message_text: str) -> Optional[str]:
+        raw = str(message_text or "").strip()
+        if not raw:
+            return None
+        markdown_match = re.search(r"\((https?://[^)\s]+)\)", raw, flags=re.IGNORECASE)
+        if markdown_match:
+            return markdown_match.group(1)
+        url_match = re.search(r"https?://\S+", raw, flags=re.IGNORECASE)
+        if url_match:
+            return url_match.group(0).rstrip(")].,!?\"'")
+        return None
+
+    async def _submit_apiyi_chat_video_stream(self, url, payload, api_key, log_tag, extra_metadata=None):
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+
+        _debug_log(f"[{log_tag}] Streaming submit to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
+
+        def _post(use_proxy=True, connection_close: bool = False):
+            request_headers = dict(headers)
+            if connection_close:
+                request_headers["Connection"] = "close"
+            kwargs = {
+                "json": payload,
+                "headers": request_headers,
+                "timeout": (60, 360),
+                "verify": False,
+                "stream": True,
+            }
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.post(url, **kwargs)
+
+        try:
+            try:
+                resp = await asyncio.to_thread(_post, True, False)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                try:
+                    resp = await asyncio.to_thread(_post, False, False)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                    resp = await asyncio.to_thread(_post, False, True)
+
+            if resp.status_code != 200:
+                body = ""
+                try:
+                    body = resp.text
+                except Exception:
+                    body = ""
+                return {"error": f"Submission Failed {resp.status_code}", "details": body[:1000], "submit_failed": True}
+
+            def _consume_stream() -> Dict[str, Any]:
+                last_messages: List[str] = []
+                progress_value: Optional[float] = None
+                video_url: Optional[str] = None
+                event_data_lines: List[str] = []
+
+                def _flush_event() -> Optional[str]:
+                    nonlocal progress_value, video_url, event_data_lines
+                    if not event_data_lines:
+                        return None
+                    raw_event = "\n".join(event_data_lines).strip()
+                    event_data_lines = []
+                    if not raw_event:
+                        return None
+                    if raw_event == "[DONE]":
+                        return "done"
+                    try:
+                        payload_obj = json.loads(raw_event)
+                    except Exception:
+                        return None
+                    choices = payload_obj.get("choices") if isinstance(payload_obj, dict) else None
+                    if not isinstance(choices, list) or not choices:
+                        return None
+                    delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
+                    content = ""
+                    if isinstance(delta, dict):
+                        content = str(delta.get("content") or "")
+                    if not content:
+                        return None
+                    content = content.strip()
+                    if content:
+                        last_messages.append(content)
+                        if len(last_messages) > 12:
+                            last_messages.pop(0)
+                        progress_match = re.search(r"(\d+(?:\.\d+)?)%", content)
+                        if progress_match:
+                            try:
+                                progress_value = float(progress_match.group(1))
+                            except Exception:
+                                pass
+                        extracted_url = self._extract_apiyi_sse_video_url(content)
+                        if extracted_url:
+                            video_url = extracted_url
+                    return None
+
+                for raw_line in resp.iter_lines(decode_unicode=True):
+                    if raw_line is None:
+                        continue
+                    line = str(raw_line)
+                    if not line.strip():
+                        signal = _flush_event()
+                        if signal == "done":
+                            break
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    event_data_lines.append(line[5:].strip())
+
+                signal = _flush_event()
+                if signal == "done":
+                    pass
+                return {
+                    "video_url": video_url,
+                    "progress": progress_value,
+                    "messages": last_messages,
+                }
+
+            stream_result = await asyncio.to_thread(_consume_stream)
+            video_url = str((stream_result or {}).get("video_url") or "").strip()
+            if not video_url:
+                return {
+                    "error": "Generation completed without video URL",
+                    "details": " | ".join((stream_result or {}).get("messages") or [])[:1000],
+                    "submit_failed": True,
+                }
+
+            metadata = {
+                "apiyi_stream_messages": (stream_result or {}).get("messages") or [],
+                "progress": (stream_result or {}).get("progress"),
+            }
+            if extra_metadata:
+                metadata.update(extra_metadata)
+            return {"url": video_url, "metadata": metadata}
+        except requests.exceptions.Timeout as e:
+            return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
+        except requests.exceptions.RequestException as e:
+            return {"error": "Upstream request failed", "details": str(e), "submit_failed": True}
+        except Exception as e:
+            return {"error": str(e), "submit_failed": True}
 
     async def _handle_n1n_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "n1n")
@@ -6100,17 +6369,25 @@ class MediaGenerationService:
             for index, target_url in enumerate(upstream_urls or [str(url or "").strip()]):
                 try:
                     resp = await asyncio.to_thread(_post, target_url, not prefer_no_proxy)
-                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
                     if prefer_no_proxy:
                         raise
                     _debug_log(f"[{log_tag}] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy (connect_timeout=15s)...", "warning")
                     try:
                         resp = await asyncio.to_thread(_post, target_url, False, 15)
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
+                        if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e2):
+                            return self._build_ambiguous_submit_result(provider_name, log_tag, e2, target_url, extra_metadata)
+                        raise
                     except Exception as e2:
                         _debug_log(f"[{log_tag}] No-proxy retry also failed: {str(e2)[:120]}", "error")
                         if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e2):
                             return self._build_ambiguous_submit_result(provider_name, log_tag, e2, target_url, extra_metadata)
                         raise
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                    if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                        return self._build_ambiguous_submit_result(provider_name, log_tag, e, target_url, extra_metadata)
+                    raise
 
                 last_response = resp
                 selected_url = target_url
@@ -6147,6 +6424,8 @@ class MediaGenerationService:
                 _debug_log(f"[{log_tag}] Error {resp.status_code}: {resp.text}", "error")
                 return {"error": f"API Error {resp.status_code}", "details": resp.text, "submit_failed": True}
         except requests.exceptions.Timeout as e:
+            if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, selected_url, extra_metadata)
             _debug_log(f"[{log_tag}] Timeout: {e}", "error")
             return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
         except requests.exceptions.RequestException as e:
@@ -6235,10 +6514,14 @@ class MediaGenerationService:
                 try:
                     try:
                         resp = await asyncio.to_thread(_post_json, submit_url, payload, True, 15, 120)
-                    except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                    except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
                         _debug_log(f"[{log_tag}] RunningHub submit failed with proxy ({str(e)[:120]}), retrying without proxy...", "warning")
                         resp = await asyncio.to_thread(_post_json, submit_url, payload, False, 15, 120)
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                        return self._build_ambiguous_submit_result("runninghub", log_tag, e, submit_url, extra_metadata)
                 except requests.exceptions.RequestException as e:
+                    if self._is_ambiguous_submit_transport_error("runninghub", log_tag, e):
+                        return self._build_ambiguous_submit_result("runninghub", log_tag, e, submit_url, extra_metadata)
                     if submit_attempt < max_submit_attempts - 1:
                         _debug_log(
                             f"[{log_tag}] RunningHub submit request exception on attempt {submit_attempt + 1}/{max_submit_attempts}: {str(e)[:200]}; retrying...",
@@ -6333,6 +6616,7 @@ class MediaGenerationService:
 
     async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
         
         _debug_log(f"[{log_tag}] Submitting to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
         
@@ -6355,13 +6639,20 @@ class MediaGenerationService:
         try:
             try:
                 resp = await asyncio.to_thread(_post, True)
-            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
                 _debug_log(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy (connect_timeout=15s)...", "warning")
                 try:
                     resp = await asyncio.to_thread(_post, False, False, 15)
-                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
+                    return self._build_ambiguous_submit_result(provider_name, log_tag, e2, url, extra_metadata)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e2:
                     _debug_log(f"[{log_tag}] Submit retry without proxy failed ({str(e2)[:120]}), retrying with connection close...", "warning")
-                    resp = await asyncio.to_thread(_post, False, True, 15)
+                    try:
+                        resp = await asyncio.to_thread(_post, False, True, 15)
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e3:
+                        return self._build_ambiguous_submit_result(provider_name, log_tag, e3, url, extra_metadata)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
             if resp.status_code not in [200, 201]: 
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
             
@@ -6420,8 +6711,12 @@ class MediaGenerationService:
                         return {"error": "Generation Failed", "details": p_data.get("error")}
             return {"error": f"Timeout after {poll_timeout_seconds}s"}
         except requests.exceptions.Timeout as e:
+            if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
             return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
         except requests.exceptions.RequestException as e:
+            if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
             details = str(e)
             if "10054" in details or "ConnectionResetError" in details:
                 details = f"{details}. Possible network middlebox/proxy reset on large request body; retried with no-proxy once."
@@ -6433,6 +6728,7 @@ class MediaGenerationService:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         trace_id = trace_id or f"grsai-{uuid.uuid4().hex[:10]}"
         payload_digest = hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+        log_tag = "grsai_video" if is_video else "grsai_image"
 
         def _build_url_pairs(submit_url: str, poll_url: str):
             pairs = [(submit_url, poll_url)]
@@ -6478,9 +6774,14 @@ class MediaGenerationService:
                 )
                 try:
                     resp = await asyncio.to_thread(_post)
-                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError):
                     logger.warning("[GrsaiTrace][%s] submit primary failed, retry without proxy | submit_url=%s", trace_id, submit_url)
-                    resp = await asyncio.to_thread(_post_no_proxy)
+                    try:
+                        resp = await asyncio.to_thread(_post_no_proxy)
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as ambiguous_error:
+                        return self._build_ambiguous_submit_result("grsai", log_tag, ambiguous_error, submit_url, extra_metadata)
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as ambiguous_error:
+                    return self._build_ambiguous_submit_result("grsai", log_tag, ambiguous_error, submit_url, extra_metadata)
                 submit_ms = int((time.perf_counter() - submit_started) * 1000)
                 logger.info(
                     "[GrsaiTrace][%s] submit done | endpoint=%s status=%s latency_ms=%s",

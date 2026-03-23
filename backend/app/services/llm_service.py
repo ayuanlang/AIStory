@@ -44,6 +44,10 @@ DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
 DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_CONNECT_TIMEOUT_SECONDS", "15"))
 DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS", "10"))
 
+
+class AmbiguousLLMTransportError(Exception):
+    pass
+
 _BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
 
 def _strip_base64_from_log(obj):
@@ -226,6 +230,86 @@ class LLMService:
         if "供应商调用失败" in detail:
             return detail
         return f"{vendor}供应商调用失败: {detail}"
+
+    def _flatten_transport_error_text(self, error: Any) -> str:
+        if error is None:
+            return ""
+        try:
+            if isinstance(error, BaseException):
+                parts = [str(error)]
+                for arg in getattr(error, "args", ()) or ():
+                    try:
+                        parts.append(str(arg))
+                    except Exception:
+                        continue
+                return " | ".join(part for part in parts if part)
+        except Exception:
+            pass
+        return str(error)
+
+    def _is_retryable_proxy_fallback_error(self, error: Any) -> bool:
+        if isinstance(error, requests.exceptions.ProxyError):
+            return True
+
+        text = self._flatten_transport_error_text(error).lower()
+        proxy_markers = [
+            "proxyerror",
+            "cannot connect to proxy",
+            "proxy authentication",
+            "tunnel connection failed",
+            "407 proxy",
+            "https proxy",
+            "http proxy",
+        ]
+        if any(marker in text for marker in proxy_markers):
+            return True
+
+        if isinstance(error, requests.exceptions.SSLError):
+            ssl_proxy_markers = [
+                "wrong version number",
+                "tlsv1 alert",
+                "certificate verify failed",
+            ]
+            return any(marker in text for marker in ssl_proxy_markers)
+
+        return False
+
+    def _is_ambiguous_submit_transport_error(self, error: Any) -> bool:
+        if error is None or self._is_retryable_proxy_fallback_error(error):
+            return False
+
+        text = self._flatten_transport_error_text(error).lower()
+        markers = [
+            "remotedisconnected",
+            "remote end closed connection without response",
+            "unexpected_eof_while_reading",
+            "ssleoferror",
+            "connection reset by peer",
+            "connection aborted",
+            "connection closed",
+            "broken pipe",
+            "read timed out",
+            "readtimeout",
+            "timed out",
+            "10054",
+            "unexpected eof",
+        ]
+        if isinstance(error, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+            return True
+        if isinstance(error, requests.exceptions.SSLError):
+            return any(marker in text for marker in markers)
+        return any(marker in text for marker in markers)
+
+    def _raise_ambiguous_submit_error(self, provider: Any, model: Any, error: Any, url: str) -> None:
+        detail = str(error or "unknown transport error").strip()
+        vendor = self._vendor_label(provider)
+        endpoint = str(url or "").strip()
+        model_text = str(model or "").strip() or "unknown"
+        message = (
+            f"{vendor} 上游连接在响应前中断，无法确认请求是否已被受理；系统已停止自动重试以避免重复生成或重复扣费。"
+            f" model={model_text} endpoint={endpoint} 原始错误: {detail}"
+        )
+        raise AmbiguousLLMTransportError(message)
 
     def _safe_log_json(self, tag: str, payload: Dict[str, Any]) -> None:
         try:
@@ -1416,6 +1500,8 @@ class LLMService:
                 "token_limit_hints": token_limit_hints,
                 "extraction_diagnostics": extraction_diagnostics,
             }
+        except AmbiguousLLMTransportError:
+            raise
         except Exception as e:
             logger.error(f"LLM Raw Completion failed: {e}")
             provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
@@ -1926,33 +2012,32 @@ class LLMService:
 
         try:
             response = await asyncio.to_thread(_request, False)
-        except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
             _debug_log(f"[DEBUG][LLM][{provider}] Connection failed ({str(e)[:120]}), retrying without proxy...", "warning")
             logger.warning(f"Connection failed ({str(e)}). Retrying without proxy (connect_timeout={DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS}s)...")
             try:
                 response = await asyncio.to_thread(_request, True, max(3, DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS))
-            except requests.exceptions.Timeout as e2:
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
                 human_summary = self._build_human_readable_transport_error_summary(
                     provider=provider,
                     model=model,
-                    error_kind="proxy_retry_timeout",
+                    error_kind="ambiguous_submit_transport",
                     error_text=e2,
                 )
-                _debug_log(f"[DEBUG][LLM][{provider}] No-proxy retry also timed out: {e2}", "error")
-                logger.error(f"No-proxy retry also timed out: {e2}")
+                _debug_log(f"[DEBUG][LLM][{provider}] No-proxy retry ended with ambiguous transport failure: {e2}", "error")
                 logger.error("%s", human_summary)
                 self._safe_log_json("LLM_RESPONSE_ERROR", {
                     "provider": provider,
                     "category": resolved_category,
                     "url": url,
                     "model": model,
-                    "error_kind": "proxy_retry_timeout",
+                    "error_kind": "ambiguous_submit_transport",
                     "error_text": str(e2),
                     "human_summary": human_summary,
                     "resolved_source": (extra_config or {}).get("__resolved_source"),
                     "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
                 })
-                raise Exception(self._vendor_failed_message(provider, f"Upstream timeout (proxy failed, direct also timed out): {e2}"))
+                self._raise_ambiguous_submit_error(provider, model, e2, url)
             except Exception as e2:
                 human_summary = self._build_human_readable_transport_error_summary(
                     provider=provider,
@@ -1974,6 +2059,27 @@ class LLMService:
                     "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
                 })
                 raise Exception(self._vendor_failed_message(provider, e2))
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            human_summary = self._build_human_readable_transport_error_summary(
+                provider=provider,
+                model=model,
+                error_kind="ambiguous_submit_transport",
+                error_text=e,
+            )
+            _debug_log(f"[DEBUG][LLM][{provider}] Ambiguous transport failure before response; automatic retry disabled: {e}", "error")
+            logger.error("%s", human_summary)
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": provider,
+                "category": resolved_category,
+                "url": url,
+                "model": model,
+                "error_kind": "ambiguous_submit_transport",
+                "error_text": str(e),
+                "human_summary": human_summary,
+                "resolved_source": (extra_config or {}).get("__resolved_source"),
+                "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+            })
+            self._raise_ambiguous_submit_error(provider, model, e, url)
         
         _debug_log(f"[DEBUG][LLM][{provider}] Response | status={response.status_code} model={model} url={url} body={_strip_base64_from_log(response.text[:500])}")
 
@@ -2661,6 +2767,8 @@ class LLMService:
                 result = await self._auto_continue_chat_completion_on_length(messages, config, result)
                 result = self._attach_routing_metadata(result, config)
                 return _attach_fallback_warnings(result)
+            except AmbiguousLLMTransportError:
+                raise
             except Exception as e:
                 last_exc = e
                 _record_failed_attempt(config.get("provider"), config.get("model"), "active", attempt, e)
@@ -2684,6 +2792,8 @@ class LLMService:
                 result = await self._auto_continue_chat_completion_on_length(messages, fb_cfg, result)
                 result = self._attach_routing_metadata(result, fb_cfg)
                 return _attach_fallback_warnings(result)
+            except AmbiguousLLMTransportError:
+                raise
             except Exception as e:
                 last_exc = e
                 _record_failed_attempt(fb_cfg.get("provider"), fb_cfg.get("model"), "fallback", idx, e)
