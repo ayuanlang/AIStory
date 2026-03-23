@@ -324,7 +324,7 @@ def _ensure_user_runtime_schema(*, is_postgres: bool) -> None:
                     )
                     temp_col = "is_active_int_migrated"
                     with engine.begin() as conn:
-                        existing_user_cols_meta = {c['name']: c for c in inspect(engine).get_columns('users')}
+                        existing_user_cols_meta = {c['name']: c for c in inspect(conn).get_columns('users')}
                         if temp_col in existing_user_cols_meta:
                             conn.execute(text(f"ALTER TABLE users DROP COLUMN IF EXISTS {temp_col} CASCADE"))
                         conn.execute(text(f"ALTER TABLE users ADD COLUMN {temp_col} INTEGER"))
@@ -687,7 +687,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
                 except Exception as e:
                     logger.warning(f"Failed to drop legacy table pricing_rules: {e}")
 
-                inspector = inspect(engine)
+                inspector = inspect(conn)
                 existing_legacy_cols = {
                     c["name"] for c in inspector.get_columns("system_api_settings")
                 } if inspector.has_table("system_api_settings") else set()
@@ -786,7 +786,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
 
                     # Remove deprecated user-scoped payload columns.
                     legacy_api_cols = ["name", "is_active", "provider", "api_key", "base_url", "model", "config"]
-                    existing_api_cols = {c["name"] for c in inspect(engine).get_columns("api_settings")}
+                    existing_api_cols = {c["name"] for c in inspect(conn).get_columns("api_settings")}
                     for legacy_col in legacy_api_cols:
                         if legacy_col not in existing_api_cols:
                             continue
