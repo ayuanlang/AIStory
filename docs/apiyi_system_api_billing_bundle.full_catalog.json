@@ -6472,15 +6472,16 @@
       "provider": "apiyi",
       "category": "Video",
       "model": "sora-2-pro",
-      "name": "APIYI sora-2-pro Base Pricing",
+      "name": "APIYI Sora 2 Pro Base Pricing",
       "billing_unit_type": "per_call",
-      "billing_cost": 60,
+      "billing_cost": 20,
       "billing_cost_input": 0,
       "billing_cost_output": 0,
       "charge_multiplier": 1.0,
-      "source_url": "https://api.apiyi.com/modelPricing",
+      "source_url": "https://docs.apiyi.com/api-capabilities/sora-2-video",
       "notes": [
-        "Pricing page status: Sora2Official"
+        "Docs page describes Pro usage on the same /v1/chat/completions family.",
+        "Use for higher-resolution 15-second output."
       ]
     },
     {

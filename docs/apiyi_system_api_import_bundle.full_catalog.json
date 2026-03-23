@@ -25551,7 +25551,7 @@
       "is_active": false
     },
     {
-      "name": "APIYI sora-2-pro",
+      "name": "APIYI Sora 2 Pro",
       "category": "Video",
       "provider": "apiyi",
       "base_url": "https://api.apiyi.com",
@@ -25559,53 +25559,63 @@
       "base_model": "sora",
       "modality": {
         "generation_modes": [
-          "t2v"
+          "t2v",
+          "i2v"
         ],
-        "output_format": "video"
+        "output_format": "video",
+        "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
+        "supported_resolutions": [
+          "1024x1792",
+          "1792x1024"
+        ],
+        "durations_seconds": [
+          15
+        ]
       },
       "tags": [
         "apiyi",
-        "auto-import"
+        "auto-import",
+        "sora",
+        "video",
+        "pro"
       ],
       "supplier_info": {
         "source_urls": [
-          "https://api.apiyi.com/modelPricing"
+          "https://docs.apiyi.com/api-capabilities/sora-2-video"
         ],
         "apiyi": {
-          "upstream_provider": "-",
-          "endpoint_hint": "/v1/videos",
-          "detail_source": "public_model_pricing",
+          "upstream_provider": "OpenAI",
+          "endpoint_hint": "/v1/chat/completions",
+          "detail_source": "docs_detail",
           "pricing": {
             "unit_type": "per_call",
             "input_usd": null,
             "output_usd": null,
-            "call_usd": 0.6,
-            "source": "https://api.apiyi.com/modelPricing",
-            "ratio_values": [
-              "模型倍率：无",
-              "补全倍率：无",
-              "分组倍率：1"
-            ],
-            "source_priority": 10
+            "call_usd": 0.2,
+            "source": "https://docs.apiyi.com/api-capabilities/sora-2-video",
+            "source_priority": 100
           },
           "notes": [
-            "Pricing page status: Sora2Official"
+            "Docs page describes Pro usage on the same /v1/chat/completions family.",
+            "Use for higher-resolution 15-second output."
           ]
         }
       },
       "config": {
         "provider_api_key_strategy": "random",
-        "endpoint_hint": "/v1/videos",
+        "endpoint_hint": "/v1/chat/completions",
         "apiyi": {
-          "upstream_provider": "-",
-          "detail_source": "public_model_pricing",
-          "pricing_source": "https://api.apiyi.com/modelPricing"
+          "upstream_provider": "OpenAI",
+          "detail_source": "docs_detail",
+          "pricing_source": "https://docs.apiyi.com/api-capabilities/sora-2-video"
         },
-        "endpoint": "/v1/videos",
+        "endpoint": "/v1/chat/completions",
         "runtime_activation": "video_openai_compatible"
       },
       "billing_unit_type": "per_call",
-      "billing_cost": 60,
+      "billing_cost": 20,
       "billing_cost_input": 0,
       "billing_cost_output": 0,
       "deprecated": false,
@@ -25625,6 +25635,8 @@
         ],
         "output_format": "video",
         "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
         "supported_resolutions": [
           "720x1280"
         ],
@@ -25663,15 +25675,14 @@
           "detail_source": "docs_detail",
           "pricing_source": "https://docs.apiyi.com/api-capabilities/sora-2-video"
         },
-        "deprecated": true,
-        "is_deprecated": true,
-        "disable_api": true
+        "endpoint": "/v1/chat/completions",
+        "runtime_activation": "video_openai_compatible"
       },
       "billing_unit_type": "per_call",
       "billing_cost": 12,
       "billing_cost_input": 0,
       "billing_cost_output": 0,
-      "deprecated": true,
+      "deprecated": false,
       "is_active": false
     },
     {
@@ -25688,6 +25699,8 @@
         ],
         "output_format": "video",
         "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
         "supported_resolutions": [
           "720x1280"
         ],
@@ -25726,15 +25739,14 @@
           "detail_source": "docs_detail",
           "pricing_source": "https://docs.apiyi.com/api-capabilities/sora-2-video"
         },
-        "deprecated": true,
-        "is_deprecated": true,
-        "disable_api": true
+        "endpoint": "/v1/chat/completions",
+        "runtime_activation": "video_openai_compatible"
       },
       "billing_unit_type": "per_call",
       "billing_cost": 12,
       "billing_cost_input": 0,
       "billing_cost_output": 0,
-      "deprecated": true,
+      "deprecated": false,
       "is_active": false
     },
     {
@@ -25751,6 +25763,8 @@
         ],
         "output_format": "video",
         "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
         "supported_resolutions": [
           "1280x720"
         ],
@@ -25789,15 +25803,14 @@
           "detail_source": "docs_detail",
           "pricing_source": "https://docs.apiyi.com/api-capabilities/sora-2-video"
         },
-        "deprecated": true,
-        "is_deprecated": true,
-        "disable_api": true
+        "endpoint": "/v1/chat/completions",
+        "runtime_activation": "video_openai_compatible"
       },
       "billing_unit_type": "per_call",
       "billing_cost": 12,
       "billing_cost_input": 0,
       "billing_cost_output": 0,
-      "deprecated": true,
+      "deprecated": false,
       "is_active": false
     },
     {
@@ -25814,6 +25827,8 @@
         ],
         "output_format": "video",
         "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
         "supported_resolutions": [
           "1280x720"
         ],
@@ -25852,15 +25867,14 @@
           "detail_source": "docs_detail",
           "pricing_source": "https://docs.apiyi.com/api-capabilities/sora-2-video"
         },
-        "deprecated": true,
-        "is_deprecated": true,
-        "disable_api": true
+        "endpoint": "/v1/chat/completions",
+        "runtime_activation": "video_openai_compatible"
       },
       "billing_unit_type": "per_call",
       "billing_cost": 12,
       "billing_cost_input": 0,
       "billing_cost_output": 0,
-      "deprecated": true,
+      "deprecated": false,
       "is_active": false
     },
     {

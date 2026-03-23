@@ -570,6 +570,8 @@ def _add_sora_video_reverse_overrides(models_by_id: Dict[str, Dict[str, Any]]) -
         "generation_modes": ["t2v", "i2v"],
         "output_format": "video",
         "streaming_progress": True,
+        "supports_reference_image": True,
+        "max_reference_images": 1,
     }
     reverse_rows = [
         ("sora_video2", "Sora 2 Reverse Vertical", ["720x1280"], [10]),
@@ -590,6 +592,26 @@ def _add_sora_video_reverse_overrides(models_by_id: Dict[str, Dict[str, Any]]) -
             upstream_provider="OpenAI",
             tags=["sora", "video"],
         )
+    _apply_image_or_video_override(
+        models_by_id,
+        model="sora-2-pro",
+        name="Sora 2 Pro",
+        category="Video",
+        doc_url=DOC_URLS["sora_2_reverse"],
+        endpoint_hint="/v1/chat/completions",
+        pricing={"unit_type": "per_call", "call_usd": 0.2, "source": DOC_URLS["sora_2_reverse"]},
+        modality={
+            **common,
+            "supported_resolutions": ["1024x1792", "1792x1024"],
+            "durations_seconds": [15],
+        },
+        upstream_provider="OpenAI",
+        notes=[
+            "Docs page describes Pro usage on the same /v1/chat/completions family.",
+            "Use for higher-resolution 15-second output.",
+        ],
+        tags=["sora", "video", "pro"],
+    )
 
 
 def _add_veo_overrides(models_by_id: Dict[str, Dict[str, Any]]) -> None:

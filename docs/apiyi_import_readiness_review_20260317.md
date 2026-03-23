@@ -6,7 +6,7 @@ Generated at: 2026-03-17T13:21:01.155144+00:00
 
 - Public `modelPricing` rows scraped: 457
 - Catalog models after docs merge: 461
-- Docs-only models added beyond public pricing: 5
+- Docs-only models added beyond public pricing: 6
 
 ## Category Counts
 
@@ -24,15 +24,15 @@ Generated at: 2026-03-17T13:21:01.155144+00:00
 
 ## Import Posture
 
-- APIYI LLM rows are kept deprecated/inactive staging rows.
-- APIYI Image rows with `/v1/images/generations` and Video rows with `/v1/videos` are imported as runtime-ready, non-deprecated rows.
-- APIYI chat-completions media variants and Google native image endpoints remain deprecated/inactive staging rows.
+- Runtime-ready subset now includes APIYI image rows on /v1/images/generations, official async video rows on /v1/videos, and validated Sora reverse chat/completions video rows.
+- Remaining APIYI rows stay deprecated/inactive staging data until their endpoint family is adapter-validated.
+- Endpoint hints and pricing metadata are retained for future adapter work; unsupported endpoint families remain blocked.
 - Billing rules use public APIYI sell prices directly, converted as `USD * 100 -> credits` with no extra multiplier.
 - Hybrid-pricing docs are normalized to a single base rule when one primary public/default price exists; alternate billing modes stay in supplier notes only.
-- Runtime activation remains blocked for Google native image endpoints and media chat-completions variants until dedicated adapters exist.
+- LLM rows and unvalidated APIYI endpoint families remain blocked until they are explicitly re-enabled.
 
 ## Recommended Next Step
 
-1. Import the APIYI bundle so the Image `/v1/images/generations` and Video `/v1/videos` subsets become selectable at runtime.
+1. Import the APIYI bundle so all rows stay synchronized as managed system API data.
 2. Apply the prepared base billing rules to the imported rows.
-3. Review remaining APIYI chat-completions media variants and Google-native image adapters before broader activation.
+3. Activate only the runtime-ready subset in environments where API keys and provider grouping are configured correctly.

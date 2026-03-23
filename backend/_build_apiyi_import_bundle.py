@@ -25,6 +25,21 @@ def _credit(value: Any) -> int:
 
 
 def _is_runtime_ready_subset(model: Dict[str, Any]) -> bool:
+    category = str(model.get("category") or "").strip().lower()
+    endpoint_hint = str(model.get("endpoint_hint") or "").strip().lower()
+    model_name = str(model.get("model") or "").strip().lower()
+    if category == "image" and endpoint_hint == "/v1/images/generations":
+        return True
+    if category == "video" and endpoint_hint == "/v1/videos":
+        return True
+    if category == "video" and endpoint_hint == "/v1/chat/completions":
+        return model_name in {
+            "sora_video2",
+            "sora_video2-15s",
+            "sora_video2-landscape",
+            "sora_video2-landscape-15s",
+            "sora-2-pro",
+        }
     return False
 
 
@@ -140,18 +155,18 @@ def _render_review(snapshot: Dict[str, Any], import_items: List[Dict[str, Any]],
             "",
             "## Import Posture",
             "",
-            "- All APIYI system API rows are kept as deprecated/inactive staging rows.",
-            "- No APIYI Image, Video, or LLM subset is imported as runtime-ready in this bundle.",
-            "- Endpoint hints and pricing metadata are retained for future adapter work, but runtime activation remains fully blocked.",
+            "- Runtime-ready subset now includes APIYI image rows on /v1/images/generations, official async video rows on /v1/videos, and validated Sora reverse chat/completions video rows.",
+            "- Remaining APIYI rows stay deprecated/inactive staging data until their endpoint family is adapter-validated.",
+            "- Endpoint hints and pricing metadata are retained for future adapter work; unsupported endpoint families remain blocked.",
             "- Billing rules use public APIYI sell prices directly, converted as `USD * 100 -> credits` with no extra multiplier.",
             "- Hybrid-pricing docs are normalized to a single base rule when one primary public/default price exists; alternate billing modes stay in supplier notes only.",
-            "- Runtime activation remains blocked for all APIYI endpoint families until they are explicitly re-enabled.",
+            "- LLM rows and unvalidated APIYI endpoint families remain blocked until they are explicitly re-enabled.",
             "",
             "## Recommended Next Step",
             "",
-            "1. Import the APIYI bundle so all rows stay synchronized as deprecated staging data.",
+            "1. Import the APIYI bundle so all rows stay synchronized as managed system API data.",
             "2. Apply the prepared base billing rules to the imported rows.",
-            "3. Re-enable specific APIYI subsets only after dedicated runtime adapter validation.",
+            "3. Activate only the runtime-ready subset in environments where API keys and provider grouping are configured correctly.",
             "",
         ]
     )

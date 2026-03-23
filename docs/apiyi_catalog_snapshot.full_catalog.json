@@ -16185,43 +16185,53 @@
     },
     {
       "model": "sora-2-pro",
-      "name": "sora-2-pro",
+      "name": "Sora 2 Pro",
       "category": "Video",
       "base_model": "sora",
       "provider": "apiyi",
-      "upstream_provider": "-",
+      "upstream_provider": "OpenAI",
       "context_window": null,
-      "endpoint_hint": "/v1/videos",
+      "endpoint_hint": "/v1/chat/completions",
       "modality": {
         "generation_modes": [
-          "t2v"
+          "t2v",
+          "i2v"
         ],
-        "output_format": "video"
+        "output_format": "video",
+        "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
+        "supported_resolutions": [
+          "1024x1792",
+          "1792x1024"
+        ],
+        "durations_seconds": [
+          15
+        ]
       },
       "doc_urls": [
-        "https://api.apiyi.com/modelPricing"
+        "https://docs.apiyi.com/api-capabilities/sora-2-video"
       ],
       "notes": [
-        "Pricing page status: Sora2Official"
+        "Docs page describes Pro usage on the same /v1/chat/completions family.",
+        "Use for higher-resolution 15-second output."
       ],
       "tags": [
         "apiyi",
-        "auto-import"
+        "auto-import",
+        "sora",
+        "video",
+        "pro"
       ],
       "pricing": {
         "unit_type": "per_call",
         "input_usd": null,
         "output_usd": null,
-        "call_usd": 0.6,
-        "source": "https://api.apiyi.com/modelPricing",
-        "ratio_values": [
-          "模型倍率：无",
-          "补全倍率：无",
-          "分组倍率：1"
-        ],
-        "source_priority": 10
+        "call_usd": 0.2,
+        "source": "https://docs.apiyi.com/api-capabilities/sora-2-video",
+        "source_priority": 100
       },
-      "detail_source": "public_model_pricing"
+      "detail_source": "docs_detail"
     },
     {
       "model": "sora_video2",
@@ -16239,6 +16249,8 @@
         ],
         "output_format": "video",
         "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
         "supported_resolutions": [
           "720x1280"
         ],
@@ -16280,6 +16292,8 @@
         ],
         "output_format": "video",
         "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
         "supported_resolutions": [
           "720x1280"
         ],
@@ -16321,6 +16335,8 @@
         ],
         "output_format": "video",
         "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
         "supported_resolutions": [
           "1280x720"
         ],
@@ -16362,6 +16378,8 @@
         ],
         "output_format": "video",
         "streaming_progress": true,
+        "supports_reference_image": true,
+        "max_reference_images": 1,
         "supported_resolutions": [
           "1280x720"
         ],
