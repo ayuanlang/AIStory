@@ -657,8 +657,14 @@ function buildShotDiptychPlan(aspectRatio) {
 
 function getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight) {
     const seamSourceSpan = layout === 'horizontal' ? sourceWidth : sourceHeight;
+    if (!Number.isFinite(seamSourceSpan) || seamSourceSpan <= 0) return 2;
+    return Math.max(2, Math.min(12, Math.round(seamSourceSpan / 256)));
+}
+
+function getShotDiptychSeamBiasPx(layout, sourceWidth, sourceHeight) {
+    const seamSourceSpan = layout === 'horizontal' ? sourceWidth : sourceHeight;
     if (!Number.isFinite(seamSourceSpan) || seamSourceSpan <= 0) return 1;
-    return Math.max(1, Math.min(4, Math.round(seamSourceSpan / 1024)));
+    return Math.max(1, Math.min(10, Math.round(seamSourceSpan / 384)));
 }
 
 function collectSupportedAspectRatioOptions(values) {
@@ -20570,6 +20576,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         let panelWidth = sourceWidth;
         let panelHeight = sourceHeight;
         const seamTrimPx = getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight);
+        const seamBiasPx = getShotDiptychSeamBiasPx(layout, sourceWidth, sourceHeight);
 
         if (layout === 'horizontal') {
             const halfWidth = sourceWidth / 2;
@@ -20603,6 +20610,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         } else if (panelRatio < targetRatio) {
             cropHeight = panelWidth / targetRatio;
             cropY = panelY + ((panelHeight - cropHeight) / 2);
+        }
+
+        if (layout === 'horizontal' && cropWidth < panelWidth) {
+            const availableShiftX = Math.max(0, panelWidth - cropWidth);
+            const biasedCropX = panelIndex === 0
+                ? (cropX - Math.min(seamBiasPx, availableShiftX / 2))
+                : (cropX + Math.min(seamBiasPx, availableShiftX / 2));
+            cropX = Math.min(panelX + availableShiftX, Math.max(panelX, biasedCropX));
+        }
+        if (layout === 'vertical' && cropHeight < panelHeight) {
+            const availableShiftY = Math.max(0, panelHeight - cropHeight);
+            const biasedCropY = panelIndex === 0
+                ? (cropY - Math.min(seamBiasPx, availableShiftY / 2))
+                : (cropY + Math.min(seamBiasPx, availableShiftY / 2));
+            cropY = Math.min(panelY + availableShiftY, Math.max(panelY, biasedCropY));
         }
 
         const outputWidth = Number(exportSize?.width) > 0 ? Number(exportSize.width) : Math.max(1, Math.round(cropWidth));
@@ -20778,12 +20800,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                 ? [
-                    `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。两格之间只允许自然构图分区，不要出现可见的白线、黑线、高亮边框、描边、相框感、拼贴缝或明显分界条。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
+                    `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。两格之间只能靠画面内容自然过渡，严禁出现任何形式的中缝装饰或分隔元素，包括但不限于白线、黑线、细线、粗线、描边、高亮边、阴影缝、拼贴缝、相框边、空白带、纯色带、渐变带、留白、留黑、间隔条、边框条或任何可见分界痕迹；两格必须直接贴合成一个连续画布，看起来像同一张完整大图被后期从中切成两格，而不是先画出两张图再拼接。中缝两侧的安全区内也严禁出现人为制造的高对比边缘、笔直切边、亮暗突变、硬边阴影或任何会在拆分后读成分隔线的边界痕迹。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
+                    `风格约束：整张图必须呈现为一次性完成的单幅电影感画面，而不是双联海报、拼贴板、分屏设计、对照图、前后对比图或任意形式的双图排版。禁止使用会强化“两张图被拼在一起”观感的构图策略，例如对称边框、独立画框、版式切割、居中分隔设计、接缝高光、接缝阴影、刻意的并置对照或任何平面设计式分栏。`,
                     `第一格（起始帧）：${startSubmitPrompt}`,
                     `第二格（结束帧）：${endSubmitPrompt}`,
                 ].join('\n\n')
                 : [
-                    `Create one single-canvas two-panel diptych for later post-split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels arranged ${diptychPlan.layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom'}. The final single-frame delivery target is ${diptychPlan.targetAspectRatio}, so compose each panel with extra bleed and crop-safe margin so it can be split and lightly center-cropped into an independent ${diptychPlan.targetAspectRatio} frame. Between the two panels, allow only natural compositional separation and do not render any visible white line, black line, bright edge, border, frame, collage seam, or explicit divider bar. Keep faces, hands, props, and key action away from the seam and outer edges. Do not add a third panel, text labels, numbering, speech bubbles, or collage elements. Maintain identity, environment continuity, lighting continuity, and scene geography across both panels. Panel A is the shot start frame. Panel B is the shot end frame.`,
+                    `Create one single-canvas two-panel diptych for later post-split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels arranged ${diptychPlan.layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom'}. The final single-frame delivery target is ${diptychPlan.targetAspectRatio}, so compose each panel with extra bleed and crop-safe margin so it can be split and lightly center-cropped into an independent ${diptychPlan.targetAspectRatio} frame. The boundary between the two panels must be invisible in the rendered image: absolutely no white line, black line, thin line, thick line, outline, bright edge, shadow seam, collage seam, frame edge, empty gap, blank strip, solid-color strip, gradient strip, spacer band, border bar, or any other visible divider artifact is allowed. The two panels must read as one continuous full canvas that will only be separated later in post, not as two images pasted together. Within the seam safety area on both sides, avoid any artificial high-contrast edge, straight cut edge, abrupt light-dark transition, hard shadow border, or any boundary artifact that could read as a divider after splitting. Keep faces, hands, props, and key action away from the seam and outer edges. Do not add a third panel, text labels, numbering, speech bubbles, or collage elements. Maintain identity, environment continuity, lighting continuity, and scene geography across both panels. Panel A is the shot start frame. Panel B is the shot end frame.`,
+                    `Style constraint: the entire image must read as a single cinematic composition created in one pass, not as a diptych poster, collage board, split-screen layout, before-and-after comparison, or any other two-image editorial design. Do not use composition choices that reinforce the feeling of two separate images being joined, such as mirrored framing devices, independent panel borders, graphic layout cuts, centered divider design, seam highlights, seam shadows, deliberate side-by-side comparison staging, or any magazine-style multi-panel presentation.`,
                     `Panel A (Start Frame): ${startSubmitPrompt}`,
                     `Panel B (End Frame): ${endSubmitPrompt}`,
                 ].join('\n\n');
@@ -20795,7 +20819,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const finalPrompt = shouldApplyGlobalCtx ? `${combinedPrompt}${globalCtx}` : combinedPrompt;
             const jointNegativePrompt = [
                 buildEntityNegativePrompt(`${rawStartPrompt}\n${rawEndPrompt}`, null, resolvedEntities),
-                'more than two panels, extra frame, uneven split, visible divider line, white seam, black seam, border, frame, contact sheet, text label, numbering, caption, comic bubble',
+                'more than two panels, extra frame, uneven split, visible divider line, center divider, separator, seam line, white seam, black seam, bright seam, high-contrast center edge, hard center edge, abrupt center transition, empty gap, blank strip, whitespace strip, spacer band, border, frame, collage seam, contact sheet, text label, numbering, caption, comic bubble',
             ].filter(Boolean).join(', ');
 
             onLog?.(t('正在联合生成首尾帧两宫格...', 'Generating joint start/end diptych...'), 'info');
