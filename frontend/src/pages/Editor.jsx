@@ -1432,6 +1432,9 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
     const [projectTab, setProjectTab] = useState(mode === 'generator' ? 'story_generator' : 'overview');
     const storyPackageFileInputRef = useRef(null);
+    const globalStoryGenerationInFlightRef = useRef(false);
+    const episodeScriptsGenerationInFlightRef = useRef(false);
+    const projectCanonGenerationInFlightRef = useRef(false);
     const episodeScriptsStatusTimerRef = useRef(null);
     const globalStoryAutosaveTimerRef = useRef(null);
     const skipNextGlobalStoryAutosaveRef = useRef(true);
@@ -2353,6 +2356,8 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     };
 
     const handleGeneratePromoFramework = async () => {
+        if (globalStoryGenerationInFlightRef.current || isGeneratingGlobalStory) return;
+        globalStoryGenerationInFlightRef.current = true;
         setIsGeneratingGlobalStory(true);
         try {
             const episodesCount = Number(promoInput.episodes_count || 0) || 0;
@@ -2459,10 +2464,13 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             alert(`Failed to generate promo framework:\n${readable}`);
         } finally {
             setIsGeneratingGlobalStory(false);
+            globalStoryGenerationInFlightRef.current = false;
         }
     };
 
     const handleGenerateGlobalStory = async () => {
+        if (globalStoryGenerationInFlightRef.current || isGeneratingGlobalStory) return;
+        globalStoryGenerationInFlightRef.current = true;
         setIsGeneratingGlobalStory(true);
         try {
             const payload = {
@@ -2516,6 +2524,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             alert(`Failed to generate global story:\n${readable}`);
         } finally {
             setIsGeneratingGlobalStory(false);
+            globalStoryGenerationInFlightRef.current = false;
         }
     };
 
@@ -2680,9 +2689,12 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     };
 
     const handleGenerateEpisodeScripts = async ({ retryFailedOnly = false, forceStart = false } = {}) => {
+        if (episodeScriptsGenerationInFlightRef.current || isGeneratingEpisodeScripts || isStoppingEpisodeScripts) return;
+        episodeScriptsGenerationInFlightRef.current = true;
         if (!id) {
             addLog?.('Cannot generate episode scripts: missing project id.', 'error');
             alert('Cannot generate episode scripts: missing project id.');
+            episodeScriptsGenerationInFlightRef.current = false;
             return;
         }
         const n = Number(
@@ -2692,6 +2704,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
         );
         if (!n || Number.isNaN(n) || n <= 0) {
             alert('Please set a valid Episodes Count first.');
+            episodeScriptsGenerationInFlightRef.current = false;
             return;
         }
 
@@ -2781,6 +2794,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 episodeScriptsStatusTimerRef.current = null;
             }
             setIsGeneratingEpisodeScripts(false);
+            episodeScriptsGenerationInFlightRef.current = false;
         }
     };
 
@@ -2820,9 +2834,12 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     };
 
     const handleGenerateProjectCanon = async () => {
+        if (projectCanonGenerationInFlightRef.current || isGeneratingCanon) return;
+        projectCanonGenerationInFlightRef.current = true;
         const name = (canonName || '').trim();
         if (!name) {
             alert('请输入角色名称');
+            projectCanonGenerationInFlightRef.current = false;
             return;
         }
 
@@ -2871,6 +2888,7 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             alert(`Failed to generate Character Canon: ${e.message}`);
         } finally {
             setIsGeneratingCanon(false);
+            projectCanonGenerationInFlightRef.current = false;
         }
     };
 
@@ -8247,6 +8265,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const [sceneGenGenerating, setSceneGenGenerating] = useState(false);
     const [sceneGenStatus, setSceneGenStatus] = useState(null);
     const [isStoppingSceneGen, setIsStoppingSceneGen] = useState(false);
+    const sceneGenStartInFlightRef = useRef(false);
+    const episodeCanonGenerationInFlightRef = useRef(false);
     const sceneGenStatusTimerRef = useRef(null);
 
     const canonOptionValue = (opt) => `${opt.label}：${opt.detail}`;
@@ -8610,9 +8630,12 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
     const handleGenerateScenes = async () => {
         if (!activeEpisode?.id) return;
+        if (sceneGenStartInFlightRef.current || sceneGenGenerating || isStoppingSceneGen) return;
+        sceneGenStartInFlightRef.current = true;
         const n = Number(sceneGenCount);
         if (Number.isNaN(n) || n <= 0) {
             alert('Please enter a valid scene count.');
+            sceneGenStartInFlightRef.current = false;
             return;
         }
 
@@ -8620,6 +8643,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (latest?.running) {
             if (onLog) onLog('Scene generation is already running. Please stop current task first.', 'warning');
             alert('Scene generation is already running. Please stop current task first.');
+            sceneGenStartInFlightRef.current = false;
             return;
         }
 
@@ -8641,14 +8665,20 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             console.error(e);
             if (onLog) onLog(`Scene generation failed: ${e.message}`, 'error');
             alert(`Generation failed: ${e.message}`);
+            setSceneGenGenerating(false);
+        } finally {
+            sceneGenStartInFlightRef.current = false;
         }
     };
 
     const handleGenerateCanon = async () => {
         if (!activeEpisode?.id) return;
+        if (episodeCanonGenerationInFlightRef.current || canonGenerating) return;
+        episodeCanonGenerationInFlightRef.current = true;
         const name = (canonName || '').trim();
         if (!name) {
             alert('请输入角色名称');
+            episodeCanonGenerationInFlightRef.current = false;
             return;
         }
 
@@ -8689,6 +8719,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             alert(`生成失败: ${e.message}`);
         } finally {
             setCanonGenerating(false);
+            episodeCanonGenerationInFlightRef.current = false;
         }
     };
 
@@ -11183,7 +11214,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
     )
 };
 
-const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh' }) => {
+const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -11252,13 +11283,16 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
 
     const handleGenerate = async (e) => {
         e.stopPropagation();
-        if (isGenerating) return;
+        if (isGenerating || generatingShots) return;
         setIsShotMenuOpen(false);
         setIsGenerating(true);
-        if (onGenerateShots) {
-            await onGenerateShots(scene.id);
+        try {
+            if (onGenerateShots) {
+                await onGenerateShots(scene.id);
+            }
+        } finally {
+            setIsGenerating(false);
         }
-        setIsGenerating(false);
     };
 
     const handleSupplement = async (e) => {
@@ -11282,6 +11316,7 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
     };
 
     const imgUrl = images.length > 0 ? images[currentIndex] : null;
+    const shotsBusy = isGenerating || generatingShots;
     const handleSceneImageError = () => {
         if (!imgUrl) return;
         rememberBrokenSceneImageUrl(imgUrl);
@@ -11354,11 +11389,11 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
                             <div className="absolute top-full right-0 mt-1 min-w-[148px] rounded-lg border border-white/10 bg-[#111111] shadow-2xl overflow-hidden">
                                 <button
                                     onClick={handleGenerate}
-                                    disabled={isGenerating}
+                                    disabled={shotsBusy}
                                     className="w-full px-3 py-2 text-left text-[11px] text-white/90 hover:bg-white/10 flex items-center gap-2 disabled:opacity-50"
                                 >
-                                    {isGenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-                                    {t('AI 镜头', 'AI Shots')}
+                                    {shotsBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                                    {shotsBusy ? t('生成中...', 'Generating...') : t('AI 镜头', 'AI Shots')}
                                 </button>
                                 <button
                                     onClick={handleSupplement}
@@ -11379,12 +11414,12 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
                         </button>
                         <button 
                             onClick={handleGenerate}
-                            disabled={isGenerating}
+                            disabled={shotsBusy}
                             className="bg-primary/90 hover:bg-primary text-black px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 shadow-lg"
                             title={t('AI 生成镜头列表', 'AI Generate Shot List')}
                         >
-                            {isGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                            {t('AI 镜头', 'AI Shots')}
+                            {shotsBusy ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                            {shotsBusy ? t('生成中...', 'Generating...') : t('AI 镜头', 'AI Shots')}
                         </button>
                     </div>
                 </div>
@@ -11460,12 +11495,12 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
                     <div className="grid grid-cols-3 gap-2">
                         <button
                             onClick={handleGenerate}
-                            disabled={isGenerating}
+                            disabled={shotsBusy}
                             className="bg-primary/85 hover:bg-primary text-black px-2 py-1.5 rounded text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-60"
                             title={t('AI 生成镜头列表', 'AI Generate Shot List')}
                         >
-                            {isGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                            {t('AI 镜头', 'AI Shots')}
+                            {shotsBusy ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                            {shotsBusy ? t('生成中...', 'Generating...') : t('AI 镜头', 'AI Shots')}
                         </button>
                         <button
                             onClick={handleSupplement}
@@ -11543,6 +11578,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     const [pendingShotSupplementSceneId, setPendingShotSupplementSceneId] = useState(null);
     const [shotSupplementImportReport, setShotSupplementImportReport] = useState(null);
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
+    const aiShotsBusySceneIdsRef = useRef(new Set());
     const [batchAiShotsProgress, setBatchAiShotsProgress] = useState(() => createBatchAiShotsProgressState());
     const [isSceneBatchProgressDismissed, setIsSceneBatchProgressDismissed] = useState(false);
     const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
@@ -13543,6 +13579,24 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         });
     }, [activeEpisode?.id, consumeAiShotsAutoSwitchTicket, onLog, onSwitchToShots, scenes, t]);
 
+    const isAiShotsFlowActive = ['preparing', 'generating', 'importing'].includes(String(aiShotsFlowStatus?.phase || '').toLowerCase());
+    const isSceneAiShotsBusy = useCallback((sceneId) => {
+        const stableSceneId = Number(sceneId || 0);
+        if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) return false;
+        const activeFlowSceneId = Number(aiShotsFlowStatus?.sceneId || 0);
+        const modalSceneId = Number(shotPromptModal?.sceneId || 0);
+        return aiShotsBusySceneIdsRef.current.has(stableSceneId)
+            || (isAiShotsFlowActive && activeFlowSceneId === stableSceneId)
+            || (Boolean(shotPromptModal?.loading) && modalSceneId === stableSceneId);
+    }, [aiShotsFlowStatus?.sceneId, isAiShotsFlowActive, shotPromptModal?.loading, shotPromptModal?.sceneId]);
+    const closeSceneShotPromptModal = useCallback(() => {
+        const stableSceneId = Number(shotPromptModal?.sceneId || 0);
+        if (Number.isFinite(stableSceneId) && stableSceneId > 0) {
+            aiShotsBusySceneIdsRef.current.delete(stableSceneId);
+        }
+        setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
+    }, [shotPromptModal?.sceneId]);
+
     const resumeAiShotsFromTaskMarker = useCallback(async (marker) => {
         if (!activeEpisode?.id || !marker?.taskId || !marker?.sceneId) return;
         if (aiShotsResumeInFlightRef.current) return;
@@ -13590,6 +13644,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     }, [activeEpisode?.id, aiShotsFlowStatus.phase, loadAiShotsTaskMarker, resumeAiShotsFromTaskMarker]);
 
     const executeGenerateShots = async ({ sceneId, promptData }) => {
+        const stableSceneId = Number(sceneId || 0);
+        if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) return;
+        if (isSceneAiShotsBusy(stableSceneId)) return;
+
+        aiShotsBusySceneIdsRef.current.add(stableSceneId);
         armAiShotsAutoSwitchTicket(activeEpisode?.id, sceneId);
         setAiShotsFlowStatus({
             phase: 'generating',
@@ -13625,6 +13684,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
             });
             alert("Failed to generate shots: " + e.message);
             setShotPromptModal(prev => ({ ...prev, loading: false }));
+        } finally {
+            aiShotsBusySceneIdsRef.current.delete(stableSceneId);
         }
     };
 
@@ -13634,14 +13695,21 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
             return;
         }
 
+        if (isSceneAiShotsBusy(sceneId)) {
+            onLog?.(t('当前场景的 AI 镜头任务已在运行，请等待完成。', 'AI shots for this scene are already running. Please wait.'), 'warning');
+            return;
+        }
+
         if (isSuperuser) {
+            aiShotsBusySceneIdsRef.current.add(Number(sceneId));
             setShotPromptModal({ open: true, sceneId: sceneId, data: null, loading: true });
             try {
                 const data = await fetchSceneShotsPrompt(sceneId);
                 setShotPromptModal({ open: true, sceneId: sceneId, data: data, loading: false });
             } catch (e) {
                 onLog?.(`SceneManager: Failed to fetch prompt preview - ${e.message}`, 'error');
-                setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
+                closeSceneShotPromptModal();
+                aiShotsBusySceneIdsRef.current.delete(Number(sceneId));
             }
             return;
         }
@@ -14433,9 +14501,14 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         setPendingShotSupplementSceneId(null);
     }, [pendingShotSupplementSceneId, editingScene?.id, aiShotsStaging.loading, aiShotsStaging.content]);
 
-    const handleConfirmGenerateShots = async () => {
-         const { sceneId, data } = shotPromptModal;
-         if (!await confirmUiMessage("This will overwrite existing shots for this scene. Continue?")) return;
+        const handleConfirmGenerateShots = async () => {
+            const { sceneId, data } = shotPromptModal;
+            if (!sceneId || isSceneAiShotsBusy(sceneId)) return;
+            if (!await confirmUiMessage("This will overwrite existing shots for this scene. Continue?")) {
+               aiShotsBusySceneIdsRef.current.delete(Number(sceneId || 0));
+               setShotPromptModal(prev => ({ ...prev, loading: false }));
+               return;
+            }
 
          setShotPromptModal(prev => ({ ...prev, loading: true }));
          await executeGenerateShots({ sceneId, promptData: data });
@@ -14662,6 +14735,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                                     entities={entities} 
                                     shotCount={Number(sceneShotCountMap?.[Number(scene?.id || 0)] || 0)}
                                     uiLang={uiLang}
+                                    generatingShots={isSceneAiShotsBusy(scene?.id)}
                                     selected={selectedSceneKeySet.has(sceneKey)}
                                     onToggleSelect={toggleSceneSelected}
                                     onClick={() => setEditingScene(scene)} 
@@ -14707,11 +14781,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                                     </button>
                                     <button
                                         onClick={() => editingScene?.id && handleGenerateShots(editingScene.id)}
-                                        disabled={!editingScene?.id}
+                                        disabled={!editingScene?.id || isSceneAiShotsBusy(editingScene?.id)}
                                         className="px-3 py-1.5 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                                         title={editingScene?.id ? t('为该场景生成 AI 镜头', 'Generate AI shots for this scene') : t('请先保存场景再生成 AI 镜头', 'Save scene first to generate AI shots')}
                                     >
-                                        <Wand2 className="w-3 h-3"/> AI Shots
+                                        {isSceneAiShotsBusy(editingScene?.id) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>} {isSceneAiShotsBusy(editingScene?.id) ? t('生成中...', 'Generating...') : 'AI Shots'}
                                     </button>
                                     <button
                                         onClick={() => {
@@ -15290,7 +15364,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                     <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
                         <div className="p-4 border-b border-white/10 flex justify-between items-center">
                             <h3 className="font-bold flex items-center gap-2"><Wand2 size={16} className="text-primary"/> Generate AI Shots</h3>
-                            <button onClick={() => setShotPromptModal({open: false, sceneId: null, data: null, loading: false})}><X size={18}/></button>
+                            <button onClick={closeSceneShotPromptModal}><X size={18}/></button>
                         </div>
                         
                         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -15339,7 +15413,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                                 <Copy size={16}/> {t('复制完整提示词', 'Copy Full Prompt')}
                             </button>
                             <button 
-                                onClick={() => setShotPromptModal({open: false, sceneId: null, data: null, loading: false})}
+                                onClick={closeSceneShotPromptModal}
                                 className="px-4 py-2 rounded hover:bg-white/10 text-sm"
                             >
                                 {t('取消', 'Cancel')}
@@ -15716,20 +15790,89 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const [isReconstructingEntity, setIsReconstructingEntity] = useState(false);
     const [reconstructProgress, setReconstructProgress] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
+    const [subjectNotification, setSubjectNotification] = useState(null);
     const [subjectImageJobs, setSubjectImageJobs] = useState({});
+    const [stoppingSubjectImageJobs, setStoppingSubjectImageJobs] = useState({});
     const subjectImageJobPollingRef = useRef(false);
     const subjectBatchGenerateStopRequestedRef = useRef(false);
     const subjectBatchGenerateSessionRef = useRef('');
+    const subjectBatchGenerateActiveJobsRef = useRef(new Map());
     const subjectBatchAnalyzeStopRequestedRef = useRef(false);
     const subjectBatchAnalyzeSessionRef = useRef('');
     const subjectBatchReconstructStopRequestedRef = useRef(false);
     const subjectBatchReconstructSessionRef = useRef('');
+    const subjectBatchReconstructActiveJobsRef = useRef(new Map());
     const subjectImageJobStorageKey = useMemo(() => {
         const pid = String(projectId || '').trim();
         return pid ? `aistory.subjectImageJobs.${pid}` : '';
     }, [projectId]);
     const SUBJECT_IMAGE_JOB_TTL_MS = 1000 * 60 * 60 * 6;
     const SUBJECT_IMAGE_JOB_MAX_RUNNING_MS = 1000 * 60 * 20;
+
+    const showSubjectNotification = useCallback((message, type = 'success') => {
+        setSubjectNotification({ message, type });
+        setTimeout(() => setSubjectNotification(null), 3000);
+    }, []);
+
+    const isSubjectBatchStopSignal = useCallback((error) => {
+        return String(error?.message || '').trim() === '__subject_batch_stop__';
+    }, []);
+
+    const trackSubjectBatchImageJob = useCallback((kind, entity, jobId) => {
+        const stableJobId = String(jobId || '').trim();
+        const stableEntityId = String(entity?.id || '').trim();
+        if (!stableJobId || !stableEntityId) return;
+
+        const targetMap = kind === 'reconstruct'
+            ? subjectBatchReconstructActiveJobsRef.current
+            : subjectBatchGenerateActiveJobsRef.current;
+
+        targetMap.set(stableEntityId, stableJobId);
+        setSubjectImageJobs(prev => ({
+            ...(prev || {}),
+            [stableEntityId]: {
+                ...(prev?.[stableEntityId] || {}),
+                jobId: stableJobId,
+                status: 'queued',
+                startedAt: Date.now(),
+                entityName: entity?.name || entity?.name_en || stableEntityId,
+            },
+        }));
+    }, []);
+
+    const untrackSubjectBatchImageJob = useCallback((kind, entityId) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId) return;
+        const targetMap = kind === 'reconstruct'
+            ? subjectBatchReconstructActiveJobsRef.current
+            : subjectBatchGenerateActiveJobsRef.current;
+        targetMap.delete(stableEntityId);
+    }, []);
+
+    const forceStopTrackedSubjectBatchImageJobs = useCallback(async (kind) => {
+        const targetMap = kind === 'reconstruct'
+            ? subjectBatchReconstructActiveJobsRef.current
+            : subjectBatchGenerateActiveJobsRef.current;
+        const entries = Array.from(targetMap.entries());
+        targetMap.clear();
+        if (entries.length === 0) return 0;
+
+        await Promise.allSettled(entries.map(async ([, jobId]) => {
+            const stableJobId = String(jobId || '').trim();
+            if (!stableJobId) return;
+            await stopGenerationJob('image', stableJobId, { force: true });
+        }));
+
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            entries.forEach(([entityId]) => {
+                delete next[String(entityId)];
+            });
+            return next;
+        });
+
+        return entries.length;
+    }, [stopGenerationJob]);
 
     const normalizeSubjectImageJobs = useCallback((raw) => {
         if (!raw || typeof raw !== 'object') return {};
@@ -16342,7 +16485,19 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 });
 
                 const settled = await Promise.allSettled(batch.map(async (entity) => {
+                    const shouldStopBatchAnalyze = () => (
+                        subjectBatchAnalyzeSessionRef.current !== batchSessionId
+                        || subjectBatchAnalyzeStopRequestedRef.current
+                    );
+
+                    if (shouldStopBatchAnalyze()) {
+                        return { stopped: true };
+                    }
+
                     const updated = await analyzeEntityImage(entity.id);
+                    if (shouldStopBatchAnalyze()) {
+                        return { stopped: true };
+                    }
                     setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
                     setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
                     setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
@@ -16352,7 +16507,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 settled.forEach((result, batchIndex) => {
                     const entity = batch[batchIndex];
                     processedCount += 1;
-                    if (result.status === 'fulfilled') {
+                    if (result.status === 'fulfilled' && result.value?.stopped) {
+                        // stop requested; ignore and let outer loop exit cleanly
+                    } else if (result.status === 'fulfilled') {
                         successCount += 1;
                     } else {
                         failedCount += 1;
@@ -16400,8 +16557,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         }
     };
 
-    const reconstructEntityAssetCore = useCallback(async (entity, onProgress) => {
+    const reconstructEntityAssetCore = useCallback(async (entity, onProgress, runtimeOptions = null) => {
         const progress = typeof onProgress === 'function' ? onProgress : () => {};
+        const shouldStop = typeof runtimeOptions?.shouldStop === 'function' ? runtimeOptions.shouldStop : () => false;
+        const onJobCreated = typeof runtimeOptions?.onJobCreated === 'function' ? runtimeOptions.onJobCreated : null;
+
+        if (shouldStop()) {
+            throw new Error('__subject_batch_stop__');
+        }
 
         const setStep = (step, zh, en, percent) => {
             progress({ step, label: t(zh, en), percent: Number(percent || 0) });
@@ -16409,6 +16572,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
         setStep('analyzing', '正在分析当前图片...', 'Analyzing current image...', 20);
         const analyzed = await analyzeEntityImage(entity.id);
+        if (shouldStop()) {
+            throw new Error('__subject_batch_stop__');
+        }
         setViewingEntity(prev => (prev?.id === analyzed.id ? analyzed : prev));
         setEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
         setAllEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
@@ -16457,6 +16623,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             .filter(Boolean);
         const uniqueRefs = [...new Set(combinedRefs)];
 
+        if (shouldStop()) {
+            throw new Error('__subject_batch_stop__');
+        }
+
         setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
         const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
             project_id: projectId,
@@ -16469,8 +16639,13 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             prompt_language: resolvedPromptSubmitLang,
             asset_type: 'subject',
             ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-            negative_prompt: buildEntityNegativePrompt(rawPrompt, analyzed || entity, allEntities)
+            negative_prompt: buildEntityNegativePrompt(rawPrompt, analyzed || entity, allEntities),
+            ...(onJobCreated ? { on_job_created: onJobCreated } : {})
         });
+
+        if (shouldStop()) {
+            throw new Error('__subject_batch_stop__');
+        }
 
         if (!asset?.url) {
             throw new Error(t('生成结果缺少图片地址', 'Generated result missing image URL'));
@@ -16535,7 +16710,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
         try {
             for (let idx = 0; idx < targets.length; idx += SUBJECT_BATCH_PARALLEL_LIMIT) {
-                if (subjectBatchReconstructSessionRef.current !== batchSessionId || subjectBatchReconstructStopRequestedRef.current) {
+                const shouldStopBatchReconstruct = () => (
+                    subjectBatchReconstructSessionRef.current !== batchSessionId
+                    || subjectBatchReconstructStopRequestedRef.current
+                );
+
+                if (shouldStopBatchReconstruct()) {
                     break;
                 }
                 const batch = targets.slice(idx, idx + SUBJECT_BATCH_PARALLEL_LIMIT);
@@ -16549,13 +16729,49 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     ),
                 });
 
-                const settled = await Promise.allSettled(batch.map((entity) => reconstructEntityAssetCore(entity)));
+                const settled = await Promise.allSettled(batch.map(async (entity) => {
+                    if (shouldStopBatchReconstruct()) {
+                        return { stopped: true };
+                    }
+
+                    let createdJobId = '';
+                    try {
+                        const updated = await reconstructEntityAssetCore(entity, null, {
+                            shouldStop: shouldStopBatchReconstruct,
+                            onJobCreated: (jobId) => {
+                                const stableJobId = String(jobId || '').trim();
+                                if (!stableJobId) return;
+                                createdJobId = stableJobId;
+                                if (shouldStopBatchReconstruct()) {
+                                    void stopGenerationJob('image', stableJobId, { force: true });
+                                    return;
+                                }
+                                trackSubjectBatchImageJob('reconstruct', entity, stableJobId);
+                            },
+                        });
+
+                        if (shouldStopBatchReconstruct()) {
+                            return { stopped: true };
+                        }
+
+                        return updated;
+                    } finally {
+                        if (createdJobId) {
+                            untrackSubjectBatchImageJob('reconstruct', entity?.id);
+                        }
+                    }
+                }));
                 settled.forEach((result, batchIndex) => {
                     const entity = batch[batchIndex];
                     processedCount += 1;
-                    if (result.status === 'fulfilled') {
+                    if (result.status === 'fulfilled' && result.value?.stopped) {
+                        // stop requested; ignore and let outer loop exit cleanly
+                    } else if (result.status === 'fulfilled') {
                         successCount += 1;
                     } else {
+                        if (shouldStopBatchReconstruct() || isSubjectBatchStopSignal(result.reason)) {
+                            return;
+                        }
                         failedCount += 1;
                         if (onLog) {
                             onLog(
@@ -16999,6 +17215,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     };
 
     const handleGenerate = async () => {
+        if (generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)])) return;
         const targetEntityId = Number(selectedEntity?.id || 0);
         if (!Number.isFinite(targetEntityId) || targetEntityId <= 0) return;
         const targetEntityName = String(selectedEntity?.name || selectedEntity?.name_en || targetEntityId);
@@ -17107,6 +17324,69 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         }
     };
 
+    const handleForceStopSubjectImage = useCallback(async (entityOverride = null) => {
+        const targetEntity = entityOverride || selectedEntity;
+        const targetEntityId = String(targetEntity?.id || '').trim();
+        if (!targetEntityId) return;
+        if (stoppingSubjectImageJobs[String(targetEntityId)]) return;
+
+        const currentJob = subjectImageJobs[String(targetEntityId)];
+        const jobId = String(currentJob?.jobId || '').trim();
+        const entityName = currentJob?.entityName || targetEntity?.name || targetEntity?.name_en || targetEntityId;
+
+        setStoppingSubjectImageJobs(prev => ({
+            ...(prev || {}),
+            [String(targetEntityId)]: true,
+        }));
+
+        setGenerating(false);
+
+        if (!jobId) {
+            setSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                delete next[String(targetEntityId)];
+                return next;
+            });
+            if (onLog) onLog(t(`已清除主体运行状态：${entityName}`, `Cleared subject running state: ${entityName}`), 'warning');
+            showSubjectNotification(t('已清除本地主体运行状态', 'Cleared local subject running state'), 'warning');
+            setStoppingSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                delete next[String(targetEntityId)];
+                return next;
+            });
+            return;
+        }
+
+        try {
+            const res = await stopGenerationJob('image', jobId, { force: true });
+            if (onLog) onLog(res?.message || t(`已请求停止主体任务：${entityName}`, `Stop requested for subject task: ${entityName}`), 'warning');
+            showSubjectNotification(t('已请求停止主体任务', 'Subject stop requested'), 'warning');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            const normalizedDetail = String(detail).trim().toLowerCase();
+            const missingJob = normalizedDetail.includes('job not found') || normalizedDetail.includes('not found');
+            if (!missingJob) {
+                if (onLog) onLog(`${t('停止主体任务失败', 'Failed to stop subject task')}: ${detail}`, 'error');
+                showSubjectNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
+                return;
+            }
+            if (onLog) onLog(t(`后端主体任务不存在，已清除本地状态：${entityName}`, `Backend subject task no longer exists. Cleared local state: ${entityName}`), 'warning');
+            showSubjectNotification(t('后端任务不存在，已解除主体锁定', 'Backend job missing, subject lock cleared'), 'warning');
+        } finally {
+            setStoppingSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                delete next[String(targetEntityId)];
+                return next;
+            });
+        }
+
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            delete next[String(targetEntityId)];
+            return next;
+        });
+    }, [onLog, selectedEntity, showSubjectNotification, stopGenerationJob, stoppingSubjectImageJobs, subjectImageJobs, t]);
+
     const handleRefUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -17204,10 +17484,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
         try {
             while (queue.length > 0) {
-                if (subjectBatchGenerateSessionRef.current !== batchSessionId) {
-                    break;
-                }
-                if (subjectBatchGenerateStopRequestedRef.current) {
+                const shouldStopBatchGenerate = () => (
+                    subjectBatchGenerateSessionRef.current !== batchSessionId
+                    || subjectBatchGenerateStopRequestedRef.current
+                );
+
+                if (shouldStopBatchGenerate()) {
                     break;
                 }
                 // Find all entities that are ready
@@ -17229,6 +17511,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 });
 
                 const settled = await Promise.allSettled(batch.map(async (entity) => {
+                    if (shouldStopBatchGenerate()) {
+                        return { entity, stopped: true };
+                    }
                     const epInfo = currentEpisode?.episode_info || {};
                     const preferredImageSize = getEpisodePreferredImageSize(epInfo);
                     let basePrompt = getEntityPromptByLang(entity, resolvedPromptSubmitLang)
@@ -17274,30 +17559,51 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         );
                     }
 
-                    const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                        project_id: projectId,
-                        episode_id: currentEpisode?.id,
-                        entity_id: entity?.id,
-                        entity_name: entity?.name || entity?.name_en,
-                        subject_name: entity?.name || entity?.name_en,
-                        subject_type: entity?.type,
-                        entity_type: entity?.type,
-                        prompt_language: resolvedPromptSubmitLang,
-                        asset_type: 'subject',
-                        ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                        negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities)
-                    });
+                    let createdJobId = '';
+                    try {
+                        const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                            project_id: projectId,
+                            episode_id: currentEpisode?.id,
+                            entity_id: entity?.id,
+                            entity_name: entity?.name || entity?.name_en,
+                            subject_name: entity?.name || entity?.name_en,
+                            subject_type: entity?.type,
+                            entity_type: entity?.type,
+                            prompt_language: resolvedPromptSubmitLang,
+                            asset_type: 'subject',
+                            ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                            negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities),
+                            on_job_created: (jobId) => {
+                                const stableJobId = String(jobId || '').trim();
+                                if (!stableJobId) return;
+                                createdJobId = stableJobId;
+                                if (shouldStopBatchGenerate()) {
+                                    void stopGenerationJob('image', stableJobId, { force: true });
+                                    return;
+                                }
+                                trackSubjectBatchImageJob('generate', entity, stableJobId);
+                            },
+                        });
 
-                    if (!res?.url) {
-                        throw new Error('Generated result missing image URL');
+                        if (shouldStopBatchGenerate()) {
+                            return { entity, stopped: true };
+                        }
+
+                        if (!res?.url) {
+                            throw new Error('Generated result missing image URL');
+                        }
+
+                        await updateEntity(entity.id, { image_url: res.url });
+                        return {
+                            entity,
+                            updatedEnt: { ...entity, image_url: res.url },
+                            imageUrl: res.url,
+                        };
+                    } finally {
+                        if (createdJobId) {
+                            untrackSubjectBatchImageJob('generate', entity?.id);
+                        }
                     }
-
-                    await updateEntity(entity.id, { image_url: res.url });
-                    return {
-                        entity,
-                        updatedEnt: { ...entity, image_url: res.url },
-                        imageUrl: res.url,
-                    };
                 }));
 
                 const batchEntityIds = new Set(batch.map((entity) => entity.id));
@@ -17308,7 +17614,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     processedCount += 1;
 
                     if (result.status === 'fulfilled') {
-                        if (result.value?.skippedPrompt) {
+                        if (result.value?.stopped) {
+                            // stop requested; ignore and let outer loop exit cleanly
+                        } else if (result.value?.skippedPrompt) {
                             skippedPromptCount += 1;
                             onLog?.(
                                 t(
@@ -17371,10 +17679,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         if (!hasRunningTask) return;
 
         setIsStoppingBatchGenerateEntities(true);
+        let forcedStoppedJobCount = 0;
 
         if (isBatchGeneratingEntities) {
             subjectBatchGenerateStopRequestedRef.current = true;
             subjectBatchGenerateSessionRef.current = '';
+            forcedStoppedJobCount += await forceStopTrackedSubjectBatchImageJobs('generate');
             updateGenerateBatchRuntimeState(false, null);
         }
 
@@ -17387,17 +17697,29 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         if (isBatchReconstructingEntities) {
             subjectBatchReconstructStopRequestedRef.current = true;
             subjectBatchReconstructSessionRef.current = '';
+            forcedStoppedJobCount += await forceStopTrackedSubjectBatchImageJobs('reconstruct');
             updateReconstructBatchRuntimeState(false, null);
         }
 
         setIsStoppingBatchGenerateEntities(false);
         if (onLog) onLog(t('已请求停止当前批量任务。', 'Stop requested for current batch task.'), 'warning');
+        showSubjectNotification(
+            forcedStoppedJobCount > 0
+                ? t(`已请求停止当前批量任务，并强制停止 ${forcedStoppedJobCount} 个已提交图片任务。`, `Stop requested for current batch task. Force-stopped ${forcedStoppedJobCount} submitted image jobs.`)
+                : t('已请求停止当前批量任务。未提交的后续任务将不再继续。', 'Stop requested for current batch task. Pending unsubmitted tasks will not continue.'),
+            'warning'
+        );
     };
 
     const hasRunningSubjectBatchTask = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
 
     return (
         <div className="p-6 h-full flex flex-col w-full relative">
+            {subjectNotification && (
+                <div className={`absolute top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-2xl border text-sm max-w-md ${subjectNotification.type === 'error' ? 'bg-red-500/90 border-red-300/40 text-white' : subjectNotification.type === 'warning' ? 'bg-amber-500/90 border-amber-300/40 text-black' : subjectNotification.type === 'info' ? 'bg-sky-500/90 border-sky-300/40 text-white' : 'bg-emerald-500/90 border-emerald-300/40 text-white'}`}>
+                    {subjectNotification.message}
+                </div>
+            )}
             <div className="flex justify-between items-center mb-6">
                 <div className="flex items-center gap-2">
                     <h2 className="text-2xl font-bold">{t('角色资产库', 'Subjects Library')}</h2>
@@ -17544,12 +17866,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     >
                         {subjectImageJobs[String(entity.id)] && (
                             <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
-                                <RefreshCw className="animate-spin" size={10} />
-                                {String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'running'
-                                    ? t('运行中', 'Running')
-                                    : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'queued'
-                                        ? t('排队中', 'Queued')
-                                        : t('生成中', 'Generating')}
+                                {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <RefreshCw className="animate-spin" size={10} />}
+                                {stoppingSubjectImageJobs[String(entity.id)]
+                                    ? t('停止中', 'Stopping')
+                                    : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'running'
+                                        ? t('运行中', 'Running')
+                                        : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'queued'
+                                            ? t('排队中', 'Queued')
+                                            : t('生成中', 'Generating')}
                             </div>
                         )}
                         {isEntityAnalyzed(entity) && (
@@ -17572,6 +17896,19 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         )}
                         
                         <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+                            {subjectImageJobs[String(entity.id)] && (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleForceStopSubjectImage(entity);
+                                    }}
+                                    disabled={Boolean(stoppingSubjectImageJobs[String(entity.id)])}
+                                    className="p-2 bg-red-500/70 hover:bg-red-500/90 rounded-full text-white backdrop-blur-md disabled:opacity-60 disabled:cursor-not-allowed"
+                                    title={t('停止该主体的后台图片任务', 'Stop this subject background image task')}
+                                >
+                                    {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={16} /> : <X size={16} />}
+                                </button>
+                            )}
                             <button 
                                 onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'library'); }}
                                 className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md"
@@ -18272,13 +18609,27 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 {imageModalTab === 'generate' && (
                                     <div className="flex flex-col h-full">
                                         {selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)] && (
-                                            <div className="mb-3 rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center gap-2">
-                                                <RefreshCw className="animate-spin" size={12} />
-                                                {String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'running'
-                                                    ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
-                                                    : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'queued'
-                                                        ? t('该主体正在排队中，开始后将自动运行。', 'This subject is queued and will run automatically once started.')
-                                                        : t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
+                                            <div className="mb-3 rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-2">
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <RefreshCw className="animate-spin" size={12} />}
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)]
+                                                        ? t('该主体停止请求发送中，请稍候。', 'Stop request is being sent for this subject. Please wait.')
+                                                        : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'running'
+                                                            ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
+                                                            : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'queued'
+                                                                ? t('该主体正在排队中，开始后将自动运行。', 'This subject is queued and will run automatically once started.')
+                                                                : t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleForceStopSubjectImage}
+                                                    disabled={Boolean(stoppingSubjectImageJobs[String(selectedEntity.id)])}
+                                                    className="shrink-0 inline-flex items-center gap-1 rounded border border-red-400/30 bg-red-500/15 px-2 py-1 text-[11px] font-bold text-red-100 hover:bg-red-500/25 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                                                    title={t('强制停止该主体的后台图片任务，并解除当前运行状态', 'Force-stop this subject background image task and clear the current running state')}
+                                                >
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <X size={12} />}
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}
+                                                </button>
                                             </div>
                                         )}
                                         <textarea
@@ -18478,6 +18829,18 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                         </div>
 
                                         <div className="flex justify-end items-center gap-2">
+                                            {selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)] && (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleForceStopSubjectImage}
+                                                    disabled={Boolean(stoppingSubjectImageJobs[String(selectedEntity.id)])}
+                                                    className="flex items-center space-x-2 bg-red-500/15 text-red-100 px-4 py-2 rounded-lg font-bold hover:bg-red-500/25 transition-all border border-red-400/25 disabled:opacity-60 disabled:cursor-not-allowed"
+                                                    title={t('强制停止该主体的后台图片任务，并解除当前运行状态', 'Force-stop this subject background image task and clear the current running state')}
+                                                >
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={16} /> : <X size={16} />}
+                                                    <span>{stoppingSubjectImageJobs[String(selectedEntity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}</span>
+                                                </button>
+                                            )}
                                             <button 
                                                 onClick={handleGenerate}
                                                 disabled={generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)]) || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}

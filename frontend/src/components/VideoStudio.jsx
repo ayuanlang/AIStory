@@ -78,7 +78,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
     };
 
     const handleGenerateMontage = async () => {
-        if (playlist.length === 0) return;
+        if (playlist.length === 0 || isGenerating) return;
         
         setIsGenerating(true);
         setPreviewUrl(null);
