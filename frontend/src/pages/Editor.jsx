@@ -16472,65 +16472,62 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         let processedCount = 0;
 
         try {
-            for (let idx = 0; idx < targets.length; idx += SUBJECT_BATCH_PARALLEL_LIMIT) {
-                if (subjectBatchAnalyzeSessionRef.current !== batchSessionId || subjectBatchAnalyzeStopRequestedRef.current) {
-                    break;
-                }
-                const batch = targets.slice(idx, idx + SUBJECT_BATCH_PARALLEL_LIMIT);
-                const batchLabel = batch.map((entity) => entity?.name || entity?.name_en || entity?.id).join(', ');
-                updateAnalyzeBatchRuntimeState(true, {
-                    current: Math.min(processedCount + 1, targets.length),
-                    total: targets.length,
-                    status: t(`分析中：${batchLabel}`, `Analyzing: ${batchLabel}`),
-                });
+            const shouldStopBatchAnalyze = () => (
+                subjectBatchAnalyzeSessionRef.current !== batchSessionId
+                || subjectBatchAnalyzeStopRequestedRef.current
+            );
+            let nextTargetIndex = 0;
+            const workerCount = Math.max(1, Math.min(SUBJECT_BATCH_PARALLEL_LIMIT, targets.length));
 
-                const settled = await Promise.allSettled(batch.map(async (entity) => {
-                    const shouldStopBatchAnalyze = () => (
-                        subjectBatchAnalyzeSessionRef.current !== batchSessionId
-                        || subjectBatchAnalyzeStopRequestedRef.current
-                    );
+            const runAnalyzeWorker = async () => {
+                while (!shouldStopBatchAnalyze()) {
+                    const targetIndex = nextTargetIndex;
+                    nextTargetIndex += 1;
+                    const entity = targets[targetIndex];
+                    if (!entity) return;
 
-                    if (shouldStopBatchAnalyze()) {
-                        return { stopped: true };
-                    }
+                    const entityLabel = entity?.name || entity?.name_en || entity?.id;
+                    updateAnalyzeBatchRuntimeState(true, {
+                        current: Math.min(processedCount + 1, targets.length),
+                        total: targets.length,
+                        status: t(`分析中：${entityLabel}`, `Analyzing: ${entityLabel}`),
+                    });
 
-                    const updated = await analyzeEntityImage(entity.id);
-                    if (shouldStopBatchAnalyze()) {
-                        return { stopped: true };
-                    }
-                    setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
-                    setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
-                    setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
-                    return updated;
-                }));
-
-                settled.forEach((result, batchIndex) => {
-                    const entity = batch[batchIndex];
-                    processedCount += 1;
-                    if (result.status === 'fulfilled' && result.value?.stopped) {
-                        // stop requested; ignore and let outer loop exit cleanly
-                    } else if (result.status === 'fulfilled') {
+                    try {
+                        const updated = await analyzeEntityImage(entity.id);
+                        if (shouldStopBatchAnalyze()) {
+                            continue;
+                        }
+                        setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+                        setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+                        setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
                         successCount += 1;
-                    } else {
+                    } catch (error) {
+                        if (shouldStopBatchAnalyze()) {
+                            continue;
+                        }
                         failedCount += 1;
                         if (onLog) {
                             onLog(
                                 t(
-                                    `批量提示词反推失败：${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`,
-                                    `Batch prompt reverse failed: ${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`
+                                    `批量提示词反推失败：${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`,
+                                    `Batch prompt reverse failed: ${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`
                                 ),
                                 'error'
                             );
                         }
+                    } finally {
+                        processedCount += 1;
+                        updateAnalyzeBatchRuntimeState(true, {
+                            current: processedCount,
+                            total: targets.length,
+                            status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
+                        });
                     }
+                }
+            };
 
-                    updateAnalyzeBatchRuntimeState(true, {
-                        current: processedCount,
-                        total: targets.length,
-                        status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
-                    });
-                });
-            }
+            await Promise.allSettled(Array.from({ length: workerCount }, () => runAnalyzeWorker()));
 
             if (subjectBatchAnalyzeSessionRef.current !== batchSessionId || subjectBatchAnalyzeStopRequestedRef.current) {
                 const stoppedSummary = t(
@@ -16709,30 +16706,29 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         let processedCount = 0;
 
         try {
-            for (let idx = 0; idx < targets.length; idx += SUBJECT_BATCH_PARALLEL_LIMIT) {
-                const shouldStopBatchReconstruct = () => (
-                    subjectBatchReconstructSessionRef.current !== batchSessionId
-                    || subjectBatchReconstructStopRequestedRef.current
-                );
+            const shouldStopBatchReconstruct = () => (
+                subjectBatchReconstructSessionRef.current !== batchSessionId
+                || subjectBatchReconstructStopRequestedRef.current
+            );
+            let nextTargetIndex = 0;
+            const workerCount = Math.max(1, Math.min(SUBJECT_BATCH_PARALLEL_LIMIT, targets.length));
 
-                if (shouldStopBatchReconstruct()) {
-                    break;
-                }
-                const batch = targets.slice(idx, idx + SUBJECT_BATCH_PARALLEL_LIMIT);
-                const batchLabel = batch.map((entity) => entity?.name || entity?.name_en || entity?.id).join(', ');
-                updateReconstructBatchRuntimeState(true, {
-                    current: Math.min(processedCount + 1, targets.length),
-                    total: targets.length,
-                    status: t(
-                        `处理中：${batchLabel}`,
-                        `Processing: ${batchLabel}`
-                    ),
-                });
+            const runReconstructWorker = async () => {
+                while (!shouldStopBatchReconstruct()) {
+                    const targetIndex = nextTargetIndex;
+                    nextTargetIndex += 1;
+                    const entity = targets[targetIndex];
+                    if (!entity) return;
 
-                const settled = await Promise.allSettled(batch.map(async (entity) => {
-                    if (shouldStopBatchReconstruct()) {
-                        return { stopped: true };
-                    }
+                    const entityLabel = entity?.name || entity?.name_en || entity?.id;
+                    updateReconstructBatchRuntimeState(true, {
+                        current: Math.min(processedCount + 1, targets.length),
+                        total: targets.length,
+                        status: t(
+                            `处理中：${entityLabel}`,
+                            `Processing: ${entityLabel}`
+                        ),
+                    });
 
                     let createdJobId = '';
                     try {
@@ -16751,46 +16747,42 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         });
 
                         if (shouldStopBatchReconstruct()) {
-                            return { stopped: true };
+                            continue;
                         }
 
-                        return updated;
-                    } finally {
-                        if (createdJobId) {
-                            untrackSubjectBatchImageJob('reconstruct', entity?.id);
+                        if (!updated?.id) {
+                            throw new Error('Reconstructed subject result missing entity payload');
                         }
-                    }
-                }));
-                settled.forEach((result, batchIndex) => {
-                    const entity = batch[batchIndex];
-                    processedCount += 1;
-                    if (result.status === 'fulfilled' && result.value?.stopped) {
-                        // stop requested; ignore and let outer loop exit cleanly
-                    } else if (result.status === 'fulfilled') {
                         successCount += 1;
-                    } else {
-                        if (shouldStopBatchReconstruct() || isSubjectBatchStopSignal(result.reason)) {
-                            return;
+                    } catch (error) {
+                        if (shouldStopBatchReconstruct() || isSubjectBatchStopSignal(error)) {
+                            continue;
                         }
                         failedCount += 1;
                         if (onLog) {
                             onLog(
                                 t(
-                                    `批量参考生图失败：${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`,
-                                    `Batch reference image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`
+                                    `批量参考生图失败：${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`,
+                                    `Batch reference image generation failed: ${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`
                                 ),
                                 'error'
                             );
                         }
+                    } finally {
+                        if (createdJobId) {
+                            untrackSubjectBatchImageJob('reconstruct', entity?.id);
+                        }
+                        processedCount += 1;
+                        updateReconstructBatchRuntimeState(true, {
+                            current: processedCount,
+                            total: targets.length,
+                            status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
+                        });
                     }
+                }
+            };
 
-                    updateReconstructBatchRuntimeState(true, {
-                        current: processedCount,
-                        total: targets.length,
-                        status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
-                    });
-                });
-            }
+            await Promise.allSettled(Array.from({ length: workerCount }, () => runReconstructWorker()));
 
             if (subjectBatchReconstructSessionRef.current !== batchSessionId || subjectBatchReconstructStopRequestedRef.current) {
                 const stoppedSummary = t(
@@ -17483,176 +17475,197 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         };
 
         try {
-            while (queue.length > 0) {
-                const shouldStopBatchGenerate = () => (
-                    subjectBatchGenerateSessionRef.current !== batchSessionId
-                    || subjectBatchGenerateStopRequestedRef.current
-                );
+            const shouldStopBatchGenerate = () => (
+                subjectBatchGenerateSessionRef.current !== batchSessionId
+                || subjectBatchGenerateStopRequestedRef.current
+            );
+            const workerLimit = Math.max(1, SUBJECT_BATCH_PARALLEL_LIMIT);
+            const activeTasks = new Map();
 
-                if (shouldStopBatchGenerate()) {
-                    break;
-                }
-                // Find all entities that are ready
-                const readyBatch = queue.filter(e => isReady(e));
-                
-                let batch = [];
-                if (readyBatch.length > 0) {
-                    batch = readyBatch.slice(0, SUBJECT_BATCH_PARALLEL_LIMIT);
-                } else {
-                    // Cycle or blocked -> Force proceed with one
-                    batch = [queue[0]];
-                }
-
-                const batchLabel = batch.map((entity) => entity?.name || entity?.name_en || entity?.id).join(', ');
+            const updateGenerateActiveStatus = () => {
+                if (activeTasks.size === 0) return;
+                const activeLabels = Array.from(activeTasks.values())
+                    .map(({ entity }) => entity?.name || entity?.name_en || entity?.id)
+                    .filter(Boolean)
+                    .join(', ');
                 updateGenerateBatchRuntimeState(true, {
                     current: Math.min(processedCount + 1, toGenerate.length),
                     total: toGenerate.length,
-                    status: t(`生成中：${batchLabel}`, `Generating: ${batchLabel}`),
+                    status: t(`生成中：${activeLabels}`, `Generating: ${activeLabels}`),
                 });
+            };
 
-                const settled = await Promise.allSettled(batch.map(async (entity) => {
+            const runGenerateEntity = async (entity) => {
+                if (shouldStopBatchGenerate()) {
+                    return { entity, stopped: true };
+                }
+                const epInfo = currentEpisode?.episode_info || {};
+                const preferredImageSize = getEpisodePreferredImageSize(epInfo);
+                let basePrompt = getEntityPromptByLang(entity, resolvedPromptSubmitLang)
+                    || entity.description
+                    || `A ${entity.type} named ${entity.name}.`;
+
+                if (!basePrompt || basePrompt.trim().length < 2) {
+                    basePrompt = `${entity.type} ${entity.name}`;
+                }
+
+                const finalPrompt = prependEntityGlobalStyleToPromptHead(
+                    String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
+                    { injectIfMissing: true }
+                );
+                if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
+                    return { entity, skippedPrompt: true };
+                }
+
+                const depUrls = [];
+                const deps = Array.isArray(entity.visual_dependencies) ? entity.visual_dependencies : [];
+                deps.forEach(dep => {
+                    const startDep = String(dep).trim();
+                    const startDepNormalized = normalizeEntityToken(startDep);
+
+                    const target = allEntities.find(e => {
+                        if (!e) return false;
+                        if (String(e.id).trim() === startDep) return true;
+                        if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
+                        if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
+                        return false;
+                    });
+
+                    if (target && urlMap.has(target.id)) {
+                        depUrls.push(urlMap.get(target.id));
+                    }
+                });
+                const uniqueRefs = [...new Set(depUrls)];
+
+                if (onLog) {
+                    onLog(
+                        `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                        'process'
+                    );
+                }
+
+                let createdJobId = '';
+                try {
+                    const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                        project_id: projectId,
+                        episode_id: currentEpisode?.id,
+                        entity_id: entity?.id,
+                        entity_name: entity?.name || entity?.name_en,
+                        subject_name: entity?.name || entity?.name_en,
+                        subject_type: entity?.type,
+                        entity_type: entity?.type,
+                        prompt_language: resolvedPromptSubmitLang,
+                        asset_type: 'subject',
+                        ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                        negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities),
+                        on_job_created: (jobId) => {
+                            const stableJobId = String(jobId || '').trim();
+                            if (!stableJobId) return;
+                            createdJobId = stableJobId;
+                            if (shouldStopBatchGenerate()) {
+                                void stopGenerationJob('image', stableJobId, { force: true });
+                                return;
+                            }
+                            trackSubjectBatchImageJob('generate', entity, stableJobId);
+                        },
+                    });
+
                     if (shouldStopBatchGenerate()) {
                         return { entity, stopped: true };
                     }
-                    const epInfo = currentEpisode?.episode_info || {};
-                    const preferredImageSize = getEpisodePreferredImageSize(epInfo);
-                    let basePrompt = getEntityPromptByLang(entity, resolvedPromptSubmitLang)
-                        || entity.description
-                        || `A ${entity.type} named ${entity.name}.`;
 
-                    if (!basePrompt || basePrompt.trim().length < 2) {
-                        basePrompt = `${entity.type} ${entity.name}`;
+                    if (!res?.url) {
+                        throw new Error('Generated result missing image URL');
                     }
 
-                    const finalPrompt = prependEntityGlobalStyleToPromptHead(
-                        String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
-                        { injectIfMissing: true }
-                    );
-                    if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
-                        return { entity, skippedPrompt: true };
+                    await updateEntity(entity.id, { image_url: res.url });
+                    return {
+                        entity,
+                        updatedEnt: { ...entity, image_url: res.url },
+                        imageUrl: res.url,
+                    };
+                } finally {
+                    if (createdJobId) {
+                        untrackSubjectBatchImageJob('generate', entity?.id);
                     }
+                }
+            };
 
-                    const depUrls = [];
-                    const deps = Array.isArray(entity.visual_dependencies) ? entity.visual_dependencies : [];
-                    deps.forEach(dep => {
-                        const startDep = String(dep).trim();
-                        const startDepNormalized = normalizeEntityToken(startDep);
+            const startNextGenerateTask = () => {
+                if (shouldStopBatchGenerate() || activeTasks.size >= workerLimit || queue.length === 0) {
+                    return false;
+                }
 
-                        const target = allEntities.find(e => {
-                            if (!e) return false;
-                            if (String(e.id).trim() === startDep) return true;
-                            if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
-                            if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
-                            return false;
-                        });
+                const nextEntity = queue.find(e => isReady(e)) || (activeTasks.size === 0 ? queue[0] : null);
+                if (!nextEntity) {
+                    return false;
+                }
 
-                        if (target && urlMap.has(target.id)) {
-                            depUrls.push(urlMap.get(target.id));
-                        }
-                    });
-                    const uniqueRefs = [...new Set(depUrls)];
+                queue = queue.filter(item => item.id !== nextEntity.id);
+                const entityId = String(nextEntity?.id || '');
+                const wrappedPromise = runGenerateEntity(nextEntity)
+                    .then((value) => ({ entityId, entity: nextEntity, status: 'fulfilled', value }))
+                    .catch((reason) => ({ entityId, entity: nextEntity, status: 'rejected', reason }));
+                activeTasks.set(entityId, { entity: nextEntity, promise: wrappedPromise });
+                updateGenerateActiveStatus();
+                return true;
+            };
 
-                    if (onLog) {
-                        onLog(
-                            `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
-                            'process'
-                        );
-                    }
+            while (queue.length > 0 || activeTasks.size > 0) {
+                while (!shouldStopBatchGenerate() && activeTasks.size < workerLimit && startNextGenerateTask()) {
+                    // Fill available concurrency slots immediately.
+                }
 
-                    let createdJobId = '';
-                    try {
-                        const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                            project_id: projectId,
-                            episode_id: currentEpisode?.id,
-                            entity_id: entity?.id,
-                            entity_name: entity?.name || entity?.name_en,
-                            subject_name: entity?.name || entity?.name_en,
-                            subject_type: entity?.type,
-                            entity_type: entity?.type,
-                            prompt_language: resolvedPromptSubmitLang,
-                            asset_type: 'subject',
-                            ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                            negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities),
-                            on_job_created: (jobId) => {
-                                const stableJobId = String(jobId || '').trim();
-                                if (!stableJobId) return;
-                                createdJobId = stableJobId;
-                                if (shouldStopBatchGenerate()) {
-                                    void stopGenerationJob('image', stableJobId, { force: true });
-                                    return;
-                                }
-                                trackSubjectBatchImageJob('generate', entity, stableJobId);
-                            },
-                        });
+                if (activeTasks.size === 0) {
+                    break;
+                }
 
-                        if (shouldStopBatchGenerate()) {
-                            return { entity, stopped: true };
-                        }
+                const settledTask = await Promise.race(Array.from(activeTasks.values()).map(item => item.promise));
+                activeTasks.delete(settledTask.entityId);
 
-                        if (!res?.url) {
-                            throw new Error('Generated result missing image URL');
-                        }
+                const entity = settledTask.entity;
+                processedCount += 1;
 
-                        await updateEntity(entity.id, { image_url: res.url });
-                        return {
-                            entity,
-                            updatedEnt: { ...entity, image_url: res.url },
-                            imageUrl: res.url,
-                        };
-                    } finally {
-                        if (createdJobId) {
-                            untrackSubjectBatchImageJob('generate', entity?.id);
-                        }
-                    }
-                }));
-
-                const batchEntityIds = new Set(batch.map((entity) => entity.id));
-                queue = queue.filter(q => !batchEntityIds.has(q.id));
-
-                settled.forEach((result, batchIndex) => {
-                    const entity = batch[batchIndex];
-                    processedCount += 1;
-
-                    if (result.status === 'fulfilled') {
-                        if (result.value?.stopped) {
-                            // stop requested; ignore and let outer loop exit cleanly
-                        } else if (result.value?.skippedPrompt) {
-                            skippedPromptCount += 1;
-                            onLog?.(
-                                t(
-                                    `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
-                                    `Batch image generation skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
-                                ),
-                                'warning'
-                            );
-                        } else if (result.value?.imageUrl) {
-                            urlMap.set(entity.id, result.value.imageUrl);
-                            const updatedEnt = result.value.updatedEnt;
-                            setAllEntities(prev => prev.map(e => e.id === entity.id ? updatedEnt : e));
-                            setEntities(prev => (prev.some(p => p.id === entity.id)
-                                ? prev.map(e => e.id === entity.id ? updatedEnt : e)
-                                : prev));
-                            if (viewingEntity && viewingEntity.id === entity.id) {
-                                setViewingEntity(updatedEnt);
-                            }
-                        }
-                    } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
-                        console.error(`Batch Gen Error for ${entity.name}`, result.reason);
+                if (settledTask.status === 'fulfilled') {
+                    if (settledTask.value?.stopped) {
+                        // stop requested; ignore and let outer loop exit cleanly
+                    } else if (settledTask.value?.skippedPrompt) {
+                        skippedPromptCount += 1;
                         onLog?.(
                             t(
-                                `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`,
-                                `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`
+                                `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
+                                `Batch image generation skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
                             ),
-                            'error'
+                            'warning'
                         );
+                    } else if (settledTask.value?.imageUrl) {
+                        urlMap.set(entity.id, settledTask.value.imageUrl);
+                        const updatedEnt = settledTask.value.updatedEnt;
+                        setAllEntities(prev => prev.map(e => e.id === entity.id ? updatedEnt : e));
+                        setEntities(prev => (prev.some(p => p.id === entity.id)
+                            ? prev.map(e => e.id === entity.id ? updatedEnt : e)
+                            : prev));
+                        if (viewingEntity && viewingEntity.id === entity.id) {
+                            setViewingEntity(updatedEnt);
+                        }
                     }
+                } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
+                    console.error(`Batch Gen Error for ${entity.name}`, settledTask.reason);
+                    onLog?.(
+                        t(
+                            `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                            `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
+                        ),
+                        'error'
+                    );
+                }
 
-                    updateGenerateBatchRuntimeState(true, {
-                        current: processedCount,
-                        total: toGenerate.length,
-                        status: t(`已处理 ${processedCount}/${toGenerate.length}`, `Processed ${processedCount}/${toGenerate.length}`),
-                    });
+                updateGenerateBatchRuntimeState(true, {
+                    current: processedCount,
+                    total: toGenerate.length,
+                    status: t(`已处理 ${processedCount}/${toGenerate.length}`, `Processed ${processedCount}/${toGenerate.length}`),
                 });
+                updateGenerateActiveStatus();
             }
             if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
                 alert(t('批量生图已停止。', 'Batch image generation stopped.'));
@@ -23997,68 +24010,101 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         };
 
         try {
-            while (queue.length > 0) {
-                if (shotLocalBatchSessionRef.current !== batchSessionId || shotLocalBatchStopRequestedRef.current) {
+            const shouldStopShotBatch = () => (
+                shotLocalBatchSessionRef.current !== batchSessionId
+                || shotLocalBatchStopRequestedRef.current
+            );
+            const workerLimit = Math.max(1, SHOT_BATCH_PARALLEL_LIMIT);
+            const activeTasks = new Map();
+
+            const updateActiveKeyframeStatus = () => {
+                if (activeTasks.size === 0) return;
+                const activeLabels = Array.from(activeTasks.values())
+                    .map(({ shot }) => shot?.shot_id || shot?.shot_name || shot?.id)
+                    .filter(Boolean)
+                    .join(', ');
+                setBatchProgress({
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`处理中：${activeLabels}`, `Processing: ${activeLabels}`),
+                    stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
+                    currentShotLabel: activeLabels,
+                    currentAssetLabel: t('起始帧 → 结束帧', 'Start Frame -> End Frame'),
+                    mode: 'keyframes-local',
+                });
+            };
+
+            const runShotKeyframeTask = async (shot) => generateShotKeyframesBatchItem({
+                shotSnapshot: shot,
+                resolvedEntities,
+                priorEndFrameUrl: endUrlMap.get(prevShotIdByShotId.get(String(shot?.id || '').trim()) || '') || '',
+            });
+
+            const startNextShotTask = () => {
+                if (shouldStopShotBatch() || activeTasks.size >= workerLimit || queue.length === 0) {
+                    return false;
+                }
+
+                const nextShot = queue.find(isReady) || (activeTasks.size === 0 ? queue[0] : null);
+                if (!nextShot) {
+                    return false;
+                }
+
+                queue = queue.filter((shot) => String(shot?.id || '').trim() !== String(nextShot?.id || '').trim());
+                const shotId = String(nextShot?.id || '');
+                const wrappedPromise = runShotKeyframeTask(nextShot)
+                    .then((value) => ({ shotId, shot: nextShot, status: 'fulfilled', value }))
+                    .catch((reason) => ({ shotId, shot: nextShot, status: 'rejected', reason }));
+                activeTasks.set(shotId, { shot: nextShot, promise: wrappedPromise });
+                updateActiveKeyframeStatus();
+                return true;
+            };
+
+            while (queue.length > 0 || activeTasks.size > 0) {
+                while (!shouldStopShotBatch() && activeTasks.size < workerLimit && startNextShotTask()) {
+                    // Fill all available keyframe concurrency slots immediately.
+                }
+
+                if (activeTasks.size === 0) {
                     break;
                 }
 
-                const readyBatch = queue.filter(isReady).slice(0, SHOT_BATCH_PARALLEL_LIMIT);
-                const batch = readyBatch.length > 0 ? readyBatch : [queue[0]];
-                const batchLabel = batch.map((shot) => shot?.shot_id || shot?.shot_name || shot?.id).join(', ');
+                const settledTask = await Promise.race(Array.from(activeTasks.values()).map((item) => item.promise));
+                activeTasks.delete(settledTask.shotId);
+
+                const shot = settledTask.shot;
+                completed += 1;
+                if (settledTask.status === 'fulfilled') {
+                    success += 1;
+                    const nextPatch = settledTask.value?.shotPatch || {};
+                    applyShotPatchToLocalState(shot?.id, nextPatch);
+                    const stableShotId = String(shot?.id || '').trim();
+                    if (settledTask.value?.endUrl) {
+                        endUrlMap.set(stableShotId, settledTask.value.endUrl);
+                    } else if (settledTask.value?.startUrl && ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(String(shot?.end_frame || '').trim().toUpperCase())) {
+                        endUrlMap.set(stableShotId, settledTask.value.startUrl);
+                    }
+                } else {
+                    failed += 1;
+                    onLog?.(
+                        t(
+                            `镜头批量关键帧失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                            `Shot keyframe batch failed: ${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
+                        ),
+                        'error'
+                    );
+                }
 
                 setBatchProgress({
                     current: completed,
                     total: targetShots.length,
-                    status: t(`处理中：${batchLabel}`, `Processing: ${batchLabel}`),
-                    stopRequested: false,
-                    currentShotLabel: batchLabel,
+                    status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
+                    stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
+                    currentShotLabel: String(shot?.shot_id || shot?.shot_name || shot?.id || ''),
                     currentAssetLabel: t('起始帧 → 结束帧', 'Start Frame -> End Frame'),
                     mode: 'keyframes-local',
                 });
-
-                const settled = await Promise.allSettled(batch.map((shot) => generateShotKeyframesBatchItem({
-                    shotSnapshot: shot,
-                    resolvedEntities,
-                    priorEndFrameUrl: endUrlMap.get(prevShotIdByShotId.get(String(shot?.id || '').trim()) || '') || '',
-                })));
-
-                const batchShotIds = new Set(batch.map((shot) => String(shot?.id || '').trim()));
-                queue = queue.filter((shot) => !batchShotIds.has(String(shot?.id || '').trim()));
-
-                settled.forEach((result, batchIndex) => {
-                    const shot = batch[batchIndex];
-                    completed += 1;
-                    if (result.status === 'fulfilled') {
-                        success += 1;
-                        const nextPatch = result.value?.shotPatch || {};
-                        applyShotPatchToLocalState(shot?.id, nextPatch);
-                        const stableShotId = String(shot?.id || '').trim();
-                        if (result.value?.endUrl) {
-                            endUrlMap.set(stableShotId, result.value.endUrl);
-                        } else if (result.value?.startUrl && ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(String(shot?.end_frame || '').trim().toUpperCase())) {
-                            endUrlMap.set(stableShotId, result.value.startUrl);
-                        }
-                    } else {
-                        failed += 1;
-                        onLog?.(
-                            t(
-                                `镜头批量关键帧失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`,
-                                `Shot keyframe batch failed: ${shot?.shot_id || shot?.shot_name || shot?.id} - ${result.reason?.response?.data?.detail || result.reason?.message || 'Unknown error'}`
-                            ),
-                            'error'
-                        );
-                    }
-
-                    setBatchProgress({
-                        current: completed,
-                        total: targetShots.length,
-                        status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
-                        stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
-                        currentShotLabel: String(shot?.shot_id || shot?.shot_name || shot?.id || ''),
-                        currentAssetLabel: t('起始帧 → 结束帧', 'Start Frame -> End Frame'),
-                        mode: 'keyframes-local',
-                    });
-                });
+                updateActiveKeyframeStatus();
             }
 
             if (shotLocalBatchSessionRef.current !== batchSessionId || shotLocalBatchStopRequestedRef.current) {
