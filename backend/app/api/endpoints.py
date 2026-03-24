@@ -1002,6 +1002,260 @@ def _assert_allowed_shot_media_payload(update_data: Dict[str, Any]) -> None:
     )
 
 
+def _asset_meta_to_dict(raw_meta: Any) -> Dict[str, Any]:
+    if isinstance(raw_meta, dict):
+        return raw_meta
+    if isinstance(raw_meta, str):
+        try:
+            parsed = json.loads(raw_meta)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _visible_asset_owner_ids_for_project(project: Optional[Project], current_user: User) -> List[int]:
+    owner_ids = {int(current_user.id)}
+    try:
+        if project and getattr(project, "owner_id", None) is not None:
+            owner_ids.add(int(project.owner_id))
+    except Exception:
+        pass
+    return sorted(owner_ids)
+
+
+def _resolve_precise_asset_library_url(
+    db: Session,
+    current_user: User,
+    legacy_url: Any,
+    *,
+    project: Optional[Project],
+    entity_id: Optional[int] = None,
+    shot_id: Optional[int] = None,
+    asset_type_aliases: Optional[set] = None,
+    media_type: Optional[str] = None,
+    limit: int = 4000,
+) -> Optional[str]:
+    raw_legacy_url = str(legacy_url or "").strip()
+    if not _is_ephemeral_provider_media_url(raw_legacy_url):
+        return None
+
+    project_id = getattr(project, "id", None)
+    if not project_id:
+        return None
+    if entity_id is None and shot_id is None:
+        return None
+
+    owner_ids = _visible_asset_owner_ids_for_project(project, current_user)
+    query = db.query(Asset).filter(Asset.user_id.in_(owner_ids))
+    if media_type:
+        query = query.filter(Asset.type == str(media_type).strip().lower())
+
+    matched_urls: List[str] = []
+    candidates = query.order_by(Asset.id.desc()).limit(max(int(limit or 0), 1)).all()
+    for asset in candidates:
+        meta = _asset_meta_to_dict(asset.meta_info)
+        if str(meta.get("source_asset_url") or "").strip() != raw_legacy_url:
+            continue
+        if str(meta.get("project_id") or "").strip() != str(project_id):
+            continue
+        if entity_id is not None and str(meta.get("entity_id") or "").strip() != str(entity_id):
+            continue
+        if shot_id is not None and str(meta.get("shot_id") or "").strip() != str(shot_id):
+            continue
+
+        candidate_asset_type = str(meta.get("asset_type") or meta.get("frame_type") or "").strip().lower()
+        if asset_type_aliases and candidate_asset_type not in asset_type_aliases:
+            continue
+
+        stable_url = str(asset.url or "").strip()
+        if not stable_url or stable_url == raw_legacy_url or _is_ephemeral_provider_media_url(stable_url):
+            continue
+
+        matched_urls.append(stable_url)
+
+    unique_urls = sorted(set(matched_urls))
+    if len(unique_urls) != 1:
+        return None
+    return unique_urls[0]
+
+
+def _repair_entity_image_url_from_assets(
+    db: Session,
+    current_user: User,
+    project: Optional[Project],
+    entity: Optional[Entity],
+) -> bool:
+    if not entity:
+        return False
+
+    legacy_url = str(getattr(entity, "image_url", None) or "").strip()
+    if not _is_ephemeral_provider_media_url(legacy_url):
+        return False
+
+    resolved_url = _resolve_precise_asset_library_url(
+        db,
+        current_user,
+        legacy_url,
+        project=project,
+        entity_id=getattr(entity, "id", None),
+        asset_type_aliases={"subject", "character", "char"},
+        media_type="image",
+    )
+    if not resolved_url:
+        return False
+
+    entity.image_url = resolved_url
+    db.add(entity)
+    logger.info(
+        "[LegacyAssetRepair] entity_id=%s project_id=%s legacy_url=%s repaired_url=%s",
+        getattr(entity, "id", None),
+        getattr(entity, "project_id", None),
+        legacy_url,
+        resolved_url,
+    )
+    return True
+
+
+def _repair_shot_media_urls_from_assets(
+    db: Session,
+    current_user: User,
+    project: Optional[Project],
+    shot: Optional[Shot],
+) -> bool:
+    if not shot:
+        return False
+
+    changed = False
+    legacy_image_url = str(getattr(shot, "image_url", None) or "").strip()
+    if _is_ephemeral_provider_media_url(legacy_image_url):
+        resolved_image_url = _resolve_precise_asset_library_url(
+            db,
+            current_user,
+            legacy_image_url,
+            project=project,
+            shot_id=getattr(shot, "id", None),
+            asset_type_aliases={"start_frame", "start"},
+            media_type="image",
+        )
+        if resolved_image_url:
+            shot.image_url = resolved_image_url
+            db.add(shot)
+            changed = True
+            logger.info(
+                "[LegacyAssetRepair] shot_id=%s slot=start project_id=%s legacy_url=%s repaired_url=%s",
+                getattr(shot, "id", None),
+                getattr(shot, "project_id", None),
+                legacy_image_url,
+                resolved_image_url,
+            )
+
+    notes_changed = False
+    notes = _asset_meta_to_dict(getattr(shot, "technical_notes", None))
+    legacy_end_frame_url = str(notes.get("end_frame_url") or "").strip()
+    if _is_ephemeral_provider_media_url(legacy_end_frame_url):
+        resolved_end_frame_url = _resolve_precise_asset_library_url(
+            db,
+            current_user,
+            legacy_end_frame_url,
+            project=project,
+            shot_id=getattr(shot, "id", None),
+            asset_type_aliases={"end_frame", "end"},
+            media_type="image",
+        )
+        if resolved_end_frame_url:
+            notes["end_frame_url"] = resolved_end_frame_url
+            notes_changed = True
+            logger.info(
+                "[LegacyAssetRepair] shot_id=%s slot=end project_id=%s legacy_url=%s repaired_url=%s",
+                getattr(shot, "id", None),
+                getattr(shot, "project_id", None),
+                legacy_end_frame_url,
+                resolved_end_frame_url,
+            )
+
+    if notes_changed:
+        shot.technical_notes = json.dumps(notes, ensure_ascii=False)
+        db.add(shot)
+        changed = True
+
+    return changed
+
+
+def _repair_entities_image_urls_from_assets(
+    db: Session,
+    current_user: User,
+    project: Optional[Project],
+    entities: List[Entity],
+) -> List[Entity]:
+    changed = False
+    for entity in entities or []:
+        if _repair_entity_image_url_from_assets(db, current_user, project, entity):
+            changed = True
+    if changed:
+        db.commit()
+    return entities
+
+
+def _repair_shots_media_urls_from_assets(
+    db: Session,
+    current_user: User,
+    project: Optional[Project],
+    shots: List[Shot],
+) -> List[Shot]:
+    changed = False
+    for shot in shots or []:
+        if _repair_shot_media_urls_from_assets(db, current_user, project, shot):
+            changed = True
+    if changed:
+        db.commit()
+    return shots
+
+
+def _replace_legacy_temp_urls_in_shot_payload(
+    db: Session,
+    current_user: User,
+    project: Optional[Project],
+    shot: Shot,
+    update_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    patched = dict(update_data or {})
+
+    image_url = patched.get("image_url")
+    if _is_ephemeral_provider_media_url(image_url):
+        resolved_image_url = _resolve_precise_asset_library_url(
+            db,
+            current_user,
+            image_url,
+            project=project,
+            shot_id=getattr(shot, "id", None),
+            asset_type_aliases={"start_frame", "start"},
+            media_type="image",
+        )
+        if resolved_image_url:
+            patched["image_url"] = resolved_image_url
+
+    raw_technical_notes = patched.get("technical_notes")
+    if raw_technical_notes is not None:
+        notes = _asset_meta_to_dict(raw_technical_notes)
+        end_frame_url = notes.get("end_frame_url")
+        if _is_ephemeral_provider_media_url(end_frame_url):
+            resolved_end_frame_url = _resolve_precise_asset_library_url(
+                db,
+                current_user,
+                end_frame_url,
+                project=project,
+                shot_id=getattr(shot, "id", None),
+                asset_type_aliases={"end_frame", "end"},
+                media_type="image",
+            )
+            if resolved_end_frame_url:
+                notes["end_frame_url"] = resolved_end_frame_url
+                patched["technical_notes"] = notes if isinstance(raw_technical_notes, dict) else json.dumps(notes, ensure_ascii=False)
+
+    return patched
+
+
 def _video_job_file_path(job_id: str) -> str:
     safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(job_id or "").strip())
     return os.path.join(VIDEO_JOB_FILE_DIR, f"{safe_job_id}.json")
@@ -10888,7 +11142,8 @@ def read_episode_shots(
 
     safe_skip = max(int(skip or 0), 0)
     safe_limit = max(1, min(int(limit or 300), 500))
-    return query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
+    shots = query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
+    return _repair_shots_media_urls_from_assets(db, current_user, project, shots)
 
 class AIShotGenRequest(BaseModel):
     user_prompt: Optional[str] = None
@@ -12811,11 +13066,12 @@ def read_shots(
         
     # Optimized: Return shots strictly by Scene ID (Physical Association)
     # Removing logical 'scene_code' sync as requested.
-    return db.query(Shot).filter(
+    shots = db.query(Shot).filter(
         Shot.project_id == project.id,
         Shot.episode_id == episode.id,
         Shot.scene_id == scene_id
     ).all()
+    return _repair_shots_media_urls_from_assets(db, current_user, project, shots)
 
 @router.post("/scenes/{scene_id}/shots", response_model=ShotOut)
 def create_shot(
@@ -12899,9 +13155,10 @@ def update_shot(
         
     scene = db.query(Scene).filter(Scene.id == db_shot.scene_id).first()
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    _require_project_access(db, episode.project_id, current_user)
+    project = _require_project_access(db, episode.project_id, current_user)
 
     update_data = shot_in.dict(exclude_unset=True)
+    update_data = _replace_legacy_temp_urls_in_shot_payload(db, current_user, project, db_shot, update_data)
     _assert_allowed_shot_media_payload(update_data)
 
     for key, value in update_data.items():
@@ -12994,12 +13251,13 @@ def read_entities(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    _require_project_access(db, project_id, current_user)
-    
+    project = _require_project_access(db, project_id, current_user)
+
     query = db.query(Entity).filter(Entity.project_id == project_id)
     if type:
         query = query.filter(Entity.type == type)
-    return query.all()
+    entities = query.all()
+    return _repair_entities_image_urls_from_assets(db, current_user, project, entities)
 
 @router.post("/projects/{project_id}/entities", response_model=EntityOut)
 def create_entity(
@@ -13008,7 +13266,7 @@ def create_entity(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    _require_project_access(db, project_id, current_user)
+    project = _require_project_access(db, project_id, current_user)
 
     _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
 
@@ -13030,6 +13288,8 @@ def create_entity(
     if existing_entity:
         # If entity exists, do NOT update or overwrite it during subject import.
         # Reuse the existing DB row and ignore incoming fields for this duplicate entity.
+        if _repair_entity_image_url_from_assets(db, current_user, project, existing_entity):
+            db.commit()
         return existing_entity
     else:
         # Create new
@@ -13160,7 +13420,7 @@ async def clone_entity_with_llm(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_project_access(db, project_id, current_user)
+    project = _require_project_access(db, project_id, current_user)
 
     source = db.query(Entity).filter(
         Entity.id == entity_id,
@@ -13168,6 +13428,8 @@ async def clone_entity_with_llm(
     ).first()
     if not source:
         raise HTTPException(status_code=404, detail="Entity not found")
+
+    _repair_entity_image_url_from_assets(db, current_user, project, source)
 
     instruction = str(req.modification_instruction or "").strip()
     if not instruction:
@@ -13401,7 +13663,21 @@ def update_entity(
     # Verify ownership via project
     project = _require_project_access(db, entity.project_id, current_user)
 
+    _repair_entity_image_url_from_assets(db, current_user, project, entity)
+
     update_data = entity_in.dict(exclude_unset=True)
+    if _is_ephemeral_provider_media_url(update_data.get("image_url")):
+        resolved_image_url = _resolve_precise_asset_library_url(
+            db,
+            current_user,
+            update_data.get("image_url"),
+            project=project,
+            entity_id=getattr(entity, "id", None),
+            asset_type_aliases={"subject", "character", "char"},
+            media_type="image",
+        )
+        if resolved_image_url:
+            update_data["image_url"] = resolved_image_url
     _assert_allowed_persisted_media_url(update_data.get("image_url"), field_label="entity.image_url")
     
     # Separate standard columns from custom attributes
@@ -13471,12 +13747,26 @@ async def generate_sora_character(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     
-    _require_project_access(db, entity.project_id, current_user)
+    project = _require_project_access(db, entity.project_id, current_user)
+
+    _repair_entity_image_url_from_assets(db, current_user, project, entity)
 
     logger.info(f"[sora_char] Generating for entity {entity.name}. MainImg: {req.main_image_url}")
 
     # 2. Update Entity Data (Save inputs)
     if req.main_image_url:
+        if _is_ephemeral_provider_media_url(req.main_image_url):
+            resolved_main_image_url = _resolve_precise_asset_library_url(
+                db,
+                current_user,
+                req.main_image_url,
+                project=project,
+                entity_id=getattr(entity, "id", None),
+                asset_type_aliases={"subject", "character", "char"},
+                media_type="image",
+            )
+            if resolved_main_image_url:
+                req = req.copy(update={"main_image_url": resolved_main_image_url})
         _assert_allowed_persisted_media_url(req.main_image_url, field_label="entity.image_url")
         entity.image_url = req.main_image_url
     
