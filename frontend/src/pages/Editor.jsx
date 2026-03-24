@@ -15699,6 +15699,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
     const IMAGE_JOB_CACHE_PURGE_MARKER_KEY = `aistory.imageJobCachePurge.${IMAGE_JOB_CACHE_PURGE_VERSION}`;
     const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
+    const SUBJECT_IMAGE_JOB_OWNER_PAGE = 'subject-library';
+    const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
     const createSubjectBatchTaskState = () => ({
         running: false,
         progress: null,
@@ -15867,6 +15869,76 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const SUBJECT_IMAGE_JOB_TTL_MS = 1000 * 60 * 60 * 6;
     const SUBJECT_IMAGE_JOB_MAX_RUNNING_MS = 1000 * 60 * 20;
 
+    const isEphemeralProviderMediaUrl = useCallback((url) => {
+        const rawUrl = String(url || '').trim();
+        if (!rawUrl) return false;
+        try {
+            const parsed = new URL(rawUrl, window.location.origin);
+            return /^file\d+\.aitohumanize\.com$/i.test(String(parsed.hostname || '').trim());
+        } catch {
+            return false;
+        }
+    }, []);
+
+    const buildSubjectJobMeta = useCallback((entityId, jobKind = 'generate', base = {}) => ({
+        ownerPage: SUBJECT_IMAGE_JOB_OWNER_PAGE,
+        ownerScopeType: 'project',
+        ownerScopeId: String(projectId || '').trim(),
+        ownerEntityId: String(entityId || '').trim(),
+        jobKind: jobKind === 'reconstruct' ? 'reconstruct' : 'generate',
+        statusFailureCount: Math.max(0, Number(base?.statusFailureCount || 0) || 0),
+        lastStatusError: String(base?.lastStatusError || '').trim(),
+        lastPolledAt: Number(base?.lastPolledAt || 0) || 0,
+    }), [projectId]);
+
+    const describeSubjectJobOwner = useCallback((payload, entityId) => {
+        const stableEntityId = String(payload?.ownerEntityId || entityId || '').trim() || 'unknown-entity';
+        const stableScopeId = String(payload?.ownerScopeId || projectId || '').trim() || 'unknown-project';
+        const stableJobKind = payload?.jobKind === 'reconstruct' ? 'reconstruct' : 'generate';
+        return `subject-library/project:${stableScopeId}/entity:${stableEntityId}/${stableJobKind}`;
+    }, [projectId]);
+
+    const forceClearSubjectImageJob = useCallback(async (entityId, payload, reason) => {
+        const stableEntityId = String(entityId || payload?.ownerEntityId || '').trim();
+        const stableJobId = String(payload?.jobId || '').trim();
+        const ownerLabel = describeSubjectJobOwner(payload, stableEntityId);
+        const reasonText = String(reason || 'forced clear').trim();
+
+        if (stableJobId) {
+            try {
+                await stopGenerationJob('image', stableJobId, { force: true });
+            } catch {
+                // Best effort stop.
+            }
+            try {
+                await deleteGenerationJob('image', stableJobId);
+            } catch {
+                // Best effort delete.
+            }
+        }
+
+        setSubjectImageJobs((prev) => {
+            const next = { ...(prev || {}) };
+            delete next[stableEntityId];
+            return next;
+        });
+        setStoppingSubjectImageJobs((prev) => {
+            const next = { ...(prev || {}) };
+            delete next[stableEntityId];
+            return next;
+        });
+
+        if (onLog) {
+            onLog(
+                t(
+                    `已强制清理主体任务：${ownerLabel}，原因：${reasonText}`,
+                    `Subject job force-cleared: ${ownerLabel}. Reason: ${reasonText}`
+                ),
+                'warning'
+            );
+        }
+    }, [deleteGenerationJob, describeSubjectJobOwner, onLog, stopGenerationJob, t]);
+
     const showSubjectNotification = useCallback((message, type = 'success') => {
         setSubjectNotification({ message, type });
         setTimeout(() => setSubjectNotification(null), 3000);
@@ -15894,9 +15966,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 status: 'queued',
                 startedAt: Date.now(),
                 entityName: entity?.name || entity?.name_en || stableEntityId,
+                ...buildSubjectJobMeta(stableEntityId, kind),
             },
         }));
-    }, []);
+    }, [buildSubjectJobMeta]);
 
     const untrackSubjectBatchImageJob = useCallback((kind, entityId) => {
         const stableEntityId = String(entityId || '').trim();
@@ -15942,14 +16015,17 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             const startedAt = Number(value?.startedAt || 0) || now;
             if (!stableEntityId || !jobId) return;
             if ((now - startedAt) > SUBJECT_IMAGE_JOB_TTL_MS) return;
+            const jobKind = value?.jobKind === 'reconstruct' ? 'reconstruct' : 'generate';
             cleaned[stableEntityId] = {
                 jobId,
                 startedAt,
                 entityName: String(value?.entityName || '').trim(),
+                status: String(value?.status || '').trim(),
+                ...buildSubjectJobMeta(stableEntityId, jobKind, value),
             };
         });
         return cleaned;
-    }, []);
+    }, [SUBJECT_IMAGE_JOB_TTL_MS, buildSubjectJobMeta]);
 
     const readSubjectImageJobsStorage = useCallback(() => {
         if (!subjectImageJobStorageKey) return {};
@@ -16200,19 +16276,54 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     let statusResp = null;
                     try {
                         statusResp = await getImageGenerationJobStatus(jobId);
-                    } catch {
+                    } catch (statusErr) {
+                        const detail = String(statusErr?.response?.data?.detail || statusErr?.message || 'unknown error').trim();
+                        const nextFailureCount = Math.max(0, Number(job?.statusFailureCount || 0) || 0) + 1;
+                        if (nextFailureCount >= SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES) {
+                            await forceClearSubjectImageJob(
+                                entityId,
+                                job,
+                                `status polling failed ${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}: ${detail}`
+                            );
+                        } else {
+                            statusUpdates[String(entityId)] = {
+                                statusFailureCount: nextFailureCount,
+                                lastStatusError: detail,
+                                lastPolledAt: Date.now(),
+                            };
+                            if (onLog) {
+                                onLog(
+                                    t(
+                                        `主体任务状态查询失败（${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}）：${job?.entityName || entityId} - ${detail}`,
+                                        `Subject job status polling failed (${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}): ${job?.entityName || entityId} - ${detail}`
+                                    ),
+                                    'warning'
+                                );
+                            }
+                        }
                         continue;
                     }
 
                     const status = String(statusResp?.status || '').trim().toLowerCase();
                     const generatedUrl = extractImageJobResultUrl(statusResp);
                     if (generatedUrl) {
-                        try {
-                            await updateEntity(Number(entityId), { image_url: generatedUrl });
-                        } catch {
-                            // Best effort; local refresh still updates UX.
+                        const canPersistGeneratedUrl = !isEphemeralProviderMediaUrl(generatedUrl);
+                        if (canPersistGeneratedUrl) {
+                            try {
+                                await updateEntity(Number(entityId), { image_url: generatedUrl });
+                            } catch {
+                                // Best effort; local refresh still updates UX.
+                            }
+                        } else if (onLog) {
+                            onLog(
+                                t(
+                                    `主体任务返回了临时图片地址，已跳过持久化：${job?.entityName || entityId}`,
+                                    `Subject job returned a temporary image URL; skipped persistence: ${job?.entityName || entityId}`
+                                ),
+                                'warning'
+                            );
                         }
-                        if (!disposed && isMountedRef.current) {
+                        if (canPersistGeneratedUrl && !disposed && isMountedRef.current) {
                             setAllEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
                             setEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
                             setViewingEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
@@ -16229,13 +16340,18 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     if (status === 'queued' || status === 'running') {
                         const startedAtMs = Number(job?.startedAt || 0) || 0;
                         if (startedAtMs > 0 && (Date.now() - startedAtMs) > SUBJECT_IMAGE_JOB_MAX_RUNNING_MS) {
-                            if (onLog) onLog(t(`主体生成超时，已移除等待：${job?.entityName || entityId}`, `Subject generation timed out, removed from pending queue: ${job?.entityName || entityId}`), 'warning');
-                            completed.push(entityId);
+                            await forceClearSubjectImageJob(
+                                entityId,
+                                job,
+                                `running longer than ${Math.round(SUBJECT_IMAGE_JOB_MAX_RUNNING_MS / 60000)} minutes`
+                            );
                             continue;
                         }
                         statusUpdates[String(entityId)] = {
                             status,
                             lastPolledAt: Date.now(),
+                            statusFailureCount: 0,
+                            lastStatusError: '',
                         };
                         continue;
                     }
@@ -16293,7 +16409,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             disposed = true;
             clearInterval(timer);
         };
-    }, [extractImageJobResultUrl, onLog, selectedEntity?.id, showImageModal, subjectImageJobs, t]);
+    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, selectedEntity?.id, showImageModal, subjectImageJobs, t]);
 
     useEffect(() => {
         const applySnapshot = (snapshot) => {
@@ -17402,6 +17518,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         status: 'queued',
                         startedAt: Date.now(),
                         entityName: targetEntityName,
+                        ...buildSubjectJobMeta(targetEntityId, 'generate'),
                     },
                 }));
             }
@@ -17677,6 +17794,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
                     if (!res?.url) {
                         throw new Error('Generated result missing image URL');
+                    }
+
+                    if (isEphemeralProviderMediaUrl(res.url)) {
+                        throw new Error('Generated result returned a temporary provider URL');
                     }
 
                     await updateEntity(entity.id, { image_url: res.url });
@@ -19227,6 +19348,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!activeEpisode?.id) return '';
         return `aistory.shotGenerationState.${activeEpisode.id}`;
     }, [activeEpisode?.id]);
+    const SHOT_JOB_OWNER_PAGE = 'shot-editor';
+    const SHOT_JOB_MAX_STATUS_FAILURES = 3;
     const imageJobStateStorageKey = useMemo(() => {
         if (!activeEpisode?.id) return '';
         return `aistory.shotImageJobs.${activeEpisode.id}`;
@@ -19245,6 +19368,36 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const IMAGE_JOB_STATE_TTL_MS = 1000 * 60 * 60;
     const VIDEO_JOB_STATE_TTL_MS = 1000 * 60 * 60;
     const shotsRefreshRequestSeqRef = useRef(0);
+
+    const resolveShotSceneId = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return '';
+        const currentShot = (shotsRef.current || []).find((item) => String(item?.id || '') === stableShotId)
+            || (editingShotRef.current && String(editingShotRef.current?.id || '') === stableShotId ? editingShotRef.current : null);
+        return String(currentShot?.scene_id || '').trim();
+    }, []);
+
+    const buildShotJobMeta = useCallback((shotId, mediaKind, base = {}) => ({
+        ownerPage: SHOT_JOB_OWNER_PAGE,
+        ownerScopeType: 'episode',
+        ownerScopeId: String(activeEpisode?.id || '').trim(),
+        ownerSceneId: String(base?.ownerSceneId || resolveShotSceneId(shotId) || '').trim(),
+        ownerShotId: String(shotId || '').trim(),
+        ownerMediaKind: mediaKind === 'video' ? 'video' : (mediaKind === 'end' ? 'end' : 'start'),
+        statusFailureCount: Math.max(0, Number(base?.statusFailureCount || 0) || 0),
+        lastStatusError: String(base?.lastStatusError || '').trim(),
+        lastPolledAt: Number(base?.lastPolledAt || 0) || 0,
+    }), [activeEpisode?.id, resolveShotSceneId]);
+
+    const describeShotJobOwner = useCallback((payload, shotId, mediaKind) => {
+        const stableShotId = String(payload?.ownerShotId || shotId || '').trim() || 'unknown-shot';
+        const stableEpisodeId = String(payload?.ownerScopeId || activeEpisode?.id || '').trim() || 'unknown-episode';
+        const stableSceneId = String(payload?.ownerSceneId || resolveShotSceneId(stableShotId) || '').trim();
+        const stableMediaKind = payload?.ownerMediaKind === 'video'
+            ? 'video'
+            : (payload?.ownerMediaKind === 'end' ? 'end' : (mediaKind === 'video' ? 'video' : (mediaKind === 'end' ? 'end' : 'start')));
+        return `shot-editor/episode:${stableEpisodeId}${stableSceneId ? `/scene:${stableSceneId}` : ''}/shot:${stableShotId}/${stableMediaKind}`;
+    }, [activeEpisode?.id, resolveShotSceneId]);
 
     const createShotBatchProgressState = useCallback(() => ({
         current: 0,
@@ -19534,14 +19687,18 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 const startedAt = Number(payload?.startedAt || 0);
                 if (!shotId || !jobId) return;
                 if (startedAt > 0 && (now - startedAt) > VIDEO_JOB_STATE_TTL_MS) return;
-                cleaned[String(shotId)] = { jobId, startedAt: startedAt || now };
+                cleaned[String(shotId)] = {
+                    jobId,
+                    startedAt: startedAt || now,
+                    ...buildShotJobMeta(String(shotId), 'video', payload),
+                };
             });
             return cleaned;
         } catch (e) {
             console.warn('Failed to read shot video job state', e);
             return {};
         }
-    }, [videoJobStateStorageKey]);
+    }, [VIDEO_JOB_STATE_TTL_MS, buildShotJobMeta, videoJobStateStorageKey]);
 
     const normalizeImageJobState = useCallback((raw) => {
         if (!raw || typeof raw !== 'object') return {};
@@ -19561,10 +19718,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 jobId: stableJobId,
                 startedAt: startedAt || now,
                 mode: payload?.mode === 'joint_diptych' ? 'joint_diptych' : 'single',
+                ...buildShotJobMeta(stableShotId, stableKind, payload),
             };
         });
         return cleaned;
-    }, [IMAGE_JOB_STATE_TTL_MS]);
+    }, [IMAGE_JOB_STATE_TTL_MS, buildShotJobMeta]);
 
     const readImageJobStateStorage = useCallback(() => {
         if (!imageJobStateStorageKey) return {};
@@ -19608,7 +19766,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [videoJobStateStorageKey]);
 
-    const setPendingVideoJob = useCallback((shotId, jobId) => {
+    const setPendingVideoJob = useCallback((shotId, jobId, options = {}) => {
         const stableShotId = String(shotId || '').trim();
         const stableJobId = String(jobId || '').trim();
         if (!stableShotId || !stableJobId) return;
@@ -19617,11 +19775,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             ...prev,
             [stableShotId]: {
                 jobId: stableJobId,
-                startedAt: Date.now(),
+                startedAt: Number(options?.startedAt || 0) || Date.now(),
+                ...buildShotJobMeta(stableShotId, 'video', options),
             },
         };
         writeVideoJobStateStorage(next);
-    }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
+    }, [buildShotJobMeta, readVideoJobStateStorage, writeVideoJobStateStorage]);
 
     const clearPendingVideoJob = useCallback((shotId) => {
         const stableShotId = String(shotId || '').trim();
@@ -19684,7 +19843,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return String(all?.[stableShotId]?.jobId || '').trim();
     }, [readVideoJobStateStorage]);
 
-    const setPendingImageJob = useCallback((shotId, kind, jobId) => {
+    const setPendingImageJob = useCallback((shotId, kind, jobId, options = {}) => {
         const stableShotId = String(shotId || '').trim();
         const stableKind = kind === 'end' ? 'end' : 'start';
         const stableJobId = String(jobId || '').trim();
@@ -19697,11 +19856,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shotId: stableShotId,
                 kind: stableKind,
                 jobId: stableJobId,
-                startedAt: Date.now(),
+                startedAt: Number(options?.startedAt || 0) || Date.now(),
+                mode: options?.mode === 'joint_diptych' ? 'joint_diptych' : 'single',
+                ...buildShotJobMeta(stableShotId, stableKind, options),
             },
         };
         writeImageJobStateStorage(next);
-    }, [readImageJobStateStorage, writeImageJobStateStorage]);
+    }, [buildShotJobMeta, readImageJobStateStorage, writeImageJobStateStorage]);
 
     const getPendingImageJobId = useCallback((shotId, kind) => {
         const stableShotId = String(shotId || '').trim();
@@ -19747,12 +19908,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         writeImageJobStateStorage(next);
     }, [readImageJobStateStorage, writeImageJobStateStorage]);
 
-    const setPendingJointDiptychImageJob = useCallback((shotId, jobId) => {
+    const setPendingJointDiptychImageJob = useCallback((shotId, jobId, options = {}) => {
         const stableShotId = String(shotId || '').trim();
         const stableJobId = String(jobId || '').trim();
         if (!stableShotId || !stableJobId) return;
         const prev = readImageJobStateStorage();
-        const startedAt = Date.now();
+        const startedAt = Number(options?.startedAt || 0) || Date.now();
         const next = {
             ...prev,
             [`${stableShotId}:start`]: {
@@ -19761,6 +19922,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 jobId: stableJobId,
                 startedAt,
                 mode: 'joint_diptych',
+                ...buildShotJobMeta(stableShotId, 'start', options),
             },
             [`${stableShotId}:end`]: {
                 shotId: stableShotId,
@@ -19768,10 +19930,69 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 jobId: stableJobId,
                 startedAt,
                 mode: 'joint_diptych',
+                ...buildShotJobMeta(stableShotId, 'end', options),
             },
         };
         writeImageJobStateStorage(next);
-    }, [readImageJobStateStorage, writeImageJobStateStorage]);
+    }, [buildShotJobMeta, readImageJobStateStorage, writeImageJobStateStorage]);
+
+    const forceClearShotImageJob = useCallback(async ({ shotId, kind, payload, reason }) => {
+        const stableShotId = String(shotId || payload?.ownerShotId || '').trim();
+        const stableKind = kind === 'end' ? 'end' : 'start';
+        const stableJobId = String(payload?.jobId || '').trim();
+        const isJointDiptych = payload?.mode === 'joint_diptych';
+        const ownerLabel = describeShotJobOwner(payload, stableShotId, stableKind);
+        const reasonText = String(reason || 'forced clear').trim();
+
+        if (stableJobId) {
+            try {
+                await stopGenerationJob('image', stableJobId, { force: true });
+            } catch {
+                // Best effort stop.
+            }
+            try {
+                await deleteGenerationJob('image', stableJobId);
+            } catch {
+                // Best effort delete.
+            }
+        }
+
+        if (isJointDiptych) {
+            clearPendingJointDiptychImageJob(stableShotId);
+            setShotGeneratingState(stableShotId, 'start', false);
+            setShotGeneratingState(stableShotId, 'end', false);
+        } else {
+            clearPendingImageJob(stableShotId, stableKind);
+            setShotGeneratingState(stableShotId, stableKind, false);
+        }
+
+        onLog?.(`Shot image job force-cleared: ${ownerLabel}. Reason: ${reasonText}`, 'warning');
+    }, [clearPendingImageJob, clearPendingJointDiptychImageJob, deleteGenerationJob, describeShotJobOwner, onLog, setShotGeneratingState, stopGenerationJob]);
+
+    const forceClearShotVideoJob = useCallback(async ({ shotId, payload, reason }) => {
+        const stableShotId = String(shotId || payload?.ownerShotId || '').trim();
+        const stableJobId = String(payload?.jobId || '').trim();
+        const ownerLabel = describeShotJobOwner(payload, stableShotId, 'video');
+        const reasonText = String(reason || 'forced clear').trim();
+
+        if (stableJobId) {
+            try {
+                await stopGenerationJob('video', stableJobId, { force: true });
+            } catch {
+                // Best effort stop.
+            }
+            try {
+                await deleteGenerationJob('video', stableJobId);
+            } catch {
+                // Best effort delete.
+            }
+            delete pausedResumeVideoJobsRef.current[stableJobId];
+        }
+
+        clearPendingVideoJob(stableShotId);
+        setShotGeneratingState(stableShotId, 'video', false);
+        onLog?.(`Shot video job force-cleared: ${ownerLabel}. Reason: ${reasonText}`, 'warning');
+    }, [clearPendingVideoJob, deleteGenerationJob, describeShotJobOwner, onLog, setShotGeneratingState, stopGenerationJob]);
 
     const clearPendingJointDiptychImageJob = useCallback((shotId) => {
         const stableShotId = String(shotId || '').trim();
@@ -21343,6 +21564,24 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         const resultUrl = extractImageJobResultUrl(status);
                         errorStreak = 0;
                         waitMs = 2500;
+                        if (Number(payload?.statusFailureCount || 0) > 0) {
+                            if (isJointDiptych) {
+                                setPendingJointDiptychImageJob(stableShotId, jobId, {
+                                    startedAt: payload?.startedAt,
+                                    statusFailureCount: 0,
+                                    lastStatusError: '',
+                                    lastPolledAt: Date.now(),
+                                });
+                            } else {
+                                setPendingImageJob(stableShotId, stableKind, jobId, {
+                                    startedAt: payload?.startedAt,
+                                    mode: payload?.mode,
+                                    statusFailureCount: 0,
+                                    lastStatusError: '',
+                                    lastPolledAt: Date.now(),
+                                });
+                            }
+                        }
 
                         if (resultUrl || phase === 'succeeded' || phase === 'completed') {
                             if (resultUrl) {
@@ -21431,10 +21670,33 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                         errorStreak += 1;
                         waitMs = Math.min(12000, Math.round(waitMs * 1.6));
-                        if (errorStreak >= 6) {
-                            onLog?.(`Image polling paused for shot ${stableShotId} due to repeated network/resource errors.`, 'warning');
+                        if (errorStreak >= SHOT_JOB_MAX_STATUS_FAILURES) {
+                            await forceClearShotImageJob({
+                                shotId: stableShotId,
+                                kind: stableKind,
+                                payload,
+                                reason: `status polling failed ${errorStreak}/${SHOT_JOB_MAX_STATUS_FAILURES}: ${detail || 'unknown error'}`,
+                            });
                             break;
                         }
+
+                        if (isJointDiptych) {
+                            setPendingJointDiptychImageJob(stableShotId, jobId, {
+                                startedAt: payload?.startedAt,
+                                statusFailureCount: errorStreak,
+                                lastStatusError: String(detail || '').trim(),
+                                lastPolledAt: Date.now(),
+                            });
+                        } else {
+                            setPendingImageJob(stableShotId, stableKind, jobId, {
+                                startedAt: payload?.startedAt,
+                                mode: payload?.mode,
+                                statusFailureCount: errorStreak,
+                                lastStatusError: String(detail || '').trim(),
+                                lastPolledAt: Date.now(),
+                            });
+                        }
+                        onLog?.(`Image polling retry ${errorStreak}/${SHOT_JOB_MAX_STATUS_FAILURES} for shot ${stableShotId} (${stableKind}).`, 'warning');
                     }
 
                     await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -21451,12 +21713,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         activeEpisode?.id,
         clearPendingImageJob,
         clearPendingJointDiptychImageJob,
+        forceClearShotImageJob,
         extractImageJobResultUrl,
         onLog,
         onUpdateShot,
         applyJointShotDiptychResult,
         readImageJobStateStorage,
         refreshShots,
+        setPendingImageJob,
+        setPendingJointDiptychImageJob,
         setEditingShot,
         setShotGeneratingState,
     ]);
@@ -21533,6 +21798,14 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             ).trim();
                             errorStreak = 0;
                             waitMs = 3000;
+                            if (Number(payload?.statusFailureCount || 0) > 0) {
+                                setPendingVideoJob(stableShotId, jobId, {
+                                    startedAt: payload?.startedAt,
+                                    statusFailureCount: 0,
+                                    lastStatusError: '',
+                                    lastPolledAt: Date.now(),
+                                });
+                            }
 
                             if (resultUrl || phase === 'succeeded' || phase === 'completed') {
                                 const serverBoundVideoUrl = resultUrl || await probeShotVideoUrl(stableShotId);
@@ -21592,12 +21865,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
                             errorStreak += 1;
                             waitMs = Math.min(15000, Math.round(waitMs * 1.6));
-                            if (errorStreak >= 6) {
-                                setShotGeneratingState(stableShotId, 'video', false);
-                                pausedResumeVideoJobsRef.current[jobId] = Date.now() + 120000;
-                                onLog?.(`Video polling paused for shot ${stableShotId} due to repeated network/resource errors.`, 'warning');
+                            if (errorStreak >= SHOT_JOB_MAX_STATUS_FAILURES) {
+                                await forceClearShotVideoJob({
+                                    shotId: stableShotId,
+                                    payload,
+                                    reason: `status polling failed ${errorStreak}/${SHOT_JOB_MAX_STATUS_FAILURES}: ${detail || 'unknown error'}`,
+                                });
                                 break;
                             }
+
+                            setPendingVideoJob(stableShotId, jobId, {
+                                startedAt: payload?.startedAt,
+                                statusFailureCount: errorStreak,
+                                lastStatusError: String(detail || '').trim(),
+                                lastPolledAt: Date.now(),
+                            });
+                            onLog?.(`Video polling retry ${errorStreak}/${SHOT_JOB_MAX_STATUS_FAILURES} for shot ${stableShotId}.`, 'warning');
                         }
 
                         await new Promise(resolve => setTimeout(resolve, waitMs));
@@ -21616,11 +21899,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, [
         activeEpisode?.id,
         clearPendingVideoJobsByJobId,
+        forceClearShotVideoJob,
         onLog,
         onUpdateShot,
         readVideoJobStateStorage,
         refreshShots,
         setEditingShot,
+        setPendingVideoJob,
         setShotGeneratingState,
         writeVideoJobStateStorage,
     ]);
