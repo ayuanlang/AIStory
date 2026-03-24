@@ -4468,8 +4468,14 @@ class MediaGenerationService:
                 ref_list = [ref_image] if isinstance(ref_image, str) else ref_image
                 resolved_refs = []
                 _debug_log(f"[Grsai] Processing {len(ref_list)} reference images...")
+                prefer_public_upload_url = self._is_public_deployment_hint()
                 for i, r in enumerate(ref_list):
-                    resolved = self._resolve_ref_for_api(r, force_data_uri_for_local=True)
+                    resolved = self._resolve_ref_for_api(
+                        r,
+                        force_data_uri_for_local=True,
+                        prefer_public_upload_url=prefer_public_upload_url,
+                        data_uri_profile="grsai_image_ref",
+                    )
                     if resolved:
                         resolved_refs.append(resolved)
                     else:
@@ -9469,7 +9475,8 @@ class MediaGenerationService:
         if not raw:
             return None
         if raw.startswith("data:"):
-            return raw
+            optimized = self._optimize_data_uri_image(raw, profile=data_uri_profile)
+            return optimized or raw
         if self._is_public_http_url(raw):
             return raw
         if prefer_public_upload_url:
@@ -9843,6 +9850,10 @@ class MediaGenerationService:
 
     def _resolve_data_uri_optimization_limits(self, profile: Optional[str] = None) -> tuple[int, int]:
         normalized_profile = str(profile or "").strip().lower()
+        if normalized_profile == "grsai_image_ref":
+            max_bytes = max(192 * 1024, int(os.getenv("GRSAI_IMAGE_REF_DATA_URI_MAX_BYTES", str(512 * 1024))))
+            max_edge = max(768, int(os.getenv("GRSAI_IMAGE_REF_DATA_URI_MAX_EDGE", "1280")))
+            return max_bytes, max_edge
         if normalized_profile == "n1n_image_ref":
             max_bytes = max(256 * 1024, int(os.getenv("N1N_IMAGE_REF_DATA_URI_MAX_BYTES", str(2 * 1024 * 1024))))
             max_edge = max(512, int(os.getenv("N1N_IMAGE_REF_DATA_URI_MAX_EDGE", "1536")))
@@ -9893,6 +9904,35 @@ class MediaGenerationService:
             _debug_log(f"[MediaService] Image optimize skipped: {e}", "warning")
 
         return data, mime
+
+    def _optimize_data_uri_image(self, value: Any, profile: Optional[str] = None) -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw.startswith("data:image/"):
+            return None
+
+        marker = ";base64,"
+        idx = raw.find(marker)
+        if idx <= 0:
+            return None
+
+        mime = raw[5:idx].strip().lower() or "image/png"
+        b64_part = raw[idx + len(marker):].strip()
+        if not b64_part:
+            return None
+
+        try:
+            binary = base64.b64decode(b64_part)
+        except Exception:
+            return None
+
+        optimized_bytes, optimized_mime = self._optimize_image_bytes_for_data_uri(binary, mime, profile=profile)
+        if not optimized_bytes:
+            return None
+        if optimized_bytes == binary and optimized_mime == mime:
+            return raw
+
+        encoded = base64.b64encode(optimized_bytes).decode("utf-8")
+        return f"data:{optimized_mime};base64,{encoded}"
 
     def _resolve_ref_list_for_api(self, refs, force_data_uri_for_local=True, prefer_public_upload_url=False, data_uri_profile: Optional[str] = None):
         source = refs if isinstance(refs, list) else [refs]
