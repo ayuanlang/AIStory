@@ -28,7 +28,7 @@ from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
 from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
-from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
 from pydantic import BaseModel
 import bcrypt
 import re
@@ -1757,6 +1757,72 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
         callback_result_url or None,
     )
     return updated or job
+
+
+def _find_image_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[Tuple[str, Dict[str, Any]]]:
+    stable_ticket = str(callback_ticket or "").strip()
+    if not stable_ticket:
+        return []
+
+    matches: List[Tuple[str, Dict[str, Any]]] = []
+    seen_job_ids: Set[str] = set()
+
+    with IMAGE_JOB_LOCK:
+        live_jobs = [(job_id, dict(job or {})) for job_id, job in IMAGE_JOB_STORE.items()]
+
+    for job_id, job in live_jobs:
+        if _extract_job_provider_callback_ticket(job) != stable_ticket:
+            continue
+        matches.append((job_id, job))
+        seen_job_ids.add(job_id)
+
+    try:
+        if os.path.isdir(IMAGE_JOB_FILE_DIR):
+            for entry in os.listdir(IMAGE_JOB_FILE_DIR):
+                if not entry.endswith(".json"):
+                    continue
+                job_id = entry[:-5].strip()
+                if not job_id or job_id in seen_job_ids:
+                    continue
+                file_job = _read_image_job_file(job_id)
+                if not isinstance(file_job, dict):
+                    continue
+                if _extract_job_provider_callback_ticket(file_job) != stable_ticket:
+                    continue
+                with IMAGE_JOB_LOCK:
+                    IMAGE_JOB_STORE[job_id] = dict(file_job)
+                matches.append((job_id, dict(file_job)))
+                seen_job_ids.add(job_id)
+    except Exception as exc:
+        logger.warning("[ImageJob] failed to scan callback ticket matches | callback_ticket=%s error=%s", stable_ticket, exc)
+
+    return matches
+
+
+async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> None:
+    stable_ticket = str(callback_ticket or "").strip()
+    if not stable_ticket:
+        return
+
+    matched_jobs = _find_image_jobs_by_provider_callback_ticket(stable_ticket)
+    if not matched_jobs:
+        logger.info("[ImageJob] provider callback received with no matching image job | callback_ticket=%s", stable_ticket)
+        return
+
+    for job_id, job in matched_jobs:
+        previous_status = _normalize_generation_status(job.get("status"))
+        previous_result_url = _extract_job_result_url(job.get("result"))
+        updated_job = _maybe_finalize_image_job_from_grsai_callback(job_id, job)
+        updated_status = _normalize_generation_status(updated_job.get("status"))
+        updated_result_url = _extract_job_result_url(updated_job.get("result"))
+
+        if updated_status == previous_status and updated_result_url == previous_result_url:
+            continue
+
+        callback_url = _resolve_callback_url_from_payload(updated_job)
+        if not callback_url:
+            continue
+        await _dispatch_generation_callback("image", callback_url, updated_job)
 
 
 def _apply_no_store_headers(response: Response) -> None:
@@ -22852,6 +22918,7 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
         payload_result_url or None,
         getattr(getattr(request, "client", None), "host", None),
     )
+    await _finalize_image_jobs_from_provider_callback(stable_ticket)
     return {"ok": True, "ticket": stable_ticket}
 
 
