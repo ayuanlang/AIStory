@@ -16184,6 +16184,35 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         }
     }, [deleteGenerationJob, describeSubjectJobOwner, onLog, stopGenerationJob, t]);
 
+    const setLocalSubjectImageJobState = useCallback((entityId, patch = {}) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId) return;
+
+        setSubjectImageJobs(prev => ({
+            ...(prev || {}),
+            [stableEntityId]: {
+                ...(prev?.[stableEntityId] || {}),
+                ...patch,
+            },
+        }));
+    }, []);
+
+    const clearLocalSubjectImageJobState = useCallback((entityId) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId) return;
+
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            delete next[stableEntityId];
+            return next;
+        });
+        setStoppingSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            delete next[stableEntityId];
+            return next;
+        });
+    }, []);
+
     const showSubjectNotification = useCallback((message, type = 'success') => {
         setSubjectNotification({ message, type });
         setTimeout(() => setSubjectNotification(null), 3000);
@@ -16249,6 +16278,38 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
         return entries.length;
     }, [stopGenerationJob]);
+
+    const clearPendingSubjectBatchImagePlaceholders = useCallback(() => {
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            let changed = false;
+
+            Object.entries(next).forEach(([entityId, job]) => {
+                const stableJobId = String(job?.jobId || '').trim();
+                const status = String(job?.status || '').trim().toLowerCase();
+                if (stableJobId) {
+                    return;
+                }
+                if (status === 'queued' || status === 'running' || status === 'persisting') {
+                    delete next[entityId];
+                    changed = true;
+                }
+            });
+
+            return changed ? next : prev;
+        });
+        setStoppingSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            let changed = false;
+            Object.keys(next).forEach((entityId) => {
+                const stableEntityId = String(entityId || '').trim();
+                if (!stableEntityId) return;
+                delete next[stableEntityId];
+                changed = true;
+            });
+            return changed ? next : prev;
+        });
+    }, []);
 
     const normalizeSubjectImageJobs = useCallback((raw) => {
         if (!raw || typeof raw !== 'object') return {};
@@ -16582,6 +16643,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 for (const [entityId, job] of jobEntries) {
                     const jobId = String(job?.jobId || '').trim();
                     if (!jobId) {
+                        const localStatus = String(job?.status || '').trim().toLowerCase();
+                        if (localStatus === 'queued' || localStatus === 'running' || localStatus === 'persisting') {
+                            continue;
+                        }
                         completed.push(entityId);
                         continue;
                     }
@@ -18035,6 +18100,22 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         setIsStoppingBatchGenerateEntities(false);
 
         updateGenerateBatchRuntimeState(true, { current: 0, total: toGenerate.length, status: 'Initializing...' });
+        const batchStartedAt = Date.now();
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            toGenerate.forEach((entity) => {
+                const stableEntityId = String(entity?.id || '').trim();
+                if (!stableEntityId) return;
+                next[stableEntityId] = {
+                    ...(next[stableEntityId] || {}),
+                    status: 'queued',
+                    startedAt: Number(next[stableEntityId]?.startedAt || 0) || batchStartedAt,
+                    entityName: entity?.name || entity?.name_en || stableEntityId,
+                    ...buildSubjectJobMeta(stableEntityId, 'generate', next[stableEntityId]),
+                };
+            });
+            return next;
+        });
 
         // Determine Dependency Map
         const nameMap = new Map();
@@ -18222,6 +18303,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
                 queue = queue.filter(item => item.id !== nextEntity.id);
                 const entityId = String(nextEntity?.id || '');
+                setLocalSubjectImageJobState(entityId, {
+                    status: 'running',
+                    startedAt: Date.now(),
+                    entityName: nextEntity?.name || nextEntity?.name_en || entityId,
+                    ...buildSubjectJobMeta(entityId, 'generate'),
+                });
                 const wrappedPromise = runGenerateEntity(nextEntity)
                     .then((value) => ({ entityId, entity: nextEntity, status: 'fulfilled', value }))
                     .catch((reason) => ({ entityId, entity: nextEntity, status: 'rejected', reason }));
@@ -18248,8 +18335,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 if (settledTask.status === 'fulfilled') {
                     if (settledTask.value?.stopped) {
                         // stop requested; ignore and let outer loop exit cleanly
+                        clearLocalSubjectImageJobState(entity.id);
                     } else if (settledTask.value?.skippedPrompt) {
                         skippedPromptCount += 1;
+                        clearLocalSubjectImageJobState(entity.id);
                         onLog?.(
                             t(
                                 `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
@@ -18267,6 +18356,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         if (viewingEntity && viewingEntity.id === entity.id) {
                             setViewingEntity(updatedEnt);
                         }
+                        clearLocalSubjectImageJobState(entity.id);
                     }
                 } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
                     console.error(`Batch Gen Error for ${entity.name}`, settledTask.reason);
@@ -18277,6 +18367,16 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         ),
                         'error'
                     );
+                    setSubjectImageJobs(prev => {
+                        const stableEntityId = String(entity?.id || '').trim();
+                        const existing = prev?.[stableEntityId];
+                        if (!stableEntityId || !existing || String(existing?.jobId || '').trim()) {
+                            return prev;
+                        }
+                        const next = { ...(prev || {}) };
+                        delete next[stableEntityId];
+                        return next;
+                    });
                 }
 
                 updateGenerateBatchRuntimeState(true, {
@@ -18300,6 +18400,18 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             if (subjectBatchGenerateSessionRef.current === batchSessionId) {
                 subjectBatchGenerateSessionRef.current = '';
             }
+            setSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                toGenerate.forEach((entity) => {
+                    const stableEntityId = String(entity?.id || '').trim();
+                    if (!stableEntityId) return;
+                    const existing = next[stableEntityId];
+                    if (!existing) return;
+                    if (String(existing?.jobId || '').trim()) return;
+                    delete next[stableEntityId];
+                });
+                return next;
+            });
             updateGenerateBatchRuntimeState(false, null);
             subjectBatchGenerateStopRequestedRef.current = false;
             setIsStoppingBatchGenerateEntities(false);
@@ -18332,6 +18444,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             forcedStoppedJobCount += await forceStopTrackedSubjectBatchImageJobs('reconstruct');
             updateReconstructBatchRuntimeState(false, null);
         }
+
+        clearPendingSubjectBatchImagePlaceholders();
 
         setIsStoppingBatchGenerateEntities(false);
         if (onLog) onLog(t('已请求停止当前批量任务。', 'Stop requested for current batch task.'), 'warning');
