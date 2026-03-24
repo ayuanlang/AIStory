@@ -1721,6 +1721,7 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
     result = _build_result_from_provider_callback(callback_payload)
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
+    current_error = str(job.get("error") or "").strip()
 
     updates: Dict[str, Any] = {}
     if callback_result_url and callback_result_url != current_result_url:
@@ -1732,11 +1733,12 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
             updates["finished_at"] = now_bj_iso()
 
     if normalized_status == "succeeded":
-        updates["error"] = None
+        if current_error:
+            updates["error"] = None
     elif normalized_status in {"failed", "canceled"}:
         failure_parts = [str(callback_payload.get("failure_reason") or "").strip(), str(callback_payload.get("error") or "").strip()]
         failure_text = " | ".join([part for part in failure_parts if part])
-        if failure_text:
+        if failure_text and failure_text != current_error:
             updates["error"] = failure_text
 
     if not updates:
