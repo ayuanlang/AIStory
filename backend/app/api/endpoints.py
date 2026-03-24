@@ -865,7 +865,11 @@ def _persist_remote_image_result(
             raw,
             exc,
         )
-        return media_url, metadata
+        updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        updated_metadata["remote_localization_failed"] = True
+        updated_metadata["remote_localization_error"] = str(exc)
+        updated_metadata["remote_localization_source_url"] = raw
+        return media_url, updated_metadata
 
     content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
     if content_type and not content_type.startswith("image/"):
@@ -1722,10 +1726,20 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
     current_error = str(job.get("error") or "").strip()
+    current_has_stable_result = bool(current_result_url) and not _is_ephemeral_provider_media_url(current_result_url)
+    callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
 
     updates: Dict[str, Any] = {}
-    if callback_result_url and callback_result_url != current_result_url:
+    if callback_result_url and callback_result_url != current_result_url and not (current_has_stable_result and callback_has_ephemeral_result):
         updates["result"] = result
+    elif callback_result_url and current_has_stable_result and callback_has_ephemeral_result:
+        logger.info(
+            "[ImageJob] ignored callback temporary result url because stable result already exists | job_id=%s callback_ticket=%s current_result_url=%s callback_result_url=%s",
+            job_id,
+            callback_ticket,
+            current_result_url,
+            callback_result_url,
+        )
 
     if normalized_status in {"succeeded", "failed", "canceled"} and normalized_status != current_status:
         updates["status"] = normalized_status
@@ -19492,6 +19506,7 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
         return
 
     entity = None
+    project = None
     entity_id_raw = get_attr(req, "entity_id")
     if entity_id_raw is not None:
         try:
@@ -19516,14 +19531,36 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
         return
 
     try:
-        _require_project_access(db, int(entity.project_id), current_user)
+        project = _require_project_access(db, int(entity.project_id), current_user)
     except Exception:
         return
 
-    if str(entity.image_url or "").strip() == str(media_url or "").strip():
+    stable_media_url = str(media_url or "").strip()
+    if _is_ephemeral_provider_media_url(stable_media_url):
+        stable_media_url = _resolve_precise_asset_library_url(
+            db,
+            current_user,
+            stable_media_url,
+            project=project,
+            entity_id=getattr(entity, "id", None),
+            asset_type_aliases={"subject", "character", "char"},
+            media_type="image",
+        ) or ""
+        if not stable_media_url:
+            logger.warning(
+                "[SubjectMediaBind] skipped temporary media url | entity_id=%s name=%s project_id=%s media_url=%s user_id=%s",
+                getattr(entity, "id", None),
+                getattr(entity, "name", None) or getattr(entity, "name_en", None),
+                getattr(entity, "project_id", None),
+                media_url,
+                getattr(current_user, "id", None),
+            )
+            return
+
+    if str(entity.image_url or "").strip() == stable_media_url:
         return
 
-    entity.image_url = media_url
+    entity.image_url = stable_media_url
     db.add(entity)
     db.commit()
     logger.info(
@@ -19531,7 +19568,7 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
         getattr(entity, "id", None),
         getattr(entity, "name", None) or getattr(entity, "name_en", None),
         getattr(entity, "project_id", None),
-        media_url,
+        stable_media_url,
         getattr(current_user, "id", None),
     )
 
@@ -20288,11 +20325,19 @@ async def _run_generate_image(
                 result["metadata"] = normalized_meta
 
             request_mode = str(getattr(req, "mode", "") or "").strip().lower()
-            if request_mode != "joint_diptych":
+            if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(result.get("url")):
                 # Only register if not error? result.get("url") check handles it.
                 _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
                 _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
                 _bind_generated_media_to_entity(db, current_user, req, result.get("url"))
+            elif request_mode != "joint_diptych":
+                logger.warning(
+                    "[ImageResultNormalize] skipped asset registration/bind for temporary provider url | user_id=%s url=%s entity_id=%s shot_id=%s",
+                    getattr(current_user, "id", None),
+                    result.get("url"),
+                    getattr(req, "entity_id", None),
+                    getattr(req, "shot_id", None),
+                )
 
         return result
     except asyncio.CancelledError:

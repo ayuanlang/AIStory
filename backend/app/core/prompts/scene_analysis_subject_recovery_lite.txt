@@ -36,8 +36,10 @@
 - 场景最高审美具体约束（Mandatory）：缺失 environment 时，必须优先补全主次锚点、材质层级、主辅配色、光源动机、陈设秩序与氛围层次。即使该空间是低配、破旧、压抑、狭窄或贫穷，也必须是“剧情允许下最好看、最可拍、最有控制力”的版本，不得堆随机杂物或做成廉价空壳。
 - 角色最高审美具体约束（Mandatory）：缺失 character 时，必须在不违背身份现实的前提下，同时优化轮廓可读性、发型组织、肤色与肤质层次、肩颈体态、服装版型、鞋履/配件完成度与镜头友好布光。即使人物设定普通、疲惫、底层或狼狈，也应补成其命运条件下的最好看版本，而不是粗糙、土气、没精神的默认模板。
 - 角色默认主角化基线（Mandatory）：对有具体姓名且承担主要叙事功能的成年角色，若当前补全输入未明确给出外貌、体型或着装限制，则必须主动补全为“现代、新潮、高级、大气、镜头友好”的主角级设计，但仍需服从题材、时代、职业、阶层与写实度。女性默认优先高挑修长、肩颈线舒展、比例利落；男性默认优先挺拔健壮、肩背展开、线条结实。主角的肤色呈现默认应更白净、细腻、明亮，通常可落在白皙至偏白净的上镜范围，但不得违背人物族裔、地域语境、职业状态与剧情现实度。若原剧本或上游已明确给出相反体态、特殊身体条件或年龄阶段，则以上游与原文为准；未成年角色不得按成人化模板设计。
+- 成年女性体态优先级（Mandatory）：对有具体姓名且承担主要叙事功能的成年女性，只要剧情、时代、职业、安全边界、动作功能性与人物设定允许，补全时必须默认优先采用修长高挑、纤秾有致、曲线明确、肩颈腰胯关系清楚的镜头友好体态；这是成年女性角色的轮廓与版型控制原则，不等于露骨化、夸张色情化或脱离现实。若原剧本或上游已明确要求相反体态、孕态、病态、未成年或厚重防护状态，则以上游与原文为准。
 - 命名角色主角化扩散规则（Mandatory）：补全缺失 subject 时，主角级的美化、发型整理、服装完成度、鞋履/配件完成度与镜头友好布光，也必须默认扩散到所有有具体姓名的成年角色，而不是只给绝对主角。除非原文或上游明确要求其邋遢、病态、老态、笨重、低配或狼狈，否则不得把有名字角色补成路人化、松垮、灰扑扑、廉价的默认模板。
 - 命名角色服装合体优先规则（Mandatory）：对所有有具体姓名的成年角色，只要剧情、时代、职业、防护需求、动作功能性与安全边界未明确要求相反，补全时默认优先采用修身、合体、贴体或线条清楚的服装版型，让肩线、腰线、腿线与整体轮廓可读，避免无依据的大廓形、松垮、臃肿、拖沓。这里的“优先紧身/修身”仅指可拍、可播出、符合身份的版型控制；未成年角色与明确宽松/厚重/防护型服装不适用。
+- 服装去平庸硬规则（Mandatory）：角色服装设计必须优先采用当下时尚感强、辨识度高、适合角色身份的方案，至少给出一个独特版型识别点与一个稳定配饰或穿搭收尾。若剧情未明确要求，禁止默认收敛成普通运动衣、普通夹克、普通卫衣、泛休闲套装等低辨识度描述；若必须使用这类单品，也必须通过剪裁、层次、材质、配色、鞋履或配饰把它提升为有设计感、可区分、可复现的角色造型。
 - 未成年角色四视图与安全表达规则（Mandatory）：若补全对象是未成年角色，仍必须补成统一的角色四视图/四宫格设定图；这里的未成年明确覆盖儿童、幼儿、低龄孩子、学龄前儿童、青少年，必要时也覆盖婴儿/宝宝角色设定，不能因为年龄较小、幼态更强或需要强调脆弱感而改写成单张人像、单张全身像、儿童概念海报，或任何“不要 4 宫格/不必 4 宫格”的宽松构图。未成年专属调整仅限安全边界：必须年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；服装、姿态、镜头语言与措辞都要保持儿童安全表达。
 - 主角色身高与头身比硬规则（Mandatory）：所有有姓名且承担主要叙事功能的成年角色，在补全过程中都必须显式写出身高与头身比，并同步写入 `appearance_cn` 与 `generation_prompt_cn/en`；不得只写“高挑”“修长”等抽象词。若当前输入没有相反证据，默认按高挑、镜头友好、约 1:9 头身的主角色比例补全；若上游或原剧本已锁定不同体态，则以其为准。
 - 发型与肤色识别强化（Mandatory）：主要角色必须把发型组织与肤色层次作为稳定识别锚点的一部分。发型必须落实到分线方式、发长区间、卷直关系、厚薄蓬贴、刘海或束发轮廓；肤色必须落实到白皙、偏白净、暖白、冷白、浅蜜色、健康麦色等可拍的真实区间，并与项目语境、年龄和职业状态保持一致。
@@ -86,6 +88,7 @@
 - 服装暗示补全规则（Mandatory）：若原文虽未直接写出服装名，但出现“摸了下婚纱”“整了整将军服”“提起裙摆”“扯正领带”“扶正头纱/肩章/帽檐/披风”等足以锁定特殊服装状态的动作，补全时必须恢复对应着装状态角色，并与常服基态角色拆分为独立实体。
 - 一角双衣补全禁令（Mandatory）：补全时绝对禁止把两个服装版本塞回同一个角色条目。若候选描述出现“日间简约复古裙装，夜间棉质睡衣”这类日夜双着装并列，必须拆成两个独立角色实体，分别输出各自 clothing / prompt / dependency 信息。
 - clothing 外部衣着补全声明（Mandatory）：补全 characters 时，每个角色 JSON 的 `clothing` 字段都必须显式写明三部分：1) 当前服装；2) 时尚对标；3) 其他剧本衣着描述。固定写法为“当前服装：...。时尚对标：角色定位=...；当代风格参考=...；版型/材质/配色关键词=...。其他剧本衣着描述：无。”；若有其他服装版本，则写成“当前服装：...。时尚对标：角色定位=...；当代风格参考=...；版型/材质/配色关键词=...。其他剧本衣着描述：有；另见 CHAR:[@OtherOutfit]（...）。”。不得省略时尚对标，也不得只写“时尚/高级/干练”这类空泛词。
+- clothing 强时尚与配饰补充规则（Mandatory）：`时尚对标` 必须避免落成“普通运动衣、普通夹克、普通卫衣、普通休闲外套”这类低辨识度默认解，除非剧本明确要求。即使角色定位需要休闲或功能化穿着，也必须补出更时尚、更有设计控制的版本，至少写明一个独特版型识别点、一个材质或配色方向，以及一个稳定配饰、鞋履或穿搭收尾。
 - 换装依赖补全规则（Mandatory）：补全换装角色时，必须依赖原角色建立 `visual_dependencies + dependency_strategy` 继承链；若换装对应明确服饰/装备道具，也必须在依赖逻辑中写清这些道具与角色版本的关系。
 - 失败重写示例（Failure -> Rewrite -> Downgraded Good, Mandatory Reference）：
   - Bad recovery draft: `Add a new woman character with similar style.` → 名称漂移、锚点缺失、未基于输入命名体系。
@@ -254,17 +257,57 @@ Part 2A:
       "gender": "F",
       "role": "Investigative Reporter",
       "archetype": "Calm Truth Seeker",
-      "appearance_cn": "28岁，东亚女性，身高约178cm，头身比约1:9，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理。",
-      "clothing": "当前服装：深海军蓝风衣（中长款，哑光防泼水面料），白色衬衫，炭灰色修身长裤，黑色皮质短靴（鞋面轻微磨损）。时尚对标：角色定位=女性调查记者；当代风格参考=都市专业女性的克制功能时装通勤路线，强调利落长线条、低饱和冷色层次与轻度老钱感新闻从业者穿搭；版型/材质/配色关键词=中长风衣、挺括衬衫、修身直筒裤、哑光技术面料、海军蓝+白+炭灰。其他剧本衣着描述：无。",
+      "appearance_cn": "28岁，东亚女性，身高约178cm，头身比约1:9，脸部线条利落，眼神专注，肤质保留真实毛孔与微细纹理，肩颈舒展，胸腰臀比例清楚、女性曲线更明确，整体修长苗条但有饱满起伏。",
+      "clothing": "当前服装：深海军蓝结构感收腰长风衣（双层翻领、腰带线条明确、前襟自然敞开，哑光防泼水面料），珍珠白真丝衬衫（自然开两粒扣，保留锁骨层次），炭灰色高腰锥形长裤，黑色尖头皮质短靴（鞋面轻微磨损），细窄皮带，极简几何耳饰。时尚对标：角色定位=女性调查记者；当代风格参考=都市专业女性的锋利功能时装通勤路线，强调利落长线条、低饱和冷色层次、结构感剪裁、精致配饰与克制高级感；版型/材质/配色关键词=结构感收腰长风衣、真丝衬衫、高腰锥形裤、尖头短靴、哑光技术面料、海军蓝+珍珠白+炭灰。其他剧本衣着描述：无。",
       "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
-      "generation_prompt_cn": "写实现代剧情风格，林月四视图角色设定图，四个面板保持同一身份与服装一致。她约28岁，身高约178cm，头身比约1:9，整体比例高挑修长且镜头友好。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。版式固定为第一宫左侧居中特写大宫格：特写约占总画布宽度 40%，脸部必须位于第一宫中间，头部整体约占该宫格高度的 78% 到 88%，发型外轮廓、下巴与颈部过渡都要完整，不得裁切；右侧剩余约 60% 宽度均分为三张等大的纵向宫格，依次放正面全身、侧面全身、反面全身。右侧三张必须使用完全一致的构图尺度和留白逻辑，顶部留白和脚下留白都尽量小且必须统一，左右留白进一步压缩，让人物在不裁切的前提下显得更大，人物高度约占各自宫格高度的 84% 到 89%。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见，四宫都必须完整，不得出现任何出框或裁切。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝风衣、白衬衫、炭灰长裤、黑色皮质短靴。背景纯白，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Lin Yue with one fixed studio observer position at chest height. She reads as about 28 years old, about 178 cm tall, with an approximately 1:9 head-to-body proportion and a tall camera-friendly silhouette. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
+      "generation_prompt_cn": "写实现代剧情风格，林月四视图角色设定图，四个面板保持同一身份与服装一致。她约28岁，身高约178cm，头身比约1:9，整体比例高挑修长且镜头友好，肩颈舒展，胸腰臀比例清楚、女性曲线更明确。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。版式固定为第一宫左侧居中特写大宫格：特写约占总画布宽度 40%，脸部必须位于第一宫中间，头部整体约占该宫格高度的 78% 到 88%，发型外轮廓、下巴与颈部过渡都要完整，不得裁切；右侧剩余约 60% 宽度均分为三张等大的纵向宫格，依次放正面全身、侧面全身、反面全身。右侧三张必须使用完全一致的构图尺度和留白逻辑，顶部留白和脚下留白都尽量小且必须统一，左右留白进一步压缩，让人物在不裁切的前提下显得更大，人物高度约占各自宫格高度的 84% 到 89%。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见，四宫都必须完整，不得出现任何出框或裁切。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为深海军蓝结构感收腰长风衣、珍珠白真丝衬衫、炭灰高腰锥形长裤、黑色尖头皮质短靴，并配细窄皮带与几何耳饰。背景纯白，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Lin Yue with one fixed studio observer position at chest height. She reads as about 28 years old, about 178 cm tall, with an approximately 1:9 head-to-body proportion, a slim elongated build, clearly readable bust-waist-hip proportion, more defined feminine curves, and a tall camera-friendly silhouette. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture without waxy smoothing. Background pure white, no labels, no watermark.",
       "negative_prompt_en": "plastic skin, waxy face, CGI look, toy-like proportions, oversmoothed pores, extra fingers, broken anatomy, text watermark",
       "anchor_description": "female investigative reporter, clean jawline, asymmetrical fringe silhouette, measured pause-before-motion stance",
       "visual_dependencies": [],
       "dependency_strategy": {
         "type": "Original",
         "logic": "Original baseline character asset; downstream variants may inherit face structure, fringe silhouette, ring anchor, trench outline, and boot profile while changing only scene-specific styling outside these stable anchors."
+      }
+    },
+    {
+      "subject_no": "S004",
+      "name": "程雾",
+      "name_en": "Cheng Wu",
+      "gender": "F",
+      "role": "Contemporary Gallery Curator",
+      "archetype": "Controlled Cosmopolitan Tastemaker",
+      "appearance_cn": "31岁左右，东亚女性，身高约172cm，头身比约1:8.75，锁骨与肩颈线条舒展，冷调白皙肤色保留自然细纹理，黑色齐下巴短发一侧收至耳后，五官边界清楚，眼神冷静审视，胸腰臀比例清楚、女性曲线更明确，整体修长利落但并不骨感单薄。",
+      "clothing": "当前服装：石墨灰长款无袖结构感西装马甲（收腰省道、翻驳线锋利），香槟灰斜裁垂坠高领针织上衣，墨黑高腰开衩直筒长裙，深橄榄皮质及膝靴，拉丝金属耳骨夹，细窄金属戒指。时尚对标：角色定位=女性当代画廊策展人；当代风格参考=都市艺术行业中的冷静高审美时装化通勤风格，强调修长腰线、垂坠面料、低饱和矿物色系、雕塑感配饰与非制服化精致完成度；版型/材质/配色关键词=长款无袖马甲、斜裁针织、开衩直筒裙、及膝皮靴、拉丝金属饰品、石墨灰+香槟灰+墨黑+深橄榄。其他剧本衣着描述：无。",
+      "action_characteristics": "动作缓慢而有控制，站姿重心垂直稳定，转身幅度克制，下巴微收，抬手整理作品标签时手势简洁。",
+      "generation_prompt_cn": "写实现代剧情风格，程雾四视图角色设定图，四个面板保持同一身份与服装一致。她约31岁，身高约172cm，头身比约1:8.75，黑色齐下巴短发一侧收至耳后，肩颈舒展，锁骨与腰线清楚可读，胸腰臀比例清楚、女性曲线更明确，整体修长利落但不单薄。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。版式固定为第一宫左侧居中特写大宫格：特写约占总画布宽度 40%，脸部必须位于第一宫中间，头部整体约占该宫格高度的 78% 到 88%，发型外轮廓、下巴与颈部过渡都要完整，不得裁切；右侧剩余约 60% 宽度均分为三张等大的纵向宫格，依次放正面全身、侧面全身、反面全身。右侧三张必须使用完全一致的构图尺度和留白逻辑，顶部留白和脚下留白都尽量小且必须统一，左右留白进一步压缩，让人物在不裁切的前提下显得更大，人物高度约占各自宫格高度的 84% 到 89%。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见，四宫都必须完整，不得出现任何出框或裁切。布光为左前方柔和主光、机位轴线低强度补光、右后方轻微轮廓光，保留自然皮肤微纹理并避免磨皮塑料感。服装为石墨灰长款无袖结构感西装马甲、香槟灰斜裁垂坠高领针织上衣、墨黑高腰开衩直筒长裙、深橄榄皮质及膝靴，并配拉丝金属耳骨夹与细窄金属戒指。整体气质必须是女性艺术行业从业者的高审美都市时装表达，而不是普通办公室套装或宽松休闲穿搭。背景纯白，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Cheng Wu with one fixed studio observer position at chest height. She reads as about 31 years old, around 172 cm tall, with an approximately 1:8.75 head-to-body proportion, a sleek chin-length black bob tucked behind one ear, an elongated torso line, clearly readable bust-waist-hip proportion, more defined feminine curves, and a restrained but fashion-forward silhouette. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system. Soft key from front-left, subtle fill on camera axis, and a gentle rim from back-right preserve skin micro-texture, fabric drape, and leather structure without waxy smoothing. Her styling should read as fashion-literate urban art-world polish rather than generic officewear: a graphite longline sleeveless tailored vest, a champagne-grey draped knit top, an ink-black slit column skirt, deep olive knee-high leather boots, a brushed metal ear cuff, and slim rings. Background pure white, no labels, no watermark.",
+      "negative_prompt_en": "generic office suit, hoodie, athletic wear, shapeless layering, waxy skin, anime proportions, extra limbs, text watermark",
+      "anchor_description": "female gallery curator, chin-length tucked bob, elongated waistline, controlled low-velocity turn",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "Original fashion-forward curator asset; downstream variants may inherit the tucked bob silhouette, cinched vest outline, slit skirt line, and knee-boot profile while changing only scene-safe state details outside these anchors."
+      }
+    },
+    {
+      "subject_no": "S005",
+      "name": "顾凛",
+      "name_en": "Gu Lin",
+      "gender": "F",
+      "role": "Crisis Strategist",
+      "archetype": "Cold Commanding Power Broker",
+      "appearance_cn": "33岁左右，东亚女性，身高约177cm，头身比约1:8.95，肩线平直展开，颈线修长，冷白偏透肤色保留真实微纹理与轻微骨相阴影，黑茶色长发以利落中分低束发收拢，眉眼锐利，鼻梁直而窄，下颌收束清楚，胸腰臀比例清楚、女性曲线更明确，整体高挑挺拔、线条锋利且具有压迫感。",
+      "clothing": "当前服装：墨黑结构感收腰长外套（硬挺肩线、窄驳领、前片垂直切线明确），深冷灰贴体高领针织内搭，炭黑高腰窄直长裤，黑曜石色尖头细跟长靴，枪灰金属细耳坠，窄表带腕表。时尚对标：角色定位=女性危机策略顾问；当代风格参考=高压权力职业中的冷感极简权威着装，强调笔直长线条、锐利肩腰关系、深色单色层次、硬挺面料、低调金属配件与非日常通勤化的控制感；版型/材质/配色关键词=结构感长外套、贴体高领针织、窄直长裤、尖头长靴、枪灰金属、墨黑+深冷灰+炭黑。其他剧本衣着描述：无。",
+      "action_characteristics": "动作幅度小而决断，站姿重心稳定偏前，转身干净迅速，抬眼与抬手都带明确指令感，停顿时也保持压迫性的控制姿态。",
+      "generation_prompt_cn": "写实现代剧情风格，顾凛四视图角色设定图，四个面板保持同一身份与服装一致。她约33岁，身高约177cm，头身比约1:8.95，黑茶色长发中分后低位束起，肩线平直展开，颈线修长，胸腰臀比例清楚、女性曲线更明确，整体高挑挺拔、锋利克制并具有明确权力感。机位锚点为棚拍胸口高度固定机位。视角顺序严格为面部特写、正面全身、侧面全身、反面全身。版式固定为第一宫左侧居中特写大宫格：特写约占总画布宽度 40%，脸部必须位于第一宫中间，头部整体约占该宫格高度的 78% 到 88%，发型外轮廓、下巴与颈部过渡都要完整，不得裁切；右侧剩余约 60% 宽度均分为三张等大的纵向宫格，依次放正面全身、侧面全身、反面全身。右侧三张必须使用完全一致的构图尺度和留白逻辑，顶部留白和脚下留白都尽量小且必须统一，左右留白进一步压缩，让人物在不裁切的前提下显得更大，人物高度约占各自宫格高度的 84% 到 89%。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见，四宫都必须完整，不得出现任何出框或裁切。布光为左前方受控主光、机位轴线低强度补光、右后方窄边轮廓光，强调骨相、外套结构线、长靴轮廓与皮肤真实微纹理。服装为墨黑结构感收腰长外套、深冷灰贴体高领针织、炭黑高腰窄直长裤、黑曜石色尖头细跟长靴，并配枪灰金属细耳坠与窄表带腕表。背景纯白，无文字无水印。",
+      "generation_prompt_en": "Photoreal contemporary drama style, 4-view character sheet for Gu Lin with one fixed studio observer position at chest height. She reads as about 33 years old, around 177 cm tall, with an approximately 1:8.95 head-to-body proportion, center-parted dark hair tied low, a sharp jaw contour, clearly readable bust-waist-hip proportion, more defined feminine curves, and a tall forceful silhouette. Keep the panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back. The Front, Side, and Back panels must all be full-body with shoes fully visible while preserving the same body proportion system. Controlled key from front-left, subtle fill on camera axis, and a narrow rim from back-right preserve bone structure, coat architecture, boot silhouette, and real skin texture. Her styling should read as premium power dressing rather than routine officewear: an ink-black structured long coat, a cool-grey fitted turtleneck knit, charcoal narrow straight trousers, pointed heeled knee-high boots, slim gunmetal earrings, and a narrow-strap watch. Background pure white, no labels, no watermark.",
+      "negative_prompt_en": "soft officewear, generic blazer set, hoodie, sporty casualwear, sweet styling, waxy skin, anime proportions, extra limbs, text watermark",
+      "anchor_description": "female crisis strategist, center-parted low-tied dark hair, hard shoulder line, forward-weighted command stance",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "Original power-archetype asset; downstream variants may inherit the low-tied center-parted hair silhouette, hard shoulder line, long dark coat outline, and pointed knee-boot profile while changing only scene-safe state details outside these anchors."
       }
     }
   ]

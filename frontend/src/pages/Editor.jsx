@@ -5,7 +5,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal } from 'lucide-react';
+import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -21,6 +21,40 @@ const getFullUrl = (url) => {
         return `${base}${url}`;
     }
     return url;
+};
+
+const createInitialFrameTrimState = () => ({
+    open: false,
+    type: 'start',
+    sourceUrl: '',
+    topPct: 0,
+    rightPct: 0,
+    bottomPct: 0,
+    leftPct: 0,
+    saving: false,
+});
+
+const clampFrameTrimPercent = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(0, Math.min(45, numeric));
+};
+
+const normalizeFrameTrimMargins = (draft) => {
+    const topPct = clampFrameTrimPercent(draft?.topPct);
+    const rightPct = clampFrameTrimPercent(draft?.rightPct);
+    const bottomPct = clampFrameTrimPercent(draft?.bottomPct);
+    const leftPct = clampFrameTrimPercent(draft?.leftPct);
+    const widthPct = Math.max(1, 100 - leftPct - rightPct);
+    const heightPct = Math.max(1, 100 - topPct - bottomPct);
+    return {
+        topPct,
+        rightPct,
+        bottomPct,
+        leftPct,
+        widthPct,
+        heightPct,
+    };
 };
 
 const brokenMediaUrls = new Set();
@@ -221,6 +255,25 @@ const collectMatchedEntityImageUrlsFromPrompt = ({
             entityPool,
             includeAssociatedEntities,
         }).map((entity) => entity?.image_url)
+    );
+};
+
+const collectMatchedSubjectImageUrlsFromPrompt = ({
+    promptText = '',
+    entityPool = [],
+}) => {
+    return normalizeMediaRefList(
+        collectMatchedEntitiesFromPrompt({
+            promptText,
+            associatedEntities: '',
+            entityPool,
+            includeAssociatedEntities: false,
+        })
+            .filter((entity) => {
+                const entityType = String(entity?.type || '').trim().toLowerCase();
+                return entityType === 'subject' || entityType === 'character' || entityType === 'char';
+            })
+            .map((entity) => entity?.image_url)
     );
 };
 
@@ -5191,6 +5244,44 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             setAnalysisFlowStatus(prev => (prev?.phase === 'warning' ? { phase: 'idle', message: '' } : prev));
         }, 8000);
     }, [t]);
+
+    useEffect(() => {
+        if (isAnalyzing) return;
+
+        const reportStatus = String(analysisUiReport?.status || '').trim().toLowerCase();
+        if (!reportStatus || reportStatus === 'running') return;
+
+        setAnalysisFlowStatus((prev) => {
+            const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+            const prevMessage = String(prev?.message || '').trim();
+
+            if (reportStatus === 'completed') {
+                if (prevPhase === 'completed' || prevPhase === 'warning' || prevPhase === 'failed') return prev;
+                return {
+                    phase: 'completed',
+                    message: prevMessage || t('分析与导入已完成。', 'Analysis and import completed.'),
+                };
+            }
+
+            if (reportStatus === 'warning') {
+                if (prevPhase === 'warning') return prev;
+                return {
+                    phase: 'warning',
+                    message: prevMessage || String(analysisUiReport?.warning || '').trim() || t('分析已结束，但有告警需要处理。', 'Analysis finished with warnings that need review.'),
+                };
+            }
+
+            if (reportStatus === 'failed') {
+                if (prevPhase === 'failed') return prev;
+                return {
+                    phase: 'failed',
+                    message: prevMessage || String(analysisUiReport?.error || '').trim() || t('分析失败。', 'Analysis failed.'),
+                };
+            }
+
+            return prev;
+        });
+    }, [analysisUiReport?.error, analysisUiReport?.status, analysisUiReport?.warning, isAnalyzing, t]);
 
     const localizeAnalysisWarningCode = useCallback((code) => {
         const normalized = String(code || '').trim();
@@ -10506,6 +10597,57 @@ const MediaDetailModal = ({ media, onClose }) => {
     );
 };
 
+const AssetHoverMetaOverlay = ({ asset, t }) => {
+    if (!asset) return null;
+
+    const meta = (asset.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
+    const fileName = String(
+        asset.name
+        || meta.original_filename
+        || meta.filename
+        || String(asset.url || '').split('/').pop()
+        || ''
+    ).trim() || t('未命名文件', 'Untitled File');
+    const assetType = String(asset.type || meta.type || '').trim().toLowerCase();
+    const resolution = String(meta.resolution || meta.dimensions || '').trim();
+    const size = String(meta.size || meta.file_size || '').trim();
+    const duration = String(meta.duration || '').trim();
+    const createdAt = String(asset.created_at || meta.created_at || '').trim();
+    const createdLabel = createdAt ? new Date(createdAt).toLocaleString() : '';
+    const typeLabel = assetType === 'video'
+        ? t('视频', 'Video')
+        : assetType === 'audio'
+            ? t('音频', 'Audio')
+            : t('图片', 'Image');
+
+    const rows = [
+        { label: t('文件', 'File'), value: fileName },
+        { label: t('类型', 'Type'), value: typeLabel },
+        ...(resolution ? [{ label: t('分辨率', 'Resolution'), value: resolution }] : []),
+        ...(size ? [{ label: t('大小', 'Size'), value: size }] : []),
+        ...(assetType === 'video' && duration ? [{ label: t('时长', 'Duration'), value: String(duration).endsWith('.0') ? `${parseInt(duration, 10)}s` : `${duration}s` }] : []),
+        ...(createdLabel ? [{ label: t('创建时间', 'Created'), value: createdLabel }] : []),
+    ].slice(0, 5);
+
+    return (
+        <div className="pointer-events-none absolute left-2 right-2 top-2 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150 z-10">
+            <div className="rounded-lg border border-white/10 bg-black/88 backdrop-blur-sm shadow-2xl p-2.5">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-primary/80 mb-2">
+                    {t('核心信息', 'Quick Info')}
+                </div>
+                <div className="space-y-1.5">
+                    {rows.map((row) => (
+                        <div key={`${row.label}:${row.value}`} className="grid grid-cols-[52px_1fr] gap-2 text-[10px] leading-4">
+                            <div className="text-white/45 uppercase truncate">{row.label}</div>
+                            <div className="text-white/90 break-all line-clamp-2">{row.value}</div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, entities = [], episodeId = null, uiLang = 'zh' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [tab, setTab] = useState('assets');
@@ -10718,6 +10860,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                     onClick={() => setSelectedAsset(asset)}
                                     className="aspect-square bg-black/40 rounded overflow-hidden border border-white/5 hover:border-primary/50 cursor-pointer group relative"
                                 >
+                                    <AssetHoverMetaOverlay asset={asset} t={t} />
                                     {asset.type === 'video' ? (
                                         <div className="w-full h-full flex items-center justify-center bg-black">
                                             <Video className="text-white/50 group-hover:text-primary transition-colors"/>
@@ -15799,6 +15942,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const SUBJECT_IMAGE_JOB_OWNER_PAGE = 'subject-library';
     const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
+    const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 2;
+    const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
     const createSubjectBatchTaskState = () => ({
         running: false,
         progress: null,
@@ -15987,6 +16132,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         statusFailureCount: Math.max(0, Number(base?.statusFailureCount || 0) || 0),
         lastStatusError: String(base?.lastStatusError || '').trim(),
         lastPolledAt: Number(base?.lastPolledAt || 0) || 0,
+        persistWaitStartedAt: Number(base?.persistWaitStartedAt || 0) || 0,
+        lastPersistWaitLogAt: Number(base?.lastPersistWaitLogAt || 0) || 0,
     }), [projectId]);
 
     const describeSubjectJobOwner = useCallback((payload, entityId) => {
@@ -16291,6 +16438,76 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         return prependEntityGlobalStyleToPromptHead(processed, { injectIfMissing: true });
     }, [allEntities, currentEpisode?.episode_info, getEntityPromptByLang, prependEntityGlobalStyleToPromptHead]);
 
+    const applySubjectEntityImageLocally = useCallback((entityId, imageUrl) => {
+        const stableEntityId = String(entityId || '').trim();
+        const stableImageUrl = String(imageUrl || '').trim();
+        if (!stableEntityId || !stableImageUrl || !isMountedRef.current) return;
+
+        setAllEntities(prev => prev.map(item => String(item?.id) === stableEntityId ? { ...item, image_url: stableImageUrl } : item));
+        setEntities(prev => prev.map(item => String(item?.id) === stableEntityId ? { ...item, image_url: stableImageUrl } : item));
+        setViewingEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
+        setSelectedEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
+        if (showImageModal && String(selectedEntity?.id || '') === stableEntityId) {
+            setShowImageModal(false);
+        }
+    }, [selectedEntity?.id, showImageModal]);
+
+    const refreshPersistedSubjectEntityImage = useCallback(async (entityId) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!projectId || !stableEntityId) return '';
+
+        const latestEntities = await fetchEntities(projectId);
+        const latestEntity = (Array.isArray(latestEntities) ? latestEntities : []).find((item) => String(item?.id || '') === stableEntityId);
+        const recoveredUrl = String(latestEntity?.image_url || '').trim();
+        if (!recoveredUrl || isEphemeralProviderMediaUrl(recoveredUrl)) {
+            return '';
+        }
+
+        applySubjectEntityImageLocally(stableEntityId, recoveredUrl);
+        return recoveredUrl;
+    }, [applySubjectEntityImageLocally, fetchEntities, isEphemeralProviderMediaUrl, projectId]);
+
+    const awaitPersistedSubjectEntityImage = useCallback(async (entityId, options = {}) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId) return '';
+
+        const initialUrl = String(options?.initialUrl || '').trim();
+        if (initialUrl && !isEphemeralProviderMediaUrl(initialUrl)) {
+            return initialUrl;
+        }
+
+        const timeoutMsRaw = Number(options?.timeoutMs || 0) || 0;
+        const intervalMsRaw = Number(options?.intervalMs || 0) || 0;
+        const timeoutMs = Math.max(3000, timeoutMsRaw || 20000);
+        const intervalMs = Math.max(1000, intervalMsRaw || 2500);
+        const entityLabel = String(options?.entityName || stableEntityId).trim() || stableEntityId;
+        const deadline = Date.now() + timeoutMs;
+
+        let recoveredUrl = '';
+        while (Date.now() < deadline) {
+            try {
+                recoveredUrl = await refreshPersistedSubjectEntityImage(stableEntityId);
+            } catch (refreshErr) {
+                console.warn('Failed to refresh persisted subject entity image', refreshErr);
+            }
+            if (recoveredUrl) {
+                return recoveredUrl;
+            }
+            await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        }
+
+        if (onLog) {
+            onLog(
+                t(
+                    `等待主体稳定图片地址超时：${entityLabel}`,
+                    `Timed out waiting for durable subject image URL: ${entityLabel}`
+                ),
+                'warning'
+            );
+        }
+        return '';
+    }, [isEphemeralProviderMediaUrl, onLog, refreshPersistedSubjectEntityImage, t]);
+
     const applyGenerateBatchState = useCallback((running, progress) => {
         if (!isMountedRef.current) return;
         setIsBatchGeneratingEntities(Boolean(running));
@@ -16410,26 +16627,64 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                             } catch {
                                 // Best effort; local refresh still updates UX.
                             }
-                        } else if (onLog) {
+                        }
+                        if (canPersistGeneratedUrl && !disposed) {
+                            applySubjectEntityImageLocally(entityId, generatedUrl);
+                            if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                            completed.push(entityId);
+                            continue;
+                        }
+
+                        let recoveredUrl = '';
+                        try {
+                            recoveredUrl = await refreshPersistedSubjectEntityImage(entityId);
+                        } catch (refreshErr) {
+                            console.warn('Failed to refresh entity after temporary image result URL', refreshErr);
+                        }
+
+                        if (recoveredUrl) {
+                            if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                            completed.push(entityId);
+                            continue;
+                        }
+
+                        const now = Date.now();
+                        const persistWaitStartedAt = Number(job?.persistWaitStartedAt || 0) || now;
+                        const lastPersistWaitLogAt = Number(job?.lastPersistWaitLogAt || 0) || 0;
+                        const persistWaitElapsed = now - persistWaitStartedAt;
+
+                        if ((now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS && onLog) {
                             onLog(
                                 t(
-                                    `主体任务返回了临时图片地址，已跳过持久化：${job?.entityName || entityId}`,
-                                    `Subject job returned a temporary image URL; skipped persistence: ${job?.entityName || entityId}`
+                                    `主体任务返回了临时图片地址，正在等待稳定图片入库：${job?.entityName || entityId}`,
+                                    `Subject job returned a temporary image URL; waiting for durable image persistence: ${job?.entityName || entityId}`
                                 ),
-                                'warning'
+                                'process'
                             );
                         }
-                        if (canPersistGeneratedUrl && !disposed && isMountedRef.current) {
-                            setAllEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
-                            setEntities(prev => prev.map(item => String(item?.id) === String(entityId) ? { ...item, image_url: generatedUrl } : item));
-                            setViewingEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
-                            setSelectedEntity(prev => (String(prev?.id || '') === String(entityId) ? { ...prev, image_url: generatedUrl } : prev));
-                            if (showImageModal && String(selectedEntity?.id || '') === String(entityId)) {
-                                setShowImageModal(false);
+
+                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS) {
+                            if (onLog) {
+                                onLog(
+                                    t(
+                                        `主体任务已完成，但在等待稳定图片超时后仍未拿到可持久化地址：${job?.entityName || entityId}`,
+                                        `Subject job finished, but no durable image URL was available before the persistence wait timed out: ${job?.entityName || entityId}`
+                                    ),
+                                    'warning'
+                                );
                             }
+                            completed.push(entityId);
+                            continue;
                         }
-                        if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
-                        completed.push(entityId);
+
+                        statusUpdates[String(entityId)] = {
+                            status: 'persisting',
+                            lastPolledAt: now,
+                            statusFailureCount: 0,
+                            lastStatusError: '',
+                            persistWaitStartedAt,
+                            lastPersistWaitLogAt: now,
+                        };
                         continue;
                     }
 
@@ -16453,6 +16708,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     }
 
                     if (status === 'succeeded' || status === 'completed') {
+                        let recoveredUrl = '';
+                        if (projectId) {
+                            try {
+                                recoveredUrl = await refreshPersistedSubjectEntityImage(entityId);
+                            } catch (refreshErr) {
+                                console.warn('Failed to refresh entity after succeeded image job without result URL', refreshErr);
+                            }
+                        }
                         if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                         completed.push(entityId);
                         continue;
@@ -16471,10 +16734,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         for (const [entityId, patch] of Object.entries(statusUpdates)) {
                             const existing = base[String(entityId)];
                             if (!existing) continue;
-                            if (String(existing.status || '') === String(patch.status || '')) continue;
-                            base[String(entityId)] = {
+                            const nextEntry = {
                                 ...existing,
                                 ...patch,
+                            };
+                            const patchChanged = Object.keys(nextEntry).some((key) => nextEntry[key] !== existing[key]);
+                            if (!patchChanged) continue;
+                            base[String(entityId)] = {
+                                ...nextEntry,
                             };
                             changed = true;
                         }
@@ -16505,7 +16772,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             disposed = true;
             clearInterval(timer);
         };
-    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, selectedEntity?.id, showImageModal, subjectImageJobs, t]);
+    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, applySubjectEntityImageLocally, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, subjectImageJobs, t]);
 
     useEffect(() => {
         const applySnapshot = (snapshot) => {
@@ -16961,15 +17228,35 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             throw new Error(t('生成结果缺少图片地址', 'Generated result missing image URL'));
         }
 
-        await updateEntity(analyzed.id, { image_url: asset.url });
-        const updatedEntity = { ...analyzed, image_url: asset.url };
+        let resolvedAssetUrl = String(asset.url || '').trim();
+        if (isEphemeralProviderMediaUrl(resolvedAssetUrl)) {
+            if (onLog) {
+                onLog(
+                    t(
+                        `主体重构返回了临时图片地址，正在等待稳定图片入库：${analyzed?.name || analyzed?.name_en || analyzed?.id}`,
+                        `Subject reconstruction returned a temporary image URL; waiting for durable image persistence: ${analyzed?.name || analyzed?.name_en || analyzed?.id}`
+                    ),
+                    'process'
+                );
+            }
+            resolvedAssetUrl = await awaitPersistedSubjectEntityImage(analyzed.id, {
+                initialUrl: resolvedAssetUrl,
+                entityName: analyzed?.name || analyzed?.name_en || analyzed?.id,
+            });
+            if (!resolvedAssetUrl) {
+                throw new Error(t('等待主体稳定图片地址超时', 'Timed out waiting for durable subject image URL'));
+            }
+        }
+
+        await updateEntity(analyzed.id, { image_url: resolvedAssetUrl });
+        const updatedEntity = { ...analyzed, image_url: resolvedAssetUrl };
         setViewingEntity(prev => (prev?.id === updatedEntity.id ? updatedEntity : prev));
         setEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
         setAllEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
 
         setStep('done', '重构完成', 'Refactor completed', 100);
         return updatedEntity;
-    }, [allEntities, currentEpisode?.episode_info, currentEpisode?.id, getEntityPromptByLang, prependEntityGlobalStyleToPromptHead, projectId, resolvedPromptSubmitLang, t]);
+    }, [allEntities, awaitPersistedSubjectEntityImage, currentEpisode?.episode_info, currentEpisode?.id, getEntityPromptByLang, isEphemeralProviderMediaUrl, onLog, prependEntityGlobalStyleToPromptHead, projectId, resolvedPromptSubmitLang, t]);
 
     const handleBatchAnalyzeAndReconstructSubjects = async () => {
         const runtimeSnapshot = getSubjectBatchSnapshot();
@@ -17892,15 +18179,29 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         throw new Error('Generated result missing image URL');
                     }
 
-                    if (isEphemeralProviderMediaUrl(res.url)) {
-                        throw new Error('Generated result returned a temporary provider URL');
+                    let resolvedImageUrl = String(res.url || '').trim();
+                    if (isEphemeralProviderMediaUrl(resolvedImageUrl)) {
+                        onLog?.(
+                            t(
+                                `批量主体生图返回了临时图片地址，正在等待稳定图片入库：${entity?.name || entity?.name_en || entity?.id}`,
+                                `Batch subject generation returned a temporary image URL; waiting for durable image persistence: ${entity?.name || entity?.name_en || entity?.id}`
+                            ),
+                            'process'
+                        );
+                        resolvedImageUrl = await awaitPersistedSubjectEntityImage(entity.id, {
+                            initialUrl: resolvedImageUrl,
+                            entityName: entity?.name || entity?.name_en || entity?.id,
+                        });
+                        if (!resolvedImageUrl) {
+                            throw new Error('Timed out waiting for durable subject image URL');
+                        }
                     }
 
-                    await updateEntity(entity.id, { image_url: res.url });
+                    await updateEntity(entity.id, { image_url: resolvedImageUrl });
                     return {
                         entity,
-                        updatedEnt: { ...entity, image_url: res.url },
-                        imageUrl: res.url,
+                        updatedEnt: { ...entity, image_url: resolvedImageUrl },
+                        imageUrl: resolvedImageUrl,
                     };
                 } finally {
                     if (createdJobId) {
@@ -18200,6 +18501,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <RefreshCw className="animate-spin" size={10} />}
                                 {stoppingSubjectImageJobs[String(entity.id)]
                                     ? t('停止中', 'Stopping')
+                                    : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'persisting'
+                                        ? t('同步中', 'Syncing')
                                     : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'running'
                                         ? t('运行中', 'Running')
                                         : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'queued'
@@ -18849,6 +19152,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                 onClick={() => handleSelectAsset(asset)}
                                                 className="aspect-square bg-black/40 rounded-lg overflow-hidden border border-white/5 hover:border-primary/50 cursor-pointer group relative"
                                             >
+                                                <AssetHoverMetaOverlay asset={asset} t={t} />
                                                 <img src={asset.url} alt="asset" className="w-full h-full object-cover" />
                                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                             </div>
@@ -18945,6 +19249,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                     {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <RefreshCw className="animate-spin" size={12} />}
                                                     {stoppingSubjectImageJobs[String(selectedEntity.id)]
                                                         ? t('该主体停止请求发送中，请稍候。', 'Stop request is being sent for this subject. Please wait.')
+                                                        : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'persisting'
+                                                            ? t('该主体已完成生成，正在等待稳定图片同步到素材库。', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
                                                         : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'running'
                                                             ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
                                                             : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'queued'
@@ -19132,6 +19438,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                                          }}
                                                                          className="aspect-square bg-black/40 rounded border border-white/5 hover:border-primary/50 cursor-pointer overflow-hidden relative group"
                                                                      >
+                                                                         <AssetHoverMetaOverlay asset={asset} t={t} />
                                                                          <img src={getFullUrl(asset.url)} alt={asset.name} className="w-full h-full object-cover" />
                                                                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                                                      </div>
@@ -20437,6 +20744,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     );
 
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
+    const [frameTrimModal, setFrameTrimModal] = useState(() => createInitialFrameTrimState());
     const [shotImageCfgDefault, setShotImageCfgDefault] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
     const [shotImageCfgValue, setShotImageCfgValue] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
     const [shotAssetsMetaIndex, setShotAssetsMetaIndex] = useState({});
@@ -20462,6 +20770,44 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setAssetDetailModal({ open: false, type: 'start', keyframeIndex: -1 });
     };
 
+    const closeFrameTrimModal = useCallback(() => {
+        setFrameTrimModal(createInitialFrameTrimState());
+    }, []);
+
+    const openFrameTrimModal = useCallback((type) => {
+        let tech = {};
+        try {
+            tech = JSON.parse(editingShot?.technical_notes || '{}');
+        } catch (e) {
+            tech = {};
+        }
+
+        const sourceUrl = type === 'end'
+            ? String(tech?.end_frame_url || '').trim()
+            : String(editingShot?.image_url || '').trim();
+
+        if (!sourceUrl) {
+            showNotification(
+                type === 'end'
+                    ? t('当前没有可裁边的结束帧。', 'There is no end frame to trim.')
+                    : t('当前没有可裁边的起始帧。', 'There is no start frame to trim.'),
+                'warning'
+            );
+            return;
+        }
+
+        setFrameTrimModal({
+            open: true,
+            type: type === 'end' ? 'end' : 'start',
+            sourceUrl,
+            topPct: 0,
+            rightPct: 0,
+            bottomPct: 0,
+            leftPct: 0,
+            saving: false,
+        });
+    }, [editingShot?.image_url, editingShot?.technical_notes, showNotification, t]);
+
     const normalizeAssetUrlToken = useCallback((value) => {
         const raw = String(value || '').trim();
         if (!raw) return '';
@@ -20472,6 +20818,129 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return raw.split('?')[0].split('#')[0].toLowerCase();
         }
     }, []);
+
+    const updateFrameTrimMargin = useCallback((key, value) => {
+        setFrameTrimModal((prev) => ({
+            ...prev,
+            [key]: clampFrameTrimPercent(value),
+        }));
+    }, []);
+
+    const applyFrameTrimToShot = useCallback(async () => {
+        if (!editingShot?.id || !frameTrimModal?.open || frameTrimModal?.saving) return;
+
+        const targetType = frameTrimModal.type === 'end' ? 'end' : 'start';
+        const normalizedMargins = normalizeFrameTrimMargins(frameTrimModal);
+        const widthRatio = normalizedMargins.widthPct / 100;
+        const heightRatio = normalizedMargins.heightPct / 100;
+
+        if (widthRatio <= 0 || heightRatio <= 0) {
+            showNotification(t('裁边范围无效，请调整四边数值。', 'Invalid trim area. Adjust the edge values and try again.'), 'warning');
+            return;
+        }
+
+        setFrameTrimModal((prev) => ({ ...prev, saving: true }));
+        setShotGeneratingState(editingShot.id, targetType, true);
+
+        try {
+            const sourceResp = await fetch(getFullUrl(frameTrimModal.sourceUrl));
+            if (!sourceResp.ok) {
+                throw new Error(`failed to download source image (${sourceResp.status})`);
+            }
+
+            const sourceBlob = await sourceResp.blob();
+            const sourceImage = await loadImageElementFromBlob(sourceBlob);
+            const sourceWidth = Number(sourceImage?.naturalWidth || sourceImage?.width || 0);
+            const sourceHeight = Number(sourceImage?.naturalHeight || sourceImage?.height || 0);
+
+            if (!sourceWidth || !sourceHeight) {
+                throw new Error('source image dimensions unavailable');
+            }
+
+            const cropX = Math.max(0, Math.round(sourceWidth * (normalizedMargins.leftPct / 100)));
+            const cropY = Math.max(0, Math.round(sourceHeight * (normalizedMargins.topPct / 100)));
+            const cropWidth = Math.max(1, Math.round(sourceWidth * widthRatio));
+            const cropHeight = Math.max(1, Math.round(sourceHeight * heightRatio));
+
+            const canvas = document.createElement('canvas');
+            canvas.width = cropWidth;
+            canvas.height = cropHeight;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                throw new Error('canvas context unavailable');
+            }
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(sourceImage, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+            const trimmedBlob = await new Promise((resolve, reject) => {
+                canvas.toBlob((blob) => {
+                    if (!blob) {
+                        reject(new Error('failed to encode trimmed image'));
+                        return;
+                    }
+                    resolve(blob);
+                }, 'image/jpeg', 0.95);
+            });
+
+            const trimmedFile = new File(
+                [trimmedBlob],
+                `shot_${editingShot.id}_${targetType}_trimmed_${Date.now()}.jpg`,
+                { type: 'image/jpeg' }
+            );
+
+            const uploaded = await uploadAsset(trimmedFile, {
+                project_id: projectId,
+                episode_id: activeEpisode?.id,
+                shot_id: editingShot.id,
+                shot_number: editingShot.shot_id,
+                shot_name: editingShot.shot_name,
+                asset_type: targetType === 'end' ? 'end_frame' : 'start_frame',
+                source_asset_url: frameTrimModal.sourceUrl,
+                remark: targetType === 'end' ? 'Trimmed end frame asset' : 'Trimmed start frame asset',
+            });
+
+            const nextUrl = String(uploaded?.url || '').trim();
+            if (!nextUrl) {
+                throw new Error('trimmed asset upload returned no url');
+            }
+
+            if (targetType === 'end') {
+                let tech = {};
+                try {
+                    tech = JSON.parse(editingShot.technical_notes || '{}');
+                    if (!tech || typeof tech !== 'object') tech = {};
+                } catch (e) {
+                    tech = {};
+                }
+                tech.end_frame_url = nextUrl;
+                tech.video_gen_mode = 'start_end';
+                const newData = { technical_notes: JSON.stringify(tech) };
+                await onUpdateShot(editingShot.id, newData);
+                setEditingShot((prev) => (prev ? { ...prev, ...newData } : prev));
+            } else {
+                const newData = { image_url: nextUrl };
+                await onUpdateShot(editingShot.id, newData);
+                setEditingShot((prev) => (prev ? { ...prev, ...newData } : prev));
+            }
+
+            refreshShotAssetsMeta();
+            closeFrameTrimModal();
+            onLog?.(targetType === 'end'
+                ? t('结束帧裁边并回填完成。', 'End frame trimmed and applied.')
+                : t('起始帧裁边并回填完成。', 'Start frame trimmed and applied.'), 'success');
+            showNotification(targetType === 'end'
+                ? t('结束帧裁边完成', 'End frame trimmed')
+                : t('起始帧裁边完成', 'Start frame trimmed'), 'success');
+        } catch (e) {
+            const detail = e?.message || 'unknown error';
+            onLog?.(`${t('裁边失败', 'Trim failed')}: ${detail}`, 'error');
+            showNotification(`${t('裁边失败', 'Trim failed')}: ${detail}`, 'error');
+            setFrameTrimModal((prev) => ({ ...prev, saving: false }));
+        } finally {
+            setShotGeneratingState(editingShot.id, targetType, false);
+        }
+    }, [activeEpisode?.id, closeFrameTrimModal, editingShot, frameTrimModal, loadImageElementFromBlob, onLog, onUpdateShot, projectId, refreshShotAssetsMeta, setShotGeneratingState, showNotification, t, uploadAsset]);
 
     const formatBytes = useCallback((bytesValue) => {
         const num = Number(bytesValue);
@@ -20975,22 +21444,77 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return refs.filter(Boolean);
     };
 
+    const resolveShotEndFrameRefs = (shotSnapshot, rawPrompt, resolvedEntities) => {
+        let refs = [];
+        try {
+            const noteStr = shotSnapshot?.technical_notes || '{}';
+            const tech = JSON.parse(noteStr);
+            const isManualMode = Array.isArray(tech.end_ref_image_urls);
+            const isUserEdited = Boolean(tech.end_ref_image_urls_user_edited);
+            const isLockedManual = isManualMode && isUserEdited;
+            const deletedRefs = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
+
+            const matchedEntities = collectMatchedEntitiesFromPrompt({
+                promptText: rawPrompt,
+                associatedEntities: '',
+                entityPool: Array.isArray(resolvedEntities) ? resolvedEntities : entities,
+                includeAssociatedEntities: false,
+            });
+            const autoMatches = matchedEntities
+                .map((entity) => String(entity?.image_url || '').trim())
+                .filter(Boolean);
+            const environmentRefSet = new Set(
+                matchedEntities
+                    .filter((entity) => {
+                        const entityType = String(entity?.type || '').trim().toLowerCase();
+                        return entityType.includes('environment') || entityType.includes('env') || entityType.includes('scene');
+                    })
+                    .map((entity) => String(entity?.image_url || '').trim())
+                    .filter(Boolean)
+            );
+
+            if (isLockedManual) {
+                refs = [...tech.end_ref_image_urls];
+            } else if (isManualMode) {
+                refs = autoMatches.filter((url) => !deletedRefs.includes(url));
+            } else {
+                refs = [...autoMatches];
+            }
+
+            const currentStartFrame = String(shotSnapshot?.image_url || '').trim();
+            if (!isLockedManual && currentStartFrame && !refs.includes(currentStartFrame) && !deletedRefs.includes(currentStartFrame)) {
+                refs.unshift(currentStartFrame);
+            }
+
+            if (currentStartFrame && refs.includes(currentStartFrame) && environmentRefSet.size > 0) {
+                refs = refs.filter((url) => {
+                    const normalized = String(url || '').trim();
+                    if (!normalized) return false;
+                    if (normalized === currentStartFrame) return true;
+                    return !environmentRefSet.has(normalized);
+                });
+            }
+        } catch (e) {
+            console.error('Error determining end frame refs:', e);
+        }
+
+        return normalizeMediaRefList(refs);
+    };
+
     const resolveJointShotDiptychRefs = useCallback((shotSnapshot, rawStartPrompt = '', rawEndPrompt = '', resolvedEntities = null) => {
         const entityPool = Array.isArray(resolvedEntities) ? resolvedEntities : entities;
-        const startRefs = collectMatchedEntityImageUrlsFromPrompt({
+        const startSubjectRefs = collectMatchedSubjectImageUrlsFromPrompt({
             promptText: rawStartPrompt,
             entityPool,
-            includeAssociatedEntities: false,
         });
-        const endRefs = collectMatchedEntityImageUrlsFromPrompt({
+        const endSubjectRefs = collectMatchedSubjectImageUrlsFromPrompt({
             promptText: rawEndPrompt,
             entityPool,
-            includeAssociatedEntities: false,
         });
 
         return normalizeMediaRefList([
-            ...startRefs,
-            ...endRefs,
+            ...startSubjectRefs,
+            ...endSubjectRefs,
         ]);
     }, [entities]);
 
@@ -26461,6 +26985,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('裁边', 'Trim Edges'),
+                                                                        busyLabel: t('裁边处理中...', 'Trimming...'),
+                                                                        onClick: () => openFrameTrimModal('start'),
+                                                                        disabled: !editingShot.image_url || currentShotGenerating,
+                                                                        busy: frameTrimModal.open && frameTrimModal.type === 'start' && frameTrimModal.saving,
+                                                                        variant: 'secondary',
+                                                                        title: t('裁去当前起始帧四周边缘并回填', 'Trim the current start frame edges and apply the result'),
+                                                                    })}
                                                                 </div>
                                                                 <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">
@@ -26524,6 +27057,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         disabled: currentShotGenerating,
                                                                         busy: currentShotGenerating,
                                                                         variant: 'primary',
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('裁边', 'Trim Edges'),
+                                                                        busyLabel: t('裁边处理中...', 'Trimming...'),
+                                                                        onClick: () => openFrameTrimModal('end'),
+                                                                        disabled: !endFrameUrl || currentShotGenerating,
+                                                                        busy: frameTrimModal.open && frameTrimModal.type === 'end' && frameTrimModal.saving,
+                                                                        variant: 'secondary',
+                                                                        title: t('裁去当前结束帧四周边缘并回填', 'Trim the current end frame edges and apply the result'),
                                                                     })}
                                                                     {renderDetailActionButton({
                                                                         label: t('提取视频尾帧', 'Extract Video Last Frame'),
@@ -26849,6 +27391,105 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             >
                                                 {t('保存', 'Save')}
                                             </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {frameTrimModal.open && (
+                                <div className="fixed inset-0 z-[130] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+                                    <div className="w-full max-w-5xl bg-[#09090b] border border-white/10 rounded-xl shadow-2xl overflow-hidden flex flex-col">
+                                        <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                                            <div>
+                                                <h4 className="font-bold text-white flex items-center gap-2">
+                                                    <Crop className="w-4 h-4 text-primary" />
+                                                    {frameTrimModal.type === 'end'
+                                                        ? t('结束帧裁边', 'End Frame Trim')
+                                                        : t('起始帧裁边', 'Start Frame Trim')}
+                                                </h4>
+                                                <div className="text-xs text-muted-foreground mt-1">
+                                                    {t('调整四边裁切比例，保存后会生成新素材并自动回填当前帧。', 'Adjust the trim on each edge. Saving will create a new asset and apply it to the current frame.')}
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={frameTrimModal.saving ? undefined : closeFrameTrimModal}
+                                                disabled={frameTrimModal.saving}
+                                                className="p-2 hover:bg-white/10 rounded-full disabled:opacity-50"
+                                            >
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_380px] gap-0">
+                                            <div className="p-4 border-b xl:border-b-0 xl:border-r border-white/10 bg-black/30">
+                                                <div className="relative min-h-[420px] h-[52vh] rounded-lg border border-white/10 bg-black/60 overflow-hidden flex items-center justify-center">
+                                                    <img
+                                                        src={getFullUrl(frameTrimModal.sourceUrl)}
+                                                        alt={frameTrimModal.type === 'end' ? 'End frame trim preview' : 'Start frame trim preview'}
+                                                        className="max-w-full max-h-full object-contain"
+                                                    />
+                                                    <div
+                                                        className="absolute border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.62)] transition-all duration-150"
+                                                        style={{
+                                                            top: `${normalizeFrameTrimMargins(frameTrimModal).topPct}%`,
+                                                            right: `${normalizeFrameTrimMargins(frameTrimModal).rightPct}%`,
+                                                            bottom: `${normalizeFrameTrimMargins(frameTrimModal).bottomPct}%`,
+                                                            left: `${normalizeFrameTrimMargins(frameTrimModal).leftPct}%`,
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="p-4 space-y-4 bg-[#101012]">
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-white/80 space-y-2">
+                                                    <div className="font-semibold text-white">{t('当前裁切结果', 'Current Trim Result')}</div>
+                                                    <div>{t('保留宽度', 'Remaining Width')}: {normalizeFrameTrimMargins(frameTrimModal).widthPct.toFixed(1)}%</div>
+                                                    <div>{t('保留高度', 'Remaining Height')}: {normalizeFrameTrimMargins(frameTrimModal).heightPct.toFixed(1)}%</div>
+                                                </div>
+
+                                                {[
+                                                    ['topPct', t('上边', 'Top')],
+                                                    ['rightPct', t('右边', 'Right')],
+                                                    ['bottomPct', t('下边', 'Bottom')],
+                                                    ['leftPct', t('左边', 'Left')],
+                                                ].map(([key, label]) => (
+                                                    <div key={key} className="space-y-2">
+                                                        <div className="flex items-center justify-between text-xs">
+                                                            <span className="text-white/85 font-medium">{label}</span>
+                                                            <span className="text-primary font-mono">{clampFrameTrimPercent(frameTrimModal[key]).toFixed(1)}%</span>
+                                                        </div>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="45"
+                                                            step="0.5"
+                                                            value={clampFrameTrimPercent(frameTrimModal[key])}
+                                                            onChange={(e) => updateFrameTrimMargin(key, e.target.value)}
+                                                            disabled={frameTrimModal.saving}
+                                                            className="w-full accent-primary"
+                                                        />
+                                                    </div>
+                                                ))}
+
+                                                <div className="grid grid-cols-2 gap-2 pt-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setFrameTrimModal((prev) => ({ ...prev, topPct: 0, rightPct: 0, bottomPct: 0, leftPct: 0 }))}
+                                                        disabled={frameTrimModal.saving}
+                                                        className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm text-white/85 disabled:opacity-50"
+                                                    >
+                                                        {t('重置', 'Reset')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={applyFrameTrimToShot}
+                                                        disabled={frameTrimModal.saving}
+                                                        className="px-3 py-2 rounded-md bg-primary text-black font-bold text-sm hover:bg-primary/90 disabled:opacity-60"
+                                                    >
+                                                        {frameTrimModal.saving ? t('保存中...', 'Saving...') : t('保存并回填', 'Save and Apply')}
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
