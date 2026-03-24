@@ -310,6 +310,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
   - **Character**：固定机位、全身含鞋、视角顺序、光照、镜头基线、稳定锚点、服装一致性、差异化轮廓、差异化服装结构/主辅色、鞋履/配饰识别点、白底/纯净背景要求。
 - **多人角色去模板化门禁（Mandatory）**：若同批输出中的两个或以上主要角色在 `appearance/clothing/generation_prompt` 层面仍可被概括为“同龄同体态同发型同穿搭，只换颜色或名字”，则该批角色结果整体无效，必须整批重写；重写时优先拉开脸型、发型轮廓、身材比例、服装版型、鞋型和材质系统，而不是只替换颜色词。
   - **Prop**：固定机位、结构视角序列、材质锚点、光照、焦段基线、状态单一性、背景纯净度。
+- **光学写法闭环 (Optical Wording Closure, 强制)**：凡提示词中出现机位、构图或镜头感表达时，必须使用可核对的焦距或等效镜头基线，禁止只写 `cinematic lens`, `wide feel`, `zoomed-in look`, `dramatic compression` 这类模糊光学词。若使用 `telephoto compression`、`wide-angle distortion` 等等效描述，必须同时写出主焦距或焦距区间。
 - **重写回写责任 (Rewrite Back-Propagation, 强制)**：若某条 `generation_prompt` 因维度门禁被重写，必须同步回写该实体的相关说明字段（如 `anchor_description`、`visual_dependencies`、`dependency_strategy.logic`、script_entity_coverage 对应关系），确保实体说明与提示词语义一致，禁止 prompt 已修正但结构字段仍停留旧版本。
 - **项目类型/定位绑定（Mandatory）**：所有 `generation_prompt_cn/generation_prompt_en` 在生成前都必须先读取并吸收 `Project Context.Type`、`Project Context.Base Positioning` 与 `project_visual_backfill.Global_Style`。提示词正文必须明确服从该视觉总基线，回答这是真人写实、动漫/二次元、风格化 3D 还是其他体系；禁止上游 `Global_Style` 写“live-action urban realism” 而下游 subjects prompt 变成 “anime cel-shaded character sheet”，或反向混搭。
 - **失败重写示例 (Failure -> Rewrite -> Downgraded Good, 强制参照)**：
@@ -442,7 +443,7 @@ Part 1 的 `Core Scene Info` 必须含：`{Stage}`、`{Environment Context}`、`
 
 - 风格驱动映射强制：
   - 真人剧：35–85mm、真实皮肤微纹理、自然高光，禁塑料/CGI感。
-  - 风格化作品：可强化色彩轮廓，但光源与焦距必须清晰。
+  - 风格化作品：可强化色彩轮廓，但光源与焦距必须清晰且可核对，不能退化成空泛镜头词。
   - Noir/Thriller：强调方向性光与对比，保持脸部可读。
 - 未给定风格时注入默认角色审美回退语义。
 - 真人剧角色必须显式强调真人感关键词。

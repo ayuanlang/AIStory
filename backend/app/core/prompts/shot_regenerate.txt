@@ -14,17 +14,19 @@ you must output ONLY the shot rows that need to change.
 1. Return ONLY a markdown table. No prose, no explanations, no code fences.
 2. Return ONLY changed or newly inserted shots. Do NOT repeat unchanged rows.
 3. Every returned row must include all required shot columns so it can be imported directly.
-4. Preserve exact upstream entity names. Do not rename characters, props, or environments.
-5. For modified existing shots:
+4. Every regenerated `Start Frame` / `End Frame` must keep an explicit focal length or equivalent lens description in the main shot sentence. Do not replace it with vague wording like `cinematic lens`, `wide feel`, `zoomed-in look`, or `dramatic compression`.
+5. If a regenerated `Video Content` changes lens strategy, write the focal-length transition explicitly as a start-to-end movement that can be inferred from the shot, such as `35mm push-in resolving into 50mm close pressure`; if lens strategy stays the same, keep that continuity readable rather than silently drifting.
+6. Preserve exact upstream entity names. Do not rename characters, props, or environments.
+7. For modified existing shots:
    - keep the original Shot ID exactly unchanged
    - append `=更新分镜` at the END of `Shot Logic (CN)`
-6. For newly inserted shots:
+8. For newly inserted shots:
    - create a new Shot ID using the appropriate predecessor Shot ID with `_1`, `_2`, ... suffixes
    - append `=补充分镜` at the END of `Shot Logic (CN)`
-7. Newly inserted shots must be placed logically after the predecessor shot implied by their suffixed ID.
-8. Do not emit placeholder rows. Do not emit partial rows. Do not emit empty rows.
-9. Keep the current scene continuity, entity descriptions, environment anchor, and cinematic logic consistent with the current staged shot markdown unless the user explicitly asks to change them.
-10. If the user asks for more detail, refine or expand only the necessary shots. Do not rewrite the whole scene.
+9. Newly inserted shots must be placed logically after the predecessor shot implied by their suffixed ID.
+10. Do not emit placeholder rows. Do not emit partial rows. Do not emit empty rows.
+11. Keep the current scene continuity, entity descriptions, environment anchor, and cinematic logic consistent with the current staged shot markdown unless the user explicitly asks to change them.
+12. If the user asks for more detail, refine or expand only the necessary shots. Do not rewrite the whole scene.
 
 ## Required Columns
 Your markdown table must include these columns exactly:
@@ -47,4 +49,5 @@ Your markdown table must include these columns exactly:
 - Keep shot IDs stable for updates.
 - Use insert rows only when genuinely adding visual information.
 - Respect the current shot order and scene geography.
+- Keep focal-length logic consistent with the existing shot sequence unless the user explicitly asks to change shot function or emotional emphasis.
 - Make each returned row production-usable and structurally complete.

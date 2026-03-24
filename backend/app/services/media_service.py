@@ -65,14 +65,14 @@ def _strip_query_from_log_url(value: Any) -> Optional[str]:
     try:
         parsed = urllib.parse.urlsplit(raw)
         if parsed.scheme and parsed.netloc:
-            return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+                return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
     except Exception:
         pass
     return raw[:300]
 
 def _debug_log(msg, level="info"):
     """Print to console and write to logger."""
-    print(msg)
+        print(msg)
     getattr(logger, level, logger.info)(msg)
 
 class MediaGenerationService:
@@ -4331,7 +4331,9 @@ class MediaGenerationService:
         
         try:
             # Submit
-            resp = requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120))
+            resp = await asyncio.to_thread(
+                lambda: requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120))
+            )
             if resp.status_code not in [200, 201]:
                 return {"error": f"Vidu Error {resp.status_code}", "details": resp.text}
 
@@ -4344,7 +4346,9 @@ class MediaGenerationService:
             poll_url = f"{endpoint}/{task_id}"
             for _ in range(90):
                 await asyncio.sleep(2)
-                p_resp = requests.get(poll_url, headers=headers, timeout=30)
+                p_resp = await asyncio.to_thread(
+                    lambda: requests.get(poll_url, headers=headers, timeout=30)
+                )
                 if p_resp.status_code == 200:
                     p_data = p_resp.json()
                     status = p_data.get("state") or p_data.get("status")
@@ -6335,7 +6339,7 @@ class MediaGenerationService:
 
              if self._is_public_http_url(ref_image):
                  try:
-                     resp = requests.get(ref_image, timeout=30)
+                     resp = await asyncio.to_thread(lambda: requests.get(ref_image, timeout=30))
                      if resp.status_code == 200:
                          ref_bytes = resp.content
                  except Exception:

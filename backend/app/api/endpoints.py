@@ -20271,12 +20271,14 @@ async def _run_generate_image(
         
         # Register Asset
         if result.get("url"):
-            normalized_url, normalized_meta = _persist_data_uri_image_result(
+            normalized_url, normalized_meta = await asyncio.to_thread(
+                _persist_data_uri_image_result,
                 current_user,
                 result.get("url"),
                 result.get("metadata"),
             )
-            normalized_url, normalized_meta = _persist_remote_image_result(
+            normalized_url, normalized_meta = await asyncio.to_thread(
+                _persist_remote_image_result,
                 current_user,
                 normalized_url,
                 normalized_meta,
@@ -20285,10 +20287,12 @@ async def _run_generate_image(
             if normalized_meta is not None:
                 result["metadata"] = normalized_meta
 
-            # Only register if not error? result.get("url") check handles it.
-            _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
-            _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
-            _bind_generated_media_to_entity(db, current_user, req, result.get("url"))
+            request_mode = str(getattr(req, "mode", "") or "").strip().lower()
+            if request_mode != "joint_diptych":
+                # Only register if not error? result.get("url") check handles it.
+                _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
+                _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
+                _bind_generated_media_to_entity(db, current_user, req, result.get("url"))
 
         return result
     except asyncio.CancelledError:

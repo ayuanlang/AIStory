@@ -26,13 +26,27 @@ const getFullUrl = (url) => {
 const brokenMediaUrls = new Set();
 const brokenSceneImageUrls = new Set();
 
+const shouldBypassBrokenMediaCache = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    if (raw.startsWith('/uploads/')) return true;
+    try {
+        const parsed = new URL(raw, BASE_URL || window.location.origin);
+        return parsed.pathname.startsWith('/uploads/');
+    } catch {
+        return false;
+    }
+};
+
 const rememberBrokenMediaUrl = (url) => {
     const normalized = String(url || '').trim();
     if (!normalized) return;
+    if (shouldBypassBrokenMediaCache(normalized)) return;
     brokenMediaUrls.add(normalized);
 };
 
 const isBrokenMediaUrl = (url) => {
+    if (shouldBypassBrokenMediaCache(url)) return false;
     return brokenMediaUrls.has(String(url || '').trim());
 };
 
@@ -240,6 +254,27 @@ const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode = null,
     }
 
     return normalizeMediaRefList(refs);
+};
+
+const resolveShotVideoPosterUrl = (shotLike = {}) => {
+    let techObj = {};
+    try {
+        techObj = JSON.parse(shotLike?.technical_notes || '{}');
+    } catch {
+        techObj = {};
+    }
+
+    return [
+        techObj?.video_poster_url,
+        techObj?.video_preview_url,
+        techObj?.video_thumbnail_url,
+        techObj?.poster_url,
+        techObj?.thumbnail_url,
+        techObj?.preview_image_url,
+        techObj?.cover_url,
+        techObj?.last_frame_url,
+        techObj?.end_frame_url,
+    ].map((value) => String(value || '').trim()).find(Boolean) || '';
 };
 
 const LazyHoverVideo = ({
@@ -20884,6 +20919,37 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         await onUpdateShot(editingShot.id, updates);
     };
 
+    const buildAssetDetailSavePatch = useCallback((shotRecord, modalType) => {
+        if (!shotRecord || typeof shotRecord !== 'object') return {};
+
+        const technicalNotes = String(shotRecord.technical_notes || '').trim() || '{}';
+
+        if (modalType === 'start') {
+            return {
+                start_frame: shotRecord.start_frame || '',
+                technical_notes: technicalNotes,
+            };
+        }
+
+        if (modalType === 'end') {
+            return {
+                end_frame: shotRecord.end_frame || '',
+                technical_notes: technicalNotes,
+            };
+        }
+
+        if (modalType === 'video') {
+            return {
+                video_content: shotRecord.video_content || '',
+                prompt: shotRecord.prompt || shotRecord.video_content || '',
+                duration: shotRecord.duration || '',
+                technical_notes: technicalNotes,
+            };
+        }
+
+        return {};
+    }, []);
+
     const resolveShotStartFrameRefs = (shotSnapshot, rawPrompt, resolvedEntities) => {
         let refs = [];
         try {
@@ -21655,6 +21721,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                         }
 
                         if (resultUrl || phase === 'succeeded' || phase === 'completed') {
+                            if (isJointDiptych) {
+                                clearPendingJointDiptychImageJob(stableShotId);
+                                setShotGeneratingState(stableShotId, 'start', false);
+                                setShotGeneratingState(stableShotId, 'end', false);
+                            } else {
+                                clearPendingImageJob(stableShotId, stableKind);
+                                setShotGeneratingState(stableShotId, stableKind, false);
+                            }
+
                             if (resultUrl) {
                                 const currentShot = (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
                                     || (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null);
@@ -21692,15 +21767,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     ? `Recovered joint start/end generation completed for shot ${stableShotId}.`
                                     : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation completed for shot ${stableShotId}.`, 'success');
                                 refreshShotAssetsMeta();
-                                await refreshShots();
-                            }
-                            if (isJointDiptych) {
-                                clearPendingJointDiptychImageJob(stableShotId);
-                                setShotGeneratingState(stableShotId, 'start', false);
-                                setShotGeneratingState(stableShotId, 'end', false);
-                            } else {
-                                clearPendingImageJob(stableShotId, stableKind);
-                                setShotGeneratingState(stableShotId, stableKind, false);
+                                Promise.resolve(refreshShots()).catch((refreshErr) => {
+                                    console.warn('Refresh shots after recovered image job failed:', refreshErr);
+                                });
                             }
                             break;
                         }
@@ -25180,7 +25249,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                         <LazyHoverVideo
                                             key={shot.video_url}
                                             src={shot.video_url}
-                                            poster={shot.image_url}
+                                            poster={resolveShotVideoPosterUrl(shot)}
                                             className="w-full h-full flex items-center justify-center"
                                             mediaClassName="w-full h-full object-contain object-center"
                                             muted
@@ -25733,7 +25802,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                             {(editingShot.video_url) ? (
                                                 <ManagedVideoPlayer
                                                     src={editingShot.video_url}
-                                                    poster={editingShot.image_url}
+                                                    poster={resolveShotVideoPosterUrl(editingShot)}
                                                     className="max-w-full max-h-full object-contain"
                                                     wrapperClassName="w-full h-full"
                                                     preload="metadata"
@@ -26527,7 +26596,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     {editingShot.video_url ? (
                                                                         <ManagedVideoPlayer
                                                                             src={editingShot.video_url}
-                                                                            poster={editingShot.image_url}
+                                                                            poster={resolveShotVideoPosterUrl(editingShot)}
                                                                             className="max-w-full max-h-full object-contain"
                                                                             wrapperClassName="w-full h-full"
                                                                             preload="metadata"
@@ -26765,7 +26834,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                         if (assetDetailModal.type === 'keyframe') {
                                                             await reconstructKeyframes(localKeyframes);
                                                         } else {
-                                                            await onUpdateShot(editingShot.id, editingShot);
+                                                            const patch = buildAssetDetailSavePatch(editingShot, assetDetailModal.type);
+                                                            if (Object.keys(patch).length > 0) {
+                                                                await onUpdateShot(editingShot.id, patch);
+                                                            }
                                                         }
                                                         onLog?.(t('详情修改已保存', 'Detail changes saved'), 'success');
                                                         closeAssetDetailModal();
