@@ -4483,7 +4483,8 @@ class MediaGenerationService:
                         and str(candidate_ref).strip().startswith("data:image/")
                     ):
                         try:
-                            hosted_ref = self._download_and_save(
+                            hosted_ref = await asyncio.to_thread(
+                                self._download_and_save,
                                 str(candidate_ref).strip(),
                                 f"{request_filename_base}_ref{i + 1}",
                                 request_user_id,
