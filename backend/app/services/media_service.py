@@ -65,14 +65,14 @@ def _strip_query_from_log_url(value: Any) -> Optional[str]:
     try:
         parsed = urllib.parse.urlsplit(raw)
         if parsed.scheme and parsed.netloc:
-                return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+            return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
     except Exception:
         pass
     return raw[:300]
 
 def _debug_log(msg, level="info"):
     """Print to console and write to logger."""
-        print(msg)
+    print(msg)
     getattr(logger, level, logger.info)(msg)
 
 class MediaGenerationService:
