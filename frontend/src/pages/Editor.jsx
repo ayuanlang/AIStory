@@ -16081,7 +16081,6 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             // ignore storage failures
         }
 
-        pendingImageJobsRef.current = {};
         subjectBatchGenerateActiveJobsRef.current.clear();
         subjectBatchReconstructActiveJobsRef.current.clear();
         if (window.__AISTORY_SUBJECT_BATCH_RUNTIME__) {
@@ -16092,7 +16091,6 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         }
         setSubjectImageJobs({});
         setStoppingSubjectImageJobs({});
-        setGeneratingStateByShot({});
     }, [createSubjectBatchTaskState, emitSubjectBatchRuntime]);
 
     const resolvedPromptSubmitLang = useMemo(() => {
@@ -19936,6 +19934,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         writeImageJobStateStorage(next);
     }, [buildShotJobMeta, readImageJobStateStorage, writeImageJobStateStorage]);
 
+    const clearPendingJointDiptychImageJob = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        clearPendingImageJob(stableShotId, 'start');
+        clearPendingImageJob(stableShotId, 'end');
+    }, [clearPendingImageJob]);
+
     const forceClearShotImageJob = useCallback(async ({ shotId, kind, payload, reason }) => {
         const stableShotId = String(shotId || payload?.ownerShotId || '').trim();
         const stableKind = kind === 'end' ? 'end' : 'start';
@@ -19993,13 +19998,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(stableShotId, 'video', false);
         onLog?.(`Shot video job force-cleared: ${ownerLabel}. Reason: ${reasonText}`, 'warning');
     }, [clearPendingVideoJob, deleteGenerationJob, describeShotJobOwner, onLog, setShotGeneratingState, stopGenerationJob]);
-
-    const clearPendingJointDiptychImageJob = useCallback((shotId) => {
-        const stableShotId = String(shotId || '').trim();
-        if (!stableShotId) return;
-        clearPendingImageJob(stableShotId, 'start');
-        clearPendingImageJob(stableShotId, 'end');
-    }, [clearPendingImageJob]);
 
     const clearPendingImageJobsByJobId = useCallback((jobId) => {
         const stableJobId = String(jobId || '').trim();
@@ -29433,6 +29431,62 @@ const Editor = ({
         const metadata = (item?.metadata && typeof item.metadata === 'object') ? item.metadata : {};
         const payload = (item?.payload && typeof item.payload === 'object') ? item.payload : {};
         const context = (item?.context && typeof item.context === 'object') ? item.context : {};
+        const ownerPage = String(
+            item?.ownerPage
+            || metadata?.ownerPage
+            || payload?.ownerPage
+            || context?.ownerPage
+            || ''
+        ).trim();
+        const ownerScopeType = String(
+            item?.ownerScopeType
+            || metadata?.ownerScopeType
+            || payload?.ownerScopeType
+            || context?.ownerScopeType
+            || ''
+        ).trim();
+        const ownerScopeId = String(
+            item?.ownerScopeId
+            || metadata?.ownerScopeId
+            || payload?.ownerScopeId
+            || context?.ownerScopeId
+            || ''
+        ).trim();
+        const ownerSceneId = String(
+            item?.ownerSceneId
+            || metadata?.ownerSceneId
+            || payload?.ownerSceneId
+            || context?.ownerSceneId
+            || ''
+        ).trim();
+        const ownerShotId = String(
+            item?.ownerShotId
+            || metadata?.ownerShotId
+            || payload?.ownerShotId
+            || context?.ownerShotId
+            || ''
+        ).trim();
+        const ownerEntityId = String(
+            item?.ownerEntityId
+            || metadata?.ownerEntityId
+            || payload?.ownerEntityId
+            || context?.ownerEntityId
+            || ''
+        ).trim();
+        const ownerMediaKind = String(
+            item?.ownerMediaKind
+            || metadata?.ownerMediaKind
+            || payload?.ownerMediaKind
+            || context?.ownerMediaKind
+            || ''
+        ).trim();
+        const jobKind = String(
+            item?.jobKind
+            || metadata?.jobKind
+            || payload?.jobKind
+            || context?.jobKind
+            || ''
+        ).trim();
 
         const episodeId = Number(
             item?.episode_id
@@ -29474,6 +29528,13 @@ const Editor = ({
             || [];
 
         const chunks = [];
+        if (ownerPage) chunks.push(`page:${ownerPage}`);
+        if (ownerScopeType && ownerScopeId) chunks.push(`${ownerScopeType}:${ownerScopeId}`);
+        if (ownerSceneId) chunks.push(`scene:${ownerSceneId}`);
+        if (ownerShotId) chunks.push(`shot:${ownerShotId}`);
+        if (ownerEntityId) chunks.push(`entity:${ownerEntityId}`);
+        if (ownerMediaKind) chunks.push(`media:${ownerMediaKind}`);
+        if (jobKind) chunks.push(`job:${jobKind}`);
         if (Number.isFinite(episodeId) && episodeId > 0) chunks.push(`EP:${episodeId}`);
         if (currentSceneLabel) chunks.push(`${t('当前场景', 'Current Scene')}:${currentSceneLabel}`);
         if (Number.isFinite(sceneId) && sceneId > 0) chunks.push(`SC:${sceneId}`);
@@ -29481,6 +29542,24 @@ const Editor = ({
         if (Number.isFinite(shotId) && shotId > 0) chunks.push(`SH:${shotId}`);
         if (shotIds.length > 0) chunks.push(`SHx${shotIds.length}`);
         return chunks.length > 0 ? chunks.join(' · ') : '-';
+    }, [t]);
+
+    const getJobPoolOwnerPageText = useCallback((item) => {
+        if (!item || typeof item !== 'object') return '-';
+        const metadata = (item?.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+        const payload = (item?.payload && typeof item.payload === 'object') ? item.payload : {};
+        const context = (item?.context && typeof item.context === 'object') ? item.context : {};
+        const ownerPage = String(
+            item?.ownerPage
+            || metadata?.ownerPage
+            || payload?.ownerPage
+            || context?.ownerPage
+            || ''
+        ).trim();
+        if (ownerPage === 'subject-library') return t('主体页', 'Subject Library');
+        if (ownerPage === 'shot-editor') return t('镜头页', 'Shot Editor');
+        if (ownerPage) return ownerPage;
+        return t('未标记', 'Unscoped');
     }, [t]);
 
     const activeEpisode = episodes.find(e => e.id === activeEpisodeId);
@@ -29908,6 +29987,7 @@ const Editor = ({
                                                 <span className="text-[11px] px-2.5 py-1 rounded bg-white/10 border border-white/10 text-white/80">{item.status || '-'}</span>
                                             </div>
                                             <div className="text-[12px] font-mono text-white/80 break-all">{item.job_id || '-'}</div>
+                                            <div className="text-[11px] text-cyan-200/80">{getJobPoolOwnerPageText(item)}</div>
                                             <div className="text-[11px] text-white/70 break-all">{getJobPoolScopeText(item)}</div>
                                             <div className="text-[11px] text-muted-foreground">{item.created_at || '-'}</div>
                                             {item.error ? (
@@ -29946,6 +30026,7 @@ const Editor = ({
                                         <th className="px-3 py-2 text-left">kind</th>
                                         <th className="px-3 py-2 text-left">job_id</th>
                                         <th className="px-3 py-2 text-left">status</th>
+                                        <th className="hidden lg:table-cell px-3 py-2 text-left">page</th>
                                         <th className="hidden md:table-cell px-3 py-2 text-left">user</th>
                                         <th className="hidden lg:table-cell px-3 py-2 text-left">scope</th>
                                         <th className="px-3 py-2 text-left">created_at</th>
@@ -29966,6 +30047,7 @@ const Editor = ({
                                                 <td className="px-3 py-2 text-white/80">{item.kind}</td>
                                                 <td className="px-3 py-2 font-mono text-[11px] text-white/80">{item.job_id}</td>
                                                 <td className="px-3 py-2 text-white">{item.status}</td>
+                                                <td className="hidden lg:table-cell px-3 py-2 text-cyan-200/80">{getJobPoolOwnerPageText(item)}</td>
                                                 <td className="hidden md:table-cell px-3 py-2 text-white/70">{item.username || item.user_id || '-'}</td>
                                                 <td className="hidden lg:table-cell px-3 py-2 text-white/70 max-w-[280px] truncate" title={getJobPoolScopeText(item)}>{getJobPoolScopeText(item)}</td>
                                                 <td className="px-3 py-2 text-white/60">{item.created_at || '-'}</td>
@@ -29995,7 +30077,7 @@ const Editor = ({
                                     })}
                                     {(!jobPoolData?.items || jobPoolData.items.length === 0) && (
                                         <tr>
-                                            <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">{t('暂无任务', 'No tasks')}</td>
+                                            <td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">{t('暂无任务', 'No tasks')}</td>
                                         </tr>
                                     )}
                                 </tbody>
