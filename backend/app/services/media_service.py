@@ -4387,15 +4387,17 @@ class MediaGenerationService:
             os.getenv("RENDER_INSTANCE_ID", ""),
         )
         tool_conf = config.get("config", {}) or {}
+        internal_callback_url = str(tool_conf.get("_provider_callback_url") or "").strip()
         raw_callback_url = str(
-            tool_conf.get("webHook")
+            internal_callback_url
+                or tool_conf.get("webHook")
                 or tool_conf.get("webhook")
             or tool_conf.get("callBackUrl")
             or tool_conf.get("callback_url")
             or tool_conf.get("callbackUrl")
             or ""
         ).strip()
-        callback_ticket = f"grsai-{gen_type}"
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"grsai-{gen_type}"
         callback_deployment_hint = self._is_public_deployment_hint()
         callback_public_base = self._resolve_public_base_url()
         callback_url = self._resolve_provider_callback_url(tool_conf, callback_ticket)

@@ -1614,6 +1614,25 @@ def _extract_job_provider_task_id(job: Dict[str, Any]) -> str:
     return ""
 
 
+def _extract_job_provider_callback_ticket(job: Dict[str, Any]) -> str:
+    if not isinstance(job, dict):
+        return ""
+
+    for value in (job.get("provider_callback_ticket"), job.get("callback_ticket")):
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+
+    return ""
+
+
+def _is_ambiguous_image_submit_detail(detail: Any) -> bool:
+    text = str(detail or "").strip().lower()
+    if not text:
+        return False
+    return "ambiguous_submit_transport" in text or "provider may have accepted the request" in text
+
+
 def _normalize_generation_status(value: Any) -> str:
     status = str(value or "").strip().lower()
     if status in {"success", "succeeded", "completed", "done"}:
@@ -1687,12 +1706,13 @@ def _get_generation_callback_payload(ticket: str) -> Dict[str, Any]:
 
 def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
     provider_task_id = _extract_job_provider_task_id(job)
-    if not provider_task_id:
+    callback_ticket = _extract_job_provider_callback_ticket(job) or "grsai-image"
+    callback_payload = _get_generation_callback_payload(callback_ticket)
+    if not callback_payload:
         return job
 
-    callback_payload = _get_generation_callback_payload("grsai-image")
     callback_task_id = _extract_callback_task_id(callback_payload)
-    if not callback_task_id or callback_task_id != provider_task_id:
+    if provider_task_id and callback_task_id and callback_task_id != provider_task_id:
         return job
 
     normalized_status = _normalize_generation_status(callback_payload.get("status"))
@@ -1721,13 +1741,15 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
     if not updates:
         return job
 
-    updates.setdefault("provider_task_id", provider_task_id)
+    if provider_task_id:
+        updates.setdefault("provider_task_id", provider_task_id)
     _set_image_job(job_id, **updates)
     with IMAGE_JOB_LOCK:
         updated = dict(IMAGE_JOB_STORE.get(job_id) or {})
     logger.info(
-        "[ImageJob] finalized from grsai callback | job_id=%s provider_task_id=%s status=%s has_result_url=%s result_url=%s",
+        "[ImageJob] finalized from grsai callback | job_id=%s callback_ticket=%s provider_task_id=%s status=%s has_result_url=%s result_url=%s",
         job_id,
+        callback_ticket,
         provider_task_id,
         updates.get("status") or current_status or None,
         bool(callback_result_url),
@@ -19518,7 +19540,14 @@ def _resolve_media_runtime_target(
     }
 
 
-async def _run_generate_image(req: GenerationRequest, current_user: User, db: Session, job_progress_callback: Any = None):
+async def _run_generate_image(
+    req: GenerationRequest,
+    current_user: User,
+    db: Session,
+    job_progress_callback: Any = None,
+    provider_callback_ticket: Optional[str] = None,
+    provider_callback_url: Optional[str] = None,
+):
     reservation_tx = None
     runtime_target = _resolve_media_runtime_target(
         provider=req.provider,
@@ -19977,6 +20006,10 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
 
         if callable(job_progress_callback):
             image_provider_options["_grsai_task_id_callback"] = job_progress_callback
+        if provider_callback_ticket:
+            image_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
+        if provider_callback_url:
+            image_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
 
         if req.enable_fallback is not None:
             image_provider_options["enableFallback"] = bool(req.enable_fallback)
@@ -20360,7 +20393,13 @@ async def _dispatch_generation_callback(kind: str, callback_url: str, job: Dict[
         )
 
 
-async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
+async def _run_generate_image_job(
+    job_id: str,
+    user_id: int,
+    req_payload: Dict[str, Any],
+    provider_callback_ticket: Optional[str] = None,
+    provider_callback_url: Optional[str] = None,
+) -> None:
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
     req_provider = str(req_payload.get("provider") or "").strip() or None
@@ -20399,7 +20438,14 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
             req_model,
         )
         result = await asyncio.wait_for(
-            _run_generate_image(req_obj, user, db, job_progress_callback=_on_grsai_task_id),
+            _run_generate_image(
+                req_obj,
+                user,
+                db,
+                job_progress_callback=_on_grsai_task_id,
+                provider_callback_ticket=provider_callback_ticket,
+                provider_callback_url=provider_callback_url,
+            ),
             timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
         )
         _set_image_job(
@@ -20491,6 +20537,22 @@ async def _run_generate_image_job(job_id: str, user_id: int, req_payload: Dict[s
                 job_id,
                 str(e.detail),
                 _extract_job_provider_task_id(current_job) or None,
+            )
+            return
+        if _is_ambiguous_image_submit_detail(e.detail):
+            _set_image_job(
+                job_id,
+                status="running",
+                error=None,
+                ambiguous_submit=True,
+                ambiguous_submit_at=now_bj_iso(),
+                upstream_submit_state="unknown",
+            )
+            logger.warning(
+                "[ImageJob] ambiguous submit retained as running | job_id=%s callback_ticket=%s detail=%s",
+                job_id,
+                provider_callback_ticket or None,
+                str(e.detail),
             )
             return
         _set_image_job(
@@ -20654,12 +20716,21 @@ async def submit_generate_image_endpoint(
     if not job_id:
         job_id = uuid.uuid4().hex
 
+    provider_callback_ticket = f"image-job-{job_id}"
+    provider_callback_url = ""
+    try:
+        provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
+    except Exception:
+        provider_callback_url = ""
+
     _set_image_job(
         job_id,
         status="queued",
         user_id=current_user.id,
         username=current_user.username,
         callback_url=callback_url,
+        provider_callback_ticket=provider_callback_ticket,
+        provider_callback_url=provider_callback_url or None,
         task_scope=scope_key,
         project_id=req_payload.get("project_id"),
         episode_id=req_payload.get("episode_id"),
@@ -20686,7 +20757,13 @@ async def submit_generate_image_endpoint(
     async def _deferred_image_job_start() -> None:
         # Let FastAPI flush submit response first, then start heavy background work.
         await asyncio.sleep(0)
-        await _run_generate_image_job(job_id, current_user.id, req_payload)
+        await _run_generate_image_job(
+            job_id,
+            current_user.id,
+            req_payload,
+            provider_callback_ticket=provider_callback_ticket,
+            provider_callback_url=provider_callback_url,
+        )
 
     image_task = asyncio.create_task(_deferred_image_job_start())
     with IMAGE_JOB_LOCK:
