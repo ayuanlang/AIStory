@@ -655,6 +655,23 @@ function buildShotDiptychPlan(aspectRatio) {
     };
 }
 
+function getShotDiptychLayoutLabel(layout, language = 'en') {
+    if (language === 'cn') {
+        return layout === 'horizontal' ? '左右并排' : '上下并排';
+    }
+    return layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom';
+}
+
+function buildShotDiptychLayoutInstruction(diptychPlan, language = 'en') {
+    const layoutLabel = getShotDiptychLayoutLabel(diptychPlan?.layout, language);
+
+    if (language === 'cn') {
+        return `两宫格必须采用${layoutLabel}排布。`;
+    }
+
+    return `The diptych must be arranged ${layoutLabel}.`;
+}
+
 function getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight) {
     const seamSourceSpan = layout === 'horizontal' ? sourceWidth : sourceHeight;
     if (!Number.isFinite(seamSourceSpan) || seamSourceSpan <= 0) return 2;
@@ -733,6 +750,19 @@ function collectSupportedAspectRatioOptions(values) {
     return out;
 }
 
+function collectSupportedImageSizeOptions(values) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(values) ? values : []).forEach((value) => {
+        const normalized = normalizeImageSizeOption(value);
+        if (!normalized) return;
+        if (seen.has(normalized)) return;
+        seen.add(normalized);
+        out.push(normalized);
+    });
+    return out;
+}
+
 function selectBestShotDiptychRequestAspectRatio({ diptychPlan, allowedAspectRatios }) {
     const fallback = normalizeAspectRatioOption(diptychPlan?.targetAspectRatio)
         || (diptychPlan?.layout === 'vertical' ? '16:9' : '9:16');
@@ -764,6 +794,25 @@ function selectBestShotDiptychRequestAspectRatio({ diptychPlan, allowedAspectRat
     return [...supported].sort((left, right) => scoreAspect(left) - scoreAspect(right))[0] || fallback;
 }
 
+function selectBestSupportedImageSize(preferredImageSize, allowedImageSizes) {
+    const fallback = normalizeImageSizeOption(preferredImageSize) || '1K';
+    const supported = collectSupportedImageSizeOptions(allowedImageSizes);
+    if (supported.length === 0) return fallback;
+
+    const rankedSizes = ['0.5K', '1K', '2K', '4K'];
+    const fallbackRank = rankedSizes.indexOf(fallback);
+    if (fallbackRank < 0) return supported[0] || fallback;
+
+    return [...supported].sort((left, right) => {
+        const leftRank = rankedSizes.indexOf(left);
+        const rightRank = rankedSizes.indexOf(right);
+        const leftDistance = leftRank < 0 ? Number.POSITIVE_INFINITY : Math.abs(leftRank - fallbackRank);
+        const rightDistance = rightRank < 0 ? Number.POSITIVE_INFINITY : Math.abs(rightRank - fallbackRank);
+        if (leftDistance !== rightDistance) return leftDistance - rightDistance;
+        return rightRank - leftRank;
+    })[0] || fallback;
+}
+
 function resolveShotPanelExportResolution(aspectRatio, imageSize) {
     const preset = getResolutionByAspectAndImageSize(aspectRatio, imageSize);
     if (!preset) return null;
@@ -771,6 +820,20 @@ function resolveShotPanelExportResolution(aspectRatio, imageSize) {
     const height = Number(preset.height);
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
     return { width, height };
+}
+
+function resolveShotDiptychRequestResolution(diptychPlan, panelExportSize) {
+    const panelWidth = Number(panelExportSize?.width);
+    const panelHeight = Number(panelExportSize?.height);
+    if (!Number.isFinite(panelWidth) || !Number.isFinite(panelHeight) || panelWidth <= 0 || panelHeight <= 0) {
+        return null;
+    }
+
+    if (diptychPlan?.layout === 'horizontal') {
+        return { width: panelWidth * 2, height: panelHeight };
+    }
+
+    return { width: panelWidth, height: panelHeight * 2 };
 }
 
 function getResolutionByAspectAndImageSize(aspectRatio, imageSize) {
@@ -20752,6 +20815,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 aspectRatios: collectSupportedAspectRatioOptions(
                     activeImageModel?.modality?.aspect_ratios || activeImageModel?.aspect_ratios || []
                 ),
+                imageSizeValues: collectSupportedImageSizeOptions(
+                    activeImageModel?.modality?.image_size_values || activeImageModel?.image_size_values || []
+                ),
             } : null);
         } catch (e) {
             console.error('Failed to load active setting sources in ShotsView', e);
@@ -20844,22 +20910,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     };
 
     const resolveJointShotDiptychRefs = useCallback((shotSnapshot, rawStartPrompt = '', rawEndPrompt = '', resolvedEntities = null) => {
-        const tech = (() => {
-            try {
-                return JSON.parse(shotSnapshot?.technical_notes || '{}');
-            } catch {
-                return {};
-            }
-        })();
-
-        const startFrameUrl = String(shotSnapshot?.image_url || '').trim();
-        const endFrameUrl = String(tech?.end_frame_url || '').trim();
-        const startRefs = resolveShotStartFrameRefs(shotSnapshot, rawStartPrompt, resolvedEntities);
-        const endRefs = getEndFrameVisibleRefs(shotSnapshot, rawEndPrompt, resolvedEntities);
+        const entityPool = Array.isArray(resolvedEntities) ? resolvedEntities : entities;
+        const startRefs = collectMatchedEntityImageUrlsFromPrompt({
+            promptText: rawStartPrompt,
+            entityPool,
+            includeAssociatedEntities: false,
+        });
+        const endRefs = collectMatchedEntityImageUrlsFromPrompt({
+            promptText: rawEndPrompt,
+            entityPool,
+            includeAssociatedEntities: false,
+        });
 
         return normalizeMediaRefList([
-            startFrameUrl,
-            endFrameUrl,
             ...startRefs,
             ...endRefs,
         ]);
@@ -21156,24 +21219,31 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 diptychPlan,
                 allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
             });
-            const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
+            const requestImageSize = selectBestSupportedImageSize(
+                preferredImageSize,
+                activeImageCapabilityProfile?.imageSizeValues,
+            );
+            const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, requestImageSize);
+            const requestResolution = resolveShotDiptychRequestResolution(diptychPlan, exportSize);
             const combinedRefs = resolveJointShotDiptychRefs(
                 shotSnapshot,
                 rawStartPrompt,
                 rawEndPrompt,
                 resolvedEntities,
             );
+            const layoutInstructionCn = buildShotDiptychLayoutInstruction(diptychPlan, 'cn');
+            const layoutInstructionEn = buildShotDiptychLayoutInstruction(diptychPlan, 'en');
 
             const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                 ? [
-                    `生成一张单画布的两宫格分镜参考图，用于后期拆分成起始帧与结束帧。最终画布必须严格只包含两格，且两格尺寸均等。当前项目最终单帧画幅为 ${diptychPlan.targetAspectRatio}，因此请按${diptychPlan.layout === 'horizontal' ? '左右并排' : '上下并排'}方式排布，让每一格都预留额外出血与安全边距，保证后期拆分并轻微居中裁切后仍能得到可用的 ${diptychPlan.targetAspectRatio} 单帧。两格之间只能靠画面内容自然过渡，严禁出现任何形式的中缝装饰或分隔元素，包括但不限于白线、黑线、细线、粗线、描边、高亮边、阴影缝、拼贴缝、相框边、空白带、纯色带、渐变带、留白、留黑、间隔条、边框条或任何可见分界痕迹；两格必须直接贴合成一个连续画布，看起来像同一张完整大图被后期从中切成两格，而不是先画出两张图再拼接。中缝两侧的安全区内也严禁出现人为制造的高对比边缘、笔直切边、亮暗突变、硬边阴影或任何会在拆分后读成分隔线的边界痕迹。不要让人物脸部、手部、关键道具和主要动作贴近中缝或外边缘，不要添加第三格、文字标签、编号、漫画气泡或拼贴元素。两格必须保持同一 shot 的身份、环境、光照与空间连续性。第一格是起始帧，第二格是结束帧。`,
-                    `风格约束：整张图必须呈现为一次性完成的单幅电影感画面，而不是双联海报、拼贴板、分屏设计、对照图、前后对比图或任意形式的双图排版。禁止使用会强化“两张图被拼在一起”观感的构图策略，例如对称边框、独立画框、版式切割、居中分隔设计、接缝高光、接缝阴影、刻意的并置对照或任何平面设计式分栏。`,
+                    `生成一张单画布两宫格分镜图，后期会拆分为起始帧和结束帧。必须严格只有两格。${layoutInstructionCn} 两格要像同一场景连续发生的两个瞬间，保持同一 shot 的人物身份、环境、光照和空间连续性。`,
+                    `两格之间不得出现任何可见分隔设计或拼贴感：不要白线、黑线、边框、留白、间隔条、接缝高光、接缝阴影，也不要让高对比硬边落在中缝附近。人物脸部、手部、关键道具和主要动作不要贴近中缝或外边缘；不要出现第三格、文字、编号、气泡或版式元素。整张图必须像一次完成的电影画面，不像海报拼版或分屏设计。`,
                     `第一格（起始帧）：${startSubmitPrompt}`,
                     `第二格（结束帧）：${endSubmitPrompt}`,
                 ].join('\n\n')
                 : [
-                    `Create one single-canvas two-panel diptych for later post-split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels arranged ${diptychPlan.layout === 'horizontal' ? 'left-to-right' : 'top-to-bottom'}. The final single-frame delivery target is ${diptychPlan.targetAspectRatio}, so compose each panel with extra bleed and crop-safe margin so it can be split and lightly center-cropped into an independent ${diptychPlan.targetAspectRatio} frame. The boundary between the two panels must be invisible in the rendered image: absolutely no white line, black line, thin line, thick line, outline, bright edge, shadow seam, collage seam, frame edge, empty gap, blank strip, solid-color strip, gradient strip, spacer band, border bar, or any other visible divider artifact is allowed. The two panels must read as one continuous full canvas that will only be separated later in post, not as two images pasted together. Within the seam safety area on both sides, avoid any artificial high-contrast edge, straight cut edge, abrupt light-dark transition, hard shadow border, or any boundary artifact that could read as a divider after splitting. Keep faces, hands, props, and key action away from the seam and outer edges. Do not add a third panel, text labels, numbering, speech bubbles, or collage elements. Maintain identity, environment continuity, lighting continuity, and scene geography across both panels. Panel A is the shot start frame. Panel B is the shot end frame.`,
-                    `Style constraint: the entire image must read as a single cinematic composition created in one pass, not as a diptych poster, collage board, split-screen layout, before-and-after comparison, or any other two-image editorial design. Do not use composition choices that reinforce the feeling of two separate images being joined, such as mirrored framing devices, independent panel borders, graphic layout cuts, centered divider design, seam highlights, seam shadows, deliberate side-by-side comparison staging, or any magazine-style multi-panel presentation.`,
+                    `Create one single-canvas two-panel storyboard image for later split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels. ${layoutInstructionEn} Both panels must feel like consecutive moments from the same shot, with consistent identity, environment, lighting, and scene geography.`,
+                    `The boundary between panels must be invisible. Do not add divider lines, borders, gaps, blank strips, seam highlights, seam shadows, collage styling, text, numbering, speech bubbles, or any third panel. Avoid placing faces, hands, hero props, or key motion near the seam or outer edges. The whole image must read as one cinematic composition, not a poster layout or split-screen graphic.`,
                     `Panel A (Start Frame): ${startSubmitPrompt}`,
                     `Panel B (End Frame): ${endSubmitPrompt}`,
                 ].join('\n\n');
@@ -21199,8 +21269,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 prompt_language: resolvedPromptSubmitLang,
                 asset_type: 'start_frame',
                 aspect_ratio: requestAspectRatio,
+                ...(requestResolution?.width ? { width: requestResolution.width } : {}),
+                ...(requestResolution?.height ? { height: requestResolution.height } : {}),
                 ...(cfgOverride ? { cfg: cfgOverride } : {}),
-                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                ...(requestImageSize ? { image_size: requestImageSize } : {}),
                 negative_prompt: jointNegativePrompt,
                 on_job_created: (jobId) => {
                     createdImageJobId = String(jobId || '').trim();
@@ -24360,7 +24432,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setShotGeneratingState(stableShotId, 'start', false);
             setShotGeneratingState(stableShotId, 'end', false);
         }
-    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
 
     const runLocalKeyframeBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
