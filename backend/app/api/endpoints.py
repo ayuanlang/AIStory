@@ -1315,6 +1315,7 @@ def _build_generation_task_scope(kind: str, user_id: int, payload: Dict[str, Any
         "scene_id": stable_payload.get("scene_id"),
         "shot_id": stable_payload.get("shot_id"),
         "asset_type": str(stable_payload.get("asset_type") or "").strip().lower(),
+        "mode": str(stable_payload.get("mode") or "").strip().lower(),
         "entity_id": stable_payload.get("entity_id"),
         "subject_name": str(stable_payload.get("subject_name") or "").strip().lower(),
     }
@@ -17508,6 +17509,8 @@ class GenerationRequest(BaseModel):
     model: Optional[str] = None
     aspect_ratio: Optional[str] = None
     image_size: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
     quality: Optional[str] = None
     output_format: Optional[str] = None
     outputFormat: Optional[str] = None
@@ -20747,11 +20750,18 @@ async def submit_generate_image_endpoint(
     )
 
     logger.info(
-        "[ImageJob] queued | job_id=%s user_id=%s scope=%s idempotency=%s",
+        "[ImageJob] queued | job_id=%s user_id=%s scope=%s idempotency=%s mode=%s asset_type=%s shot_id=%s size=%sx%s aspect_ratio=%s prompt_preview=%s",
         job_id,
         current_user.id,
         scope_key,
         bool(idempotency_key),
+        str(req_payload.get("mode") or "").strip() or None,
+        str(req_payload.get("asset_type") or "").strip() or None,
+        req_payload.get("shot_id"),
+        req_payload.get("width") or None,
+        req_payload.get("height") or None,
+        str(req_payload.get("aspect_ratio") or "").strip() or None,
+        str(req_payload.get("prompt") or "").strip().replace("\n", " ")[:160] or None,
     )
 
     async def _deferred_image_job_start() -> None:

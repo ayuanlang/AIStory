@@ -21268,6 +21268,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_name: shotSnapshot.shot_name,
                 prompt_language: resolvedPromptSubmitLang,
                 asset_type: 'start_frame',
+                mode: 'joint_diptych',
                 aspect_ratio: requestAspectRatio,
                 ...(requestResolution?.width ? { width: requestResolution.width } : {}),
                 ...(requestResolution?.height ? { height: requestResolution.height } : {}),
