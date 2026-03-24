@@ -15696,6 +15696,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
 
 const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3 }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
+    const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
+    const IMAGE_JOB_CACHE_PURGE_MARKER_KEY = `aistory.imageJobCachePurge.${IMAGE_JOB_CACHE_PURGE_VERSION}`;
     const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const createSubjectBatchTaskState = () => ({
         running: false,
@@ -15973,6 +15975,49 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             // ignore storage failures
         }
     }, [normalizeSubjectImageJobs, subjectImageJobStorageKey]);
+
+    useEffect(() => {
+        if (!window?.localStorage) return;
+        try {
+            if (window.localStorage.getItem(IMAGE_JOB_CACHE_PURGE_MARKER_KEY) === '1') return;
+
+            const imageJobPrefixes = [
+                'aistory.subjectImageJobs.',
+                'aistory.shotImageJobs.',
+                'aistory.shotVideoJobs.',
+                'aistory.shotGenerationState.',
+            ];
+
+            const keysToRemove = [];
+            for (let index = 0; index < window.localStorage.length; index += 1) {
+                const key = String(window.localStorage.key(index) || '');
+                if (!key) continue;
+                if (key === SUBJECT_BATCH_RUNTIME_STORAGE_KEY || imageJobPrefixes.some((prefix) => key.startsWith(prefix))) {
+                    keysToRemove.push(key);
+                }
+            }
+
+            keysToRemove.forEach((key) => {
+                window.localStorage.removeItem(key);
+            });
+            window.localStorage.setItem(IMAGE_JOB_CACHE_PURGE_MARKER_KEY, '1');
+        } catch {
+            // ignore storage failures
+        }
+
+        pendingImageJobsRef.current = {};
+        subjectBatchGenerateActiveJobsRef.current.clear();
+        subjectBatchReconstructActiveJobsRef.current.clear();
+        if (window.__AISTORY_SUBJECT_BATCH_RUNTIME__) {
+            window.__AISTORY_SUBJECT_BATCH_RUNTIME__.generate = createSubjectBatchTaskState();
+            window.__AISTORY_SUBJECT_BATCH_RUNTIME__.analyze = createSubjectBatchTaskState();
+            window.__AISTORY_SUBJECT_BATCH_RUNTIME__.reconstruct = createSubjectBatchTaskState();
+            emitSubjectBatchRuntime();
+        }
+        setSubjectImageJobs({});
+        setStoppingSubjectImageJobs({});
+        setGeneratingStateByShot({});
+    }, [createSubjectBatchTaskState, emitSubjectBatchRuntime]);
 
     const resolvedPromptSubmitLang = useMemo(() => {
         return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
