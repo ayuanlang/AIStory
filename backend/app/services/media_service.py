@@ -4469,9 +4469,44 @@ class MediaGenerationService:
                 resolved_refs = []
                 _debug_log(f"[Grsai] Processing {len(ref_list)} reference images...")
                 prefer_public_upload_url = self._is_public_deployment_hint()
+                request_user_id_raw = tool_conf.get("_request_user_id")
+                try:
+                    request_user_id = int(request_user_id_raw or 1)
+                except Exception:
+                    request_user_id = 1
+                request_filename_base = str(tool_conf.get("_request_filename_base") or "grsai_ref").strip() or "grsai_ref"
                 for i, r in enumerate(ref_list):
+                    candidate_ref = r
+                    if (
+                        prefer_public_upload_url
+                        and isinstance(candidate_ref, str)
+                        and str(candidate_ref).strip().startswith("data:image/")
+                    ):
+                        try:
+                            hosted_ref = self._download_and_save(
+                                str(candidate_ref).strip(),
+                                f"{request_filename_base}_ref{i + 1}",
+                                request_user_id,
+                            )
+                            public_hosted_ref = self._resolve_public_upload_url(hosted_ref) or hosted_ref
+                            if public_hosted_ref and str(public_hosted_ref).strip().startswith(("http://", "https://")):
+                                candidate_ref = public_hosted_ref
+                                logger.info(
+                                    "[GrsaiTrace][%s] ref hosted before submit | ref_index=%s user_id=%s hosted_ref=%s",
+                                    trace_id,
+                                    i,
+                                    request_user_id,
+                                    _strip_query_from_log_url(public_hosted_ref),
+                                )
+                        except Exception as ref_host_error:
+                            logger.warning(
+                                "[GrsaiTrace][%s] ref host before submit failed | ref_index=%s error=%s",
+                                trace_id,
+                                i,
+                                ref_host_error,
+                            )
                     resolved = self._resolve_ref_for_api(
-                        r,
+                        candidate_ref,
                         force_data_uri_for_local=True,
                         prefer_public_upload_url=prefer_public_upload_url,
                         data_uri_profile="grsai_image_ref",
@@ -4522,8 +4557,10 @@ class MediaGenerationService:
             result_url = f"{result_base}/v1/draw/result"
 
             _debug_log(f"[Grsai] Submitting Payload: {json.dumps(log_payload, ensure_ascii=False)}")
+            payload_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            inline_ref_bytes = sum(self._data_uri_image_size_bytes(item) or 0 for item in (payload.get("urls") or []))
             logger.info(
-                "[GrsaiTrace][%s] image submit prepared | endpoint=%s result_url=%s has_refs=%s refs_count=%s callback_enabled=%s payload_keys=%s",
+                "[GrsaiTrace][%s] image submit prepared | endpoint=%s result_url=%s has_refs=%s refs_count=%s callback_enabled=%s payload_keys=%s payload_bytes=%s inline_ref_bytes=%s",
                 trace_id,
                 endpoint,
                 result_url,
@@ -4531,6 +4568,8 @@ class MediaGenerationService:
                 len(payload.get("urls") or []),
                 bool(callback_url and callback_url != "-1"),
                 sorted(list(payload.keys())),
+                payload_bytes,
+                inline_ref_bytes,
             )
             return await self._submit_and_poll_grsai(
                 endpoint,
@@ -6750,7 +6789,10 @@ class MediaGenerationService:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         trace_id = trace_id or f"grsai-{uuid.uuid4().hex[:10]}"
         payload_digest = hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+        payload_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         log_tag = "grsai_video" if is_video else "grsai_image"
+        submit_connect_timeout = max(10, int(os.getenv("GRSAI_SUBMIT_CONNECT_TIMEOUT_SECONDS", "20")))
+        submit_io_timeout = max(120, int(os.getenv("GRSAI_SUBMIT_IO_TIMEOUT_SECONDS", "300")))
 
         def _build_url_pairs(submit_url: str, poll_url: str):
             pairs = [(submit_url, poll_url)]
@@ -6773,14 +6815,14 @@ class MediaGenerationService:
         for index, (submit_url, poll_url) in enumerate(upstream_candidates):
 
             def _post():
-                return requests.post(submit_url, json=payload, headers=headers, timeout=(15, 120), verify=False)
+                return requests.post(submit_url, json=payload, headers=headers, timeout=(submit_connect_timeout, submit_io_timeout), verify=False)
 
             def _post_no_proxy():
                 return requests.post(
                     submit_url,
                     json=payload,
                     headers=headers,
-                    timeout=(15, 120),
+                    timeout=(submit_connect_timeout, submit_io_timeout),
                     verify=False,
                     proxies={"http": None, "https": None},
                 )
@@ -6788,11 +6830,14 @@ class MediaGenerationService:
             try:
                 submit_started = time.perf_counter()
                 logger.info(
-                    "[GrsaiTrace][%s] submit begin | endpoint=%s candidate_index=%s payload_digest=%s",
+                    "[GrsaiTrace][%s] submit begin | endpoint=%s candidate_index=%s payload_digest=%s payload_bytes=%s submit_timeouts=%s/%s",
                     trace_id,
                     submit_url,
                     index,
                     payload_digest,
+                    payload_bytes,
+                    submit_connect_timeout,
+                    submit_io_timeout,
                 )
                 try:
                     resp = await asyncio.to_thread(_post)

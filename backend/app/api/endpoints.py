@@ -20079,6 +20079,9 @@ async def _run_generate_image(
             image_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
         if provider_callback_url:
             image_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
+        image_provider_options["_request_user_id"] = int(current_user.id)
+        if _build_generation_filename_base(req, db):
+            image_provider_options["_request_filename_base"] = _build_generation_filename_base(req, db)
 
         if req.enable_fallback is not None:
             image_provider_options["enableFallback"] = bool(req.enable_fallback)
