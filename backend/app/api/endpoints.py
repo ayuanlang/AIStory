@@ -827,6 +827,115 @@ def _persist_data_uri_image_result(
     return normalized_url, updated_metadata
 
 
+def _persist_remote_image_result(
+    current_user: User,
+    media_url: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    raw = str(media_url or "").strip()
+    if not raw:
+        return media_url, metadata
+    if raw.startswith("/"):
+        return media_url, metadata
+    if not raw.lower().startswith(("http://", "https://")):
+        return media_url, metadata
+
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return media_url, metadata
+
+    hostname = str(parsed.hostname or "").strip().lower()
+    if hostname in {"localhost", "127.0.0.1"}:
+        return media_url, metadata
+
+    try:
+        response = requests.get(
+            raw,
+            stream=True,
+            timeout=120,
+            allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning(
+            "[ImageResultNormalize] remote image download failed | user_id=%s url=%s err=%s",
+            getattr(current_user, "id", None),
+            raw,
+            exc,
+        )
+        return media_url, metadata
+
+    content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if content_type and not content_type.startswith("image/"):
+        logger.warning(
+            "[ImageResultNormalize] remote image skipped non-image content | user_id=%s url=%s content_type=%s",
+            getattr(current_user, "id", None),
+            raw,
+            content_type,
+        )
+        return media_url, metadata
+
+    binary = response.content
+    if not binary:
+        return media_url, metadata
+
+    extension_map = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/bmp": ".bmp",
+    }
+    file_ext = extension_map.get(content_type)
+    if not file_ext:
+        path_ext = os.path.splitext(parsed.path or "")[1].lower()
+        if path_ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+            file_ext = ".jpg" if path_ext == ".jpeg" else path_ext
+        else:
+            file_ext = ".png"
+
+    upload_root = settings.UPLOAD_DIR
+    if not os.path.isabs(upload_root):
+        upload_root = os.path.abspath(upload_root)
+
+    user_dir = os.path.join(upload_root, str(getattr(current_user, "id", "unknown")), "generated")
+    os.makedirs(user_dir, exist_ok=True)
+
+    filename = f"provider_result_{uuid.uuid4().hex[:16]}{file_ext}"
+    save_path = os.path.join(user_dir, filename)
+    with open(save_path, "wb") as f:
+        f.write(binary)
+
+    updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    updated_metadata["stored_from_remote_url"] = raw
+    updated_metadata["stored_from_remote_url_bytes"] = len(binary)
+    if content_type:
+        updated_metadata["stored_from_remote_url_content_type"] = content_type
+
+    try:
+        with Image.open(save_path) as img:
+            updated_metadata["width"] = int(img.width)
+            updated_metadata["height"] = int(img.height)
+            if img.format:
+                updated_metadata["format"] = str(img.format)
+    except Exception as exc:
+        logger.warning("remote image metadata probe failed path=%s err=%s", save_path, exc)
+
+    relative_path = os.path.relpath(save_path, upload_root).replace("\\", "/")
+    normalized_url = f"/uploads/{relative_path}"
+    logger.info(
+        "[ImageResultNormalize] stored remote image | user_id=%s source_url=%s normalized_url=%s bytes=%s",
+        getattr(current_user, "id", None),
+        raw,
+        normalized_url,
+        len(binary),
+    )
+    return normalized_url, updated_metadata
+
+
 def _video_job_file_path(job_id: str) -> str:
     safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(job_id or "").strip())
     return os.path.join(VIDEO_JOB_FILE_DIR, f"{safe_job_id}.json")
@@ -15334,14 +15443,30 @@ async def upload_asset(
     type: str = "image", # image or video
     remark: Optional[str] = None,
     project_id: Optional[str] = None,
+    episode_id: Optional[str] = None,
     entity_id: Optional[str] = None,
     shot_id: Optional[str] = None,
+    shot_number: Optional[str] = None,
+    shot_name: Optional[str] = None,
+    asset_type: Optional[str] = None,
+    source_asset_url: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     max_upload_bytes = max(int(settings.MAX_ASSET_UPLOAD_MB or 100), 1) * 1024 * 1024
     allowed_image_ext = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
     allowed_video_ext = {'.mp4', '.mov', '.avi', '.webm'}
+    normalized_idempotency_key = _normalize_asset_idempotency_key(idempotency_key)
+
+    if normalized_idempotency_key:
+        existing_asset = _find_existing_asset_for_registration(
+            db,
+            current_user.id,
+            idempotency_key=normalized_idempotency_key,
+        )
+        if existing_asset:
+            return _serialize_asset_row(existing_asset)
 
     # Ensure upload directory
     upload_dir = settings.UPLOAD_DIR
@@ -15399,8 +15524,18 @@ async def upload_asset(
     # Extract Metadata
     meta_info = {'source': 'file_upload'}
     if project_id: meta_info['project_id'] = project_id
+    if episode_id: meta_info['episode_id'] = episode_id
     if entity_id: meta_info['entity_id'] = entity_id
     if shot_id: meta_info['shot_id'] = shot_id
+    if shot_number: meta_info['shot_number'] = shot_number
+    if shot_name: meta_info['shot_name'] = shot_name
+    if asset_type:
+        meta_info['asset_type'] = asset_type
+        meta_info['frame_type'] = asset_type
+    if source_asset_url:
+        meta_info['source_asset_url'] = source_asset_url
+    if normalized_idempotency_key:
+        meta_info['idempotency_key'] = normalized_idempotency_key
     
     try:
         file_size = os.path.getsize(file_path)
@@ -15431,16 +15566,8 @@ async def upload_asset(
     db.add(asset)
     db.commit()
     db.refresh(asset)
-    
-    return {
-        "id": asset.id,
-        "type": asset.type,
-        "url": asset.url,
-        "filename": asset.filename,
-        "meta_info": asset.meta_info,
-        "remark": asset.remark,
-        "created_at": asset.created_at
-    }
+
+    return _serialize_asset_row(asset)
 
 
 @router.delete("/assets/{asset_id}")
@@ -18215,6 +18342,89 @@ def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
         return "prop"
     return text
 
+
+def _serialize_asset_row(asset: Asset) -> Dict[str, Any]:
+    return {
+        "id": asset.id,
+        "type": asset.type,
+        "url": asset.url,
+        "filename": asset.filename,
+        "meta_info": asset.meta_info,
+        "remark": asset.remark,
+        "created_at": asset.created_at,
+    }
+
+
+def _normalize_asset_idempotency_key(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _asset_meta_matches_registration_context(asset_meta: Any, expected_meta: Any) -> bool:
+    if not isinstance(asset_meta, dict):
+        asset_meta = {}
+    if not isinstance(expected_meta, dict):
+        expected_meta = {}
+
+    compare_keys = [
+        "project_id",
+        "episode_id",
+        "entity_id",
+        "shot_id",
+        "asset_type",
+        "frame_type",
+        "source_asset_url",
+    ]
+    for key in compare_keys:
+        expected_value = str(expected_meta.get(key) or "").strip()
+        if not expected_value:
+            continue
+        if str(asset_meta.get(key) or "").strip() != expected_value:
+            return False
+    return True
+
+
+def _find_existing_asset_for_registration(
+    db: Session,
+    user_id: int,
+    *,
+    url: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    meta_info: Optional[Dict[str, Any]] = None,
+) -> Optional[Asset]:
+    normalized_key = _normalize_asset_idempotency_key(idempotency_key)
+    normalized_meta = dict(meta_info) if isinstance(meta_info, dict) else {}
+
+    if normalized_key:
+        keyed_candidates = (
+            db.query(Asset)
+            .filter(Asset.user_id == user_id)
+            .order_by(Asset.id.desc())
+            .limit(500)
+            .all()
+        )
+        for candidate in keyed_candidates:
+            candidate_meta = candidate.meta_info if isinstance(candidate.meta_info, dict) else {}
+            if _normalize_asset_idempotency_key(candidate_meta.get("idempotency_key")) != normalized_key:
+                continue
+            return candidate
+
+    normalized_url = str(url or "").strip()
+    if not normalized_url:
+        return None
+
+    url_candidates = (
+        db.query(Asset)
+        .filter(Asset.user_id == user_id, Asset.url == normalized_url)
+        .order_by(Asset.id.desc())
+        .limit(50)
+        .all()
+    )
+    for candidate in url_candidates:
+        candidate_meta = candidate.meta_info if isinstance(candidate.meta_info, dict) else {}
+        if _asset_meta_matches_registration_context(candidate_meta, normalized_meta):
+            return candidate
+    return url_candidates[0] if url_candidates and not normalized_meta else None
+
 def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source_metadata: Dict = None):
     # Handle dict or object
     def get_attr(obj, key):
@@ -18243,7 +18453,7 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
 
         meta = {}
         # Copy known fields
-        for field in ["shot_number", "shot_id", "project_id", "asset_type", "entity_id", "entity_name", "subject_name", "subject_type", "entity_type"]:
+        for field in ["shot_number", "shot_id", "project_id", "episode_id", "asset_type", "entity_id", "entity_name", "subject_name", "subject_type", "entity_type", "source_asset_url", "idempotency_key"]:
             val = get_attr(req, field)
             if val: meta[field] = val
 
@@ -18424,6 +18634,16 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
             else:
                  remark = f"Generated {get_attr(req, 'asset_type')} for Shot {get_attr(req, 'shot_number')} by {provider}"
 
+        existing_asset = _find_existing_asset_for_registration(
+            db,
+            user_id,
+            url=url,
+            idempotency_key=meta.get("idempotency_key"),
+            meta_info=meta,
+        )
+        if existing_asset:
+            return existing_asset
+
         asset = Asset(
             user_id=user_id,
             type=("image" if is_image else ("audio" if is_audio else "video")),
@@ -18434,6 +18654,7 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
         )
         db.add(asset)
         db.commit()
+        return asset
     except Exception as e:
         print(f"Asset reg failed: {e}")
 
@@ -19582,6 +19803,11 @@ async def _run_generate_image(req: GenerationRequest, current_user: User, db: Se
                 current_user,
                 result.get("url"),
                 result.get("metadata"),
+            )
+            normalized_url, normalized_meta = _persist_remote_image_result(
+                current_user,
+                normalized_url,
+                normalized_meta,
             )
             result["url"] = normalized_url
             if normalized_meta is not None:

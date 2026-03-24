@@ -667,6 +667,59 @@ function getShotDiptychSeamBiasPx(layout, sourceWidth, sourceHeight) {
     return Math.max(1, Math.min(10, Math.round(seamSourceSpan / 320)));
 }
 
+function getShotDiptychFallbackCropPx(layout, sourceWidth, sourceHeight, targetAspectRatio, frameRole = 'start') {
+    const seamSourceSpan = layout === 'horizontal' ? sourceWidth : sourceHeight;
+    if (!Number.isFinite(seamSourceSpan) || seamSourceSpan <= 0) {
+        return { seamExtraPx: 1, outerTrimPx: 0 };
+    }
+
+    const ratioValue = parseAspectRatioValue(targetAspectRatio) || 1;
+    const isExtremeAspect = ratioValue >= 1.7 || ratioValue <= 0.58;
+    const isStrongAspect = ratioValue >= 1.3 || ratioValue <= 0.78;
+    const frameBoost = frameRole === 'end' ? 1 : 0;
+
+    const seamDivisor = isExtremeAspect ? 320 : (isStrongAspect ? 360 : 420);
+    const outerDivisor = isExtremeAspect ? 900 : 1100;
+
+    return {
+        seamExtraPx: Math.max(1, Math.min(8, Math.round(seamSourceSpan / seamDivisor) + frameBoost)),
+        outerTrimPx: Math.max(0, Math.min(4, Math.round(seamSourceSpan / outerDivisor))),
+    };
+}
+
+const JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION = '20260324a';
+
+function hashStableText(value) {
+    const raw = String(value || '');
+    let hash = 0;
+    for (let index = 0; index < raw.length; index += 1) {
+        hash = ((hash * 31) + raw.charCodeAt(index)) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+
+function buildJointShotDiptychUploadIdempotencyKey({
+    shotId,
+    frameRole,
+    compositeUrl,
+    layout,
+    targetAspectRatio,
+    exportSize,
+}) {
+    const compositeToken = String(compositeUrl || '').trim().split('?')[0].split('#')[0];
+    const signature = [
+        JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION,
+        String(shotId || '').trim(),
+        String(frameRole || '').trim(),
+        compositeToken,
+        String(layout || '').trim(),
+        String(targetAspectRatio || '').trim(),
+        Number(exportSize?.width || 0),
+        Number(exportSize?.height || 0),
+    ].join('|');
+    return `joint-diptych:${hashStableText(signature)}`;
+}
+
 function collectSupportedAspectRatioOptions(values) {
     const out = [];
     const seen = new Set();
@@ -20526,7 +20579,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return refs.filter(Boolean);
     };
 
-    const resolveJointShotDiptychRefs = useCallback((shotSnapshot) => {
+    const resolveJointShotDiptychRefs = useCallback((shotSnapshot, rawStartPrompt = '', rawEndPrompt = '', resolvedEntities = null) => {
         const tech = (() => {
             try {
                 return JSON.parse(shotSnapshot?.technical_notes || '{}');
@@ -20537,9 +20590,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const startFrameUrl = String(shotSnapshot?.image_url || '').trim();
         const endFrameUrl = String(tech?.end_frame_url || '').trim();
+        const startRefs = resolveShotStartFrameRefs(shotSnapshot, rawStartPrompt, resolvedEntities);
+        const endRefs = getEndFrameVisibleRefs(shotSnapshot, rawEndPrompt, resolvedEntities);
 
-        return [...new Set([startFrameUrl, endFrameUrl].filter(Boolean))];
-    }, []);
+        return normalizeMediaRefList([
+            startFrameUrl,
+            endFrameUrl,
+            ...startRefs,
+            ...endRefs,
+        ]);
+    }, [getEndFrameVisibleRefs]);
 
     const loadImageElementFromBlob = useCallback((blob) => {
         return new Promise((resolve, reject) => {
@@ -20566,6 +20626,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         image,
         layout,
         panelIndex,
+        frameRole = 'start',
         targetAspectRatio,
         exportSize,
     }) => {
@@ -20583,24 +20644,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         let panelHeight = sourceHeight;
         const seamTrimPx = getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight);
         const seamBiasPx = getShotDiptychSeamBiasPx(layout, sourceWidth, sourceHeight);
+        const fallbackCrop = getShotDiptychFallbackCropPx(layout, sourceWidth, sourceHeight, targetAspectRatio, frameRole);
+        const innerTrimPx = seamTrimPx + fallbackCrop.seamExtraPx;
+        const outerTrimPx = fallbackCrop.outerTrimPx;
 
         if (layout === 'horizontal') {
             const halfWidth = sourceWidth / 2;
             if (panelIndex === 0) {
-                panelX = 0;
-                panelWidth = Math.max(1, Math.floor(halfWidth - seamTrimPx));
+                panelX = Math.max(0, outerTrimPx);
+                panelWidth = Math.max(1, Math.floor(halfWidth - innerTrimPx - outerTrimPx));
             } else {
-                panelX = Math.min(sourceWidth - 1, Math.ceil(halfWidth + seamTrimPx));
-                panelWidth = Math.max(1, sourceWidth - panelX);
+                panelX = Math.min(sourceWidth - 1, Math.ceil(halfWidth + innerTrimPx));
+                panelWidth = Math.max(1, sourceWidth - panelX - outerTrimPx);
             }
         } else {
             const halfHeight = sourceHeight / 2;
             if (panelIndex === 0) {
-                panelY = 0;
-                panelHeight = Math.max(1, Math.floor(halfHeight - seamTrimPx));
+                panelY = Math.max(0, outerTrimPx);
+                panelHeight = Math.max(1, Math.floor(halfHeight - innerTrimPx - outerTrimPx));
             } else {
-                panelY = Math.min(sourceHeight - 1, Math.ceil(halfHeight + seamTrimPx));
-                panelHeight = Math.max(1, sourceHeight - panelY);
+                panelY = Math.min(sourceHeight - 1, Math.ceil(halfHeight + innerTrimPx));
+                panelHeight = Math.max(1, sourceHeight - panelY - outerTrimPx);
             }
         }
 
@@ -20620,16 +20684,18 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         if (layout === 'horizontal' && cropWidth < panelWidth) {
             const availableShiftX = Math.max(0, panelWidth - cropWidth);
+            const effectiveBiasPx = seamBiasPx + fallbackCrop.seamExtraPx;
             const biasedCropX = panelIndex === 0
-                ? (cropX - Math.min(seamBiasPx, availableShiftX / 2))
-                : (cropX + Math.min(seamBiasPx, availableShiftX / 2));
+                ? (cropX - Math.min(effectiveBiasPx, availableShiftX / 2))
+                : (cropX + Math.min(effectiveBiasPx, availableShiftX / 2));
             cropX = Math.min(panelX + availableShiftX, Math.max(panelX, biasedCropX));
         }
         if (layout === 'vertical' && cropHeight < panelHeight) {
             const availableShiftY = Math.max(0, panelHeight - cropHeight);
+            const effectiveBiasPx = seamBiasPx + fallbackCrop.seamExtraPx;
             const biasedCropY = panelIndex === 0
-                ? (cropY - Math.min(seamBiasPx, availableShiftY / 2))
-                : (cropY + Math.min(seamBiasPx, availableShiftY / 2));
+                ? (cropY - Math.min(effectiveBiasPx, availableShiftY / 2))
+                : (cropY + Math.min(effectiveBiasPx, availableShiftY / 2));
             cropY = Math.min(panelY + availableShiftY, Math.max(panelY, biasedCropY));
         }
 
@@ -20691,6 +20757,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             image: compositeImage,
             layout: diptychPlan.layout,
             panelIndex: 0,
+            frameRole: 'start',
             targetAspectRatio: diptychPlan.targetAspectRatio,
             exportSize,
         });
@@ -20698,6 +20765,24 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             image: compositeImage,
             layout: diptychPlan.layout,
             panelIndex: 1,
+            frameRole: 'end',
+            targetAspectRatio: diptychPlan.targetAspectRatio,
+            exportSize,
+        });
+
+        const startUploadIdempotencyKey = buildJointShotDiptychUploadIdempotencyKey({
+            shotId: targetShotId,
+            frameRole: 'start',
+            compositeUrl,
+            layout: diptychPlan.layout,
+            targetAspectRatio: diptychPlan.targetAspectRatio,
+            exportSize,
+        });
+        const endUploadIdempotencyKey = buildJointShotDiptychUploadIdempotencyKey({
+            shotId: targetShotId,
+            frameRole: 'end',
+            compositeUrl,
+            layout: diptychPlan.layout,
             targetAspectRatio: diptychPlan.targetAspectRatio,
             exportSize,
         });
@@ -20711,6 +20796,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_number: stableShot?.shot_id,
                 shot_name: stableShot?.shot_name,
                 asset_type: 'start_frame',
+                source_asset_url: compositeUrl,
+                idempotency_key: startUploadIdempotencyKey,
+                remark: 'Joint diptych split start frame',
             }
         );
         const endUpload = await uploadAsset(
@@ -20722,6 +20810,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_number: stableShot?.shot_id,
                 shot_name: stableShot?.shot_name,
                 asset_type: 'end_frame',
+                source_asset_url: compositeUrl,
+                idempotency_key: endUploadIdempotencyKey,
+                remark: 'Joint diptych split end frame',
             }
         );
 
@@ -20802,7 +20893,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
             });
             const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
-            const combinedRefs = resolveJointShotDiptychRefs(shotSnapshot);
+            const combinedRefs = resolveJointShotDiptychRefs(
+                shotSnapshot,
+                rawStartPrompt,
+                rawEndPrompt,
+                resolvedEntities,
+            );
 
             const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                 ? [
