@@ -936,6 +936,72 @@ def _persist_remote_image_result(
     return normalized_url, updated_metadata
 
 
+_EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
+    re.compile(r"^file\d+\.aitohumanize\.com$", re.IGNORECASE),
+]
+
+
+def _is_ephemeral_provider_media_url(value: Any) -> bool:
+    raw = str(value or "").strip()
+    if not raw or raw.startswith("/") or raw.startswith("data:"):
+        return False
+
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return False
+
+    if str(parsed.scheme or "").lower() not in {"http", "https"}:
+        return False
+
+    hostname = str(parsed.hostname or "").strip().lower()
+    if not hostname:
+        return False
+
+    for pattern in _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS:
+        if pattern.match(hostname):
+            return True
+    return False
+
+
+def _assert_allowed_persisted_media_url(value: Any, *, field_label: str) -> None:
+    raw = str(value or "").strip()
+    if not raw:
+        return
+    if _is_ephemeral_provider_media_url(raw):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_label} cannot use a temporary provider URL; use a localized /uploads URL or another stable asset URL",
+        )
+
+
+def _assert_allowed_shot_media_payload(update_data: Dict[str, Any]) -> None:
+    if not isinstance(update_data, dict):
+        return
+
+    _assert_allowed_persisted_media_url(update_data.get("image_url"), field_label="shot.image_url")
+
+    raw_technical_notes = update_data.get("technical_notes")
+    if raw_technical_notes is None:
+        return
+
+    notes = raw_technical_notes if isinstance(raw_technical_notes, dict) else None
+    if notes is None and isinstance(raw_technical_notes, str):
+        try:
+            parsed = json.loads(raw_technical_notes)
+            notes = parsed if isinstance(parsed, dict) else None
+        except Exception:
+            notes = None
+
+    if not isinstance(notes, dict):
+        return
+
+    _assert_allowed_persisted_media_url(
+        notes.get("end_frame_url"),
+        field_label="shot.technical_notes.end_frame_url",
+    )
+
+
 def _video_job_file_path(job_id: str) -> str:
     safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(job_id or "").strip())
     return os.path.join(VIDEO_JOB_FILE_DIR, f"{safe_job_id}.json")
@@ -12781,6 +12847,8 @@ def create_shot(
          raise
          
     try:
+        _assert_allowed_shot_media_payload(shot.dict(exclude_unset=True))
+
         db_shot = Shot(
             scene_id=scene_id,
             project_id=project.id,
@@ -12832,8 +12900,11 @@ def update_shot(
     scene = db.query(Scene).filter(Scene.id == db_shot.scene_id).first()
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
     _require_project_access(db, episode.project_id, current_user)
-        
-    for key, value in shot_in.dict(exclude_unset=True).items():
+
+    update_data = shot_in.dict(exclude_unset=True)
+    _assert_allowed_shot_media_payload(update_data)
+
+    for key, value in update_data.items():
         setattr(db_shot, key, value)
         
     db.commit()
@@ -12938,6 +13009,8 @@ def create_entity(
     current_user: User = Depends(get_current_user)
 ):
     _require_project_access(db, project_id, current_user)
+
+    _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
 
     incoming_name = str(entity.name or "").strip()
     incoming_name_en = str(entity.name_en or "").strip()
@@ -13329,6 +13402,7 @@ def update_entity(
     project = _require_project_access(db, entity.project_id, current_user)
 
     update_data = entity_in.dict(exclude_unset=True)
+    _assert_allowed_persisted_media_url(update_data.get("image_url"), field_label="entity.image_url")
     
     # Separate standard columns from custom attributes
     standard_columns = {c.name for c in Entity.__table__.columns}
@@ -13403,6 +13477,7 @@ async def generate_sora_character(
 
     # 2. Update Entity Data (Save inputs)
     if req.main_image_url:
+        _assert_allowed_persisted_media_url(req.main_image_url, field_label="entity.image_url")
         entity.image_url = req.main_image_url
     
     # Merge references into visual_dependencies or custom_attributes

@@ -20599,7 +20599,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             ...startRefs,
             ...endRefs,
         ]);
-    }, [getEndFrameVisibleRefs]);
+    }, [entities]);
 
     const loadImageElementFromBlob = useCallback((blob) => {
         return new Promise((resolve, reject) => {
