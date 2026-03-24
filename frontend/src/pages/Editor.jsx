@@ -20826,6 +20826,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }));
     }, []);
 
+    const loadImageElementFromBlob = useCallback((blob) => {
+        return new Promise((resolve, reject) => {
+            const objectUrl = URL.createObjectURL(blob);
+            const image = new Image();
+
+            const cleanup = () => {
+                URL.revokeObjectURL(objectUrl);
+            };
+
+            image.onload = () => {
+                cleanup();
+                resolve(image);
+            };
+            image.onerror = () => {
+                cleanup();
+                reject(new Error('failed to load generated image for splitting'));
+            };
+            image.src = objectUrl;
+        });
+    }, []);
+
     const applyFrameTrimToShot = useCallback(async () => {
         if (!editingShot?.id || !frameTrimModal?.open || frameTrimModal?.saving) return;
 
@@ -21517,27 +21538,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             ...endSubjectRefs,
         ]);
     }, [entities]);
-
-    const loadImageElementFromBlob = useCallback((blob) => {
-        return new Promise((resolve, reject) => {
-            const objectUrl = URL.createObjectURL(blob);
-            const image = new Image();
-
-            const cleanup = () => {
-                URL.revokeObjectURL(objectUrl);
-            };
-
-            image.onload = () => {
-                cleanup();
-                resolve(image);
-            };
-            image.onerror = () => {
-                cleanup();
-                reject(new Error('failed to load generated image for splitting'));
-            };
-            image.src = objectUrl;
-        });
-    }, []);
 
     const cropGeneratedPanelToBlob = useCallback(async ({
         image,
