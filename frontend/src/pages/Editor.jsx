@@ -63,6 +63,118 @@ const brokenSceneImageUrls = new Set();
 const shouldBypassBrokenMediaCache = (url) => {
     const raw = String(url || '').trim();
     if (!raw) return false;
+    if (raw.startsWith('/uploads/')) return true;
+    try {
+        const parsed = new URL(raw, BASE_URL || window.location.origin);
+        return parsed.pathname.startsWith('/uploads/');
+    } catch {
+        return false;
+    }
+};
+
+const rememberBrokenMediaUrl = (url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized) return;
+    if (shouldBypassBrokenMediaCache(normalized)) return;
+    brokenMediaUrls.add(normalized);
+};
+
+const isBrokenMediaUrl = (url) => {
+    if (shouldBypassBrokenMediaCache(url)) return false;
+    return brokenMediaUrls.has(String(url || '').trim());
+};
+
+const getSafeMediaUrl = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw || isBrokenMediaUrl(raw)) return '';
+    return getFullUrl(raw);
+};
+
+const extractImageJobResultUrl = (statusResp) => {
+    const result = (statusResp?.result && typeof statusResp.result === 'object') ? statusResp.result : {};
+    const candidates = [
+        result?.url,
+        result?.image_url,
+        result?.imageUrl,
+        result?.generated_url,
+        statusResp?.url,
+        statusResp?.image_url,
+        statusResp?.imageUrl,
+    ];
+    for (const value of candidates) {
+        const stable = String(value || '').trim();
+        if (stable) return stable;
+    }
+    return '';
+};
+
+const rememberBrokenSceneImageUrl = (url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized) return;
+    brokenSceneImageUrls.add(normalized);
+    rememberBrokenMediaUrl(normalized);
+};
+
+const isBrokenSceneImageUrl = (url) => {
+    return brokenSceneImageUrls.has(String(url || '').trim());
+};
+
+const normalizeBatchParallelLimit = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 3;
+    return Math.min(12, Math.max(1, Math.trunc(parsed)));
+};
+
+const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps }) => {
+    const rawSrc = String(src || '').trim();
+    const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
+
+    useEffect(() => {
+        setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
+    }, [rawSrc]);
+
+    const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
+    if (!resolvedSrc) return fallback || null;
+
+    return (
+        <img
+            src={resolvedSrc}
+            alt={alt}
+            className={className}
+            onError={() => {
+                rememberBrokenMediaUrl(rawSrc);
+                setFailed(true);
+            }}
+            {...imgProps}
+        />
+    );
+};
+
+const SafeAudio = ({ src, fallback = null, ...audioProps }) => {
+    const rawSrc = String(src || '').trim();
+    const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
+
+    useEffect(() => {
+        setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
+    }, [rawSrc]);
+
+    const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
+    if (!resolvedSrc) return fallback || null;
+
+    return (
+        <audio
+            src={resolvedSrc}
+            onError={() => {
+                rememberBrokenMediaUrl(rawSrc);
+                setFailed(true);
+            }}
+            {...audioProps}
+        />
+    );
+};
+
+const normalizeMediaRefList = (items) => {
+    if (!Array.isArray(items)) return [];
     return [...new Set(
         items
             .map((item) => String(item || '').trim())
