@@ -16166,7 +16166,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const [subjectNotification, setSubjectNotification] = useState(null);
     const [subjectImageJobs, setSubjectImageJobs] = useState({});
     const [stoppingSubjectImageJobs, setStoppingSubjectImageJobs] = useState({});
+    const subjectImageJobsRef = useRef({});
     const subjectImageJobPollingRef = useRef(false);
+    const subjectImageJobPollTokenRef = useRef(0);
+    const subjectImageJobTerminalLogRef = useRef(new Set());
     const subjectBatchGenerateStopRequestedRef = useRef(false);
     const subjectBatchGenerateSessionRef = useRef('');
     const subjectBatchGenerateActiveJobsRef = useRef(new Map());
@@ -16287,6 +16290,18 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const showSubjectNotification = useCallback((message, type = 'success') => {
         setSubjectNotification({ message, type });
         setTimeout(() => setSubjectNotification(null), 3000);
+    }, []);
+
+    const shouldLogSubjectJobTerminal = useCallback((jobId, outcome) => {
+        const stableJobId = String(jobId || '').trim();
+        const stableOutcome = String(outcome || '').trim().toLowerCase();
+        if (!stableJobId || !stableOutcome) return true;
+        const dedupeKey = `${stableJobId}:${stableOutcome}`;
+        if (subjectImageJobTerminalLogRef.current.has(dedupeKey)) {
+            return false;
+        }
+        subjectImageJobTerminalLogRef.current.add(dedupeKey);
+        return true;
     }, []);
 
     const isSubjectBatchStopSignal = useCallback((error) => {
@@ -16926,19 +16941,43 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     }, [subjectImageJobs, writeSubjectImageJobsStorage]);
 
     useEffect(() => {
-        const jobEntries = Object.entries(subjectImageJobs || {});
-        if (jobEntries.length === 0) return;
+        subjectImageJobsRef.current = subjectImageJobs || {};
+    }, [subjectImageJobs]);
+
+    useEffect(() => {
+        if (Object.keys(subjectImageJobs || {}).length === 0) return;
 
         let disposed = false;
+        const pollToken = subjectImageJobPollTokenRef.current + 1;
+        subjectImageJobPollTokenRef.current = pollToken;
+
+        const isActivePoll = () => !disposed && subjectImageJobPollTokenRef.current === pollToken;
+        const getCurrentJobEntry = (entityId, expectedJobId = '') => {
+            const stableEntityId = String(entityId || '').trim();
+            if (!stableEntityId) return null;
+            const currentEntry = subjectImageJobsRef.current?.[stableEntityId] || null;
+            if (!currentEntry) return null;
+            const stableExpectedJobId = String(expectedJobId || '').trim();
+            if (!stableExpectedJobId) return currentEntry;
+            return String(currentEntry?.jobId || '').trim() === stableExpectedJobId ? currentEntry : null;
+        };
+
         const pollOnce = async () => {
             if (disposed || subjectImageJobPollingRef.current) return;
             subjectImageJobPollingRef.current = true;
             try {
                 const completed = [];
                 const statusUpdates = {};
+                const jobEntries = Object.entries(subjectImageJobsRef.current || {});
+                if (jobEntries.length === 0 || !isActivePoll()) {
+                    return;
+                }
                 for (const [entityId, job] of jobEntries) {
                     const jobId = String(job?.jobId || '').trim();
                     if (!jobId) {
+                        if (!getCurrentJobEntry(entityId)) {
+                            continue;
+                        }
                         const localStatus = String(job?.status || '').trim().toLowerCase();
                         if (localStatus === 'queued' || localStatus === 'running' || localStatus === 'persisting') {
                             continue;
@@ -16965,7 +17004,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 lastStatusError: detail,
                                 lastPolledAt: Date.now(),
                             };
-                            if (onLog) {
+                            if (isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
                                 onLog(
                                     t(
                                         `主体任务状态查询失败（${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}）：${job?.entityName || entityId} - ${detail}`,
@@ -16981,6 +17020,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     const status = String(statusResp?.status || '').trim().toLowerCase();
                     const generatedUrl = extractImageJobResultUrl(statusResp);
                     if (generatedUrl) {
+                        const currentJob = getCurrentJobEntry(entityId, jobId);
+                        if (!currentJob) {
+                            continue;
+                        }
                         const canPersistGeneratedUrl = !isEphemeralProviderMediaUrl(generatedUrl);
                         if (canPersistGeneratedUrl) {
                             try {
@@ -16989,10 +17032,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 // Best effort; local refresh still updates UX.
                             }
                         }
-                        if (canPersistGeneratedUrl && !disposed) {
+                        if (canPersistGeneratedUrl && currentJob) {
+                            clearLocalSubjectImageJobState(entityId);
                             applySubjectEntityImageLocally(entityId, generatedUrl);
-                            if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
-                            completed.push(entityId);
+                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
+                                onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                            }
                             continue;
                         }
 
@@ -17004,8 +17049,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         }
 
                         if (recoveredUrl) {
-                            if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
-                            completed.push(entityId);
+                            if (getCurrentJobEntry(entityId, jobId)) {
+                                clearLocalSubjectImageJobState(entityId);
+                            }
+                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
+                                onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                            }
                             continue;
                         }
 
@@ -17014,7 +17063,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         const lastPersistWaitLogAt = Number(job?.lastPersistWaitLogAt || 0) || 0;
                         const persistWaitElapsed = now - persistWaitStartedAt;
 
-                        if ((now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS && onLog) {
+                        if ((now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
                             onLog(
                                 t(
                                     `主体任务返回了临时图片地址，正在等待稳定图片入库：${job?.entityName || entityId}`,
@@ -17025,7 +17074,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         }
 
                         if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS) {
-                            if (onLog) {
+                            if (getCurrentJobEntry(entityId, jobId)) {
+                                clearLocalSubjectImageJobState(entityId);
+                            }
+                            if (isActivePoll() && onLog) {
                                 onLog(
                                     t(
                                         `主体任务已完成，但在等待稳定图片超时后仍未拿到可持久化地址：${job?.entityName || entityId}`,
@@ -17034,7 +17086,6 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                     'warning'
                                 );
                             }
-                            completed.push(entityId);
                             continue;
                         }
 
@@ -17050,6 +17101,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     }
 
                     if (status === 'queued' || status === 'running') {
+                        if (!isActivePoll() || !getCurrentJobEntry(entityId, jobId)) {
+                            continue;
+                        }
                         const startedAtMs = Number(job?.startedAt || 0) || 0;
                         if (startedAtMs > 0 && (Date.now() - startedAtMs) > SUBJECT_IMAGE_JOB_MAX_RUNNING_MS) {
                             await forceClearSubjectImageJob(
@@ -17061,9 +17115,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         }
                         statusUpdates[String(entityId)] = {
                             status,
-                            lastPolledAt: Date.now(),
                             statusFailureCount: 0,
                             lastStatusError: '',
+                            lastPolledAt: Date.now(),
                         };
                         continue;
                     }
@@ -17077,18 +17131,27 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 console.warn('Failed to refresh entity after succeeded image job without result URL', refreshErr);
                             }
                         }
-                        if (onLog) onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
-                        completed.push(entityId);
+                        if (getCurrentJobEntry(entityId, jobId)) {
+                            clearLocalSubjectImageJobState(entityId);
+                        }
+                        if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
+                            onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                        }
                         continue;
                     }
 
                     if (status === 'failed' || status === 'canceled' || status === 'cancelled' || status === 'error') {
-                        if (onLog) onLog(t(`主体生成失败：${job?.entityName || entityId} - ${statusResp?.error || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${statusResp?.error || status}`), 'error');
-                        completed.push(entityId);
+                        if (getCurrentJobEntry(entityId, jobId)) {
+                            clearLocalSubjectImageJobState(entityId);
+                        }
+                        if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'failed') && onLog) {
+                            onLog(t(`主体生成失败：${job?.entityName || entityId} - ${statusResp?.error || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${statusResp?.error || status}`), 'error');
+                        }
+                        continue;
                     }
                 }
 
-                if (!disposed && Object.keys(statusUpdates).length > 0) {
+                if (isActivePoll() && Object.keys(statusUpdates).length > 0) {
                     setSubjectImageJobs(prev => {
                         const base = { ...(prev || {}) };
                         let changed = false;
@@ -17110,7 +17173,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     });
                 }
 
-                if (!disposed && completed.length > 0) {
+                if (isActivePoll() && completed.length > 0) {
                     setSubjectImageJobs(prev => {
                         const next = { ...(prev || {}) };
                         completed.forEach((entityId) => {
@@ -17131,9 +17194,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
         return () => {
             disposed = true;
+            if (subjectImageJobPollTokenRef.current === pollToken) {
+                subjectImageJobPollTokenRef.current += 1;
+            }
             clearInterval(timer);
         };
-    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, applySubjectEntityImageLocally, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, subjectImageJobs, t]);
+    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, subjectImageJobs, t]);
 
     useEffect(() => {
         const applySnapshot = (snapshot) => {
@@ -17858,7 +17924,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     if (!stableEntityId) return;
                     const existing = next[stableEntityId];
                     if (!existing) return;
-                    if (String(existing?.jobKind || '').trim() !== 'reconstruct') return;
+                    if (String(existing?.jobKind || 'reconstruct').trim() !== 'reconstruct') return;
                     delete next[stableEntityId];
                 });
                 return next;
@@ -18888,6 +18954,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         if (!hasRunningTask) return;
 
         setIsStoppingBatchGenerateEntities(true);
+        subjectImageJobPollTokenRef.current += 1;
         let forcedStoppedJobCount = 0;
 
         if (isBatchGeneratingEntities) {
@@ -22034,8 +22101,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     async function onUpdateShot(shotId, changes) {
         try {
-            const currentShot = shots.find(s => s.id === shotId);
-            const editingBase = (editingShot && editingShot.id === shotId) ? editingShot : null;
+            const stableShotId = String(shotId || '').trim();
+            const currentShot = shots.find((s) => String(s?.id || '').trim() === stableShotId);
+            const editingBase = (editingShot && String(editingShot?.id || '').trim() === stableShotId) ? editingShot : null;
 
             // Important: avoid sending full stale shot object during async generation flows.
             // Only send required fields + explicit changes to prevent overwriting already-generated media URLs.
@@ -22052,11 +22120,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             };
 
             await updateShot(shotId, payload);
-            setShots(prev => prev.map(s => s.id === shotId ? { ...s, ...changes } : s));
+            setShots(prev => prev.map((s) => (String(s?.id || '').trim() === stableShotId ? { ...s, ...changes } : s)));
 
             // Sync editingShot safely
             setEditingShot(prev => {
-                if (prev && prev.id === shotId) {
+                if (prev && String(prev?.id || '').trim() === stableShotId) {
                     return { ...prev, ...changes };
                 }
                 return prev;
