@@ -26881,6 +26881,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             ? t(`（资源 ${batchProgress.currentAssetLabel}）`, ` (Asset ${batchProgress.currentAssetLabel})`)
             : '';
         if (isBatchGenerating) {
+            if (batchProgress?.stopRequested) {
+                return t(
+                    `共 ${total} 个，已请求停止，等待并发任务退出（当前 ${current}/${total}）${shotSuffix}${assetSuffix}`,
+                    `Total ${total}, stop requested, waiting for concurrent tasks to exit (current ${current}/${total})${shotSuffix}${assetSuffix}`
+                );
+            }
             return t(
                 `共 ${total} 个，进行到 ${current}/${total}（${shotBatchProgressPercent}%）${shotSuffix}${assetSuffix}`,
                 `Total ${total}, processing ${current}/${total} (${shotBatchProgressPercent}%)${shotSuffix}${assetSuffix}`
@@ -26984,7 +26990,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 onClick={handleBatchGenerateVideo}
                                 disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
                                 className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                title={t('批量生成视频（会先自动生成图片）', 'Batch Generate Videos (Auto-creates images first)')}
+                                title={t('批量生成视频（仅处理已有首尾帧且当前无视频的镜头）', 'Batch Generate Videos (only shots with existing start/end frames and no current video)')}
                             >
                                 {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>}
                                 <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('视频', 'Video')}</span>
@@ -27000,7 +27006,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                     <span>
                                         {isStoppingShotBatch
                                             ? t('停止中...', 'Stopping...')
-                                            : (batchProgress.stopRequested ? t('已请求停止', 'Stop Requested') : t('停止', 'Stop'))}
+                                            : (batchProgress.stopRequested ? t('等待退出', 'Waiting to Stop') : t('停止', 'Stop'))}
                                     </span>
                                 </button>
                             )}
@@ -27050,7 +27056,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     <div className="flex items-center justify-between w-full gap-3">
                         <span>
                             {batchProgress.status || t('批量任务状态已更新。', 'Batch task status updated.')}
-                            {batchProgress.stopRequested ? ` · ${t('已请求停止', 'Stop requested')}` : ''}
+                            {batchProgress.stopRequested ? ` · ${t('停止请求中，等待退出', 'Stop requested, waiting for exit')}` : ''}
                             {shotBatchProgressSummary ? ` · ${shotBatchProgressSummary}` : ''}
                         </span>
                         {isShotBatchCompleted && (

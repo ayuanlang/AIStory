@@ -26134,18 +26134,26 @@ def stop_shot_media_batch_job(
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
 
-    removed = False
-    info = _episode_runtime_info_from_episode(episode)
-    if SHOT_MEDIA_BATCH_STATUS_KEY in info:
-        info.pop(SHOT_MEDIA_BATCH_STATUS_KEY, None)
-        episode.episode_info = info
-        db.add(episode)
-        db.commit()
-        removed = True
+    latest_status = _read_shot_media_batch_status(episode)
+    if not bool(latest_status.get("running")):
+        _clear_cached_shot_media_batch_status(int(episode_id))
+        return {
+            "episode_id": int(episode_id),
+            "running": False,
+            "status": "idle",
+            "deleted": False,
+            "message": "No running shot batch task",
+        }
+
+    now_iso = now_bj_iso()
+    latest_status["stop_requested"] = True
+    latest_status["stop_requested_at"] = latest_status.get("stop_requested_at") or now_iso
+    latest_status["stopped_by_user"] = True
+    latest_status["message"] = "Stop requested by user"
+    latest_status["updated_at"] = now_iso
+    _persist_shot_media_batch_status(db, episode, latest_status)
 
     _set_shot_media_batch_cancel_requested(int(episode_id))
-    _clear_episode_worker(SHOT_MEDIA_BATCH_THREADS, SHOT_MEDIA_BATCH_THREADS_LOCK, int(episode_id))
-    _clear_shot_media_batch_cancel_event(int(episode_id))
     _log_batch_sys_event(
         kind="shot-media-batch",
         phase="stop",
@@ -26154,16 +26162,15 @@ def stop_shot_media_batch_job(
         project_id=episode.project_id,
         episode_id=episode_id,
         job_id=f"shot-media-batch:{int(episode_id)}",
-        result="canceled",
-        message="Force removed by user",
+        result="cancel_requested",
+        message="Stop requested by user",
     )
-    _clear_cached_shot_media_batch_status(int(episode_id))
     return {
         "episode_id": int(episode_id),
-        "running": False,
-        "status": "canceled",
-        "deleted": bool(removed),
-        "message": "Force removed",
+        "running": True,
+        "status": "cancel_requested",
+        "deleted": False,
+        "message": "Stop requested",
     }
 
 class MontageItem(BaseModel):
