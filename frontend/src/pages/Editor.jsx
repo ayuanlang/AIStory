@@ -793,6 +793,7 @@ function getShotDiptychFallbackCropPx(layout, sourceWidth, sourceHeight, targetA
 }
 
 const JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION = '20260324a';
+const SHOT_FRAME_ASSET_UPLOAD_VERSION = '20260325a';
 
 function hashStableText(value) {
     const raw = String(value || '');
@@ -823,6 +824,33 @@ function buildJointShotDiptychUploadIdempotencyKey({
         Number(exportSize?.height || 0),
     ].join('|');
     return `joint-diptych:${hashStableText(signature)}`;
+}
+
+function buildShotFrameAssetUploadIdempotencyKey({
+    operation,
+    shotId,
+    frameRole,
+    sourceUrl,
+    margins,
+}) {
+    const sourceToken = String(sourceUrl || '').trim().split('?')[0].split('#')[0];
+    const normalizedMargins = margins && typeof margins === 'object'
+        ? [
+            Number(margins.topPct || 0).toFixed(3),
+            Number(margins.rightPct || 0).toFixed(3),
+            Number(margins.bottomPct || 0).toFixed(3),
+            Number(margins.leftPct || 0).toFixed(3),
+        ].join('|')
+        : '';
+    const signature = [
+        SHOT_FRAME_ASSET_UPLOAD_VERSION,
+        String(operation || '').trim(),
+        String(shotId || '').trim(),
+        String(frameRole || '').trim(),
+        sourceToken,
+        normalizedMargins,
+    ].join('|');
+    return `shot-frame:${hashStableText(signature)}`;
 }
 
 function collectSupportedAspectRatioOptions(values) {
@@ -20287,6 +20315,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const pendingImageJobsRef = useRef({});
     const shotsRef = useRef([]);
     const editingShotRef = useRef(null);
+    const jointDiptychApplyInFlightRef = useRef(new Map());
+    const appliedJointDiptychResultsRef = useRef(new Map());
     const generatingStateByShotRef = useRef({});
     const shotLocalBatchSessionRef = useRef('');
     const shotLocalBatchStopRequestedRef = useRef(false);
@@ -21470,6 +21500,13 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 `shot_${editingShot.id}_${targetType}_trimmed_${Date.now()}.jpg`,
                 { type: 'image/jpeg' }
             );
+            const trimUploadIdempotencyKey = buildShotFrameAssetUploadIdempotencyKey({
+                operation: 'trim',
+                shotId: editingShot.id,
+                frameRole: targetType,
+                sourceUrl: frameTrimModal.sourceUrl,
+                margins: normalizedMargins,
+            });
 
             const uploaded = await uploadAsset(trimmedFile, {
                 project_id: projectId,
@@ -21479,6 +21516,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shot_name: editingShot.shot_name,
                 asset_type: targetType === 'end' ? 'end_frame' : 'start_frame',
                 source_asset_url: frameTrimModal.sourceUrl,
+                idempotency_key: trimUploadIdempotencyKey,
                 remark: targetType === 'end' ? 'Trimmed end frame asset' : 'Trimmed start frame asset',
             });
 
@@ -22085,18 +22123,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const resolveJointShotDiptychRefs = useCallback((shotSnapshot, rawStartPrompt = '', rawEndPrompt = '', resolvedEntities = null) => {
         const entityPool = Array.isArray(resolvedEntities) ? resolvedEntities : entities;
-        const startSubjectRefs = collectMatchedSubjectImageUrlsFromPrompt({
+        const startPromptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
             promptText: rawStartPrompt,
+            associatedEntities: shotSnapshot?.associated_entities || '',
             entityPool,
+            includeAssociatedEntities: false,
         });
-        const endSubjectRefs = collectMatchedSubjectImageUrlsFromPrompt({
+        const endPromptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
             promptText: rawEndPrompt,
+            associatedEntities: shotSnapshot?.associated_entities || '',
             entityPool,
+            includeAssociatedEntities: false,
         });
 
         return normalizeMediaRefList([
-            ...startSubjectRefs,
-            ...endSubjectRefs,
+            ...startPromptEntityRefs,
+            ...endPromptEntityRefs,
         ]);
     }, [entities]);
 
@@ -22215,112 +22257,164 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const applyJointShotDiptychResult = useCallback(async ({ shotRecord, compositeUrl }) => {
         const stableShot = shotRecord || null;
         const targetShotId = String(stableShot?.id || '').trim();
+        const stableCompositeUrl = String(compositeUrl || '').trim();
         if (!targetShotId) {
             throw new Error('Missing shot context for joint diptych result');
         }
-
-        const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
-        const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
-        const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
-        const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
-
-        const compositeResp = await fetch(getFullUrl(compositeUrl));
-        if (!compositeResp.ok) {
-            throw new Error(`Failed to download composite image (${compositeResp.status})`);
-        }
-        const compositeBlob = await compositeResp.blob();
-        const compositeImage = await loadImageElementFromBlob(compositeBlob);
-
-        const startBlob = await cropGeneratedPanelToBlob({
-            image: compositeImage,
-            layout: diptychPlan.layout,
-            panelIndex: 0,
-            frameRole: 'start',
-            targetAspectRatio: diptychPlan.targetAspectRatio,
-            exportSize,
-        });
-        const endBlob = await cropGeneratedPanelToBlob({
-            image: compositeImage,
-            layout: diptychPlan.layout,
-            panelIndex: 1,
-            frameRole: 'end',
-            targetAspectRatio: diptychPlan.targetAspectRatio,
-            exportSize,
-        });
-
-        const startUploadIdempotencyKey = buildJointShotDiptychUploadIdempotencyKey({
-            shotId: targetShotId,
-            frameRole: 'start',
-            compositeUrl,
-            layout: diptychPlan.layout,
-            targetAspectRatio: diptychPlan.targetAspectRatio,
-            exportSize,
-        });
-        const endUploadIdempotencyKey = buildJointShotDiptychUploadIdempotencyKey({
-            shotId: targetShotId,
-            frameRole: 'end',
-            compositeUrl,
-            layout: diptychPlan.layout,
-            targetAspectRatio: diptychPlan.targetAspectRatio,
-            exportSize,
-        });
-
-        const startUpload = await uploadAsset(
-            new File([startBlob], `shot_${targetShotId}_start_diptych_${Date.now()}.jpg`, { type: 'image/jpeg' }),
-            {
-                project_id: projectId,
-                episode_id: activeEpisode?.id,
-                shot_id: targetShotId,
-                shot_number: stableShot?.shot_id,
-                shot_name: stableShot?.shot_name,
-                asset_type: 'start_frame',
-                source_asset_url: compositeUrl,
-                idempotency_key: startUploadIdempotencyKey,
-                remark: 'Joint diptych split start frame',
-            }
-        );
-        const endUpload = await uploadAsset(
-            new File([endBlob], `shot_${targetShotId}_end_diptych_${Date.now()}.jpg`, { type: 'image/jpeg' }),
-            {
-                project_id: projectId,
-                episode_id: activeEpisode?.id,
-                shot_id: targetShotId,
-                shot_number: stableShot?.shot_id,
-                shot_name: stableShot?.shot_name,
-                asset_type: 'end_frame',
-                source_asset_url: compositeUrl,
-                idempotency_key: endUploadIdempotencyKey,
-                remark: 'Joint diptych split end frame',
-            }
-        );
-
-        const startUrl = String(startUpload?.url || '').trim();
-        const endUrl = String(endUpload?.url || '').trim();
-        if (!startUrl || !endUrl) {
-            throw new Error('Failed to upload split start/end frame assets');
+        if (!stableCompositeUrl) {
+            throw new Error('Missing composite URL for joint diptych result');
         }
 
-        let techNotes = {};
+        const applyKey = `${targetShotId}::${stableCompositeUrl}`;
+        const completedResult = appliedJointDiptychResultsRef.current.get(applyKey);
+        if (completedResult) {
+            return completedResult;
+        }
+
+        const inflightResult = jointDiptychApplyInFlightRef.current.get(applyKey);
+        if (inflightResult) {
+            return await inflightResult;
+        }
+
+        const runApply = (async () => {
+            const latestShot = (shotsRef.current || []).find((item) => String(item?.id || '') === targetShotId)
+                || (editingShotRef.current && String(editingShotRef.current?.id || '') === targetShotId ? editingShotRef.current : null)
+                || stableShot;
+
+            let latestTechNotes = {};
+            try {
+                latestTechNotes = JSON.parse(latestShot?.technical_notes || '{}');
+            } catch {
+                latestTechNotes = {};
+            }
+
+            if (
+                String(latestShot?.image_url || '').trim()
+                && String(latestTechNotes?.end_frame_url || '').trim()
+                && String(latestTechNotes?.joint_diptych_last_composite_url || '').trim() === stableCompositeUrl
+            ) {
+                const existingData = {
+                    image_url: String(latestShot?.image_url || '').trim(),
+                    start_frame: latestShot?.start_frame || stableShot?.start_frame || '',
+                    end_frame: latestShot?.end_frame || stableShot?.end_frame || '',
+                    technical_notes: JSON.stringify(latestTechNotes),
+                };
+                appliedJointDiptychResultsRef.current.set(applyKey, existingData);
+                return existingData;
+            }
+
+            const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
+            const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
+            const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
+            const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
+
+            const compositeResp = await fetch(getFullUrl(stableCompositeUrl));
+            if (!compositeResp.ok) {
+                throw new Error(`Failed to download composite image (${compositeResp.status})`);
+            }
+            const compositeBlob = await compositeResp.blob();
+            const compositeImage = await loadImageElementFromBlob(compositeBlob);
+
+            const startBlob = await cropGeneratedPanelToBlob({
+                image: compositeImage,
+                layout: diptychPlan.layout,
+                panelIndex: 0,
+                frameRole: 'start',
+                targetAspectRatio: diptychPlan.targetAspectRatio,
+                exportSize,
+            });
+            const endBlob = await cropGeneratedPanelToBlob({
+                image: compositeImage,
+                layout: diptychPlan.layout,
+                panelIndex: 1,
+                frameRole: 'end',
+                targetAspectRatio: diptychPlan.targetAspectRatio,
+                exportSize,
+            });
+
+            const startUploadIdempotencyKey = buildJointShotDiptychUploadIdempotencyKey({
+                shotId: targetShotId,
+                frameRole: 'start',
+                compositeUrl: stableCompositeUrl,
+                layout: diptychPlan.layout,
+                targetAspectRatio: diptychPlan.targetAspectRatio,
+                exportSize,
+            });
+            const endUploadIdempotencyKey = buildJointShotDiptychUploadIdempotencyKey({
+                shotId: targetShotId,
+                frameRole: 'end',
+                compositeUrl: stableCompositeUrl,
+                layout: diptychPlan.layout,
+                targetAspectRatio: diptychPlan.targetAspectRatio,
+                exportSize,
+            });
+
+            const startUpload = await uploadAsset(
+                new File([startBlob], `shot_${targetShotId}_start_diptych_${Date.now()}.jpg`, { type: 'image/jpeg' }),
+                {
+                    project_id: projectId,
+                    episode_id: activeEpisode?.id,
+                    shot_id: targetShotId,
+                    shot_number: latestShot?.shot_id,
+                    shot_name: latestShot?.shot_name,
+                    asset_type: 'start_frame',
+                    source_asset_url: stableCompositeUrl,
+                    idempotency_key: startUploadIdempotencyKey,
+                    remark: 'Joint diptych split start frame',
+                }
+            );
+            const endUpload = await uploadAsset(
+                new File([endBlob], `shot_${targetShotId}_end_diptych_${Date.now()}.jpg`, { type: 'image/jpeg' }),
+                {
+                    project_id: projectId,
+                    episode_id: activeEpisode?.id,
+                    shot_id: targetShotId,
+                    shot_number: latestShot?.shot_id,
+                    shot_name: latestShot?.shot_name,
+                    asset_type: 'end_frame',
+                    source_asset_url: stableCompositeUrl,
+                    idempotency_key: endUploadIdempotencyKey,
+                    remark: 'Joint diptych split end frame',
+                }
+            );
+
+            const startUrl = String(startUpload?.url || '').trim();
+            const endUrl = String(endUpload?.url || '').trim();
+            if (!startUrl || !endUrl) {
+                throw new Error('Failed to upload split start/end frame assets');
+            }
+
+            let techNotes = {};
+            try {
+                techNotes = JSON.parse(latestShot?.technical_notes || '{}');
+            } catch {
+                techNotes = {};
+            }
+            techNotes.end_frame_url = endUrl;
+            techNotes.video_gen_mode = 'start_end';
+            techNotes.end_frame_reused_from_start = false;
+            techNotes.joint_diptych_last_composite_url = stableCompositeUrl;
+
+            const nextData = {
+                image_url: startUrl,
+                start_frame: latestShot?.start_frame || stableShot?.start_frame || '',
+                end_frame: latestShot?.end_frame || stableShot?.end_frame || '',
+                technical_notes: JSON.stringify(techNotes),
+            };
+
+            await onUpdateShot(targetShotId, nextData);
+            setEditingShot(prev => (prev && String(prev.id) === targetShotId ? { ...prev, ...nextData } : prev));
+            refreshShotAssetsMeta();
+            appliedJointDiptychResultsRef.current.set(applyKey, nextData);
+            return nextData;
+        })();
+
+        jointDiptychApplyInFlightRef.current.set(applyKey, runApply);
         try {
-            techNotes = JSON.parse(stableShot?.technical_notes || '{}');
-        } catch {
-            techNotes = {};
+            return await runApply;
+        } finally {
+            jointDiptychApplyInFlightRef.current.delete(applyKey);
         }
-        techNotes.end_frame_url = endUrl;
-        techNotes.video_gen_mode = 'start_end';
-        techNotes.end_frame_reused_from_start = false;
-
-        const nextData = {
-            image_url: startUrl,
-            start_frame: stableShot?.start_frame || '',
-            end_frame: stableShot?.end_frame || '',
-            technical_notes: JSON.stringify(techNotes),
-        };
-
-        await onUpdateShot(targetShotId, nextData);
-        setEditingShot(prev => (prev && String(prev.id) === targetShotId ? { ...prev, ...nextData } : prev));
-        refreshShotAssetsMeta();
-        return nextData;
     }, [activeEpisode?.episode_info, onUpdateShot, project?.global_info, projectId, cropGeneratedPanelToBlob, loadImageElementFromBlob, refreshShotAssetsMeta]);
 
     const handleGenerateShotDiptychFrames = async (cfgOverride = null) => {
@@ -22387,16 +22481,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                 ? [
-                    `生成一张单画布两宫格分镜图，后期会拆分为起始帧和结束帧。必须严格只有两格。${layoutInstructionCn} 两格要像同一场景连续发生的两个瞬间，保持同一 shot 的人物身份、环境、光照和空间连续性。`,
+                        `生成一张单画布两宫格分镜图，后期会拆分为起始帧和结束帧。最终输出总共只能有两格，不能多于两格，也不能把下面任意一段提示词各自再扩展成两宫格。第一段提示词只负责第一格，第二段提示词只负责第二格。${layoutInstructionCn} 两格要像同一场景连续发生的两个瞬间，保持同一 shot 的人物身份、环境、光照和空间连续性。`,
                     `两格之间不得出现任何可见分隔设计或拼贴感：不要白线、黑线、边框、留白、间隔条、接缝高光、接缝阴影，也不要让高对比硬边落在中缝附近。人物脸部、手部、关键道具和主要动作不要贴近中缝或外边缘；不要出现第三格、文字、编号、气泡或版式元素。整张图必须像一次完成的电影画面，不像海报拼版或分屏设计。`,
-                    `第一格（起始帧）：${startSubmitPrompt}`,
-                    `第二格（结束帧）：${endSubmitPrompt}`,
+                        `第一格（起始帧专用，仅这一格使用，不得扩展到第二格或再生成额外分格）：${startSubmitPrompt}`,
+                        `第二格（结束帧专用，仅这一格使用，不得扩展到第一格或再生成额外分格）：${endSubmitPrompt}`,
                 ].join('\n\n')
                 : [
-                    `Create one single-canvas two-panel storyboard image for later split delivery into the shot start frame and end frame. The canvas must contain exactly two equal panels. ${layoutInstructionEn} Both panels must feel like consecutive moments from the same shot, with consistent identity, environment, lighting, and scene geography.`,
+                        `Create one single-canvas two-panel storyboard image for later split delivery into the shot start frame and end frame. The final output must contain exactly two panels in total, not two panels per prompt. The first prompt applies only to panel A, and the second prompt applies only to panel B. Do not expand either prompt into its own diptych or generate any extra panel. ${layoutInstructionEn} Both panels must feel like consecutive moments from the same shot, with consistent identity, environment, lighting, and scene geography.`,
                     `The boundary between panels must be invisible. Do not add divider lines, borders, gaps, blank strips, seam highlights, seam shadows, collage styling, text, numbering, speech bubbles, or any third panel. Avoid placing faces, hands, hero props, or key motion near the seam or outer edges. The whole image must read as one cinematic composition, not a poster layout or split-screen graphic.`,
-                    `Panel A (Start Frame): ${startSubmitPrompt}`,
-                    `Panel B (End Frame): ${endSubmitPrompt}`,
+                        `Panel A only (Start Frame only; use this prompt for this panel alone, not for panel B and not for another diptych): ${startSubmitPrompt}`,
+                        `Panel B only (End Frame only; use this prompt for this panel alone, not for panel A and not for another diptych): ${endSubmitPrompt}`,
                 ].join('\n\n');
 
             const shouldApplyGlobalCtx = !(isManualStart && isManualEnd);
@@ -24881,13 +24975,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 `shot_${targetShotId}_video_last_frame_${Date.now()}.jpg`,
                 { type: 'image/jpeg' }
             );
+            const extractUploadIdempotencyKey = buildShotFrameAssetUploadIdempotencyKey({
+                operation: 'video_last_frame',
+                shotId: targetShotId,
+                frameRole: 'end',
+                sourceUrl: videoUrlRaw,
+            });
 
             const uploaded = await uploadAsset(frameFile, {
                 project_id: projectId,
+                episode_id: activeEpisode?.id,
                 shot_id: targetShotId,
                 shot_number: editingShot.shot_id,
                 shot_name: editingShot.shot_name,
                 asset_type: 'end_frame',
+                source_asset_url: videoUrlRaw,
+                idempotency_key: extractUploadIdempotencyKey,
             });
             const extractedUrl = String(uploaded?.url || '').trim();
             if (!extractedUrl) {
@@ -26753,28 +26856,32 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </div>
                                             )}
                                             {(() => {
-                                                // Logic: If prompt words < 5, treat as empty -> show Start Frame
                                                 const prompt = editingShot.end_frame || '';
-                                                const wordCount = prompt.trim().split(/\s+/).filter(w => w.length > 0).length;
-                                                const isSameAsStart = wordCount < 5;
-
                                                 let endUrl = null;
-                                                try { endUrl = JSON.parse(editingShot.technical_notes || '{}').end_frame_url; } catch(e){}
+                                                let endFrameReusedFromStart = false;
+                                                try {
+                                                    const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                    endUrl = tech.end_frame_url;
+                                                    endFrameReusedFromStart = tech.end_frame_reused_from_start === true;
+                                                } catch(e){}
 
-                                                if (isSameAsStart && editingShot.image_url) {
+                                                const normalizedEndPrompt = String(prompt || '').trim().toUpperCase();
+                                                const isSameAsStart = endFrameReusedFromStart || ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt);
+
+                                                if (!endUrl && isSameAsStart && editingShot.image_url) {
                                                      return (
                                                         <div className="relative w-full h-full group/mirror">
                                                             <SafeImage
                                                                 src={editingShot.image_url}
                                                                 className="max-w-full max-h-full object-contain opacity-60 group-hover/mirror:opacity-100 transition-opacity cursor-pointer"
-                                                                title={t('与起始帧相同（提示词少于 5 个词）', 'Same as Start Frame (Prompt < 5 words)')}
+                                                                title={t('结束帧当前配置为复用起始帧', 'End frame is currently configured to reuse the start frame')}
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
                                                                     openAssetDetailModal('end');
                                                                 }}
                                                             />
                                                             <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-30 group-hover/mirror:opacity-0 transition-opacity">
-                                                                <span className="bg-black/50 text-white text-[9px] px-2 py-1 rounded">{t('与起始帧相同', 'SAME AS START')}</span>
+                                                                <span className="bg-black/50 text-white text-[9px] px-2 py-1 rounded">{t('复用起始帧', 'REUSE START FRAME')}</span>
                                                             </div>
                                                         </div>
                                                      )
