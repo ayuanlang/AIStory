@@ -21476,7 +21476,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [isSettingsOpen, refreshActiveSources]);
 
-    const onUpdateShot = async (shotId, changes) => {
+    async function onUpdateShot(shotId, changes) {
         try {
             const currentShot = shots.find(s => s.id === shotId);
             const editingBase = (editingShot && editingShot.id === shotId) ? editingShot : null;
