@@ -293,6 +293,42 @@ class MediaGenerationService:
             return " ".join(self._flatten_text(item) for item in value)
         return str(value)
 
+    def _normalize_retry_group(self, value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _get_retry_group_from_config(self, config_obj: Any) -> str:
+        cfg = self._safe_json_dict(config_obj)
+        return self._normalize_retry_group(
+            cfg.get("retry_group")
+            or cfg.get("routing_group")
+            or cfg.get("smart_group")
+        )
+
+    def _get_retry_price_group_from_config(self, config_obj: Any) -> str:
+        cfg = self._safe_json_dict(config_obj)
+        return self._normalize_retry_group(
+            cfg.get("retry_price_group")
+            or cfg.get("price_tier_group")
+            or cfg.get("pricing_tier")
+        )
+
+    def _classify_media_retry(self, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        payload = result if isinstance(result, dict) else {}
+        has_output = bool(payload.get("url")) or bool(payload.get("video_url"))
+        ambiguous_submit = bool(payload.get("ambiguous_submit"))
+        submit_failed = bool(payload.get("submit_failed"))
+        has_error = bool(payload.get("error"))
+
+        if has_output:
+            return {"retryable": False, "reason": "success", "has_output": True}
+        if ambiguous_submit:
+            return {"retryable": False, "reason": "ambiguous_submit", "has_output": False}
+        if submit_failed:
+            return {"retryable": True, "reason": "submit_failed", "has_output": False}
+        if has_error:
+            return {"retryable": True, "reason": "generation_failed", "has_output": False}
+        return {"retryable": True, "reason": "no_output", "has_output": False}
+
     def _enforce_no_watermark_payload(self, value: Any) -> Any:
         if isinstance(value, list):
             return [self._enforce_no_watermark_payload(item) for item in value]
@@ -2550,6 +2586,8 @@ class MediaGenerationService:
                 "model": candidate_config.get("model") or row.model,
                 "priority": priority,
                 "retry_limit": retry_limit,
+                "retry_group": self._get_retry_group_from_config(cfg),
+                "retry_price_group": self._get_retry_price_group_from_config(cfg),
                 "is_multi_ref_default": bool(cfg.get("smart_multi_ref_default")),
                 "avg_price_estimate": int((BillingService.estimate_system_api_average_price(
                     session,
@@ -2905,6 +2943,7 @@ class MediaGenerationService:
             self.USER_API_STRATEGY_SMART_DEFAULT,
             self.USER_API_STRATEGY_LOW_PRICE_REPLACE,
         }
+        media_retry_mode = category in {"Image", "Video", "Voice"}
 
         if allow_priority_fallback_when_explicit and legacy_strategy:
             smart_enabled = True
@@ -2968,72 +3007,113 @@ class MediaGenerationService:
                     baseline_config = _merge_request_provider_options(replacement_candidate.get("config"))
                     effective_provider = self._normalize_provider_name(replacement_candidate.get("provider"), category)
 
-        fallback_candidates: List[Dict[str, Any]] = []
-        if strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
-            fallback_candidates = sorted(
-                [
+        selected_setting_id = ((baseline_config.get("config") or {}).get("__resolved_setting_id")) if isinstance(baseline_config, dict) else None
+        selected_candidate = None
+        if selected_setting_id is not None:
+            selected_candidate = next((c for c in candidates if int(c.get("id") or 0) == int(selected_setting_id or 0)), None)
+        if selected_candidate is None:
+            selected_candidate = next(
+                (
                     c for c in candidates
-                    if c.get("provider") and not (
-                        c.get("provider") == effective_provider
-                        and str(c.get("model") or "") == str(baseline_config.get("model") or "")
-                    )
-                ],
-                key=lambda x: (
-                    int(x.get("avg_price_estimate", 10**9) or 10**9),
-                    int(x.get("priority", 100) or 100),
-                    int(x.get("id", 0) or 0),
+                    if c.get("provider") == effective_provider
+                    and str(c.get("model") or "") == str(baseline_config.get("model") or "")
                 ),
+                None,
             )
-            if fallback_candidate_limit and fallback_candidate_limit > 0:
-                fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
-        elif strategy == self.USER_API_STRATEGY_SMART_DEFAULT:
-            fallback_candidates = sorted(
-                [
-                    c for c in candidates
-                    if c.get("provider") and not (
-                        c.get("provider") == effective_provider
-                        and str(c.get("model") or "") == str(baseline_config.get("model") or "")
-                    )
-                ],
-                key=lambda x: (
-                    int(x.get("avg_price_estimate", 10**9) or 10**9),
-                    int(x.get("priority", 100) or 100),
-                    int(x.get("id", 0) or 0),
-                ),
-            )
-            # Smart default strategy: after 3 active retries, try up to 3 same-category fallbacks.
-            fallback_candidates = fallback_candidates[:3]
-        elif legacy_strategy and smart_enabled:
-            fallback_candidates = sorted(
-                [
-                    c for c in candidates
-                    if c.get("provider") and not (
-                        c.get("provider") == effective_provider
-                        and str(c.get("model") or "") == str(baseline_config.get("model") or "")
-                    )
-                ],
-                key=lambda x: (
-                    int(x.get("avg_price_estimate", 10**9) or 10**9),
-                    int(x.get("priority", 100) or 100),
-                    int(x.get("id", 0) or 0),
-                ),
-            )
-            if fallback_candidate_limit and fallback_candidate_limit > 0:
-                fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
 
-        retry_limit = max(1, int(primary_retry_limit or 3))
-        if legacy_strategy:
+        selected_retry_group = self._normalize_retry_group(
+            (selected_candidate or {}).get("retry_group")
+            or self._get_retry_group_from_config((baseline_config or {}).get("config"))
+        )
+        selected_retry_price_group = self._normalize_retry_group(
+            (selected_candidate or {}).get("retry_price_group")
+            or self._get_retry_price_group_from_config((baseline_config or {}).get("config"))
+        )
+
+        fallback_candidates: List[Dict[str, Any]] = []
+        if media_retry_mode:
+            fallback_candidates = sorted(
+                [
+                    c for c in candidates
+                    if c.get("provider")
+                    and int(c.get("id") or 0) != int((selected_candidate or {}).get("id") or 0)
+                    and selected_retry_group
+                    and self._normalize_retry_group(c.get("retry_group")) == selected_retry_group
+                    and selected_retry_price_group
+                    and self._normalize_retry_group(c.get("retry_price_group")) == selected_retry_price_group
+                ],
+                key=lambda x: (
+                    int(x.get("priority", 100) or 100),
+                    int(x.get("avg_price_estimate", 10**9) or 10**9),
+                    int(x.get("id", 0) or 0),
+                ),
+            )[:3]
             retry_limit = 2
-        for c in candidates:
-            if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
-                if legacy_strategy:
-                    retry_limit = max(1, int(c.get("retry_limit")))
-                break
+        else:
+            if strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
+                fallback_candidates = sorted(
+                    [
+                        c for c in candidates
+                        if c.get("provider") and not (
+                            c.get("provider") == effective_provider
+                            and str(c.get("model") or "") == str(baseline_config.get("model") or "")
+                        )
+                    ],
+                    key=lambda x: (
+                        int(x.get("avg_price_estimate", 10**9) or 10**9),
+                        int(x.get("priority", 100) or 100),
+                        int(x.get("id", 0) or 0),
+                    ),
+                )
+                if fallback_candidate_limit and fallback_candidate_limit > 0:
+                    fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
+            elif strategy == self.USER_API_STRATEGY_SMART_DEFAULT:
+                fallback_candidates = sorted(
+                    [
+                        c for c in candidates
+                        if c.get("provider") and not (
+                            c.get("provider") == effective_provider
+                            and str(c.get("model") or "") == str(baseline_config.get("model") or "")
+                        )
+                    ],
+                    key=lambda x: (
+                        int(x.get("avg_price_estimate", 10**9) or 10**9),
+                        int(x.get("priority", 100) or 100),
+                        int(x.get("id", 0) or 0),
+                    ),
+                )
+                fallback_candidates = fallback_candidates[:3]
+            elif legacy_strategy and smart_enabled:
+                fallback_candidates = sorted(
+                    [
+                        c for c in candidates
+                        if c.get("provider") and not (
+                            c.get("provider") == effective_provider
+                            and str(c.get("model") or "") == str(baseline_config.get("model") or "")
+                        )
+                    ],
+                    key=lambda x: (
+                        int(x.get("avg_price_estimate", 10**9) or 10**9),
+                        int(x.get("priority", 100) or 100),
+                        int(x.get("id", 0) or 0),
+                    ),
+                )
+                if fallback_candidate_limit and fallback_candidate_limit > 0:
+                    fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
+
+            retry_limit = max(1, int(primary_retry_limit or 3))
+            if legacy_strategy:
+                retry_limit = 2
+            for c in candidates:
+                if c.get("provider") == effective_provider and c.get("retry_limit") is not None:
+                    if legacy_strategy:
+                        retry_limit = max(1, int(c.get("retry_limit")))
+                    break
 
         multi_ref_count = len(reference_image_url) if isinstance(reference_image_url, list) else 0
         attempt_items: List[Dict[str, Any]] = []
 
-        if smart_enabled and category == "Image" and multi_ref_count > 4:
+        if (not media_retry_mode) and smart_enabled and category == "Image" and multi_ref_count > 4:
             multi_ref_target = sorted(
                 [c for c in candidates if c.get("is_multi_ref_default")],
                 key=lambda x: (x.get("priority", 100), x.get("id", 0)),
@@ -3053,7 +3133,14 @@ class MediaGenerationService:
                 "tag": "active_retry",
             })
 
-        if strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
+        if media_retry_mode:
+            for c in fallback_candidates:
+                attempt_items.append({
+                    "provider": c.get("provider"),
+                    "config": _merge_request_provider_options(c.get("config")),
+                    "tag": "group_fallback",
+                })
+        elif strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
             for c in fallback_candidates:
                 attempt_items.append({
                     "provider": c.get("provider"),
@@ -3081,14 +3168,7 @@ class MediaGenerationService:
         fallback_unlocked = False
 
         for index, attempt in enumerate(deduped_attempts, start=1):
-            if attempt.get("tag") == "priority_fallback" and not fallback_unlocked:
-                logger.info(
-                    "Smart routing skip fallback | category=%s user_id=%s attempt=%s/%s reason=no_explicit_submit_failure",
-                    category,
-                    user_id,
-                    index,
-                    len(deduped_attempts),
-                )
+            if attempt.get("tag") in {"priority_fallback", "group_fallback"} and not fallback_unlocked:
                 continue
 
             selected_provider = self._normalize_provider_name(attempt.get("provider"), category)
@@ -3097,17 +3177,16 @@ class MediaGenerationService:
                 continue
 
             logger.info(
-                "Smart routing attempt | category=%s user_id=%s strategy=%s attempt=%s/%s provider=%s model=%s tag=%s smart_enabled=%s fallback_triggered=%s",
+                "Media routing attempt | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s group=%s price_group=%s",
                 category,
                 user_id,
-                strategy,
                 index,
                 len(deduped_attempts),
                 selected_provider,
                 selected_config.get("model"),
                 attempt.get("tag"),
-                smart_enabled,
-                fallback_unlocked,
+                selected_retry_group or "-",
+                selected_retry_price_group or "-",
             )
 
             result = await self._execute_generation_by_provider(
@@ -3128,11 +3207,11 @@ class MediaGenerationService:
 
             if result and not result.get("error"):
                 metadata = result.get("metadata") or {}
-                fallback_used = bool(fallback_unlocked) or attempt.get("tag") == "priority_fallback"
+                fallback_used = bool(fallback_unlocked) or attempt.get("tag") in {"priority_fallback", "group_fallback"}
                 resolved_setting_id = (selected_config.get("config") or {}).get("__resolved_setting_id")
                 resolved_model = str(selected_config.get("model") or metadata.get("model") or "").strip()
                 logger.info(
-                    "Smart routing success | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s fallback_used=%s initial_provider=%s initial_model=%s",
+                    "Media routing success | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s fallback_used=%s",
                     category,
                     user_id,
                     index,
@@ -3141,8 +3220,6 @@ class MediaGenerationService:
                     selected_config.get("model"),
                     attempt.get("tag"),
                     fallback_used,
-                    effective_provider,
-                    baseline_config.get("model"),
                 )
                 metadata["smart_routing"] = {
                     "enabled": smart_enabled,
@@ -3151,6 +3228,8 @@ class MediaGenerationService:
                     "provider": selected_provider,
                     "model": resolved_model,
                     "fallback_used": bool(fallback_used),
+                    "retry_group": selected_retry_group or None,
+                    "retry_price_group": selected_retry_price_group or None,
                     "system_api_id": int(resolved_setting_id) if resolved_setting_id is not None else None,
                     "initial_provider": effective_provider,
                     "initial_model": str(baseline_config.get("model") or "").strip(),
@@ -3169,44 +3248,16 @@ class MediaGenerationService:
                 final_error["_attempt_provider"] = selected_provider
                 final_error["_attempt_model"] = runtime_model or selected_config.get("model")
                 final_error["_attempt_tag"] = attempt.get("tag")
-            has_error = bool((result or {}).get("error"))
-            has_output = bool((result or {}).get("url")) or bool((result or {}).get("video_url"))
-            submit_failed = bool((result or {}).get("submit_failed"))
-            ambiguous_submit = bool((result or {}).get("ambiguous_submit"))
-            fallback_reason = ""
-            fallback_triggered_now = submit_failed
-            if ambiguous_submit:
-                fallback_triggered_now = False
-            elif has_error or not has_output:
-                fallback_triggered_now = True
-
-            if fallback_triggered_now:
-                if submit_failed:
-                    fallback_reason = "submit_failed"
-                elif has_error:
-                    fallback_reason = "generation_failed"
-                elif not has_output:
-                    fallback_reason = "no_output"
-                else:
-                    fallback_reason = "unknown"
+            retry_state = self._classify_media_retry(result)
+            fallback_triggered_now = bool(retry_state.get("retryable"))
+            fallback_reason = str(retry_state.get("reason") or "unknown")
 
             error_detail = str((result or {}).get("error") or "").strip() if isinstance(result, dict) else ""
-            error_details_extra = ""
-            if isinstance(result, dict):
-                raw_details = result.get("details")
-                if raw_details is not None:
-                    try:
-                        if isinstance(raw_details, (dict, list)):
-                            error_details_extra = json.dumps(raw_details, ensure_ascii=False)[:1000]
-                        else:
-                            error_details_extra = str(raw_details)[:1000]
-                    except Exception:
-                        error_details_extra = str(raw_details)[:1000]
             next_fallback_provider = ""
             next_fallback_model = ""
             if fallback_triggered_now:
                 for next_attempt in deduped_attempts[index:]:
-                    if next_attempt.get("tag") != "priority_fallback":
+                    if next_attempt.get("tag") not in {"priority_fallback", "group_fallback"}:
                         continue
                     candidate_provider = self._normalize_provider_name(next_attempt.get("provider"), category)
                     if not candidate_provider:
@@ -3216,7 +3267,7 @@ class MediaGenerationService:
                     break
 
             logger.warning(
-                "Smart routing attempt failed | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s reason=%s submit_failed=%s has_error=%s has_output=%s next_fallback_provider=%s next_fallback_model=%s error=%s",
+                "Media routing failed | category=%s user_id=%s attempt=%s/%s provider=%s model=%s tag=%s reason=%s next_provider=%s next_model=%s error=%s",
                 category,
                 user_id,
                 index,
@@ -3224,47 +3275,27 @@ class MediaGenerationService:
                 selected_provider,
                 selected_config.get("model"),
                 attempt.get("tag"),
-                fallback_reason or "non_fallback",
-                submit_failed,
-                has_error,
-                has_output,
+                fallback_reason or "non_retryable",
                 next_fallback_provider,
                 next_fallback_model,
                 error_detail,
             )
-            if error_details_extra:
-                logger.warning(
-                    "Smart routing attempt failed details | category=%s user_id=%s attempt=%s/%s provider=%s model=%s details=%s",
-                    category,
-                    user_id,
-                    index,
-                    len(deduped_attempts),
-                    selected_provider,
-                    selected_config.get("model"),
-                    error_details_extra,
-                )
 
             if fallback_triggered_now:
                 if not fallback_unlocked:
                     logger.info(
-                        "Smart routing fallback triggered | category=%s user_id=%s trigger_attempt=%s provider=%s reason=%s",
+                        "Media routing fallback enabled | category=%s user_id=%s trigger_attempt=%s provider=%s reason=%s group=%s price_group=%s",
                         category,
                         user_id,
                         index,
                         selected_provider,
                         fallback_reason,
+                        selected_retry_group or "-",
+                        selected_retry_price_group or "-",
                     )
                 fallback_unlocked = True
                 continue
 
-            logger.info(
-                "Smart routing stop without fallback | category=%s user_id=%s attempt=%s/%s provider=%s reason=non_submit_failure",
-                category,
-                user_id,
-                index,
-                len(deduped_attempts),
-                selected_provider,
-            )
             return final_error
 
         return final_error

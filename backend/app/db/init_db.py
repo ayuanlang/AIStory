@@ -32,6 +32,153 @@ _REVIEW_MODELS_AVAILABLE = all(
 logger = logging.getLogger(__name__)
 
 
+def _safe_json_dict(value):
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _normalize_system_api_price_tier(category: str, average_cost: int) -> str:
+    normalized_category = str(category or "").strip().lower()
+    cost = max(0, int(average_cost or 0))
+    if normalized_category == "video":
+        if cost <= 120:
+            return "low"
+        if cost <= 400:
+            return "mid"
+        return "high"
+    if normalized_category == "image":
+        if cost <= 15:
+            return "low"
+        if cost <= 80:
+            return "mid"
+        return "high"
+    if cost <= 30:
+        return "low"
+    if cost <= 150:
+        return "mid"
+    return "high"
+
+
+def _infer_system_api_retry_group(row: SystemAPISetting) -> str:
+    category = str(getattr(row, "category", "") or "").strip().lower()
+    provider = str(getattr(row, "provider", "") or "").strip().lower()
+    model = str(getattr(row, "model", "") or "").strip().lower()
+    name = str(getattr(row, "name", "") or "").strip().lower()
+    merged = f"{provider} {model} {name}"
+
+    if category == "image":
+        if any(token in merged for token in ["create-character", "upload-character", "character"]):
+            return "image-character"
+        if any(token in merged for token in ["remove-background"]):
+            return "image-remove-bg"
+        if any(token in merged for token in ["upscale", "reframe"]):
+            return "image-upscale"
+        if any(token in merged for token in ["image-to-image", "-edit", "/edit", " edit", "kontext", "remix"]):
+            return "image-edit-pro"
+        if any(token in merged for token in ["fast", "flex-text-to-image", "imagen4-fast", "qwen/text-to-image"]):
+            return "image-general-fast"
+        return "image-general-pro"
+
+    if category == "video":
+        if any(token in merged for token in ["storyboard"]):
+            return "video-storyboard"
+        if any(token in merged for token in ["characters"]):
+            return "video-character"
+        if any(token in merged for token in ["video-to-video", "watermark-remover", "video-upscale"]):
+            return "video-v2v"
+        if any(token in merged for token in ["image-to-video", "i2v", "animate-", "motion-control"]):
+            if any(token in merged for token in ["lite", "flash", "standard"]):
+                return "video-i2v-fast"
+            return "video-i2v-pro"
+        if any(token in merged for token in ["text-to-video", "t2v", "from-audio", "speech-to-video"]):
+            if any(token in merged for token in ["lite", "fast", "draft", "turbo"]):
+                return "video-t2v-fast"
+            return "video-t2v-pro"
+        if any(token in merged for token in ["vidu", "seedance", "sora-2", "veo", "hailuo", "wan", "kling", "runway"]):
+            return "video-t2v-pro"
+
+    if category in {"voice", "audio", "tools"}:
+        if any(token in merged for token in ["speech-to-text", "stt"]):
+            return "voice-stt"
+        if any(token in merged for token in ["sound-effect", "audio-isolation", "sfx"]):
+            return "voice-sfx"
+        if any(token in merged for token in ["dialogue"]):
+            return "voice-dialogue"
+        if any(token in merged for token in ["text-to-speech", "tts", "text-to-audio"]):
+            return "voice-tts-general"
+
+    return ""
+
+
+def _backfill_system_api_retry_metadata() -> None:
+    try:
+        from app.services.billing_service import BillingService
+
+        with SessionLocal() as session:
+            rows = session.query(SystemAPISetting).filter(~SystemAPISetting.category.like("System_%")).all()
+            changed = 0
+            now_iso = now_bj_iso()
+
+            def _fallback_average_cost(row: SystemAPISetting, cfg: dict) -> int:
+                api_pricing = cfg.get("api_pricing") if isinstance(cfg.get("api_pricing"), dict) else {}
+                for raw in (
+                    api_pricing.get("cost"),
+                    cfg.get("billing_cost"),
+                    getattr(row, "price_avg_cost", None),
+                    getattr(row, "provider_price_avg_cost", None),
+                ):
+                    try:
+                        parsed = int(float(raw or 0))
+                    except Exception:
+                        parsed = 0
+                    if parsed > 0:
+                        return parsed
+                return 0
+
+            for row in rows:
+                cfg = _safe_json_dict(getattr(row, "config", None))
+                retry_group = _infer_system_api_retry_group(row)
+                average_cost = 0
+                try:
+                    average_cost = int((BillingService.estimate_system_api_average_price(session, int(row.id)) or {}).get("average_cost") or 0)
+                except Exception:
+                    average_cost = 0
+                if average_cost <= 0:
+                    average_cost = _fallback_average_cost(row, cfg)
+                retry_price_group = _normalize_system_api_price_tier(getattr(row, "category", None), average_cost)
+
+                next_cfg = dict(cfg)
+                if retry_group:
+                    next_cfg["retry_group"] = retry_group
+                else:
+                    next_cfg.pop("retry_group", None)
+                next_cfg["retry_price_group"] = retry_price_group
+                next_cfg["retry_price_estimate"] = int(max(0, average_cost))
+                if next_cfg.get("smart_priority") is None:
+                    next_cfg["smart_priority"] = 100
+
+                if next_cfg != cfg:
+                    row.config = next_cfg
+                    row.updated_at = now_iso
+                    changed += 1
+
+            if changed > 0:
+                session.commit()
+                logger.info("Backfilled %s system_api_settings retry group/price tier metadata", changed)
+    except Exception as exc:
+        logger.warning("Failed to backfill system_api_settings retry metadata: %s", exc)
+
+
 def _compile_column_type_sql(column) -> str:
     try:
         return column.type.compile(dialect=engine.dialect)
@@ -1039,6 +1186,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             logger.error(f"Failed to migrate system_api pricing into base rules: {e}")
 
         _deactivate_legacy_duplicate_base_billing_rules()
+        _backfill_system_api_retry_metadata()
 
         # Migrate legacy system-owned rows from api_settings into system_api_settings (opt-in only).
         if _should_manage_api_settings_on_init():

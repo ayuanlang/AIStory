@@ -183,6 +183,8 @@ const UserAdmin = () => {
     const [selectedSystemApiId, setSelectedSystemApiId] = useState('');
     const [systemApiFilterCategory, setSystemApiFilterCategory] = useState('all');
     const [systemApiFilterProvider, setSystemApiFilterProvider] = useState('all');
+    const [systemApiFilterRetryGroup, setSystemApiFilterRetryGroup] = useState('all');
+    const [systemApiFilterRetryPriceGroup, setSystemApiFilterRetryPriceGroup] = useState('all');
     const [systemApiCapabilityFilter, setSystemApiCapabilityFilter] = useState('all');
     const [systemApiHideDeprecated, setSystemApiHideDeprecated] = useState(false);
     const [systemApiSortMode, setSystemApiSortMode] = useState('default');
@@ -237,6 +239,8 @@ const UserAdmin = () => {
         base_url: '',
         model: '',
         base_model: '',
+        retry_group: '',
+        retry_price_group: '',
         config: '{}',
         is_active: false,
         deprecated: false,
@@ -303,6 +307,9 @@ const UserAdmin = () => {
     const [selectedPromptSkillId, setSelectedPromptSkillId] = useState('');
     const [selectedPromptSkillText, setSelectedPromptSkillText] = useState('');
     const [isPromptSkillTextLoading, setIsPromptSkillTextLoading] = useState(false);
+
+    const SYSTEM_API_FILTER_HAS_VALUE = '__has_value__';
+    const SYSTEM_API_FILTER_EMPTY_VALUE = '__empty__';
 
     const showSystemApiEditToast = (text) => {
         setSystemApiEditToast(String(text || '').trim());
@@ -1065,6 +1072,34 @@ const UserAdmin = () => {
         return {};
     };
 
+    const getSystemApiRetryGroup = (row) => {
+        const cfg = getSystemApiConfig(row);
+        return String(cfg?.retry_group || '').trim();
+    };
+
+    const getSystemApiRetryPriceGroup = (row) => {
+        const cfg = getSystemApiConfig(row);
+        return String(cfg?.retry_price_group || '').trim();
+    };
+
+    const buildSystemApiConfigPayload = () => {
+        const parsed = parseJsonFieldSafe(systemApiForm.config);
+        const baseConfig = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ...parsed } : {};
+        const retryGroup = String(systemApiForm.retry_group || '').trim();
+        const retryPriceGroup = String(systemApiForm.retry_price_group || '').trim();
+        if (retryGroup) {
+            baseConfig.retry_group = retryGroup;
+        } else {
+            delete baseConfig.retry_group;
+        }
+        if (retryPriceGroup) {
+            baseConfig.retry_price_group = retryPriceGroup;
+        } else {
+            delete baseConfig.retry_price_group;
+        }
+        return baseConfig;
+    };
+
     const normalizeApiPricingUnitType = (value) => {
         const unit = String(value || 'per_call').trim() || 'per_call';
         const allowed = new Set(['per_call', 'per_second', 'per_minute', 'per_token', 'per_1k_tokens', 'per_million_tokens']);
@@ -1451,29 +1486,28 @@ const UserAdmin = () => {
             const apiCategory = String(apiRow?.category || '').trim();
             const apiProvider = String(apiRow?.provider || '').trim();
             const apiBaseModel = String(apiRow?.base_model || apiRow?.model || '').trim();
+            const ruleTarget = String(row?.content_type || '').trim().toLowerCase();
+            const unitType = normalizeApiPricingUnitType(row?.billing_unit_type || 'per_call');
 
             if (billingRuleFilterStatus === 'active' && !row?.is_active) return false;
-            if (billingRuleFilterStatus === 'inactive' && !!row?.is_active) return false;
-            if (billingRuleFilterTarget === 'text' && !row?.applies_to_text) return false;
-            if (billingRuleFilterTarget === 'image' && !row?.applies_to_image) return false;
-            if (billingRuleFilterTarget === 'video' && !row?.applies_to_video) return false;
-            if (billingRuleFilterUnitType !== 'all' && String(row?.billing_unit_type || '') !== billingRuleFilterUnitType) return false;
+            if (billingRuleFilterStatus === 'inactive' && row?.is_active) return false;
+            if (billingRuleFilterTarget !== 'all' && ruleTarget !== String(billingRuleFilterTarget || '').trim().toLowerCase()) return false;
+            if (billingRuleFilterUnitType !== 'all' && unitType !== billingRuleFilterUnitType) return false;
             if (billingRuleFilterApiCategory !== 'all' && apiCategory !== billingRuleFilterApiCategory) return false;
             if (billingRuleFilterApiProvider !== 'all' && apiProvider !== billingRuleFilterApiProvider) return false;
             if (billingRuleFilterApiBaseModel !== 'all' && apiBaseModel !== billingRuleFilterApiBaseModel) return false;
-            if (!keyword) return true;
 
             const haystack = [
-                row?.name,
+                row?.provider,
+                row?.rule_name,
                 row?.description,
-                row?.generation_mode,
-                row?.input_format,
-                row?.output_format,
+                row?.model,
+                row?.mode,
+                row?.content_type,
                 row?.billing_unit_type,
                 apiCategory,
                 apiProvider,
                 apiBaseModel,
-                apiRow?.model,
             ].map((v) => String(v || '').toLowerCase()).join(' ');
             return haystack.includes(keyword);
         });
@@ -2054,6 +2088,8 @@ const UserAdmin = () => {
                 base_url: '',
                 model: '',
                 base_model: '',
+                retry_group: '',
+                retry_price_group: '',
                 config: '{}',
                 is_active: false,
                 deprecated: false,
@@ -2105,6 +2141,8 @@ const UserAdmin = () => {
             base_url: row.base_url || '',
             model: row.model || '',
             base_model: row.base_model || '',
+            retry_group: getSystemApiRetryGroup(row),
+            retry_price_group: getSystemApiRetryPriceGroup(row),
             config: safeJsonStr(row.config) || '{}',
             is_active: !!row.is_active,
             deprecated: !!row.deprecated,
@@ -2222,6 +2260,37 @@ const UserAdmin = () => {
         return Array.from(set);
     }, [systemApiRows, systemApiFilterCategory]);
 
+    const matchesSystemApiMetadataFilter = (value, filterValue) => {
+        const normalizedValue = String(value || '').trim();
+        if (filterValue === 'all') return true;
+        if (filterValue === SYSTEM_API_FILTER_HAS_VALUE) return normalizedValue.length > 0;
+        if (filterValue === SYSTEM_API_FILTER_EMPTY_VALUE) return normalizedValue.length === 0;
+        return normalizedValue === String(filterValue || '').trim();
+    };
+
+    const systemApiRetryGroupOptions = React.useMemo(() => {
+        const set = new Set();
+        systemApiRows.forEach((row) => {
+            if (systemApiFilterCategory !== 'all' && String(row?.category || '') !== systemApiFilterCategory) return;
+            if (systemApiFilterProvider !== 'all' && String(row?.provider || '') !== systemApiFilterProvider) return;
+            const retryGroup = getSystemApiRetryGroup(row);
+            if (retryGroup) set.add(retryGroup);
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider]);
+
+    const systemApiRetryPriceGroupOptions = React.useMemo(() => {
+        const set = new Set();
+        systemApiRows.forEach((row) => {
+            if (systemApiFilterCategory !== 'all' && String(row?.category || '') !== systemApiFilterCategory) return;
+            if (systemApiFilterProvider !== 'all' && String(row?.provider || '') !== systemApiFilterProvider) return;
+            if (!matchesSystemApiMetadataFilter(getSystemApiRetryGroup(row), systemApiFilterRetryGroup)) return;
+            const retryPriceGroup = getSystemApiRetryPriceGroup(row);
+            if (retryPriceGroup) set.add(retryPriceGroup);
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider, systemApiFilterRetryGroup]);
+
     const getSystemApiCapabilityInfo = (row) => {
         const category = String(row?.category || '').trim();
         const provider = String(row?.provider || '').trim();
@@ -2309,12 +2378,14 @@ const UserAdmin = () => {
         return systemApiRows.filter((row) => {
             if (systemApiFilterCategory !== 'all' && String(row?.category || '') !== systemApiFilterCategory) return false;
             if (systemApiFilterProvider !== 'all' && String(row?.provider || '') !== systemApiFilterProvider) return false;
+            if (!matchesSystemApiMetadataFilter(getSystemApiRetryGroup(row), systemApiFilterRetryGroup)) return false;
+            if (!matchesSystemApiMetadataFilter(getSystemApiRetryPriceGroup(row), systemApiFilterRetryPriceGroup)) return false;
             if (systemApiCapabilityFilter === 'callable' && !getSystemApiCapabilityInfo(row).callable) return false;
             if (systemApiCapabilityFilter === 'not_callable' && getSystemApiCapabilityInfo(row).callable) return false;
             if (systemApiCapabilityFilter === 'staging_only' && getSystemApiCapabilityInfo(row).state !== 'staging_only') return false;
             return true;
         });
-    }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider, systemApiCapabilityFilter]);
+    }, [systemApiRows, systemApiFilterCategory, systemApiFilterProvider, systemApiFilterRetryGroup, systemApiFilterRetryPriceGroup, systemApiCapabilityFilter]);
 
     function isSystemApiDeprecated(row) {
         if (typeof row?.deprecated === 'boolean') return row.deprecated;
@@ -2428,7 +2499,7 @@ const UserAdmin = () => {
                 base_url: String(systemApiForm.base_url || '').trim() || undefined,
                 model: String(systemApiForm.model || '').trim() || undefined,
                 base_model: String(systemApiForm.base_model || '').trim() || undefined,
-                config: parseJsonFieldSafe(systemApiForm.config) || {},
+                config: buildSystemApiConfigPayload(),
                 is_active: !!systemApiForm.is_active,
                 tags: parseTagsField(systemApiForm.tags),
                 generation_modes: parseCsvArrayField(systemApiForm.generation_modes),
@@ -2486,7 +2557,7 @@ const UserAdmin = () => {
                 base_url: String(systemApiForm.base_url || '').trim() || undefined,
                 model: String(systemApiForm.model || '').trim() || undefined,
                 base_model: String(systemApiForm.base_model || '').trim() || undefined,
-                config: parseJsonFieldSafe(systemApiForm.config) || {},
+                config: buildSystemApiConfigPayload(),
                 is_active: !!systemApiForm.is_active,
                 tags: parseTagsField(systemApiForm.tags),
                 generation_modes: parseCsvArrayField(systemApiForm.generation_modes),
@@ -6376,7 +6447,7 @@ const UserAdmin = () => {
                                         <div className="text-[11px] text-gray-300 bg-white/5 border border-white/10 rounded p-2 leading-relaxed">
                                             {t('智能路由规则：多参考图（>4）会优先尝试“多图默认 API”；主通道达到重试上限后，按同类别优先级（数字越小越优先）依次回退。', 'Smart routing rule: multi-reference image jobs (>4) first try the “multi-ref default API”; after retry limit on the main path, fallback follows same-category priority (lower number first).')}
                                         </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
                                             <div>
                                                 <label className="text-xs uppercase text-gray-400">{t('模型类型筛选', 'Model Type Filter')}</label>
                                                 <select
@@ -6384,6 +6455,8 @@ const UserAdmin = () => {
                                                     onChange={(e) => {
                                                         setSystemApiFilterCategory(e.target.value);
                                                         setSystemApiFilterProvider('all');
+                                                        setSystemApiFilterRetryGroup('all');
+                                                        setSystemApiFilterRetryPriceGroup('all');
                                                     }}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 >
@@ -6397,12 +6470,49 @@ const UserAdmin = () => {
                                                 <label className="text-xs uppercase text-gray-400">{t('供应商筛选', 'Provider Filter')}</label>
                                                 <select
                                                     value={systemApiFilterProvider}
-                                                    onChange={(e) => setSystemApiFilterProvider(e.target.value)}
+                                                    onChange={(e) => {
+                                                        setSystemApiFilterProvider(e.target.value);
+                                                        setSystemApiFilterRetryGroup('all');
+                                                        setSystemApiFilterRetryPriceGroup('all');
+                                                    }}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                 >
                                                     <option value="all">{t('全部供应商', 'All Providers')}</option>
                                                     {systemApiProviderOptions.map((provider) => (
                                                         <option key={provider} value={provider}>{provider}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs uppercase text-gray-400">{t('回退分组筛选', 'Retry Group Filter')}</label>
+                                                <select
+                                                    value={systemApiFilterRetryGroup}
+                                                    onChange={(e) => {
+                                                        setSystemApiFilterRetryGroup(e.target.value);
+                                                        setSystemApiFilterRetryPriceGroup('all');
+                                                    }}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="all">{t('全部分组', 'All Retry Groups')}</option>
+                                                    <option value={SYSTEM_API_FILTER_HAS_VALUE}>{t('仅有值', 'Has Value Only')}</option>
+                                                    <option value={SYSTEM_API_FILTER_EMPTY_VALUE}>{t('仅空值', 'Empty Only')}</option>
+                                                    {systemApiRetryGroupOptions.map((retryGroup) => (
+                                                        <option key={retryGroup} value={retryGroup}>{retryGroup}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs uppercase text-gray-400">{t('价格档位筛选', 'Price Tier Filter')}</label>
+                                                <select
+                                                    value={systemApiFilterRetryPriceGroup}
+                                                    onChange={(e) => setSystemApiFilterRetryPriceGroup(e.target.value)}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="all">{t('全部档位', 'All Price Tiers')}</option>
+                                                    <option value={SYSTEM_API_FILTER_HAS_VALUE}>{t('仅有值', 'Has Value Only')}</option>
+                                                    <option value={SYSTEM_API_FILTER_EMPTY_VALUE}>{t('仅空值', 'Empty Only')}</option>
+                                                    {systemApiRetryPriceGroupOptions.map((retryPriceGroup) => (
+                                                        <option key={retryPriceGroup} value={retryPriceGroup}>{retryPriceGroup}</option>
                                                     ))}
                                                 </select>
                                             </div>
@@ -6430,6 +6540,8 @@ const UserAdmin = () => {
                                                     onClick={() => {
                                                         setSystemApiFilterCategory('all');
                                                         setSystemApiFilterProvider('all');
+                                                        setSystemApiFilterRetryGroup('all');
+                                                        setSystemApiFilterRetryPriceGroup('all');
                                                         setSystemApiCapabilityFilter('all');
                                                         setSystemApiHideDeprecated(false);
                                                         setSystemApiSortMode('default');
@@ -6505,7 +6617,11 @@ const UserAdmin = () => {
                                                         <button
                                                             key={`system-api-provider-summary-${item.provider}`}
                                                             type="button"
-                                                            onClick={() => setSystemApiFilterProvider(String(item.provider || 'all'))}
+                                                            onClick={() => {
+                                                                setSystemApiFilterProvider(String(item.provider || 'all'));
+                                                                setSystemApiFilterRetryGroup('all');
+                                                                setSystemApiFilterRetryPriceGroup('all');
+                                                            }}
                                                             className={`rounded-lg border px-3 py-2 text-left min-w-[180px] ${isSelected ? 'border-cyan-300 bg-cyan-700/20 text-cyan-50' : 'border-cyan-500/20 bg-black/20 text-cyan-100/90 hover:bg-cyan-500/10'}`}
                                                             title={item.categories.join(', ') || '-'}
                                                         >
@@ -6558,6 +6674,8 @@ const UserAdmin = () => {
                                                         <th className="text-left p-2 whitespace-nowrap">{t('模型', 'Model')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('基础模型', 'Base Model')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('名称', 'Name')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('分组', 'Group')}</th>
+                                                        <th className="text-left p-2 whitespace-nowrap">{t('价格档', 'Price Tier')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('Base URL', 'Base URL')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('模态', 'Modality')}</th>
                                                         <th className="text-left p-2 whitespace-nowrap">{t('标签', 'Tags')}</th>
@@ -6588,6 +6706,8 @@ const UserAdmin = () => {
                                                             <td className="p-2 max-w-[220px] truncate" title={row.model || '-'}>{row.model || '-'}</td>
                                                             <td className="p-2 max-w-[220px] truncate" title={row.base_model || '-'}>{row.base_model || '-'}</td>
                                                             <td className="p-2 max-w-[160px] truncate" title={row.name || '-'}>{row.name || '-'}</td>
+                                                            <td className="p-2 max-w-[140px] truncate" title={getSystemApiRetryGroup(row) || '-'}>{getSystemApiRetryGroup(row) || '-'}</td>
+                                                            <td className="p-2 max-w-[120px] truncate" title={getSystemApiRetryPriceGroup(row) || '-'}>{getSystemApiRetryPriceGroup(row) || '-'}</td>
                                                             <td className="p-2 max-w-[200px] truncate" title={row.base_url || '-'}>{row.base_url || '-'}</td>
                                                             <td className="p-2 max-w-[160px] truncate" title={Array.isArray(row.generation_modes) ? row.generation_modes.join(', ') : '-'}>{Array.isArray(row.generation_modes) ? row.generation_modes.join(', ') : '-'}</td>
                                                             <td className="p-2 max-w-[120px] truncate" title={Array.isArray(row.tags) ? row.tags.join(', ') : '-'}>{Array.isArray(row.tags) && row.tags.length > 0 ? row.tags.join(', ') : '-'}</td>
@@ -6640,7 +6760,7 @@ const UserAdmin = () => {
                                                     )})}
                                                     {visibleSystemApiRows.length === 0 && (
                                                         <tr className="border-t border-white/10">
-                                                            <td className="p-3 text-gray-400" colSpan={14}>
+                                                            <td className="p-3 text-gray-400" colSpan={16}>
                                                                 {t('无匹配结果，请调整筛选条件。', 'No matching settings. Adjust your filters.')}
                                                             </td>
                                                         </tr>
@@ -6961,6 +7081,28 @@ const UserAdmin = () => {
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
                                                     placeholder={t('用于归类同一基础模型', 'Used to group same base model')}
                                                 />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('重试分组', 'Retry Group')}</label>
+                                                <input
+                                                    value={systemApiForm.retry_group}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, retry_group: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                    placeholder={t('同类回退分组键', 'Fallback group key for same category')}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('价格档位', 'Price Tier')}</label>
+                                                <select
+                                                    value={systemApiForm.retry_price_group}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, retry_price_group: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                >
+                                                    <option value="">{t('未设置', 'Unset')}</option>
+                                                    <option value="low">low</option>
+                                                    <option value="mid">mid</option>
+                                                    <option value="high">high</option>
+                                                </select>
                                             </div>
                                             <div className="md:col-span-2">
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">API Key</label>

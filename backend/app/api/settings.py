@@ -2881,6 +2881,14 @@ def _query_system_settings_manage_rows(db: Session):
     ).all()
 
 
+def _filter_non_deprecated_export_rows(rows: List[Any]) -> List[Any]:
+    return [
+        row
+        for row in (rows or [])
+        if not _is_setting_deprecated(getattr(row, "config", None), getattr(row, "deprecated", None))
+    ]
+
+
 def _rule_to_out(rule: SystemAPIBillingRule) -> SystemAPIBillingRuleOut:
     if hasattr(SystemAPIBillingRuleOut, "model_validate"):
         return SystemAPIBillingRuleOut.model_validate(rule)
@@ -8019,7 +8027,7 @@ def export_system_settings_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
-    rows = _query_system_settings_manage_rows(db)
+    rows = _filter_non_deprecated_export_rows(_query_system_settings_manage_rows(db))
 
     items = []
     for row in rows:
@@ -8048,7 +8056,7 @@ def export_system_settings_for_manage(
     return {
         "version": 1,
         "exported_at": now_bj_iso(),
-        "count": len(rows),
+        "count": len(items),
         "items": items,
     }
 
@@ -8075,6 +8083,7 @@ def export_system_settings_to_seed_file(
         SystemAPISetting.model.asc(),
         SystemAPISetting.id.asc(),
     ).all()
+    rows = _filter_non_deprecated_export_rows(rows)
 
     items = []
     for row in rows:
@@ -8125,6 +8134,7 @@ def export_system_provider_bundle_for_manage(
     rows = db.query(SystemAPISetting).filter(
         ~SystemAPISetting.category.like("System_%"),
     ).order_by(SystemAPISetting.provider.asc(), SystemAPISetting.category.asc(), SystemAPISetting.model.asc(), SystemAPISetting.id.asc()).all()
+    rows = _filter_non_deprecated_export_rows(rows)
     providers = _build_provider_bundle_export_payload(db, rows)
 
     return {

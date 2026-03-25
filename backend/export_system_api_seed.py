@@ -32,6 +32,7 @@ def main():
             )
             .all()
         )
+        rows = [row for row in rows if not bool(getattr(row, "deprecated", False))]
 
         items = []
         for row in rows:

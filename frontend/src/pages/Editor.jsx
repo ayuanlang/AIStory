@@ -5,7 +5,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop } from 'lucide-react';
+import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -63,118 +63,6 @@ const brokenSceneImageUrls = new Set();
 const shouldBypassBrokenMediaCache = (url) => {
     const raw = String(url || '').trim();
     if (!raw) return false;
-    if (raw.startsWith('/uploads/')) return true;
-    try {
-        const parsed = new URL(raw, BASE_URL || window.location.origin);
-        return parsed.pathname.startsWith('/uploads/');
-    } catch {
-        return false;
-    }
-};
-
-const rememberBrokenMediaUrl = (url) => {
-    const normalized = String(url || '').trim();
-    if (!normalized) return;
-    if (shouldBypassBrokenMediaCache(normalized)) return;
-    brokenMediaUrls.add(normalized);
-};
-
-const isBrokenMediaUrl = (url) => {
-    if (shouldBypassBrokenMediaCache(url)) return false;
-    return brokenMediaUrls.has(String(url || '').trim());
-};
-
-const getSafeMediaUrl = (url) => {
-    const raw = String(url || '').trim();
-    if (!raw || isBrokenMediaUrl(raw)) return '';
-    return getFullUrl(raw);
-};
-
-const extractImageJobResultUrl = (statusResp) => {
-    const result = (statusResp?.result && typeof statusResp.result === 'object') ? statusResp.result : {};
-    const candidates = [
-        result?.url,
-        result?.image_url,
-        result?.imageUrl,
-        result?.generated_url,
-        statusResp?.url,
-        statusResp?.image_url,
-        statusResp?.imageUrl,
-    ];
-    for (const value of candidates) {
-        const stable = String(value || '').trim();
-        if (stable) return stable;
-    }
-    return '';
-};
-
-const rememberBrokenSceneImageUrl = (url) => {
-    const normalized = String(url || '').trim();
-    if (!normalized) return;
-    brokenSceneImageUrls.add(normalized);
-    rememberBrokenMediaUrl(normalized);
-};
-
-const isBrokenSceneImageUrl = (url) => {
-    return brokenSceneImageUrls.has(String(url || '').trim());
-};
-
-const normalizeBatchParallelLimit = (value) => {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return 3;
-    return Math.min(12, Math.max(1, Math.trunc(parsed)));
-};
-
-const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps }) => {
-    const rawSrc = String(src || '').trim();
-    const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
-
-    useEffect(() => {
-        setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
-    }, [rawSrc]);
-
-    const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
-    if (!resolvedSrc) return fallback || null;
-
-    return (
-        <img
-            src={resolvedSrc}
-            alt={alt}
-            className={className}
-            onError={() => {
-                rememberBrokenMediaUrl(rawSrc);
-                setFailed(true);
-            }}
-            {...imgProps}
-        />
-    );
-};
-
-const SafeAudio = ({ src, fallback = null, ...audioProps }) => {
-    const rawSrc = String(src || '').trim();
-    const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
-
-    useEffect(() => {
-        setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
-    }, [rawSrc]);
-
-    const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
-    if (!resolvedSrc) return fallback || null;
-
-    return (
-        <audio
-            src={resolvedSrc}
-            onError={() => {
-                rememberBrokenMediaUrl(rawSrc);
-                setFailed(true);
-            }}
-            {...audioProps}
-        />
-    );
-};
-
-const normalizeMediaRefList = (items) => {
-    if (!Array.isArray(items)) return [];
     return [...new Set(
         items
             .map((item) => String(item || '').trim())
@@ -15940,6 +15828,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
     const IMAGE_JOB_CACHE_PURGE_MARKER_KEY = `aistory.imageJobCachePurge.${IMAGE_JOB_CACHE_PURGE_VERSION}`;
     const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
+    const SUBJECT_BATCH_RUNTIME_STALE_MS = 1000 * 60;
+    const SUBJECT_BATCH_WATCHDOG_INTERVAL_MS = 1000 * 5;
     const SUBJECT_IMAGE_JOB_OWNER_PAGE = 'subject-library';
     const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
     const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 2;
@@ -16129,6 +16019,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         ownerScopeId: String(projectId || '').trim(),
         ownerEntityId: String(entityId || '').trim(),
         jobKind: jobKind === 'reconstruct' ? 'reconstruct' : 'generate',
+        previousStableImageUrl: String(base?.previousStableImageUrl || '').trim(),
         statusFailureCount: Math.max(0, Number(base?.statusFailureCount || 0) || 0),
         lastStatusError: String(base?.lastStatusError || '').trim(),
         lastPolledAt: Number(base?.lastPolledAt || 0) || 0,
@@ -16226,6 +16117,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         const stableJobId = String(jobId || '').trim();
         const stableEntityId = String(entity?.id || '').trim();
         if (!stableJobId || !stableEntityId) return;
+        const previousStableImageUrl = String(entity?.image_url || '').trim();
 
         const targetMap = kind === 'reconstruct'
             ? subjectBatchReconstructActiveJobsRef.current
@@ -16240,7 +16132,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 status: 'queued',
                 startedAt: Date.now(),
                 entityName: entity?.name || entity?.name_en || stableEntityId,
-                ...buildSubjectJobMeta(stableEntityId, kind),
+                ...buildSubjectJobMeta(stableEntityId, kind, { previousStableImageUrl }),
             },
         }));
     }, [buildSubjectJobMeta]);
@@ -16420,6 +16312,29 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         return t('英文', 'English');
     }, [t]);
 
+    const getSubjectImageJobEntry = useCallback((entityOrId) => {
+        const stableEntityId = String(entityOrId?.id || entityOrId || '').trim();
+        if (!stableEntityId) return null;
+        return subjectImageJobs[stableEntityId] || null;
+    }, [subjectImageJobs]);
+
+    const isSubjectImageActionLocked = useCallback((entityOrId) => {
+        const stableEntityId = String(entityOrId?.id || entityOrId || '').trim();
+        if (!stableEntityId) return false;
+        return Boolean(subjectImageJobs[stableEntityId] || stoppingSubjectImageJobs[stableEntityId]);
+    }, [stoppingSubjectImageJobs, subjectImageJobs]);
+
+    const notifySubjectImageActionLocked = useCallback((entityOrId) => {
+        const stableEntityId = String(entityOrId?.id || entityOrId || '').trim();
+        const entityName = String(entityOrId?.name || entityOrId?.name_en || stableEntityId).trim() || stableEntityId;
+        const message = t(
+            `主体图片任务运行中，暂时不能更换或移除图片：${entityName}`,
+            `Subject image job is running. Image changes are temporarily disabled: ${entityName}`
+        );
+        showSubjectNotification(message, 'warning');
+        onLog?.(message, 'warning');
+    }, [onLog, showSubjectNotification, t]);
+
     const getResolvedEntityGlobalStyleText = useCallback(() => {
         const info = currentEpisode?.episode_info?.e_global_info;
         const projectInfo = project?.global_info;
@@ -16508,6 +16423,20 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         setEntities(prev => prev.map(item => String(item?.id) === stableEntityId ? { ...item, image_url: stableImageUrl } : item));
         setViewingEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
         setSelectedEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
+        if (showImageModal && String(selectedEntity?.id || '') === stableEntityId) {
+            setShowImageModal(false);
+        }
+    }, [selectedEntity?.id, showImageModal]);
+
+    const clearSubjectEntityImageLocally = useCallback((entityId) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId || !isMountedRef.current) return;
+
+        const applyClear = (item) => (String(item?.id || '') === stableEntityId ? { ...item, image_url: null } : item);
+        setAllEntities(prev => prev.map(applyClear));
+        setEntities(prev => prev.map(applyClear));
+        setViewingEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: null } : prev));
+        setSelectedEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: null } : prev));
         if (showImageModal && String(selectedEntity?.id || '') === stableEntityId) {
             setShowImageModal(false);
         }
@@ -16614,12 +16543,199 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         applyReconstructBatchState(running, progress);
     }, [applyReconstructBatchState, subjectBatchScopeKey]);
 
+    const hasSubjectBatchJobState = useCallback((jobKind) => {
+        const stableJobKind = String(jobKind || '').trim();
+        if (!stableJobKind) return false;
+
+        return Object.values(subjectImageJobs || {}).some((job) => {
+            if (!job || typeof job !== 'object') return false;
+            const currentJobKind = String(job?.jobKind || 'generate').trim();
+            return currentJobKind === stableJobKind;
+        });
+    }, [subjectImageJobs]);
+
+    const clearSubjectBatchRuntimeUi = useCallback((task) => {
+        const stableTask = String(task || '').trim();
+        if (stableTask === 'generate') {
+            updateGenerateBatchRuntimeState(false, null);
+            setIsStoppingBatchGenerateEntities(false);
+            return;
+        }
+        if (stableTask === 'analyze') {
+            updateAnalyzeBatchRuntimeState(false, null);
+            return;
+        }
+        if (stableTask === 'reconstruct') {
+            updateReconstructBatchRuntimeState(false, null);
+        }
+    }, [updateAnalyzeBatchRuntimeState, updateGenerateBatchRuntimeState, updateReconstructBatchRuntimeState]);
+
+    const tryHealSubjectBatchRuntime = useCallback((options = {}) => {
+        const {
+            task,
+            uiRunning,
+            sessionRef,
+            activeJobsRef,
+            jobKind,
+            stopRequestedRef,
+            snapshot = null,
+            staleMs = 0,
+            allowSessionReset = false,
+        } = options;
+
+        const stableTask = String(task || '').trim();
+        if (!stableTask || !uiRunning) return false;
+
+        if (!allowSessionReset && String(sessionRef?.current || '').trim()) {
+            return false;
+        }
+
+        if (activeJobsRef?.current?.size > 0) {
+            return false;
+        }
+
+        if (jobKind && hasSubjectBatchJobState(jobKind)) {
+            return false;
+        }
+
+        if (staleMs > 0) {
+            const taskState = snapshot?.[stableTask] || createSubjectBatchTaskState();
+            const updatedAt = Number(taskState?.updatedAt || 0) || 0;
+            if (!taskState?.running) return false;
+            if (updatedAt <= 0 || (Date.now() - updatedAt) <= staleMs) {
+                return false;
+            }
+        }
+
+        if (sessionRef) {
+            sessionRef.current = '';
+        }
+        if (stopRequestedRef) {
+            stopRequestedRef.current = false;
+        }
+
+        clearSubjectBatchRuntimeUi(stableTask);
+        return true;
+    }, [clearSubjectBatchRuntimeUi, createSubjectBatchTaskState, hasSubjectBatchJobState]);
+
     useEffect(() => {
         isMountedRef.current = true;
         return () => {
             isMountedRef.current = false;
         };
     }, []);
+
+    useEffect(() => {
+        const applySnapshot = (snapshot) => {
+            const generateTask = snapshot?.generate || createSubjectBatchTaskState();
+            const analyzeTask = snapshot?.analyze || createSubjectBatchTaskState();
+            const reconstructTask = snapshot?.reconstruct || createSubjectBatchTaskState();
+
+            if (generateTask.scopeKey === subjectBatchScopeKey && generateTask.running) {
+                applyGenerateBatchState(true, generateTask.progress || null);
+            } else {
+                applyGenerateBatchState(false, null);
+            }
+
+            if (analyzeTask.scopeKey === subjectBatchScopeKey && analyzeTask.running) {
+                applyAnalyzeBatchState(true, analyzeTask.progress || null);
+            } else {
+                applyAnalyzeBatchState(false, null);
+            }
+
+            if (reconstructTask.scopeKey === subjectBatchScopeKey && reconstructTask.running) {
+                applyReconstructBatchState(true, reconstructTask.progress || null);
+            } else {
+                applyReconstructBatchState(false, null);
+            }
+        };
+
+        applySnapshot(getSubjectBatchSnapshot());
+        return subscribeSubjectBatchRuntime(applySnapshot);
+    }, [applyAnalyzeBatchState, applyGenerateBatchState, applyReconstructBatchState, subjectBatchScopeKey]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'generate',
+            uiRunning: isBatchGeneratingEntities,
+            sessionRef: subjectBatchGenerateSessionRef,
+            activeJobsRef: subjectBatchGenerateActiveJobsRef,
+            jobKind: 'generate',
+            stopRequestedRef: subjectBatchGenerateStopRequestedRef,
+        });
+    }, [isBatchGeneratingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'analyze',
+            uiRunning: isBatchAnalyzingEntities,
+            sessionRef: subjectBatchAnalyzeSessionRef,
+            stopRequestedRef: subjectBatchAnalyzeStopRequestedRef,
+        });
+    }, [isBatchAnalyzingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'reconstruct',
+            uiRunning: isBatchReconstructingEntities,
+            sessionRef: subjectBatchReconstructSessionRef,
+            activeJobsRef: subjectBatchReconstructActiveJobsRef,
+            jobKind: 'reconstruct',
+            stopRequestedRef: subjectBatchReconstructStopRequestedRef,
+        });
+    }, [isBatchReconstructingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        const hasTopLevelBatchUi = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
+        if (!hasTopLevelBatchUi) return;
+
+        const timer = window.setInterval(() => {
+            const snapshot = getSubjectBatchSnapshot();
+            tryHealSubjectBatchRuntime({
+                task: 'generate',
+                uiRunning: isBatchGeneratingEntities,
+                sessionRef: subjectBatchGenerateSessionRef,
+                activeJobsRef: subjectBatchGenerateActiveJobsRef,
+                jobKind: 'generate',
+                stopRequestedRef: subjectBatchGenerateStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+
+            tryHealSubjectBatchRuntime({
+                task: 'analyze',
+                uiRunning: isBatchAnalyzingEntities,
+                sessionRef: subjectBatchAnalyzeSessionRef,
+                stopRequestedRef: subjectBatchAnalyzeStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+
+            tryHealSubjectBatchRuntime({
+                task: 'reconstruct',
+                uiRunning: isBatchReconstructingEntities,
+                sessionRef: subjectBatchReconstructSessionRef,
+                activeJobsRef: subjectBatchReconstructActiveJobsRef,
+                jobKind: 'reconstruct',
+                stopRequestedRef: subjectBatchReconstructStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+        }, SUBJECT_BATCH_WATCHDOG_INTERVAL_MS);
+
+        return () => {
+            window.clearInterval(timer);
+        };
+    }, [
+        getSubjectBatchSnapshot,
+        isBatchAnalyzingEntities,
+        isBatchGeneratingEntities,
+        isBatchReconstructingEntities,
+        tryHealSubjectBatchRuntime,
+    ]);
 
     useEffect(() => {
         setSubjectImageJobs(readSubjectImageJobsStorage());
@@ -16867,6 +16983,91 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         applySnapshot(getSubjectBatchSnapshot());
         return subscribeSubjectBatchRuntime(applySnapshot);
     }, [applyAnalyzeBatchState, applyGenerateBatchState, applyReconstructBatchState, subjectBatchScopeKey]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'generate',
+            uiRunning: isBatchGeneratingEntities,
+            sessionRef: subjectBatchGenerateSessionRef,
+            activeJobsRef: subjectBatchGenerateActiveJobsRef,
+            jobKind: 'generate',
+            stopRequestedRef: subjectBatchGenerateStopRequestedRef,
+        });
+    }, [isBatchGeneratingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'analyze',
+            uiRunning: isBatchAnalyzingEntities,
+            sessionRef: subjectBatchAnalyzeSessionRef,
+            stopRequestedRef: subjectBatchAnalyzeStopRequestedRef,
+        });
+    }, [isBatchAnalyzingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'reconstruct',
+            uiRunning: isBatchReconstructingEntities,
+            sessionRef: subjectBatchReconstructSessionRef,
+            activeJobsRef: subjectBatchReconstructActiveJobsRef,
+            jobKind: 'reconstruct',
+            stopRequestedRef: subjectBatchReconstructStopRequestedRef,
+        });
+    }, [isBatchReconstructingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        const hasTopLevelBatchUi = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
+        if (!hasTopLevelBatchUi) return;
+
+        const timer = window.setInterval(() => {
+            const snapshot = getSubjectBatchSnapshot();
+            tryHealSubjectBatchRuntime({
+                task: 'generate',
+                uiRunning: isBatchGeneratingEntities,
+                sessionRef: subjectBatchGenerateSessionRef,
+                activeJobsRef: subjectBatchGenerateActiveJobsRef,
+                jobKind: 'generate',
+                stopRequestedRef: subjectBatchGenerateStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+
+            tryHealSubjectBatchRuntime({
+                task: 'analyze',
+                uiRunning: isBatchAnalyzingEntities,
+                sessionRef: subjectBatchAnalyzeSessionRef,
+                stopRequestedRef: subjectBatchAnalyzeStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+
+            tryHealSubjectBatchRuntime({
+                task: 'reconstruct',
+                uiRunning: isBatchReconstructingEntities,
+                sessionRef: subjectBatchReconstructSessionRef,
+                activeJobsRef: subjectBatchReconstructActiveJobsRef,
+                jobKind: 'reconstruct',
+                stopRequestedRef: subjectBatchReconstructStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+        }, SUBJECT_BATCH_WATCHDOG_INTERVAL_MS);
+
+        return () => {
+            window.clearInterval(timer);
+        };
+    }, [
+        getSubjectBatchSnapshot,
+        isBatchAnalyzingEntities,
+        isBatchGeneratingEntities,
+        isBatchReconstructingEntities,
+        SUBJECT_BATCH_RUNTIME_STALE_MS,
+        SUBJECT_BATCH_WATCHDOG_INTERVAL_MS,
+        tryHealSubjectBatchRuntime,
+    ]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
@@ -17666,6 +17867,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     
     // Open Image Modal
     const handleOpenImageModal = (entity, defaultTab = 'library') => {
+        if (defaultTab !== 'generate' && isSubjectImageActionLocked(entity)) {
+            notifySubjectImageActionLocked(entity);
+            return;
+        }
         setSelectedEntity(entity);
         setImageModalTab(defaultTab); // This might cause render before prompt is set?
         setImageSelectAction('direct_use');
@@ -17695,6 +17900,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         const currentDraft = String(promptDrafts?.[currentLang] || '').trim();
         setPrompt(currentDraft);
     }, [effectivePromptSubmitLang, imageModalTab, showImageModal, promptDrafts]);
+
+    useEffect(() => {
+        if (!showImageModal) return;
+        if (!selectedEntity?.id) return;
+        if (!isSubjectImageActionLocked(selectedEntity)) return;
+        if (imageModalTab === 'generate') return;
+        setImageModalTab('generate');
+    }, [imageModalTab, isSubjectImageActionLocked, selectedEntity, showImageModal]);
 
     // Load Assets
     const loadAssets = async () => {
@@ -18059,6 +18272,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
     const updateEntityImage = async (url, closeModal = true) => {
         if (!selectedEntity) return;
+        if (isSubjectImageActionLocked(selectedEntity)) {
+            notifySubjectImageActionLocked(selectedEntity);
+            return null;
+        }
         const targetUrl = String(url || '').trim();
         if (!targetUrl) return;
         try {
@@ -18077,6 +18294,40 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             return null;
         }
     };
+
+    const handleRemoveEntityImage = useCallback(async (entityOverride = null, options = {}) => {
+        const targetEntity = entityOverride || selectedEntity;
+        const stableEntityId = String(targetEntity?.id || '').trim();
+        if (!stableEntityId) return null;
+        if (isSubjectImageActionLocked(targetEntity)) {
+            notifySubjectImageActionLocked(targetEntity);
+            return null;
+        }
+
+        const currentImageUrl = String(targetEntity?.image_url || '').trim();
+        if (!currentImageUrl) return targetEntity;
+
+        const skipConfirm = Boolean(options?.skipConfirm);
+        if (!skipConfirm) {
+            const confirmed = await confirmUiMessage(
+                t('确认移除该主体当前图片关联？这不会删除素材文件，只会清空主体绑定。', 'Remove the current image association from this subject? The asset file will be kept; only the subject binding will be cleared.')
+            );
+            if (!confirmed) return null;
+        }
+
+        try {
+            await updateEntity(Number(stableEntityId), { image_url: null });
+            clearSubjectEntityImageLocally(stableEntityId);
+            showSubjectNotification(t('已移除主体图片关联', 'Subject image association removed'), 'warning');
+            onLog?.(t(`已移除主体图片关联：${targetEntity?.name || targetEntity?.name_en || stableEntityId}`, `Removed subject image association: ${targetEntity?.name || targetEntity?.name_en || stableEntityId}`), 'warning');
+            return { ...(targetEntity || {}), image_url: null };
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || t('未知错误', 'Unknown error');
+            showSubjectNotification(`${t('移除图片失败', 'Failed to remove image')}: ${detail}`, 'error');
+            return null;
+        }
+    }, [clearSubjectEntityImageLocally, confirmUiMessage, isSubjectImageActionLocked, onLog, selectedEntity, showSubjectNotification, t]);
 
     const handleBatchGenerateEntities = async () => {
         const MIN_BATCH_IMAGE_PROMPT_CHARS = 5;
@@ -18604,7 +18855,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     <span className="text-xs uppercase font-bold">{t('新建', 'New')} {subTab}</span>
                 </div>
                 
-                {entities.map(entity => (
+                {entities.map(entity => {
+                    const imageActionLocked = isSubjectImageActionLocked(entity);
+                    return (
                     <div 
                         key={entity.id} 
                         onClick={() => setViewingEntity(entity)}
@@ -18638,8 +18891,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
                             />
                         ) : (
-                            <div className="absolute inset-0 flex items-center justify-center bg-white/5">
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/5 px-4 text-center">
                                 <Users className="text-white/20" size={48} />
+                                <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/55">{t('未绑定图片', 'No Linked Image')}</div>
+                                <div className="text-[10px] text-white/35">{t('可重新选择或生成主体图', 'Select or generate a subject image')}</div>
                             </div>
                         )}
                         
@@ -18659,21 +18914,34 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                             )}
                             <button 
                                 onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'library'); }}
-                                className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md"
-                                title={t('更换图片（素材库/上传）', 'Change Image (Library/Upload)')}
+                                disabled={imageActionLocked}
+                                className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={imageActionLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片（素材库/上传）', 'Change Image (Library/Upload)')}
                             >
                                 <ImageIcon size={16} />
                             </button>
                             <button 
                                 onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'generate'); }}
-                                className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md"
+                                disabled={imageActionLocked}
+                                className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                 title={t('生成 AI 图片', 'Generate AI Image')}
                             >
                                 <Wand2 size={16} />
                             </button>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleRemoveEntityImage(entity);
+                                }}
+                                disabled={imageActionLocked || !entity.image_url}
+                                className="p-2 bg-amber-500/80 hover:bg-amber-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={imageActionLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                            >
+                                <Unlink size={16} />
+                            </button>
                             <button 
                                 onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(entity); }}
-                                disabled={isReconstructingEntity || !entity.image_url}
+                                disabled={isReconstructingEntity || imageActionLocked || !entity.image_url}
                                 className="p-2 bg-indigo-500/80 hover:bg-indigo-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                 title={t('现有资产重构（分析图片并重生成）', 'Refactor Existing Asset (analyze + regenerate)')}
                             >
@@ -18701,7 +18969,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                             <div className="text-[10px] text-white/60">{entity.description?.substring(0, 30)}...</div>
                         </div>
                     </div>
-                ))}
+                    );
+                })}
 
                 {entityListLoading && entities.length === 0 && Array.from({ length: 8 }).map((_, idx) => (
                     <div
@@ -18725,6 +18994,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             {/* Entity Detail Modal */}
             <AnimatePresence>
                 {viewingEntity && (
+                    (() => {
+                        const viewingEntityImageLocked = isSubjectImageActionLocked(viewingEntity);
+                        return (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-8" onClick={() => setViewingEntity(null)}>
                         <motion.div 
                             initial={{ opacity: 0, scale: 0.95 }}
@@ -18738,9 +19010,10 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 {viewingEntity.image_url ? (
                                     <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="max-w-full max-h-full object-contain" fallback={<div className="flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
                                 ) : (
-                                    <div className="flex flex-col items-center justify-center text-white/20">
+                                    <div className="flex flex-col items-center justify-center px-8 text-center text-white/20">
                                         <Users size={64} />
-                                        <span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span>
+                                        <span className="mt-4 text-sm font-bold uppercase tracking-[0.18em]">{t('图片已移除', 'Image Unlinked')}</span>
+                                        <span className="mt-2 text-xs text-white/45">{t('当前主体未绑定图片，可重新选择素材或直接生成新图。', 'This subject has no linked image. Select media again or generate a new one.')}</span>
                                     </div>
                                 )}
                                 
@@ -18748,10 +19021,22 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                     <div className="absolute top-4 left-4 flex gap-2">
                                          <button 
                                             onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'library'); }}
-                                            className="p-3 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-colors"
-                                                          title={t('更换图片', 'Change Image')}
+                                            disabled={viewingEntityImageLocked}
+                                            className="p-3 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                          title={viewingEntityImageLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片', 'Change Image')}
                                          >
                                              <ImageIcon size={20} />
+                                         </button>
+                                         <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                void handleRemoveEntityImage(viewingEntity);
+                                            }}
+                                            disabled={viewingEntityImageLocked || !viewingEntity.image_url}
+                                            className="p-3 bg-amber-500/80 hover:bg-amber-500 text-white rounded-full backdrop-blur-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg border border-white/10"
+                                                          title={viewingEntityImageLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                         >
+                                             <Unlink size={20} />
                                          </button>
                                          <button 
                                             onClick={(e) => { e.stopPropagation(); handleAnalyzeEntity(viewingEntity); }}
@@ -18763,7 +19048,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                          </button>
                                          <button 
                                             onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(viewingEntity); }}
-                                            disabled={isReconstructingEntity || isAnalyzingEntity || !viewingEntity.image_url}
+                                                          disabled={isReconstructingEntity || isAnalyzingEntity || viewingEntityImageLocked || !viewingEntity.image_url}
                                             className="p-3 bg-primary/90 hover:bg-primary text-black rounded-full backdrop-blur-md transition-colors disabled:opacity-50 shadow-lg border border-white/10"
                                                           title={t('现有资产重构（分析图片并按新提示词重新生成）', 'Refactor Existing Asset (analyze + regenerate with new prompt)')}
                                          >
@@ -19170,7 +19455,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                     </button>
                                     <button 
                                         onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'generate'); }}
-                                        className="px-4 py-2 bg-primary hover:bg-primary/90 text-black rounded-md text-sm font-bold transition-colors flex items-center gap-2"
+                                        disabled={viewingEntityImageLocked}
+                                        className="px-4 py-2 bg-primary hover:bg-primary/90 text-black rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
                                         <Wand2 size={16} /> Generate Image
                                     </button>
@@ -19178,12 +19464,18 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                             </div>
                         </motion.div>
                     </div>
+                        );
+                    })()
                 )}
             </AnimatePresence>
 
             {/* Image Selection Modal */}
             <AnimatePresence>
                 {showImageModal && (
+                    (() => {
+                        const selectedEntityImageLocked = isSubjectImageActionLocked(selectedEntity);
+                        const selectedEntityHasRunningImageJob = Boolean(selectedEntity?.id && getSubjectImageJobEntry(selectedEntity));
+                        return (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
                         <motion.div 
                             initial={{ opacity: 0, scale: 0.95 }}
@@ -19193,17 +19485,36 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         >
                             <div className="flex justify-between items-center p-4 border-b border-white/10 bg-black/20">
                                 <h3 className="font-bold text-lg">{t('为主体选择图片', 'Select Image for')} {selectedEntity?.name}</h3>
-                                <button onClick={() => setShowImageModal(false)} className="text-white/50 hover:text-white">
-                                    <X size={20} />
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleRemoveEntityImage(selectedEntity)}
+                                        disabled={selectedEntityImageLocked || !selectedEntity?.image_url}
+                                        className="inline-flex items-center gap-1 rounded border border-amber-400/25 bg-amber-500/10 px-2.5 py-1.5 text-xs font-bold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title={selectedEntityImageLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                    >
+                                        <Unlink size={14} />
+                                        {t('移除图片', 'Remove Image')}
+                                    </button>
+                                    <button onClick={() => setShowImageModal(false)} className="text-white/50 hover:text-white">
+                                        <X size={20} />
+                                    </button>
+                                </div>
                             </div>
+
+                            {selectedEntityImageLocked && (
+                                <div className="px-4 py-2 border-b border-amber-400/20 bg-amber-500/10 text-xs text-amber-100">
+                                    {t('当前主体图片任务运行中。更换、上传、移除和高级改图操作已暂时锁定；如需处理，请先停止任务。', 'A subject image job is currently running. Replace, upload, remove, and advanced image editing actions are temporarily locked; stop the job first if you need to modify the image.')}
+                                </div>
+                            )}
 
                             <div className="flex border-b border-white/10">
                                 {['library', 'upload', 'generate', 'advanced'].map(tab => (
                                     <button
                                         key={tab}
                                         onClick={() => setImageModalTab(tab)}
-                                        className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${imageModalTab === tab ? 'border-primary text-primary bg-primary/5' : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'}`}
+                                        disabled={selectedEntityImageLocked && tab !== 'generate'}
+                                        className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${imageModalTab === tab ? 'border-primary text-primary bg-primary/5' : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'}`}
                                     >
                                         {tab === 'library'
                                             ? t('素材库', 'Library')
@@ -19263,8 +19574,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                         {filteredAssets.map(asset => (
                                             <div 
                                                 key={asset.id} 
-                                                onClick={() => handleSelectAsset(asset)}
-                                                className="aspect-square bg-black/40 rounded-lg overflow-hidden border border-white/5 hover:border-primary/50 cursor-pointer group relative"
+                                                onClick={() => {
+                                                    if (selectedEntityImageLocked) {
+                                                        notifySubjectImageActionLocked(selectedEntity);
+                                                        return;
+                                                    }
+                                                    handleSelectAsset(asset);
+                                                }}
+                                                className={`aspect-square bg-black/40 rounded-lg overflow-hidden border border-white/5 group relative ${selectedEntityImageLocked ? 'cursor-not-allowed opacity-60' : 'hover:border-primary/50 cursor-pointer'}`}
                                             >
                                                 <AssetHoverMetaOverlay asset={asset} t={t} />
                                                 <img src={asset.url} alt="asset" className="w-full h-full object-cover" />
@@ -19293,7 +19610,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                 accept="image/*" 
                                                 onChange={handleUpload}
                                                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                                disabled={uploading} 
+                                                disabled={uploading || selectedEntityImageLocked} 
                                             />
                                             {uploading ? (
                                                 <RefreshCw className="animate-spin text-primary mb-2" size={32} />
@@ -19312,11 +19629,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                     type="text" 
                                                     placeholder={t('请输入图片链接（https://...）', 'Enter image URL (https://...)')} 
                                                     className="flex-1 bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:border-primary/50 outline-none"
+                                                    disabled={selectedEntityImageLocked}
                                                     onKeyDown={(e) => {
                                                         if (e.key === 'Enter') updateEntityImage(e.target.value);
                                                     }}
                                                 />
-                                                <button className="p-2 bg-white/10 hover:bg-white/20 rounded-md">
+                                                <button disabled={selectedEntityImageLocked} className="p-2 bg-white/10 hover:bg-white/20 rounded-md disabled:opacity-50 disabled:cursor-not-allowed">
                                                     <LinkIcon size={18} />
                                                 </button>
                                              </div>
@@ -19357,7 +19675,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
                                 {imageModalTab === 'generate' && (
                                     <div className="flex flex-col h-full">
-                                        {selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)] && (
+                                        {selectedEntityHasRunningImageJob && (
                                             <div className="mb-3 rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center justify-between gap-3">
                                                 <div className="flex items-center gap-2">
                                                     {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <RefreshCw className="animate-spin" size={12} />}
@@ -19581,7 +19899,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                         </div>
 
                                         <div className="flex justify-end items-center gap-2">
-                                            {selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)] && (
+                                            {selectedEntityHasRunningImageJob && (
                                                 <button
                                                     type="button"
                                                     onClick={handleForceStopSubjectImage}
@@ -19595,20 +19913,20 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                             )}
                                             <button 
                                                 onClick={handleGenerate}
-                                                disabled={generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)]) || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}
+                                                disabled={generating || selectedEntityHasRunningImageJob || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}
                                                 className="flex items-center space-x-2 bg-primary text-black px-6 py-2 rounded-lg font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                                             >
-                                                {generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)]) ? (
+                                                {generating || selectedEntityHasRunningImageJob ? (
                                                     <RefreshCw className="animate-spin" size={18} />
                                                 ) : (
                                                     <Wand2 size={18} />
                                                 )}
-                                                <span>{(generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)])) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}</span>
+                                                <span>{(generating || selectedEntityHasRunningImageJob) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}</span>
                                             </button>
                                             <div className="relative">
                                                 <button
                                                     onClick={() => setShowPromptLangMenu(prev => !prev)}
-                                                    disabled={generating}
+                                                    disabled={generating || selectedEntityHasRunningImageJob}
                                                     className="h-full px-2 py-2 rounded-lg border border-white/15 bg-black/30 text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50"
                                                     title={t('临时切换本次提交语种', 'Temporarily switch submit language for this generation')}
                                                 >
@@ -19653,6 +19971,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                             </div>
                         </motion.div>
                     </div>
+                        );
+                    })()
                 )}
             </AnimatePresence>
             
@@ -20852,6 +21172,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const currentVoiceGenerating = editingShot?.id
         ? !!voiceGeneratingByShot[String(editingShot.id)]
         : false;
+    const isShotFrameActionLocked = useCallback(
+        (frameType) => Boolean(currentGeneratingState?.[frameType === 'end' ? 'end' : 'start']),
+        [currentGeneratingState]
+    );
+    const notifyShotFrameActionLocked = useCallback(
+        (frameType) => {
+            showNotification(
+                frameType === 'end'
+                    ? t('结束帧任务运行中，暂时不能更换或删除图片。', 'End frame job is running; image replacement and removal are temporarily disabled.')
+                    : t('起始帧任务运行中，暂时不能更换或删除图片。', 'Start frame job is running; image replacement and removal are temporarily disabled.'),
+                'warning'
+            );
+        },
+        [showNotification, t]
+    );
     const hasActiveGeneration = useMemo(
         () => Object.values(generatingStateByShot || {}).some(s => !!(s?.start || s?.end || s?.video)),
         [generatingStateByShot]
@@ -26072,15 +26407,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                                 <button 
                                                     onClick={async () => {
+                                                        if (isShotFrameActionLocked('start')) {
+                                                            notifyShotFrameActionLocked('start');
+                                                            return;
+                                                        }
                                                         openMediaPicker(async (url) => {
                                                             const newData = { image_url: url };
                                                             setEditingShot(prev => ({...prev, ...newData}));
                                                             // Auto-save user selection to ensure it counts as "latest selected"
                                                             await onUpdateShot(editingShot.id, newData);
                                                             onLog?.('Start Frame Image set', 'success');
-                                                        }, { shotId: editingShot.id });
+                                                        }, { shotId: editingShot.id, shotFrameType: 'start' });
                                                     }}
-                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1"
+                                                    disabled={isShotFrameActionLocked('start')}
+                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                    title={isShotFrameActionLocked('start') ? t('起始帧任务运行中，不能更换图片', 'Start frame job is running; image changes are disabled') : t('设置起始帧图片', 'Set start frame image')}
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
                                                 </button>
@@ -26113,11 +26454,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                             </div>
                                         </div>
-                                        <div className="aspect-video bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center" onClick={() => openAssetDetailModal('start')}>
+                                        {currentGeneratingState.start && (
+                                            <div className="rounded-lg border border-amber-400/40 bg-amber-500/12 px-3 py-2 text-[11px] text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]">
+                                                <div className="flex items-center gap-2 font-bold uppercase tracking-[0.12em] text-amber-100">
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                    {t('起始帧生成中', 'Start Frame In Progress')}
+                                                </div>
+                                                <div className="mt-1 text-amber-50/75">
+                                                    {t('当前预览会在生成完成后自动刷新，替换与删除入口已锁定。', 'This preview will refresh automatically when generation completes. Replace and delete actions are locked.')}
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className={`aspect-video bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('start')}>
                                             {currentGeneratingState.start && (
-                                                <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
-                                                    <Loader2 className="w-6 h-6 animate-spin text-primary"/>
-                                                    <span className="text-[10px] text-white/70 animate-pulse">{t('正在生成图片...', 'Generating Image...')}</span>
+                                                <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
+                                                    <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
+                                                        <Loader2 className="w-7 h-7 animate-spin text-amber-200"/>
+                                                    </div>
+                                                    <div className="px-6 text-center">
+                                                        <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成起始帧', 'Generating Start Frame')}</div>
+                                                        <div className="mt-1 text-[11px] text-white/75">{t('生成完成后会自动更新这里的画面', 'The preview here will update automatically when generation completes')}</div>
+                                                    </div>
                                                 </div>
                                             )}
                                             {editingShot.image_url ? (
@@ -26134,14 +26491,19 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     <button 
                                                         onClick={async (e) => {
                                                             e.stopPropagation();
+                                                            if (isShotFrameActionLocked('start')) {
+                                                                notifyShotFrameActionLocked('start');
+                                                                return;
+                                                            }
                                                             if(!await confirmUiMessage("Delete Start Frame image?")) return;
                                                             const newData = { image_url: "" };
                                                             await onUpdateShot(editingShot.id, newData);
                                                             setEditingShot(prev => ({...prev, ...newData}));
                                                             onLog?.('Start Frame Image removed', 'info');
                                                         }}
-                                                        className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500/80 text-white rounded-md opacity-0 group-hover:opacity-100 transition-all z-20"
-                                                        title={t('删除起始帧', 'Delete Start Frame')}
+                                                        disabled={isShotFrameActionLocked('start')}
+                                                        className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500/80 text-white rounded-md opacity-0 group-hover:opacity-100 transition-all z-20 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        title={isShotFrameActionLocked('start') ? t('起始帧任务运行中，不能删除图片', 'Start frame job is running; image removal is disabled') : t('删除起始帧', 'Delete Start Frame')}
                                                     >
                                                         <Trash2 className="w-3 h-3"/>
                                                     </button>
@@ -26209,13 +26571,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     {t('详情', 'Detail')}
                                                 </button>
                                                 <button 
-                                                    onClick={() => openMediaPicker(async (url) => {
-                                                        const tech = JSON.parse(editingShot.technical_notes || '{}');
-                                                        tech.end_frame_url = url;
-                                                        const updates = { technical_notes: JSON.stringify(tech) };
-                                                        await persistEditingShotUpdates(updates);
-                                                    }, { shotId: editingShot.id })}
-                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1"
+                                                    onClick={() => {
+                                                        if (isShotFrameActionLocked('end')) {
+                                                            notifyShotFrameActionLocked('end');
+                                                            return;
+                                                        }
+                                                        openMediaPicker(async (url) => {
+                                                            const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                            tech.end_frame_url = url;
+                                                            const updates = { technical_notes: JSON.stringify(tech) };
+                                                            await persistEditingShotUpdates(updates);
+                                                        }, { shotId: editingShot.id, shotFrameType: 'end' });
+                                                    }}
+                                                    disabled={isShotFrameActionLocked('end')}
+                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                    title={isShotFrameActionLocked('end') ? t('结束帧任务运行中，不能更换图片', 'End frame job is running; image changes are disabled') : t('设置结束帧图片', 'Set end frame image')}
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
                                                 </button>
@@ -26247,11 +26617,27 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                 </button>
                                             </div>
                                         </div>
-                                        <div className="aspect-video bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center" onClick={() => openAssetDetailModal('end')}>
+                                        {currentGeneratingState.end && (
+                                            <div className="rounded-lg border border-amber-400/40 bg-amber-500/12 px-3 py-2 text-[11px] text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]">
+                                                <div className="flex items-center gap-2 font-bold uppercase tracking-[0.12em] text-amber-100">
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                    {t('结束帧生成中', 'End Frame In Progress')}
+                                                </div>
+                                                <div className="mt-1 text-amber-50/75">
+                                                    {t('当前预览会在生成完成后自动刷新，替换与删除入口已锁定。', 'This preview will refresh automatically when generation completes. Replace and delete actions are locked.')}
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className={`aspect-video bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('end')}>
                                             {currentGeneratingState.end && (
-                                                <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
-                                                    <Loader2 className="w-6 h-6 animate-spin text-primary"/>
-                                                    <span className="text-[10px] text-white/70 animate-pulse">{t('正在生成结束帧...', 'Generating End Frame...')}</span>
+                                                <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
+                                                    <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
+                                                        <Loader2 className="w-7 h-7 animate-spin text-amber-200"/>
+                                                    </div>
+                                                    <div className="px-6 text-center">
+                                                        <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成结束帧', 'Generating End Frame')}</div>
+                                                        <div className="mt-1 text-[11px] text-white/75">{t('生成完成后会自动更新这里的画面', 'The preview here will update automatically when generation completes')}</div>
+                                                    </div>
                                                 </div>
                                             )}
                                             {(() => {
@@ -26296,6 +26682,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                             <button 
                                                                 onClick={async (e) => {
                                                                     e.stopPropagation();
+                                                                    if (isShotFrameActionLocked('end')) {
+                                                                        notifyShotFrameActionLocked('end');
+                                                                        return;
+                                                                    }
                                                                     if(!await confirmUiMessage("Delete End Frame image?")) return;
                                                                     const tech = JSON.parse(editingShot.technical_notes || '{}');
                                                                     tech.end_frame_url = "";
@@ -26308,8 +26698,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     setEditingShot(prev => ({...prev, ...newData}));
                                                                     onLog?.('End Frame Image removed', 'info');
                                                                 }}
-                                                                className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500/80 text-white rounded-md opacity-0 group-hover:opacity-100 transition-all z-20"
-                                                                title={t('删除结束帧', 'Delete End Frame')}
+                                                                disabled={isShotFrameActionLocked('end')}
+                                                                className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500/80 text-white rounded-md opacity-0 group-hover:opacity-100 transition-all z-20 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                                title={isShotFrameActionLocked('end') ? t('结束帧任务运行中，不能删除图片', 'End frame job is running; image removal is disabled') : t('删除结束帧', 'Delete End Frame')}
                                                             >
                                                                 <Trash2 className="w-3 h-3"/>
                                                             </button>
@@ -27070,15 +27461,46 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     );
                                                 };
 
+                                                const renderFrameGeneratingNotice = (frameType) => {
+                                                    const stableType = frameType === 'end' ? 'end' : 'start';
+                                                    const isRunning = Boolean(currentGeneratingState?.[stableType]);
+                                                    if (!isRunning) return null;
+
+                                                    return (
+                                                        <div className="rounded-lg border border-amber-400/40 bg-amber-500/12 px-3 py-3 text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]">
+                                                            <div className="flex items-start gap-3">
+                                                                <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-amber-200" />
+                                                                <div className="min-w-0">
+                                                                    <div className="text-xs font-bold tracking-[0.12em] uppercase text-amber-100">
+                                                                        {stableType === 'end'
+                                                                            ? t('结束帧生成中', 'End Frame In Progress')
+                                                                            : t('起始帧生成中', 'Start Frame In Progress')}
+                                                                    </div>
+                                                                    <div className="mt-1 text-[11px] leading-5 text-amber-50/80">
+                                                                        {stableType === 'end'
+                                                                            ? t('当前已锁定结束帧替换、删除与手动回填入口，生成完成后会自动刷新这里的预览。', 'End frame replacement, deletion, and manual apply actions are locked until generation finishes. This preview will refresh automatically when the result is ready.')
+                                                                            : t('当前已锁定起始帧替换、删除与手动回填入口，生成完成后会自动刷新这里的预览。', 'Start frame replacement, deletion, and manual apply actions are locked until generation finishes. This preview will refresh automatically when the result is ready.')}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                };
+
                                                 if (modalType === 'start') {
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                             <div className="space-y-3">
-                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center relative">
+                                                                <div className={`h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex items-center justify-center relative transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`}>
                                                                     {currentGeneratingState.start && (
-                                                                        <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
-                                                                            <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                                                                            <span className="text-xs text-white/80">{t('正在生成起始帧...', 'Generating Start Frame...')}</span>
+                                                                        <div className="absolute inset-0 z-10 bg-black/68 flex items-center justify-center flex-col gap-3">
+                                                                            <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
+                                                                                <Loader2 className="w-7 h-7 animate-spin text-amber-200" />
+                                                                            </div>
+                                                                            <div className="text-center px-6">
+                                                                                <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成起始帧', 'Generating Start Frame')}</div>
+                                                                                <div className="mt-1 text-xs text-white/75">{t('生成完成后将自动刷新当前预览', 'This preview will refresh automatically when generation completes')}</div>
+                                                                            </div>
                                                                         </div>
                                                                     )}
                                                                     {editingShot.image_url ? <SafeImage src={editingShot.image_url} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
@@ -27090,6 +27512,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 {renderAssetMetaPanel(linkedAssetDetail, linkedAssetMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
+                                                                {renderFrameGeneratingNotice('start')}
                                                                 <div className="flex flex-wrap items-center gap-2">
                                                                     {renderDetailActionButton({
                                                                         label: t('生成起始帧', 'Generate Start Frame'),
@@ -27131,10 +27554,20 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                         }
                                                                         setEditingShot({...editingShot, start_frame: v});
                                                                     }} type="image" currentImage={editingShot.image_url} onImageUpdate={async (url) => {
+                                                                        if (isShotFrameActionLocked('start')) {
+                                                                            notifyShotFrameActionLocked('start');
+                                                                            return;
+                                                                        }
                                                                         const newData = { image_url: url };
                                                                         await onUpdateShot(editingShot.id, newData);
                                                                         setEditingShot(prev => ({...prev, ...newData}));
-                                                                    }} projectId={projectId} shotId={editingShot.id} assetType="start_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
+                                                                    }} projectId={projectId} shotId={editingShot.id} assetType="start_frame" featureInjector={injectEntityFeatures} onPickMedia={(cb) => {
+                                                                        if (isShotFrameActionLocked('start')) {
+                                                                            notifyShotFrameActionLocked('start');
+                                                                            return;
+                                                                        }
+                                                                        openMediaPicker(cb, { shotId: editingShot.id, shotFrameType: 'start' });
+                                                                    }} />
                                                                 </div>
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
@@ -27147,11 +27580,16 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                             <div className="space-y-3">
-                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center relative">
+                                                                <div className={`h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex items-center justify-center relative transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`}>
                                                                     {currentGeneratingState.end && (
-                                                                        <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
-                                                                            <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                                                                            <span className="text-xs text-white/80">{t('正在生成结束帧...', 'Generating End Frame...')}</span>
+                                                                        <div className="absolute inset-0 z-10 bg-black/68 flex items-center justify-center flex-col gap-3">
+                                                                            <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
+                                                                                <Loader2 className="w-7 h-7 animate-spin text-amber-200" />
+                                                                            </div>
+                                                                            <div className="text-center px-6">
+                                                                                <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成结束帧', 'Generating End Frame')}</div>
+                                                                                <div className="mt-1 text-xs text-white/75">{t('生成完成后将自动刷新当前预览', 'This preview will refresh automatically when generation completes')}</div>
+                                                                            </div>
                                                                         </div>
                                                                     )}
                                                                     {endFrameUrl ? <SafeImage src={endFrameUrl} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
@@ -27163,6 +27601,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                 {renderAssetMetaPanel(linkedAssetDetail, linkedAssetMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
+                                                                {renderFrameGeneratingNotice('end')}
                                                                 <div className="flex flex-wrap items-center gap-2">
                                                                     {renderDetailActionButton({
                                                                         label: t('生成结束帧', 'Generate End Frame'),
@@ -27211,11 +27650,21 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     }
                                                                     setEditingShot({...editingShot, end_frame: v});
                                                                 }} type="image" currentImage={endFrameUrl} onImageUpdate={async (url) => {
+                                                                    if (isShotFrameActionLocked('end')) {
+                                                                        notifyShotFrameActionLocked('end');
+                                                                        return;
+                                                                    }
                                                                     const nextTech = { ...tech, end_frame_url: url, video_gen_mode: 'start_end' };
                                                                     const newData = { technical_notes: JSON.stringify(nextTech) };
                                                                     await onUpdateShot(editingShot.id, newData);
                                                                     setEditingShot(prev => ({...prev, ...newData}));
-                                                                }} projectId={projectId} shotId={editingShot.id} assetType="end_frame" featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
+                                                                }} projectId={projectId} shotId={editingShot.id} assetType="end_frame" featureInjector={injectEntityFeatures} onPickMedia={(cb) => {
+                                                                    if (isShotFrameActionLocked('end')) {
+                                                                        notifyShotFrameActionLocked('end');
+                                                                        return;
+                                                                    }
+                                                                    openMediaPicker(cb, { shotId: editingShot.id, shotFrameType: 'end' });
+                                                                }} />
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={editingShot.end_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                             </div>

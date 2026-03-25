@@ -23346,7 +23346,7 @@ def get_generation_job_pool(
     cached_payload = _read_generation_job_pool_cache(cache_key)
     t_cache_ms = int((time.perf_counter() - t_cache_start) * 1000)
     if cached_payload is not None:
-        logger.info(
+        logger.debug(
             "jobs.pool.timing user_id=%s kind=%s running_only=%s limit=%s cache_hit=1 total_ms=%s cache_ms=%s mem_ms=%s proj_ms=%s owner_ms=%s ep_ms=%s finalize_ms=%s total=%s",
             getattr(current_user, "id", None),
             safe_kind,
@@ -23662,7 +23662,7 @@ def get_generation_job_pool(
 
     _write_generation_job_pool_cache(cache_key, response_payload)
 
-    logger.info(
+    logger.debug(
         "jobs.pool.timing user_id=%s kind=%s running_only=%s limit=%s cache_hit=0 total_ms=%s cache_ms=%s mem_ms=%s proj_ms=%s owner_ms=%s ep_ms=%s finalize_ms=%s total=%s",
         getattr(current_user, "id", None),
         safe_kind,
