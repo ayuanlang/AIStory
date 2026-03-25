@@ -20451,6 +20451,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const generatingStateByShotRef = useRef({});
     const shotLocalBatchSessionRef = useRef('');
     const shotLocalBatchStopRequestedRef = useRef(false);
+    const selectedSceneIdRef = useRef('all');
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [activeImageCapabilityProfile, setActiveImageCapabilityProfile] = useState(null);
     const [localKeyframes, setLocalKeyframes] = useState([]);
@@ -20582,6 +20583,26 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             // Ignore localStorage failures.
         }
     }, [getShotBatchRuntimeStorageKey]);
+
+    const syncLocalShotBatchRuntime = useCallback((running, progress, sceneIdOverride) => {
+        const episodeId = activeEpisode?.id;
+        if (!episodeId) return;
+        const stableSceneId = sceneIdOverride ?? selectedSceneIdRef.current;
+        const nextProgress = progress || createShotBatchProgressState();
+        saveShotBatchRuntime(episodeId, stableSceneId, running, nextProgress);
+        isBatchGeneratingRef.current = Boolean(running);
+        batchProgressRef.current = nextProgress;
+        setIsBatchGenerating(Boolean(running));
+        setBatchProgress(nextProgress);
+    }, [activeEpisode?.id, createShotBatchProgressState, saveShotBatchRuntime]);
+
+    const isPersistentLocalShotBatchStopRequested = useCallback((sceneIdOverride) => {
+        const episodeId = activeEpisode?.id;
+        if (!episodeId) return false;
+        const stableSceneId = sceneIdOverride ?? selectedSceneIdRef.current;
+        const restored = loadShotBatchRuntime(episodeId, stableSceneId);
+        return Boolean(restored?.progress?.stopRequested);
+    }, [activeEpisode?.id, loadShotBatchRuntime]);
 
     const extractEpisodeIdFromJobPoolItem = useCallback((item) => {
         const direct = Number(item?.episode_id || item?.episodeId || 0);
@@ -20781,6 +20802,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     useEffect(() => {
         editingShotRef.current = editingShot || null;
     }, [editingShot]);
+
+    useEffect(() => {
+        selectedSceneIdRef.current = String(selectedSceneId || 'all');
+    }, [selectedSceneId]);
 
     useEffect(() => {
         generatingStateByShotRef.current = generatingStateByShot || {};
@@ -21150,6 +21175,88 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         setShotGeneratingState(stableShotId, 'end', false);
     }, [clearPendingJointDiptychImageJob, setShotGeneratingState]);
 
+    const clearLocalShotBatchUiState = useCallback((sceneIdOverride) => {
+        const stableSceneId = String((sceneIdOverride ?? selectedSceneIdRef.current) || 'all').trim() || 'all';
+        const prev = readGenerationStateStorage();
+        const next = {};
+
+        Object.entries(prev || {}).forEach(([shotId, value]) => {
+            const stableShotId = String(shotId || '').trim();
+            const shotSceneId = String(resolveShotSceneId(stableShotId) || '').trim();
+            const matchesScene = stableSceneId === 'all' || (shotSceneId && shotSceneId === stableSceneId);
+            if (!matchesScene) {
+                next[stableShotId] = value;
+                return;
+            }
+
+            const keepVideo = Boolean(value?.video);
+            if (keepVideo) {
+                next[stableShotId] = {
+                    ...value,
+                    start: false,
+                    end: false,
+                    startAt: 0,
+                    endAt: 0,
+                };
+            }
+        });
+
+        writeGenerationStateStorage(next);
+        generatingStateByShotRef.current = next;
+        setGeneratingStateByShot(next);
+    }, [readGenerationStateStorage, resolveShotSceneId, writeGenerationStateStorage]);
+
+    const forceStopLocalShotBatchJobs = useCallback(async ({ sceneIdOverride, mode, reason }) => {
+        const stableEpisodeId = String(activeEpisode?.id || '').trim();
+        if (!stableEpisodeId) return 0;
+        const stableSceneId = String((sceneIdOverride ?? selectedSceneIdRef.current) || 'all').trim() || 'all';
+        const stableMode = String(mode || '').trim();
+        const allImageJobs = readImageJobStateStorage();
+        const handledKeys = new Set();
+        let stoppedCount = 0;
+
+        const entries = Object.entries(allImageJobs || {});
+        for (const [key, payload] of entries) {
+            if (!payload || typeof payload !== 'object') continue;
+            if (handledKeys.has(key)) continue;
+
+            const ownerScopeId = String(payload?.ownerScopeId || '').trim();
+            const ownerSceneId = String(payload?.ownerSceneId || '').trim();
+            const stableShotId = String(payload?.shotId || payload?.ownerShotId || '').trim();
+            const payloadMode = payload?.mode === 'joint_diptych' ? 'joint_diptych' : 'single';
+            const matchesEpisode = ownerScopeId === stableEpisodeId;
+            const matchesScene = stableSceneId === 'all' || (ownerSceneId && ownerSceneId === stableSceneId) || (stableShotId && String(resolveShotSceneId(stableShotId) || '').trim() === stableSceneId);
+            const matchesMode = stableMode === 'joint-diptych-local' ? payloadMode === 'joint_diptych' : payloadMode === 'single';
+
+            if (!matchesEpisode || !matchesScene || !matchesMode || !stableShotId) continue;
+
+            if (payloadMode === 'joint_diptych') {
+                handledKeys.add(`${stableShotId}:start`);
+                handledKeys.add(`${stableShotId}:end`);
+                await forceClearShotImageJob({
+                    shotId: stableShotId,
+                    kind: 'start',
+                    payload,
+                    reason,
+                });
+                stoppedCount += 1;
+                continue;
+            }
+
+            handledKeys.add(key);
+            await forceClearShotImageJob({
+                shotId: stableShotId,
+                kind: payload?.kind === 'end' ? 'end' : 'start',
+                payload,
+                reason,
+            });
+            stoppedCount += 1;
+        }
+
+        clearLocalShotBatchUiState(stableSceneId);
+        return stoppedCount;
+    }, [activeEpisode?.id, clearLocalShotBatchUiState, forceClearShotImageJob, readImageJobStateStorage, resolveShotSceneId]);
+
     const releaseShotImageUiByJobId = useCallback((jobId) => {
         const stableJobId = String(jobId || '').trim();
         if (!stableJobId) return;
@@ -21416,26 +21523,52 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return;
         }
         if (restored.running && isLocalShotBatchMode(restored.progress?.mode)) {
-            const restoredMode = String(restored.progress?.mode || '');
-            setIsBatchGenerating(false);
-            setBatchProgress({
-                ...(restored.progress || createShotBatchProgressState()),
-                mode: restoredMode,
-                stopRequested: true,
-                status: restoredMode === 'joint-diptych-local'
-                    ? t('上一次本地首尾联生批量任务已中断，请重新执行。', 'The previous local joint diptych batch was interrupted. Please run it again.')
-                    : t('上一次本地关键帧批量任务已中断，请重新执行。', 'The previous local keyframe batch was interrupted. Please run it again.'),
-            });
+            setIsBatchGenerating(true);
+            setBatchProgress(restored.progress || createShotBatchProgressState());
             return;
         }
         setIsBatchGenerating(Boolean(restored.running));
         setBatchProgress(restored.progress || createShotBatchProgressState());
-    }, [activeEpisode?.id, selectedSceneId, loadShotBatchRuntime, createShotBatchProgressState, isLocalShotBatchMode, t]);
+    }, [activeEpisode?.id, selectedSceneId, loadShotBatchRuntime, createShotBatchProgressState, isLocalShotBatchMode]);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
         saveShotBatchRuntime(activeEpisode.id, selectedSceneId, isBatchGenerating, batchProgress);
     }, [activeEpisode?.id, selectedSceneId, isBatchGenerating, batchProgress, saveShotBatchRuntime]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return undefined;
+        const mode = String(batchProgress?.mode || '');
+        const isDetachedLocalBatch = isLocalShotBatchMode(mode) && Boolean(isBatchGenerating) && !shotLocalBatchSessionRef.current;
+        if (!isDetachedLocalBatch) return undefined;
+
+        const syncDetachedState = () => {
+            const restored = loadShotBatchRuntime(activeEpisode.id, selectedSceneId);
+            if (restored) {
+                const nextRunning = Boolean(restored.running);
+                const nextProgress = restored.progress || createShotBatchProgressState();
+                isBatchGeneratingRef.current = nextRunning;
+                batchProgressRef.current = nextProgress;
+                setIsBatchGenerating(nextRunning);
+                setBatchProgress((prev) => {
+                    const prevSerialized = JSON.stringify(prev || {});
+                    const nextSerialized = JSON.stringify(nextProgress || {});
+                    return prevSerialized === nextSerialized ? prev : nextProgress;
+                });
+            }
+
+            const storedGeneratingState = readGenerationStateStorage();
+            setGeneratingStateByShot((prev) => {
+                const prevSerialized = JSON.stringify(prev || {});
+                const nextSerialized = JSON.stringify(storedGeneratingState || {});
+                return prevSerialized === nextSerialized ? prev : storedGeneratingState;
+            });
+        };
+
+        syncDetachedState();
+        const intervalId = window.setInterval(syncDetachedState, 1000);
+        return () => window.clearInterval(intervalId);
+    }, [activeEpisode?.id, batchProgress?.mode, createShotBatchProgressState, isBatchGenerating, isLocalShotBatchMode, loadShotBatchRuntime, readGenerationStateStorage, selectedSceneId]);
 
     useEffect(() => {
         isBatchGeneratingRef.current = Boolean(isBatchGenerating);
@@ -26025,8 +26158,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             clearInterval(shotBatchStatusTimerRef.current);
             shotBatchStatusTimerRef.current = null;
         }
-        setIsBatchGenerating(true);
-        setBatchProgress({
+        syncLocalShotBatchRuntime(true, {
             current: 0,
             total: targetShots.length,
             status: t('关键帧批量任务准备中...', 'Preparing keyframe batch...'),
@@ -26054,6 +26186,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const shouldStopShotBatch = () => (
                 shotLocalBatchSessionRef.current !== batchSessionId
                 || shotLocalBatchStopRequestedRef.current
+                || isPersistentLocalShotBatchStopRequested(selectedSceneIdRef.current)
             );
             const workerLimit = Math.max(1, SHOT_BATCH_PARALLEL_LIMIT);
             const activeTasks = new Map();
@@ -26064,7 +26197,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     .map(({ shot }) => shot?.shot_id || shot?.shot_name || shot?.id)
                     .filter(Boolean)
                     .join(', ');
-                setBatchProgress({
+                syncLocalShotBatchRuntime(true, {
                     current: completed,
                     total: targetShots.length,
                     status: t(`处理中：${activeLabels}`, `Processing: ${activeLabels}`),
@@ -26136,7 +26269,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     );
                 }
 
-                setBatchProgress({
+                syncLocalShotBatchRuntime(true, {
                     current: completed,
                     total: targetShots.length,
                     status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
@@ -26150,7 +26283,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             if (shotLocalBatchSessionRef.current !== batchSessionId || shotLocalBatchStopRequestedRef.current) {
                 onLog?.(t(`关键帧批量任务已停止：成功 ${success}，失败 ${failed}`, `Keyframe batch stopped: ${success} succeeded, ${failed} failed`), 'warning');
-                setBatchProgress({
+                syncLocalShotBatchRuntime(false, {
                     current: completed,
                     total: targetShots.length,
                     status: t(`关键帧批量已停止：成功 ${success}，失败 ${failed}`, `Keyframe batch stopped: ${success} succeeded, ${failed} failed`),
@@ -26163,7 +26296,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             }
 
             onLog?.(t(`关键帧批量完成：成功 ${success}，失败 ${failed}`, `Keyframe batch complete: ${success} succeeded, ${failed} failed`), failed > 0 ? 'warning' : 'success');
-            setBatchProgress({
+            syncLocalShotBatchRuntime(false, {
                 current: completed,
                 total: targetShots.length,
                 status: t(`关键帧批量完成：成功 ${success}，失败 ${failed}`, `Keyframe batch complete: ${success} succeeded, ${failed} failed`),
@@ -26179,11 +26312,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 clearInterval(shotBatchStatusTimerRef.current);
                 shotBatchStatusTimerRef.current = null;
             }
-            setIsBatchGenerating(false);
             refreshShots();
             refreshShotAssetsMeta();
         }
-    }, [SHOT_BATCH_PARALLEL_LIMIT, activeEpisode?.episode_info, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotKeyframesBatchItem, getShotEndFrameUrl, isStartFrameInheritPrompt, onLog, refreshShotAssetsMeta, refreshShots, shots, t]);
+    }, [SHOT_BATCH_PARALLEL_LIMIT, activeEpisode?.episode_info, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotKeyframesBatchItem, getShotEndFrameUrl, isPersistentLocalShotBatchStopRequested, isStartFrameInheritPrompt, onLog, refreshShotAssetsMeta, refreshShots, shots, syncLocalShotBatchRuntime, t]);
 
     const runLocalJointDiptychBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
@@ -26216,8 +26348,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             clearInterval(shotBatchStatusTimerRef.current);
             shotBatchStatusTimerRef.current = null;
         }
-        setIsBatchGenerating(true);
-        setBatchProgress({
+        syncLocalShotBatchRuntime(true, {
             current: 0,
             total: targetShots.length,
             status: t('首尾联生批量任务准备中...', 'Preparing joint diptych batch...'),
@@ -26237,6 +26368,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const shouldStopShotBatch = () => (
                 shotLocalBatchSessionRef.current !== batchSessionId
                 || shotLocalBatchStopRequestedRef.current
+                || isPersistentLocalShotBatchStopRequested(selectedSceneIdRef.current)
             );
             const workerLimit = Math.max(1, SHOT_BATCH_PARALLEL_LIMIT);
             const activeTasks = new Map();
@@ -26247,7 +26379,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     .map(({ shot }) => shot?.shot_id || shot?.shot_name || shot?.id)
                     .filter(Boolean)
                     .join(', ');
-                setBatchProgress({
+                syncLocalShotBatchRuntime(true, {
                     current: completed,
                     total: targetShots.length,
                     status: t(`处理中：${activeLabels}`, `Processing: ${activeLabels}`),
@@ -26306,7 +26438,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     );
                 }
 
-                setBatchProgress({
+                syncLocalShotBatchRuntime(true, {
                     current: completed,
                     total: targetShots.length,
                     status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
@@ -26320,7 +26452,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             if (shotLocalBatchSessionRef.current !== batchSessionId || shotLocalBatchStopRequestedRef.current) {
                 onLog?.(t(`首尾联生批量任务已停止：成功 ${success}，失败 ${failed}`, `Joint diptych batch stopped: ${success} succeeded, ${failed} failed`), 'warning');
-                setBatchProgress({
+                syncLocalShotBatchRuntime(false, {
                     current: completed,
                     total: targetShots.length,
                     status: t(`首尾联生批量已停止：成功 ${success}，失败 ${failed}`, `Joint diptych batch stopped: ${success} succeeded, ${failed} failed`),
@@ -26333,7 +26465,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             }
 
             onLog?.(t(`首尾联生批量完成：成功 ${success}，失败 ${failed}`, `Joint diptych batch complete: ${success} succeeded, ${failed} failed`), failed > 0 ? 'warning' : 'success');
-            setBatchProgress({
+            syncLocalShotBatchRuntime(false, {
                 current: completed,
                 total: targetShots.length,
                 status: t(`首尾联生批量完成：成功 ${success}，失败 ${failed}`, `Joint diptych batch complete: ${success} succeeded, ${failed} failed`),
@@ -26349,11 +26481,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 clearInterval(shotBatchStatusTimerRef.current);
                 shotBatchStatusTimerRef.current = null;
             }
-            setIsBatchGenerating(false);
             refreshShots();
             refreshShotAssetsMeta();
         }
-    }, [SHOT_BATCH_PARALLEL_LIMIT, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotDiptychBatchItem, getShotEndFrameUrl, onLog, refreshShotAssetsMeta, refreshShots, shots, t]);
+    }, [SHOT_BATCH_PARALLEL_LIMIT, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotDiptychBatchItem, getShotEndFrameUrl, isPersistentLocalShotBatchStopRequested, onLog, refreshShotAssetsMeta, refreshShots, shots, syncLocalShotBatchRuntime, t]);
 
     const pollShotBatchStatus = useCallback(async () => {
         if (!activeEpisode?.id) return null;
@@ -26467,19 +26598,30 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         if (!activeEpisode?.id) return;
         setIsStoppingShotBatch(true);
         try {
-            if (shotLocalBatchSessionRef.current && isLocalShotBatchMode(batchProgressRef.current?.mode)) {
+            if (isLocalShotBatchMode(batchProgressRef.current?.mode)) {
                 const localMode = String(batchProgressRef.current?.mode || 'keyframes-local');
                 const stopMessage = localMode === 'joint-diptych-local'
                     ? t('已请求停止当前首尾联生批量任务。', 'Stop requested for current joint diptych batch.')
                     : t('已请求停止当前关键帧批量任务。', 'Stop requested for current keyframe batch.');
                 shotLocalBatchStopRequestedRef.current = true;
-                setBatchProgress((prev) => ({
-                    ...prev,
+                const nextProgress = {
+                    ...(batchProgressRef.current || createShotBatchProgressState()),
                     stopRequested: true,
-                    status: prev.status || stopMessage,
+                    status: stopMessage,
                     mode: localMode,
-                }));
-                onLog?.(stopMessage, 'warning');
+                };
+                syncLocalShotBatchRuntime(false, nextProgress);
+                const stoppedJobCount = await forceStopLocalShotBatchJobs({
+                    sceneIdOverride: selectedSceneId,
+                    mode: localMode,
+                    reason: stopMessage,
+                });
+                onLog?.(
+                    stoppedJobCount > 0
+                        ? t(`已停止本地批量，并强制结束 ${stoppedJobCount} 个图片任务。`, `Stopped local batch and force-stopped ${stoppedJobCount} image jobs.`)
+                        : t('已停止本地批量，并清除运行中的界面状态。', 'Stopped local batch and cleared running UI state.'),
+                    'warning'
+                );
                 return;
             }
 
