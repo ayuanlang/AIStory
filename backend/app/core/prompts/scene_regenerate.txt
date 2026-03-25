@@ -186,9 +186,14 @@ You MUST use all of them together.
 ### 一、语言与命名规则
 - 自然语言默认跟随剧本原始语言；但若 `Project Context` 中明确给出 `Language`，则该项目语言为最高优先级，必须覆盖剧本文本原始语言。
 - 仅固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移。
+- 固定双语输出字段契约（Mandatory）：`generation_prompt_cn`、`appearance_cn`、`description_cn` 等带 `_cn` 的字段始终必须输出中文；`generation_prompt_en`、`negative_prompt_en`、`name_en` 等带 `_en` 的字段始终必须输出英文；`anchor_description` 始终必须输出英文短语。以上字段语言契约不受项目语言影响。
+- 字段语言与画面内语言区分（Mandatory）：`Project Context.Language` 影响的是设计语境、命名语境与画面中实际会被看见/听见的语言内容，不改变字段本身的中英文职责。即使项目语言为英文，`generation_prompt_cn` 仍必须用中文；即使项目语言为中文，`generation_prompt_en` 仍必须用英文。
 - 每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
 - 当 `Project Context` 明确指定目标语言时，剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、口号、书信/消息内容、以及任何“角色正在说某种语言/切换语言”的语言事件，都必须转换并改写为目标语言后再写入结果；若 `Project Context` 未指定 `Language`，则上述语言性内容默认保持剧本原始语言。禁止无依据地统一改成英文。
 - 在所有图片/视频相关提示词与分析字段中，只要涉及实际会被看见或听见的语言内容，包括对白、旁白、OS/V.O.、字幕、屏幕文字、UI 文案、招牌、海报、书信、短信、按钮文案、门牌、涂鸦、广播词等，必须使用“项目目标语言；若未指定则使用剧本原始语言”来填写。禁止为了维持 `generation_prompt_en` 或其它英文描述字段而把这些实际语言内容生硬改写成英文占位句。
+- 项目语言驱动的视觉设计语境（Mandatory）：`Project Context.Language` 不仅约束文字输出语言，也约束角色、道具、环境的默认视觉设计语境。若剧本未明确给出人物族裔/地域、道具产地/品牌体系、建筑地域/城市语境、标识系统或生活方式线索，则必须优先按项目语言对应的常识性现实语境补全设计基线。
+- 英文项目默认设计基线（Mandatory）：当项目语言为英文，且剧本没有明确给出相反证据时，角色默认按英语语境下的英美人物与生活系统进行设计基线补全；道具、服装剪裁、室内陈设、街道标识、办公/家居环境、印刷物与 UI 语言也应默认匹配英美语境。禁止在无剧本依据时，把英文项目默认设计成中文语境人物、中国式生活道具或空间。
+- 中文及其他项目语言设计对齐（Mandatory）：当项目语言为中文或其他明确语言时，同样必须让角色外观基线、服装组织方式、道具系统、环境构造、招牌文字与日常生活细节优先匹配该语言对应的现实语境；除非剧本已明确指定跨文化/跨地域设定，否则不得混入无依据的异语种生活系统。
 - 名称一旦定稿，下游逐字符继承，禁止任何自动改写。
 - Character/Prop/Environment 的命名权威在当前任务中同样冻结，禁止别名/翻译漂移。
 - `name/name_en` 定稿后下游仅可引用，禁止新增或改写。
@@ -240,9 +245,14 @@ You MUST use all of them together.
 - 角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
 - 不得使用会裁切鞋子的构图（如 waist-up / bust shot / knee crop）作为角色资产主图；若需近景，仅可作为附加 panel，且必须保留至少一个全身含鞋 panel。
 - 若角色提示词未明确“full body + shoes visible”，或输出画面描述存在脚部/鞋子被遮挡、出框、裁切，判定无效并必须重写。
+- 角色四视图版式对齐规则（Mandatory）：凡当前任务需要输出角色四视图/四宫格设定图时，必须与 `scene_analysis.txt` 保持同一版式约束：第一宫为左侧居中特写大宫格，约占总宽度 40%，头部约占该宫高度 78% 到 88%；右侧剩余约 60% 宽度均分为正面全身、侧面全身、反面全身三宫，人物高度约占各自宫格高度 84% 到 89%；四宫必须零留白、零可见分隔线、零拼贴缝，后三宫完整全身且鞋子清晰可见。
+- 主角色身高与头身比硬规则（Mandatory）：所有有姓名且承担主要叙事功能的成年角色，`appearance_cn`、`description_cn`、`generation_prompt_cn/en` 必须显式写出身高与头身比，不得仅写“高挑”“比例好”等抽象描述；若剧本无相反证据，默认写成高挑修长、约 1:9 头身的主角色比例。
+- 发型与肤色落地规则（Mandatory）：发型必须写到可被镜头稳定识别的结构层，例如分线方式、刘海形态、发长区间、卷直关系、厚薄蓬贴、束发方式、鬓角和发尾轮廓；肤色必须写到可拍的真实区间与质感层，例如冷白、暖白、白皙、偏白净、浅蜜色、健康麦色，并与年龄、职业、日晒程度和项目语境一致。
 - `anchor_description` 与角色身份锚点是不可变更锚点；下游仅允许逐字符继承，不得重写、扩写、弱化、替换同义词或做风格化改写。
 - 视觉舒适度硬规则（Mandatory）：角色 `generation_prompt_cn/en`、`description`、`appearance` 与相关说明默认必须保持克制、可播出、非图形化表达。尽量不要出现血腥、喷溅、开放性伤口、暴露组织、腐烂、残缺、体液污渍等强视觉不适内容；若剧情确实要求人物状态变化，优先使用“疲惫、凌乱、淋湿、沾灰、轻微擦痕、衣物破损但不露创口”等温和且可识别的写法。
 - 锚点内容白名单（Mandatory）：`anchor_description` 只允许写稳定身份锚点，例如脸型、发型轮廓、体态、服装版型、配色、饰品、鞋履、非图形化小痕迹；不得把受伤细节、血迹位置、瘀伤扩散、创口形态、残缺状态等写成锚点。
+- 锚点精简与检索清晰度规则（Mandatory）：`anchor_description` 必须精简为少量高密度英文短语，通常控制在 3 到 5 个锚点内；第一个锚点通常应写基本角色定位，如 `female teacher`、`male chef`、`female investigative reporter`，后续再补最稳定且最有区分度的相貌、轮廓与服饰细节。
+- 同类服饰避让规则（Mandatory）：若当前 Scene 或同组对戏角色中多人可能穿同类服饰，例如西装、制服、校服、白大褂、工装等，则 `anchor_description` 不得把 `black suit`、`standard uniform` 这类泛化服装词作为核心锚点；必须优先改用脸型、发型轮廓、体态、肩颈线、固定配件、鞋型、穿着方式或局部剪裁特征等更能区分个体的描点。
 - 若美化/风格化与锚点冲突，必须以锚点优先；宁可降低风格化程度，也不得改变锚点。
 - 未给定风格时注入默认角色审美回退语义。
 - 真人剧角色必须显式强调真人感关键词。
@@ -273,13 +283,19 @@ You MUST use all of them together.
 - 每个环境必须明确当前画面主体（Primary Subject）与次级支撑主体（Secondary Subject），并与景别/机位保持一致。
 - Environment 的 `Primary Subject`/`Secondary Subject` 与 `Viewpoint Anchor` 必须使用固定显目物体或结构锚点，禁止使用任何人物/人体部位作为锚点。
 - 同地不同观察方向（如门内看外/门外看内、正打/反打背景差异大）必须拆分独立 Environment，并以 `visual_dependencies` 关联。
+- 触发拆分条件（Mandatory）：当满足以下任一条件时，必须视为需要独立 Environment 变体而不是在同一环境中含糊描述：轴线反转（跨 180°）、观察方向切换、背景主物体集合变化、主光方向变化、景别/镜高引发背景结构重组。
 - Environment Name 模板：`{Venue}_{DirectionTag}_{ShotScale}_{LightingTag可选}`。
 - `DirectionTag` 主用 `Front/Reverse`；可扩展 `SideLeft/SideRight`。
 - 当前任务若输出新 environment，其名称必须与当前场景补丁中的 `Environment Name` 逐字符一致。
 - 若该 environment 实际依赖已有 Base 环境，则必须在 `visual_dependencies` 与 `dependency_strategy` 中建立可追溯依赖链，而不是把 Base 环境重新生成为新实体。
+- 环境变体具体化规则（Mandatory）：生成 `Front/Reverse/SideLeft/SideRight` 或其他观察方向变体时，禁止只写“反向视角”“另一侧版本”“same environment with changes”之类空泛说明；必须明确 `Viewpoint Anchor/Viewing Direction`、`Visible Set`、`Excluded Set`、`Primary Subject/Secondary Subject` 与 `FG/MG/BG` 中实际出现的物体。
+- 方向切换专门环境实体硬规则（Mandatory）：凡涉及门内/门外、窗内/窗外、桌前/桌后、柜台内/柜台外、台前/台后等观察方向切换，必须新建专门环境实体承接该方向版本，并写明 `Environment Relation=VARIANT_OF:<BaseEnv>`、`Base Environment Reference=<BaseEnv>`、`visual_dependencies=[ENV:[BaseEnv]]` 与继承说明；不得只在原环境 prose 里追加一句“反向看”。
+- 正反打层级重排硬规则（Mandatory）：当 Base 里的前景/中景主体在反向镜头中后移为当前背景时，必须显式写出 `Depth Role Reassignment`，例如 `Base FG/MG:[A,B] -> Current BG:[...]`、`Base BG:[...] -> Current MG/FG:[...]`，并同步说明新的主锚点。
 - `Background Set Change / Dynamic Parts State / FG/MG/BG` 或正文 prose 涉及状态差异时，必须写到“具体实体 + 可见变化 + 位置/层级”这一粒度；禁止只写 `damaged version`、`messier room`、`worse condition`、`aged state`、`burned feel`、`ruined atmosphere`。
+- 环境状态细节落点规则（Mandatory）：描述环境状态变化时，禁止只写“更乱了”“更旧了”“破败感增强”“状态恶化”等抽象结果词；必须写清是哪些实体发生了什么可见变化，例如墙面剥落位置、翻倒的椅子、灯罩凹痕、地砖裂缝或窗框积灰等。
 - `Dynamic Parts State` 非 `None` 时必须写 `Before -> After + trigger`，且仅允许非角色、非叙事触发因素。
 - Environment 必须保障动作与机位可达：有进出路径、可站位区、机位移动走廊、无遮挡视线；非剧情刚需避免随机障碍。
+- 界面与通道可执行规则（Mandatory）：若场景涉及穿门、出洞、探窗、绕到桌后、跨过柜台、从走廊入室或台上台下切换等动作，环境提示词必须预埋可执行通道、净空、落脚区、转身区与无遮挡视线，确保动作在空间上真实可达。
 - 必须显式说明门/窗/灯/屏幕等当前状态（Open/Closed/On/Off）。
 - 极简主义硬规则（Mandatory）：Environment 提示词必须优先采用叙事必要最小集原则；凡对剧情推进、角色调度、镜头动线不必要的物件，默认不进入 `FG/MG` 的故事发展区域。
 - 故事区去冗余（Mandatory）：`FG/MG` 仅保留剧情刚需锚点与可调度结构；非必要装饰物应移至 `BG` 弱化呈现或直接排除到 `Excluded Set`。
@@ -292,6 +308,7 @@ You MUST use all of them together.
 - Environment 提示词最低维度槽位：`Viewpoint Anchor`、`Viewing Direction`、`FG/MG/BG`、`Primary Subject`、`Secondary Subject`、空间可达/调度可行性、去人物化约束必须齐全；任一缺失即该 environment 条目无效。
 - Character 提示词最低维度槽位：`full body + shoes visible`、固定观察机位、视角序列、光照结构、镜头基线、服装一致性、稳定锚点、`negative_prompt_en` 必须齐全；任一缺失即该 character 条目无效。
 - Prop 提示词最低维度槽位：固定观察机位、结构视角序列、材质锚点、镜头/微距基线、光照结构、状态单一性、`negative_prompt_en` 必须齐全；任一缺失即该 prop 条目无效。
+- 光学写法闭环（Mandatory）：任何 character/prop/environment 提示词若声明了机位、观察高度、景别、视角顺序、主辅光结构、画幅比例或面板版式，就必须形成自洽闭环，不得前后矛盾，也不得一边要求 full body 一边再写 waist-up/knee crop 等冲突构图。
 - 禁止带病流转（No Partial Pass-Through, 强制）：若任一条目未通过维度检查，不得输出部分结果，也不得把问题留给下游；必须先重写后再执行同一轮检查。
 - 重写机制（Rewrite Protocol, 强制）：发现维度缺口时，必须按缺口范围重写，而不是在原条目尾部机械补短语。
 - 实体级重写：若问题是漏抽/漏落点/漏映射，必须重写该场景的实体抽取、场景补丁映射和对应 `SUBJECTS_JSON` 条目，直到三者闭环一致。

@@ -5,7 +5,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink } from 'lucide-react';
+import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -6578,6 +6578,42 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
     };
 
+    const maybeAlertIncompleteSubjectsImport = useCallback((analysisResult, analyzedText = '') => {
+        const warningCodes = [
+            ...(Array.isArray(analysisResult?.warning_codes) ? analysisResult.warning_codes : []),
+            ...(Array.isArray(analysisResult?.meta?.integrity?.warning_codes) ? analysisResult.meta.integrity.warning_codes : []),
+        ].map((code) => String(code || '').trim().toUpperCase()).filter(Boolean);
+
+        const relevantCodes = warningCodes.filter((code) => (
+            code === 'ANALYSIS_JSON_INVALID'
+            || code === 'ANALYSIS_SUBJECTS_UNVERIFIED'
+            || code === 'ANALYSIS_SUBJECTS_INCOMPLETE'
+        ));
+
+        const report = buildSubjectConsistencyReport(analyzedText || '');
+        const reasonLines = [
+            ...relevantCodes.map((code) => localizeAnalysisWarningCode(code)).filter(Boolean),
+            ...(report?.ok ? [] : [String(report?.message || '').trim()]),
+        ];
+        const uniqueReasons = [...new Set(reasonLines.map((line) => String(line || '').trim()).filter(Boolean))];
+
+        if (uniqueReasons.length === 0) return;
+
+        const alertMessage = [
+            t(
+                '本次场景分析返回的 subjects JSON 可能不完整。系统已继续导入可解析内容，请立即人工复核。',
+                'The subjects JSON returned by this scene analysis may be incomplete. The system imported the parseable content, but manual review is required.'
+            ),
+            ...uniqueReasons.map((line) => `- ${line}`),
+        ].join('\n');
+
+        if (lastSubjectsImportIncompleteAlertRef.current === alertMessage) return;
+
+        lastSubjectsImportIncompleteAlertRef.current = alertMessage;
+        if (onLog) onLog(`Subjects import warning:\n${alertMessage}`, 'warning');
+        alert(alertMessage);
+    }, [buildSubjectConsistencyReport, localizeAnalysisWarningCode, onLog, t]);
+
     const handleImportEntities = async () => {
         const payload = getAnalysisEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
         if (!payload) {
@@ -7716,6 +7752,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const analysisResumeInFlightRef = useRef(false);
     const analysisStopRequestedRef = useRef(false);
     const analysisRunInFlightRef = useRef(false);
+    const lastSubjectsImportIncompleteAlertRef = useRef('');
 
     const isTaskCanceledError = useCallback((error) => {
         if (!error) return false;
@@ -7987,6 +8024,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             } finally {
                 phaseMarks.importFinishedAt = Date.now();
             }
+            maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             phaseMarks.persistStartedAt = Date.now();
@@ -9281,6 +9319,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             } finally {
                 phaseMarks.importFinishedAt = Date.now();
             }
+            maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
             // Persist LLM raw output into dedicated DB field (DO NOT overwrite script_content)
             // Keep this after import so import can start immediately when LLM returns.
@@ -9597,6 +9636,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             } finally {
                 phaseMarks.importFinishedAt = Date.now();
             }
+            maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
             // Persist the LLM output after import to avoid delaying the import stage.
             const savedByBackend = !!(result?.meta?.saved_to_episode);
@@ -17810,6 +17850,29 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             if (subjectBatchReconstructSessionRef.current === batchSessionId) {
                 subjectBatchReconstructSessionRef.current = '';
             }
+            subjectBatchReconstructActiveJobsRef.current.clear();
+            setSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                targets.forEach((entity) => {
+                    const stableEntityId = String(entity?.id || '').trim();
+                    if (!stableEntityId) return;
+                    const existing = next[stableEntityId];
+                    if (!existing) return;
+                    if (String(existing?.jobKind || '').trim() !== 'reconstruct') return;
+                    delete next[stableEntityId];
+                });
+                return next;
+            });
+            setStoppingSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                targets.forEach((entity) => {
+                    const stableEntityId = String(entity?.id || '').trim();
+                    if (!stableEntityId) return;
+                    delete next[stableEntityId];
+                });
+                return next;
+            });
+            clearPendingSubjectBatchImagePlaceholders();
             subjectBatchReconstructStopRequestedRef.current = false;
             updateReconstructBatchRuntimeState(false, null);
         }
@@ -18791,6 +18854,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             if (subjectBatchGenerateSessionRef.current === batchSessionId) {
                 subjectBatchGenerateSessionRef.current = '';
             }
+            subjectBatchGenerateActiveJobsRef.current.clear();
             setSubjectImageJobs(prev => {
                 const next = { ...(prev || {}) };
                 toGenerate.forEach((entity) => {
@@ -18798,11 +18862,21 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     if (!stableEntityId) return;
                     const existing = next[stableEntityId];
                     if (!existing) return;
-                    if (String(existing?.jobId || '').trim()) return;
+                    if (String(existing?.jobKind || 'generate').trim() !== 'generate') return;
                     delete next[stableEntityId];
                 });
                 return next;
             });
+            setStoppingSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                toGenerate.forEach((entity) => {
+                    const stableEntityId = String(entity?.id || '').trim();
+                    if (!stableEntityId) return;
+                    delete next[stableEntityId];
+                });
+                return next;
+            });
+            clearPendingSubjectBatchImagePlaceholders();
             updateGenerateBatchRuntimeState(false, null);
             subjectBatchGenerateStopRequestedRef.current = false;
             setIsStoppingBatchGenerateEntities(false);
@@ -18997,6 +19071,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 
                 {entities.map(entity => {
                     const imageActionLocked = isSubjectImageActionLocked(entity);
+                    const hasRunningSubjectImageJob = Boolean(subjectImageJobs[String(entity.id)]);
                     return (
                     <div 
                         key={entity.id} 
@@ -19016,6 +19091,20 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                             ? t('排队中', 'Queued')
                                             : t('生成中', 'Generating')}
                             </div>
+                        )}
+                        {hasRunningSubjectImageJob && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleForceStopSubjectImage(entity);
+                                }}
+                                disabled={Boolean(stoppingSubjectImageJobs[String(entity.id)])}
+                                className="absolute top-2 right-2 z-30 inline-flex items-center gap-1 rounded-md bg-red-500/80 hover:bg-red-500 text-white px-2 py-1 text-[10px] font-bold backdrop-blur-md disabled:opacity-60 disabled:cursor-not-allowed"
+                                title={t('停止该主体的后台图片任务', 'Stop this subject background image task')}
+                            >
+                                {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <X size={10} />}
+                                <span>{stoppingSubjectImageJobs[String(entity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}</span>
+                            </button>
                         )}
                         {isEntityAnalyzed(entity) && (
                             <div className="absolute bottom-2 right-2 z-30 px-2 py-1 rounded-md bg-emerald-500/20 border border-emerald-400/40 text-emerald-100 text-[10px] font-bold pointer-events-none">
@@ -19038,20 +19127,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                             </div>
                         )}
                         
-                        <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                            {subjectImageJobs[String(entity.id)] && (
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        void handleForceStopSubjectImage(entity);
-                                    }}
-                                    disabled={Boolean(stoppingSubjectImageJobs[String(entity.id)])}
-                                    className="p-2 bg-red-500/70 hover:bg-red-500/90 rounded-full text-white backdrop-blur-md disabled:opacity-60 disabled:cursor-not-allowed"
-                                    title={t('停止该主体的后台图片任务', 'Stop this subject background image task')}
-                                >
-                                    {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={16} /> : <X size={16} />}
-                                </button>
-                            )}
+                        <div className={`absolute right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 ${hasRunningSubjectImageJob ? 'top-12' : 'top-2'}`}>
                             <button 
                                 onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'library'); }}
                                 disabled={imageActionLocked}
@@ -20039,18 +20115,6 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                         </div>
 
                                         <div className="flex justify-end items-center gap-2">
-                                            {selectedEntityHasRunningImageJob && (
-                                                <button
-                                                    type="button"
-                                                    onClick={handleForceStopSubjectImage}
-                                                    disabled={Boolean(stoppingSubjectImageJobs[String(selectedEntity.id)])}
-                                                    className="flex items-center space-x-2 bg-red-500/15 text-red-100 px-4 py-2 rounded-lg font-bold hover:bg-red-500/25 transition-all border border-red-400/25 disabled:opacity-60 disabled:cursor-not-allowed"
-                                                    title={t('强制停止该主体的后台图片任务，并解除当前运行状态', 'Force-stop this subject background image task and clear the current running state')}
-                                                >
-                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={16} /> : <X size={16} />}
-                                                    <span>{stoppingSubjectImageJobs[String(selectedEntity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}</span>
-                                                </button>
-                                            )}
                                             <button 
                                                 onClick={handleGenerate}
                                                 disabled={generating || selectedEntityHasRunningImageJob || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}
@@ -20387,6 +20451,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         currentAssetLabel: '',
         mode: '',
     }), []);
+
+    const isLocalShotBatchMode = useCallback((mode) => (
+        mode === 'keyframes-local' || mode === 'joint-diptych-local'
+    ), []);
 
     const getShotBatchRuntimeStorageKey = useCallback((episodeId, sceneId) => {
         if (!episodeId) return '';
@@ -21280,19 +21348,22 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setBatchProgress(createShotBatchProgressState());
             return;
         }
-        if (restored.running && restored.progress?.mode === 'keyframes-local') {
+        if (restored.running && isLocalShotBatchMode(restored.progress?.mode)) {
+            const restoredMode = String(restored.progress?.mode || '');
             setIsBatchGenerating(false);
             setBatchProgress({
                 ...(restored.progress || createShotBatchProgressState()),
-                mode: 'keyframes-local',
+                mode: restoredMode,
                 stopRequested: true,
-                status: t('上一次本地关键帧批量任务已中断，请重新执行。', 'The previous local keyframe batch was interrupted. Please run it again.'),
+                status: restoredMode === 'joint-diptych-local'
+                    ? t('上一次本地首尾联生批量任务已中断，请重新执行。', 'The previous local joint diptych batch was interrupted. Please run it again.')
+                    : t('上一次本地关键帧批量任务已中断，请重新执行。', 'The previous local keyframe batch was interrupted. Please run it again.'),
             });
             return;
         }
         setIsBatchGenerating(Boolean(restored.running));
         setBatchProgress(restored.progress || createShotBatchProgressState());
-    }, [activeEpisode?.id, selectedSceneId, loadShotBatchRuntime, createShotBatchProgressState, t]);
+    }, [activeEpisode?.id, selectedSceneId, loadShotBatchRuntime, createShotBatchProgressState, isLocalShotBatchMode, t]);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
@@ -22558,6 +22629,149 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setShotGeneratingState(targetShotId, 'end', false);
         }
     };
+
+    const generateShotDiptychBatchItem = useCallback(async ({ shotSnapshot, resolvedEntities, cfgOverride = null, silent = false }) => {
+        const stableShot = shotSnapshot || null;
+        const targetShotId = String(stableShot?.id || '').trim();
+        if (!targetShotId) {
+            throw new Error('Missing shot id for joint diptych generation');
+        }
+
+        let techNotes = {};
+        try {
+            techNotes = JSON.parse(stableShot?.technical_notes || '{}');
+        } catch {
+            techNotes = {};
+        }
+
+        const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
+        const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
+        const rawStartPrompt = resolvedPromptSubmitLang === 'cn'
+            ? (cnStartPrompt || stableShot?.start_frame || stableShot?.video_content || 'A cinematic shot')
+            : (stableShot?.start_frame || cnStartPrompt || stableShot?.video_content || 'A cinematic shot');
+        const rawEndPrompt = resolvedPromptSubmitLang === 'cn'
+            ? (cnEndPrompt || stableShot?.end_frame || 'End frame')
+            : (stableShot?.end_frame || cnEndPrompt || 'End frame');
+
+        const normalizedEndPrompt = String(rawEndPrompt || '').trim().toUpperCase();
+        if (['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt)) {
+            throw new Error('End frame is configured to reuse the start frame, so joint start/end generation is unavailable');
+        }
+
+        let createdImageJobId = '';
+        setShotGeneratingState(targetShotId, 'start', true);
+        setShotGeneratingState(targetShotId, 'end', true);
+
+        try {
+            const entityList = Array.isArray(resolvedEntities) ? resolvedEntities : await awaitShotGenerationEntities();
+            const isManualStart = techNotes.manual_start_frame === true;
+            const isManualEnd = techNotes.manual_end_frame === true;
+            const { text: startSubmitPrompt } = injectEntityFeatures(rawStartPrompt, isManualStart, entityList);
+            const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, entityList);
+
+            const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
+            const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
+            const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
+            const requestAspectRatio = selectBestShotDiptychRequestAspectRatio({
+                diptychPlan,
+                allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
+            });
+            const requestImageSize = selectBestSupportedImageSize(
+                preferredImageSize,
+                activeImageCapabilityProfile?.imageSizeValues,
+            );
+            const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, requestImageSize);
+            const requestResolution = resolveShotDiptychRequestResolution(diptychPlan, exportSize);
+            const combinedRefs = resolveJointShotDiptychRefs(
+                stableShot,
+                rawStartPrompt,
+                rawEndPrompt,
+                entityList,
+            );
+            const layoutInstructionCn = buildShotDiptychLayoutInstruction(diptychPlan, 'cn');
+            const layoutInstructionEn = buildShotDiptychLayoutInstruction(diptychPlan, 'en');
+
+            const combinedPrompt = resolvedPromptSubmitLang === 'cn'
+                ? [
+                    `生成一张单画布两宫格分镜图，后期会拆分为起始帧和结束帧。最终输出总共只能有两格，不能多于两格，也不能把下面任意一段提示词各自再扩展成两宫格。第一段提示词只负责第一格，第二段提示词只负责第二格。${layoutInstructionCn} 两格要像同一场景连续发生的两个瞬间，保持同一 shot 的人物身份、环境、光照和空间连续性。`,
+                    `两格之间不得出现任何可见分隔设计或拼贴感：不要白线、黑线、边框、留白、间隔条、接缝高光、接缝阴影，也不要让高对比硬边落在中缝附近。人物脸部、手部、关键道具和主要动作不要贴近中缝或外边缘；不要出现第三格、文字、编号、气泡或版式元素。整张图必须像一次完成的电影画面，不像海报拼版或分屏设计。`,
+                    `第一格（起始帧专用，仅这一格使用，不得扩展到第二格或再生成额外分格）：${startSubmitPrompt}`,
+                    `第二格（结束帧专用，仅这一格使用，不得扩展到第一格或再生成额外分格）：${endSubmitPrompt}`,
+                ].join('\n\n')
+                : [
+                    `Create one single-canvas two-panel storyboard image for later split delivery into the shot start frame and end frame. The final output must contain exactly two panels in total, not two panels per prompt. The first prompt applies only to panel A, and the second prompt applies only to panel B. Do not expand either prompt into its own diptych or generate any extra panel. ${layoutInstructionEn} Both panels must feel like consecutive moments from the same shot, with consistent identity, environment, lighting, and scene geography.`,
+                    `The boundary between panels must be invisible. Do not add divider lines, borders, gaps, blank strips, seam highlights, seam shadows, collage styling, text, numbering, speech bubbles, or any third panel. Avoid placing faces, hands, hero props, or key motion near the seam or outer edges. The whole image must read as one cinematic composition, not a poster layout or split-screen graphic.`,
+                    `Panel A only (Start Frame only; use this prompt for this panel alone, not for panel B and not for another diptych): ${startSubmitPrompt}`,
+                    `Panel B only (End Frame only; use this prompt for this panel alone, not for panel A and not for another diptych): ${endSubmitPrompt}`,
+                ].join('\n\n');
+
+            const shouldApplyGlobalCtx = !(isManualStart && isManualEnd);
+            const globalCtx = shouldApplyGlobalCtx
+                ? getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(combinedPrompt) })
+                : '';
+            const finalPrompt = shouldApplyGlobalCtx ? `${combinedPrompt}${globalCtx}` : combinedPrompt;
+            const jointNegativePrompt = [
+                buildEntityNegativePrompt(`${rawStartPrompt}\n${rawEndPrompt}`, null, entityList),
+                'more than two panels, extra frame, uneven split, visible divider line, center divider, separator, seam line, white seam, black seam, bright seam, high-contrast center edge, hard center edge, abrupt center transition, empty gap, blank strip, whitespace strip, spacer band, border, frame, collage seam, contact sheet, text label, numbering, caption, comic bubble',
+            ].filter(Boolean).join(', ');
+
+            if (!silent) {
+                onLog?.(t('正在联合生成首尾帧两宫格...', 'Generating joint start/end diptych...'), 'info');
+            }
+
+            const res = await generateImage(finalPrompt, null, combinedRefs.length > 0 ? combinedRefs : null, {
+                project_id: projectId,
+                episode_id: activeEpisode?.id,
+                shot_id: targetShotId,
+                shot_number: stableShot?.shot_id,
+                shot_name: stableShot?.shot_name,
+                prompt_language: resolvedPromptSubmitLang,
+                asset_type: 'start_frame',
+                mode: 'joint_diptych',
+                aspect_ratio: requestAspectRatio,
+                ...(requestResolution?.width ? { width: requestResolution.width } : {}),
+                ...(requestResolution?.height ? { height: requestResolution.height } : {}),
+                ...(cfgOverride ? { cfg: cfgOverride } : {}),
+                ...(requestImageSize ? { image_size: requestImageSize } : {}),
+                negative_prompt: jointNegativePrompt,
+                on_job_created: (jobId) => {
+                    createdImageJobId = String(jobId || '').trim();
+                    if (!createdImageJobId) return;
+                    setPendingJointDiptychImageJob(targetShotId, createdImageJobId);
+                    setShotGeneratingState(targetShotId, 'start', true);
+                    setShotGeneratingState(targetShotId, 'end', true);
+                },
+            });
+
+            if (!res?.url) {
+                throw new Error('No composite image URL returned');
+            }
+            clearPendingJointDiptychImageJob(targetShotId);
+            const nextData = await applyJointShotDiptychResult({
+                shotRecord: {
+                    ...stableShot,
+                    start_frame: rawStartPrompt,
+                    end_frame: rawEndPrompt,
+                },
+                compositeUrl: res.url,
+            });
+            if (!silent) {
+                onLog?.(t('首尾帧两宫格已生成并拆分回填。', 'Joint start/end diptych generated, split, and applied.'), 'success');
+                showNotification(t('已生成并拆分回填首尾帧', 'Start/end frames generated and split successfully'), 'success');
+            }
+            return {
+                shotId: targetShotId,
+                shotLabel: String(stableShot?.shot_id || stableShot?.shot_name || `#${targetShotId}`),
+                shotPatch: nextData,
+            };
+        } finally {
+            if (createdImageJobId) {
+                clearPendingJointDiptychImageJob(targetShotId);
+            }
+            setShotGeneratingState(targetShotId, 'start', false);
+            setShotGeneratingState(targetShotId, 'end', false);
+        }
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, awaitShotGenerationEntities, buildEntityNegativePrompt, getGlobalContextStr, injectEntityFeatures, onLog, project?.global_info, projectId, resolveJointShotDiptychRefs, resolvedPromptSubmitLang, setPendingJointDiptychImageJob, setShotGeneratingState, showNotification, t]);
 
     const handleManualEndFrameInputChange = (nextValue) => {
         if (!editingShot) return;
@@ -25903,9 +26117,180 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
     }, [SHOT_BATCH_PARALLEL_LIMIT, activeEpisode?.episode_info, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotKeyframesBatchItem, getShotEndFrameUrl, isStartFrameInheritPrompt, onLog, refreshShotAssetsMeta, refreshShots, shots, t]);
 
+    const runLocalJointDiptychBatch = useCallback(async () => {
+        const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
+        const targetShots = orderedShots.filter((shot) => {
+            const currentStartUrl = String(shot?.image_url || '').trim();
+            const currentEndUrl = String(getShotEndFrameUrl(shot) || '').trim();
+            const normalizedEndPrompt = String(shot?.end_frame || '').trim().toUpperCase();
+            return !currentStartUrl && !currentEndUrl && !['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt);
+        });
+
+        if (targetShots.length === 0) {
+            alert(t('当前没有适合首尾联生的镜头。仅会处理起始帧和结束帧都缺失、且结束帧不复用起始帧的镜头。', 'No shots are eligible for joint start/end generation. Only shots missing both start and end frames, with a distinct end frame prompt, are included.'));
+            return;
+        }
+
+        const ok = await confirmUiMessage(
+            t(
+                `将为 ${targetShots.length} 个镜头批量执行首尾联生。系统会本地并发调度，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个镜头，只处理起始帧和结束帧都缺失、且结束帧不复用起始帧的镜头。是否继续？`,
+                `Run joint start/end diptych generation for ${targetShots.length} shots. The local scheduler will run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave and only include shots missing both start and end frames whose end prompt is not configured to reuse the start frame. Continue?`
+            )
+        );
+        if (!ok) return;
+
+        const resolvedEntities = await awaitShotGenerationEntities();
+
+        shotLocalBatchStopRequestedRef.current = false;
+        const batchSessionId = `shot-joint-diptych-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        shotLocalBatchSessionRef.current = batchSessionId;
+        if (shotBatchStatusTimerRef.current) {
+            clearInterval(shotBatchStatusTimerRef.current);
+            shotBatchStatusTimerRef.current = null;
+        }
+        setIsBatchGenerating(true);
+        setBatchProgress({
+            current: 0,
+            total: targetShots.length,
+            status: t('首尾联生批量任务准备中...', 'Preparing joint diptych batch...'),
+            stopRequested: false,
+            currentShotLabel: '',
+            currentAssetLabel: t('首尾联生', 'Joint Diptych'),
+            mode: 'joint-diptych-local',
+        });
+        onLog?.(t('开始本地首尾联生批量任务。', 'Started local joint diptych batch.'), 'process');
+
+        let completed = 0;
+        let success = 0;
+        let failed = 0;
+        let queue = [...targetShots];
+
+        try {
+            const shouldStopShotBatch = () => (
+                shotLocalBatchSessionRef.current !== batchSessionId
+                || shotLocalBatchStopRequestedRef.current
+            );
+            const workerLimit = Math.max(1, SHOT_BATCH_PARALLEL_LIMIT);
+            const activeTasks = new Map();
+
+            const updateActiveJointStatus = () => {
+                if (activeTasks.size === 0) return;
+                const activeLabels = Array.from(activeTasks.values())
+                    .map(({ shot }) => shot?.shot_id || shot?.shot_name || shot?.id)
+                    .filter(Boolean)
+                    .join(', ');
+                setBatchProgress({
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`处理中：${activeLabels}`, `Processing: ${activeLabels}`),
+                    stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
+                    currentShotLabel: activeLabels,
+                    currentAssetLabel: t('首尾联生', 'Joint Diptych'),
+                    mode: 'joint-diptych-local',
+                });
+            };
+
+            const startNextShotTask = () => {
+                if (shouldStopShotBatch() || activeTasks.size >= workerLimit || queue.length === 0) {
+                    return false;
+                }
+                const nextShot = queue.shift();
+                if (!nextShot) return false;
+                const shotId = String(nextShot?.id || '').trim();
+                const wrappedPromise = generateShotDiptychBatchItem({
+                    shotSnapshot: nextShot,
+                    resolvedEntities,
+                    silent: true,
+                })
+                    .then((value) => ({ shotId, shot: nextShot, status: 'fulfilled', value }))
+                    .catch((reason) => ({ shotId, shot: nextShot, status: 'rejected', reason }));
+                activeTasks.set(shotId, { shot: nextShot, promise: wrappedPromise });
+                updateActiveJointStatus();
+                return true;
+            };
+
+            while (queue.length > 0 || activeTasks.size > 0) {
+                while (!shouldStopShotBatch() && activeTasks.size < workerLimit && startNextShotTask()) {
+                    // Fill all local joint-diptych concurrency slots immediately.
+                }
+
+                if (activeTasks.size === 0) {
+                    break;
+                }
+
+                const settledTask = await Promise.race(Array.from(activeTasks.values()).map((item) => item.promise));
+                activeTasks.delete(settledTask.shotId);
+
+                const shot = settledTask.shot;
+                completed += 1;
+                if (settledTask.status === 'fulfilled') {
+                    success += 1;
+                    const nextPatch = settledTask.value?.shotPatch || {};
+                    applyShotPatchToLocalState(shot?.id, nextPatch);
+                } else {
+                    failed += 1;
+                    onLog?.(
+                        t(
+                            `镜头批量首尾联生失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                            `Shot joint diptych batch failed: ${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
+                        ),
+                        'error'
+                    );
+                }
+
+                setBatchProgress({
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
+                    stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
+                    currentShotLabel: String(shot?.shot_id || shot?.shot_name || shot?.id || ''),
+                    currentAssetLabel: t('首尾联生', 'Joint Diptych'),
+                    mode: 'joint-diptych-local',
+                });
+                updateActiveJointStatus();
+            }
+
+            if (shotLocalBatchSessionRef.current !== batchSessionId || shotLocalBatchStopRequestedRef.current) {
+                onLog?.(t(`首尾联生批量任务已停止：成功 ${success}，失败 ${failed}`, `Joint diptych batch stopped: ${success} succeeded, ${failed} failed`), 'warning');
+                setBatchProgress({
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`首尾联生批量已停止：成功 ${success}，失败 ${failed}`, `Joint diptych batch stopped: ${success} succeeded, ${failed} failed`),
+                    stopRequested: true,
+                    currentShotLabel: '',
+                    currentAssetLabel: t('首尾联生', 'Joint Diptych'),
+                    mode: 'joint-diptych-local',
+                });
+                return;
+            }
+
+            onLog?.(t(`首尾联生批量完成：成功 ${success}，失败 ${failed}`, `Joint diptych batch complete: ${success} succeeded, ${failed} failed`), failed > 0 ? 'warning' : 'success');
+            setBatchProgress({
+                current: completed,
+                total: targetShots.length,
+                status: t(`首尾联生批量完成：成功 ${success}，失败 ${failed}`, `Joint diptych batch complete: ${success} succeeded, ${failed} failed`),
+                stopRequested: false,
+                currentShotLabel: '',
+                currentAssetLabel: t('首尾联生', 'Joint Diptych'),
+                mode: 'joint-diptych-local',
+            });
+        } finally {
+            shotLocalBatchSessionRef.current = '';
+            shotLocalBatchStopRequestedRef.current = false;
+            if (shotBatchStatusTimerRef.current) {
+                clearInterval(shotBatchStatusTimerRef.current);
+                shotBatchStatusTimerRef.current = null;
+            }
+            setIsBatchGenerating(false);
+            refreshShots();
+            refreshShotAssetsMeta();
+        }
+    }, [SHOT_BATCH_PARALLEL_LIMIT, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotDiptychBatchItem, getShotEndFrameUrl, onLog, refreshShotAssetsMeta, refreshShots, shots, t]);
+
     const pollShotBatchStatus = useCallback(async () => {
         if (!activeEpisode?.id) return null;
-        if (shotLocalBatchSessionRef.current && batchProgressRef.current?.mode === 'keyframes-local') {
+        if (shotLocalBatchSessionRef.current && isLocalShotBatchMode(batchProgressRef.current?.mode)) {
+            const localMode = String(batchProgressRef.current?.mode || 'keyframes-local');
             return {
                 running: true,
                 total: Number(batchProgressRef.current?.total || 0),
@@ -25913,9 +26298,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 message: String(batchProgressRef.current?.status || ''),
                 stop_requested: Boolean(batchProgressRef.current?.stopRequested),
                 current_shot_label: String(batchProgressRef.current?.currentShotLabel || ''),
-                current_asset_type: 'start_end_sequence',
+                current_asset_type: localMode === 'joint-diptych-local' ? 'joint_diptych' : 'start_end_sequence',
                 current_asset_label: String(batchProgressRef.current?.currentAssetLabel || ''),
-                mode: 'keyframes-local',
+                mode: localMode,
             };
         }
         try {
@@ -25966,7 +26351,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         } catch (e) {
             return null;
         }
-    }, [activeEpisode?.id, refreshShots, t]);
+    }, [activeEpisode?.id, isLocalShotBatchMode, refreshShots, t]);
 
     useEffect(() => {
         if (!activeEpisode?.id) {
@@ -25980,7 +26365,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const hydrate = async () => {
             let recovered = false;
-            if (!isBatchGeneratingRef.current && batchProgressRef.current?.mode !== 'keyframes-local') {
+            if (!isBatchGeneratingRef.current && !isLocalShotBatchMode(batchProgressRef.current?.mode)) {
                 recovered = await recoverShotBatchFromJobPool();
             }
             const status = await pollShotBatchStatus();
@@ -26008,21 +26393,25 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 shotBatchStatusTimerRef.current = null;
             }
         };
-    }, [activeEpisode?.id, selectedSceneId, pollShotBatchStatus, recoverShotBatchFromJobPool]);
+    }, [activeEpisode?.id, isLocalShotBatchMode, selectedSceneId, pollShotBatchStatus, recoverShotBatchFromJobPool]);
 
     const handleStopShotBatch = async () => {
         if (!activeEpisode?.id) return;
         setIsStoppingShotBatch(true);
         try {
-            if (shotLocalBatchSessionRef.current && batchProgressRef.current?.mode === 'keyframes-local') {
+            if (shotLocalBatchSessionRef.current && isLocalShotBatchMode(batchProgressRef.current?.mode)) {
+                const localMode = String(batchProgressRef.current?.mode || 'keyframes-local');
+                const stopMessage = localMode === 'joint-diptych-local'
+                    ? t('已请求停止当前首尾联生批量任务。', 'Stop requested for current joint diptych batch.')
+                    : t('已请求停止当前关键帧批量任务。', 'Stop requested for current keyframe batch.');
                 shotLocalBatchStopRequestedRef.current = true;
                 setBatchProgress((prev) => ({
                     ...prev,
                     stopRequested: true,
-                    status: prev.status || t('已请求停止当前关键帧批量任务。', 'Stop requested for current keyframe batch.'),
-                    mode: 'keyframes-local',
+                    status: prev.status || stopMessage,
+                    mode: localMode,
                 }));
-                onLog?.(t('已请求停止当前关键帧批量任务。', 'Stop requested for current keyframe batch.'), 'warning');
+                onLog?.(stopMessage, 'warning');
                 return;
             }
 
@@ -26069,12 +26458,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
         const ok = mode === 'videos'
             ? await confirmUiMessage(`Generate Videos for all ${shots.length} shots? This will AUTO-GENERATE any missing Start/End frames first.`)
-            : await confirmUiMessage(
-                t(
-                    `为当前缺失关键帧的镜头启动本地并发批处理？系统会按依赖顺序分批执行，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个镜头。`,
-                    `Start local concurrent batching for shots with missing keyframes? The scheduler will respect dependency order and run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave.`
-                )
-            );
+            : true;
         if (!ok) return;
 
         setIsShotBatchStarting(true);
@@ -26089,6 +26473,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             if (mode === 'keyframes') {
                 await runLocalKeyframeBatch();
+                return;
+            }
+            if (mode === 'joint_diptych') {
+                await runLocalJointDiptychBatch();
                 return;
             }
 
@@ -26134,6 +26522,10 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const handleBatchGenerate = async () => {
         await startShotBatchByMode('keyframes');
+    };
+
+    const handleBatchGenerateJointDiptych = async () => {
+        await startShotBatchByMode('joint_diptych');
     };
 
     const handleBatchGenerateVideo = async () => {
@@ -26320,6 +26712,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                             >
                                 {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
                                 <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('补帧', 'Frames')}</span>
+                            </button>
+                            <button 
+                                onClick={handleBatchGenerateJointDiptych}
+                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                title={t('按镜头批量执行首尾联生', 'Batch Generate Joint Start/End Diptychs')}
+                            >
+                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <PanelsTopLeft className="w-3 h-3"/>}
+                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('首尾联生', 'Joint')}</span>
                             </button>
                             <button 
                                 onClick={handleBatchGenerateVideo}
