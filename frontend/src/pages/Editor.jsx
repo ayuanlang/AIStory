@@ -24660,17 +24660,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     
     // --- Entity Injection Helper ---
     // Injects anchor description while keeping original entity token shape.
-    const injectEntityFeatures = (text, isUserEdited = false, entitySource = null) => {
+    function injectEntityFeatures(text, isUserEdited = false, entitySource = null) {
         if (!text) return { text, modified: false };
 
         const styleAdjustedText = applyGlobalStyleToPrompt(text, { injectIfMissing: true });
-        
+
         // If the user has manually edited the prompt, we DO NOT inject entity features automatically.
         // We respect the user's exact prompt.
         if (isUserEdited) {
             return { text: styleAdjustedText, modified: styleAdjustedText !== text };
         }
-        
+
         // In ShotsView, 'entities' contains ALL entities.
         const entList = Array.isArray(entitySource) ? entitySource : entities;
 
@@ -24726,7 +24726,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             // 1. [Global Style] is injected before entity pass.
             if (cleanKey === 'global style' || cleanKey === 'global_style') {
-                return match; 
+                return match;
             }
 
             // 2. Entity Injection
@@ -24746,11 +24746,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 }
             }
 
-            return match; 
+            return match;
         });
 
         return { text: newText, modified };
-    };
+    }
 
     const isStartFrameInheritPrompt = (value) => {
         const token = String(value || '').trim().toUpperCase();
