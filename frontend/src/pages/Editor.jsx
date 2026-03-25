@@ -20604,6 +20604,18 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         return Boolean(restored?.progress?.stopRequested);
     }, [activeEpisode?.id, loadShotBatchRuntime]);
 
+    const getPersistentLocalShotBatchRuntime = useCallback((sceneIdOverride) => {
+        const episodeId = activeEpisode?.id;
+        if (!episodeId) return null;
+        const stableSceneId = String((sceneIdOverride ?? selectedSceneIdRef.current) || 'all').trim() || 'all';
+        const restored = loadShotBatchRuntime(episodeId, stableSceneId);
+        if (!restored?.running || !isLocalShotBatchMode(restored?.progress?.mode)) return null;
+        return {
+            ...restored,
+            sceneId: stableSceneId,
+        };
+    }, [activeEpisode?.id, isLocalShotBatchMode, loadShotBatchRuntime]);
+
     const extractEpisodeIdFromJobPoolItem = useCallback((item) => {
         const direct = Number(item?.episode_id || item?.episodeId || 0);
         if (Number.isFinite(direct) && direct > 0) return direct;
@@ -20682,6 +20694,17 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return '';
         }
     }, []);
+
+    const getBatchVideoEligibleShots = useCallback((shotList) => {
+        return (Array.isArray(shotList) ? shotList : []).filter((shot) => {
+            if (!shot || !shot.id) return false;
+            const startFrameUrl = String(shot?.image_url || '').trim();
+            const endFrameUrl = String(getShotEndFrameUrl(shot) || '').trim();
+            const videoUrl = String(shot?.video_url || '').trim();
+            if (videoUrl) return false;
+            return Boolean(startFrameUrl || endFrameUrl);
+        });
+    }, [getShotEndFrameUrl]);
 
     const normalizeGeneratingState = useCallback((raw) => {
         if (!raw || typeof raw !== 'object') return {};
@@ -26488,17 +26511,29 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
     const pollShotBatchStatus = useCallback(async () => {
         if (!activeEpisode?.id) return null;
-        if (shotLocalBatchSessionRef.current && isLocalShotBatchMode(batchProgressRef.current?.mode)) {
-            const localMode = String(batchProgressRef.current?.mode || 'keyframes-local');
+        const persistentLocalRuntime = getPersistentLocalShotBatchRuntime(selectedSceneId);
+        if ((shotLocalBatchSessionRef.current && isLocalShotBatchMode(batchProgressRef.current?.mode)) || persistentLocalRuntime) {
+            const localProgress = shotLocalBatchSessionRef.current && isLocalShotBatchMode(batchProgressRef.current?.mode)
+                ? (batchProgressRef.current || createShotBatchProgressState())
+                : (persistentLocalRuntime?.progress || createShotBatchProgressState());
+            const localMode = String(localProgress?.mode || 'keyframes-local');
+            isBatchGeneratingRef.current = true;
+            batchProgressRef.current = localProgress;
+            setIsBatchGenerating(true);
+            setBatchProgress((prev) => {
+                const prevSerialized = JSON.stringify(prev || {});
+                const nextSerialized = JSON.stringify(localProgress || {});
+                return prevSerialized === nextSerialized ? prev : localProgress;
+            });
             return {
                 running: true,
-                total: Number(batchProgressRef.current?.total || 0),
-                completed: Number(batchProgressRef.current?.current || 0),
-                message: String(batchProgressRef.current?.status || ''),
-                stop_requested: Boolean(batchProgressRef.current?.stopRequested),
-                current_shot_label: String(batchProgressRef.current?.currentShotLabel || ''),
+                total: Number(localProgress?.total || 0),
+                completed: Number(localProgress?.current || 0),
+                message: String(localProgress?.status || ''),
+                stop_requested: Boolean(localProgress?.stopRequested),
+                current_shot_label: String(localProgress?.currentShotLabel || ''),
                 current_asset_type: localMode === 'joint-diptych-local' ? 'joint_diptych' : 'start_end_sequence',
-                current_asset_label: String(batchProgressRef.current?.currentAssetLabel || ''),
+                current_asset_label: String(localProgress?.currentAssetLabel || ''),
                 mode: localMode,
             };
         }
@@ -26550,7 +26585,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         } catch (e) {
             return null;
         }
-    }, [activeEpisode?.id, isLocalShotBatchMode, refreshShots, t]);
+    }, [activeEpisode?.id, createShotBatchProgressState, getPersistentLocalShotBatchRuntime, isLocalShotBatchMode, refreshShots, selectedSceneId, t]);
 
     useEffect(() => {
         if (!activeEpisode?.id) {
@@ -26666,16 +26701,29 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             return;
         }
 
+        const targetShots = mode === 'videos' ? getBatchVideoEligibleShots(shots) : shots;
+        if (mode === 'videos' && targetShots.length === 0) {
+            const msg = t('当前没有可批量生成视频的镜头。需要至少已有一张首尾帧，且当前没有视频。', 'No eligible shots for batch video generation. Each shot must already have at least one start/end frame and must not already have a video.');
+            onLog?.(msg, 'warning');
+            alert(msg);
+            return;
+        }
+
         const ok = mode === 'videos'
-            ? await confirmUiMessage(`Generate Videos for all ${shots.length} shots? This will AUTO-GENERATE any missing Start/End frames first.`)
+            ? await confirmUiMessage(t(
+                `将为 ${targetShots.length} 个镜头批量生成视频。只会提交至少已有一张首尾帧、且当前没有视频的镜头；后端会按你的账号等级并发执行。是否继续？`,
+                `Generate videos for ${targetShots.length} shots. Only shots that already have at least one start/end frame and do not already have a video will be submitted; the backend will run them concurrently based on your user level. Continue?`
+            ))
             : true;
         if (!ok) return;
 
         setIsShotBatchStarting(true);
         try {
-            const targetShotIds = shots.map((shot) => shot.id).filter(Boolean);
+            const targetShotIds = targetShots.map((shot) => shot.id).filter(Boolean);
             if (targetShotIds.length === 0) {
-                const msg = t('当前镜头尚未保存到数据库，无法批量执行。请先保存镜头。', 'Current shots are not saved to database yet, cannot run batch. Please save shots first.');
+                const msg = mode === 'videos'
+                    ? t('当前没有可批量生成视频的镜头。需要至少已有一张首尾帧，且当前没有视频。', 'No eligible shots for batch video generation. Each shot must already have at least one start/end frame and must not already have a video.')
+                    : t('当前镜头尚未保存到数据库，无法批量执行。请先保存镜头。', 'Current shots are not saved to database yet, cannot run batch. Please save shots first.');
                 onLog?.(msg, 'warning');
                 alert(msg);
                 return;
@@ -26690,7 +26738,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 return;
             }
 
-            await startShotMediaBatch(activeEpisode.id, {
+            const started = await startShotMediaBatch(activeEpisode.id, {
                 mode,
                 shot_ids: targetShotIds,
                 overwrite_existing: false,
@@ -26701,7 +26749,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setIsBatchGenerating(true);
             setBatchProgress({
                 current: 0,
-                total: shots.length,
+                total: Number(started?.total || targetShotIds.length),
                 status: mode === 'videos' ? 'Video batch started...' : 'Keyframe batch started...',
                 stopRequested: false,
                 currentShotLabel: '',

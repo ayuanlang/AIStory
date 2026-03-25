@@ -24291,6 +24291,7 @@ def stop_all_generation_jobs(
 
 
 SHOT_MEDIA_BATCH_STATUS_KEY = "shot_media_batch_status"
+SHOT_MEDIA_BATCH_DEFAULT_CONCURRENCY = 3
 SHOT_MEDIA_BATCH_RUNTIME_CACHE: Dict[int, Dict[str, Any]] = {}
 SHOT_MEDIA_BATCH_RUNTIME_CACHE_LOCK = threading.Lock()
 
@@ -24392,6 +24393,16 @@ def _persist_shot_media_batch_status(db: Session, episode: Episode, status_paylo
     db.add(target_episode)
     db.commit()
     _cache_shot_media_batch_status(int(target_episode.id), merged_status)
+
+
+def _is_shot_video_batch_eligible(shot: Shot, overwrite_existing: bool = False) -> bool:
+    tech = _parse_shot_tech(shot)
+    start_frame_url = str(getattr(shot, "image_url", "") or "").strip()
+    end_frame_url = str(tech.get("end_frame_url") or "").strip()
+    video_url = str(getattr(shot, "video_url", "") or "").strip()
+    if not overwrite_existing and video_url:
+        return False
+    return bool(start_frame_url or end_frame_url)
 
 
 def _parse_shot_tech(shot: Shot) -> Dict[str, Any]:
@@ -24972,6 +24983,217 @@ def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int
     return prev_end or None
 
 
+def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False) -> Dict[str, Any]:
+    item_db = SessionLocal()
+    cancel_event = _get_shot_media_batch_cancel_event(int(episode_id), create=True)
+
+    class _BatchStopRequested(Exception):
+        pass
+
+    async def _run_cancellable(coro: Any) -> Any:
+        task = asyncio.create_task(coro)
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=0.5)
+                if task in done:
+                    return await task
+                if cancel_event and cancel_event.is_set():
+                    task.cancel()
+                    try:
+                        await task
+                    except BaseException:
+                        pass
+                    raise _BatchStopRequested("Stop requested")
+        finally:
+            if not task.done():
+                task.cancel()
+
+    async def _run_stage_with_retry(coro_factory: Any, max_attempts: int = 3) -> Any:
+        last_error: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            if cancel_event and cancel_event.is_set():
+                raise _BatchStopRequested("Stop requested")
+            try:
+                return await _run_cancellable(coro_factory())
+            except _BatchStopRequested:
+                raise
+            except Exception as exc:
+                last_error = exc
+                try:
+                    item_db.rollback()
+                except Exception:
+                    pass
+                if attempt < max_attempts:
+                    logger.warning(
+                        "[shot_media_batch] video stage retry | shot_id=%s attempt=%s/%s error=%s",
+                        shot_id,
+                        attempt,
+                        max_attempts,
+                        exc,
+                    )
+                    await asyncio.sleep(min(4, attempt))
+                    continue
+        raise Exception(f"video failed after {max_attempts} attempts: {last_error}")
+
+    try:
+        episode = item_db.query(Episode).filter(Episode.id == episode_id).first()
+        user = item_db.query(User).filter(User.id == user_id).first()
+        shot = item_db.query(Shot).filter(Shot.id == shot_id, Shot.episode_id == episode_id).first()
+        if not episode or not user or not shot:
+            raise Exception("Shot batch item not found")
+
+        shot_label = str(shot.shot_id or shot.shot_name or f"#{shot.id}")
+        tech = _parse_shot_tech(shot)
+        start_frame_url = str(shot.image_url or "").strip()
+        end_frame_url = str(tech.get("end_frame_url") or "").strip()
+        video_url = str(shot.video_url or "").strip()
+
+        if not overwrite_existing and video_url:
+            return {
+                "shot_id": int(shot.id),
+                "shot_label": shot_label,
+                "ok": True,
+                "skipped": True,
+                "skip_reason": "existing_video",
+            }
+        if not start_frame_url and not end_frame_url:
+            return {
+                "shot_id": int(shot.id),
+                "shot_label": shot_label,
+                "ok": True,
+                "skipped": True,
+                "skip_reason": "missing_frames",
+            }
+
+        episode_info = _episode_info_from_episode(episode)
+        e_global_info = episode_info.get("e_global_info", {}) if isinstance(episode_info, dict) else {}
+        global_style = str((e_global_info or {}).get("Global_Style") or "").strip()
+        entity_lookup = _build_project_entity_lookup(item_db, int(episode.project_id))
+
+        video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
+        video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
+        logger.info(
+            "[shot_media_batch] subject_ref_index_map asset=video shot_id=%s shot_label=%s map=%s",
+            shot.id,
+            shot_label,
+            video_ref_index_map,
+        )
+        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
+
+        def _resolve_video_mode(payload: Dict[str, Any]) -> str:
+            raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "start"
+            return _normalize_video_ref_mode(raw_mode) or "start"
+
+        video_mode = _resolve_video_mode(tech)
+        refs: List[str] = []
+        explicit_last_frame_url = end_frame_url or None
+        video_prompt_candidates: List[str] = [
+            str(video_prompt_raw or "").strip(),
+            str(shot.start_frame or "").strip(),
+            str(shot.end_frame or "").strip(),
+            str(tech.get("video_prompt_cn") or "").strip(),
+            str(tech.get("start_frame_cn") or "").strip(),
+            str(tech.get("end_frame_cn") or "").strip(),
+        ]
+        if isinstance(tech.get("video_ref_image_urls"), list):
+            refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
+        else:
+            shot_mode = str(video_mode or "").strip().lower()
+            if not shot_mode:
+                shot_mode = "start_end" if end_frame_url else "start"
+
+            if shot_mode == "end":
+                if end_frame_url:
+                    explicit_last_frame_url = end_frame_url
+            else:
+                if start_frame_url:
+                    refs.append(start_frame_url)
+
+                if shot_mode == "entity_refs":
+                    keyframes = tech.get("keyframes")
+                    if isinstance(keyframes, list):
+                        refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
+
+                if shot_mode == "start_end" and end_frame_url:
+                    explicit_last_frame_url = end_frame_url
+
+        refs, auto_entity_refs = _merge_entity_refs_for_video_mode(
+            refs,
+            ref_mode=video_mode,
+            prompt_candidates=video_prompt_candidates,
+            entity_lookup=entity_lookup,
+            manual_override=bool(tech.get("video_ref_image_urls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
+        )
+
+        normalized_refs, normalized_last_frame_url, batch_ref_info = _normalize_video_request_refs(
+            refs or None,
+            explicit_last_frame_url,
+            video_mode,
+            supports_last_frame_mode=True,
+        )
+
+        ordered_video_refs: List[str] = []
+        if isinstance(normalized_refs, list):
+            ordered_video_refs.extend([str(x).strip() for x in normalized_refs if str(x).strip()])
+        elif str(normalized_refs or "").strip():
+            ordered_video_refs.append(str(normalized_refs).strip())
+        if str(normalized_last_frame_url or "").strip():
+            ordered_video_refs.append(str(normalized_last_frame_url).strip())
+        ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
+
+        video_prompt = _append_video_api_ref_mapping(
+            video_prompt,
+            ordered_video_refs,
+            normalized_refs,
+            normalized_last_frame_url,
+            None,
+        )
+
+        logger.info(
+            "[shot_media_batch] video ref resolution | shot_id=%s shot_label=%s video_mode=%s refs=%s last_frame=%s auto_entity_refs=%s fallback_to_refs=%s",
+            shot.id,
+            shot_label,
+            video_mode,
+            len(ordered_video_refs),
+            bool(str(normalized_last_frame_url or "").strip()),
+            len(auto_entity_refs),
+            bool(batch_ref_info.get("fallback_to_refs")),
+        )
+
+        duration_val = 5.0
+        try:
+            duration_val = float(str(shot.duration or 5).strip() or 5)
+        except Exception:
+            duration_val = 5.0
+
+        video_req = VideoGenerationRequest(
+            prompt=video_prompt,
+            ref_image_url=normalized_refs,
+            last_frame_url=normalized_last_frame_url,
+            ref_mode=video_mode,
+            keyframes=None,
+            duration=duration_val,
+            project_id=episode.project_id,
+            shot_id=shot.id,
+            shot_number=shot.shot_id,
+            shot_name=shot.shot_name,
+            asset_type="video",
+        )
+        _release_db_connection(item_db, "shot_media_batch_video")
+        asyncio.run(_run_stage_with_retry(
+            lambda: _run_generate_video(req=video_req, current_user=user, db=item_db),
+        ))
+
+        return {
+            "shot_id": int(shot.id),
+            "shot_label": shot_label,
+            "ok": True,
+            "skipped": False,
+        }
+    finally:
+        item_db.close()
+
+
 def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], user_id: int) -> None:
     db = SessionLocal()
     cancel_event = _get_shot_media_batch_cancel_event(int(episode_id), create=True)
@@ -25015,6 +25237,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         mode = str((request_payload or {}).get("mode") or "keyframes").strip().lower()
         overwrite_existing = bool((request_payload or {}).get("overwrite_existing"))
         requested_shot_ids = [int(x) for x in ((request_payload or {}).get("shot_ids") or []) if x]
+        batch_max_concurrency = _resolve_user_batch_parallel_limit(
+            getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
+            default=SHOT_MEDIA_BATCH_DEFAULT_CONCURRENCY,
+        )
 
         shots_query = db.query(Shot).filter(Shot.episode_id == episode_id).order_by(Shot.id.asc())
         if requested_shot_ids:
@@ -25113,6 +25339,176 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         continue
 
             raise Exception(f"{stage_label} failed after {max_attempts} attempts: {last_error}")
+
+        if mode == "videos":
+            shot_label_map = {
+                int(shot.id): str(shot.shot_id or shot.shot_name or f"#{shot.id}")
+                for shot in target_shots
+            }
+            next_shot_index = 0
+            active_future_map: Dict[Any, int] = {}
+
+            def _active_shot_ids() -> List[int]:
+                return list(active_future_map.values())
+
+            def _persist_active_video_status(latest_episode: Optional[Episode], latest_message: Optional[str] = None) -> None:
+                if not latest_episode:
+                    return
+                latest_status = _read_shot_media_batch_status(latest_episode)
+                active_shot_ids = _active_shot_ids()
+                active_shot_labels = [shot_label_map.get(sid) or f"#{sid}" for sid in active_shot_ids]
+                latest_status["current_shot_id"] = active_shot_ids[0] if len(active_shot_ids) == 1 else None
+                latest_status["current_shot_label"] = " / ".join(active_shot_labels)
+                latest_status["current_asset_type"] = "video" if active_shot_labels else None
+                latest_status["current_asset_label"] = "Video" if active_shot_labels else ""
+                latest_status["updated_at"] = now_bj_iso()
+                if latest_message is not None:
+                    latest_status["message"] = latest_message
+                elif active_shot_labels:
+                    latest_status["message"] = (
+                        f"Processing shots {', '.join(active_shot_labels)} · Video..."
+                        if len(active_shot_labels) > 1
+                        else f"Processing shot {active_shot_labels[0]} · Video..."
+                    )
+                _persist_shot_media_batch_status(db, latest_episode, latest_status)
+
+            def _submit_next_shot(executor: ThreadPoolExecutor) -> bool:
+                nonlocal next_shot_index
+                if next_shot_index >= len(target_shots):
+                    return False
+                shot = target_shots[next_shot_index]
+                next_shot_index += 1
+                active_future_map[executor.submit(
+                    _run_shot_media_video_batch_item,
+                    episode_id,
+                    int(shot.id),
+                    user_id,
+                    overwrite_existing,
+                )] = int(shot.id)
+                return True
+
+            max_workers = max(1, min(batch_max_concurrency, total or 1))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                while len(active_future_map) < max_workers and _submit_next_shot(executor):
+                    pass
+
+                episode = _read_latest_episode()
+                if episode and _is_stop_requested():
+                    _persist_stopped_status()
+                    return
+                _persist_active_video_status(episode)
+
+                while active_future_map:
+                    completed_future = next(as_completed(list(active_future_map.keys())))
+                    sid = active_future_map.pop(completed_future)
+                    shot_label = shot_label_map.get(sid) or f"#{sid}"
+                    try:
+                        result = completed_future.result()
+                    except Exception as e:
+                        if _is_stop_requested():
+                            _persist_stopped_status()
+                            return
+                        result = {
+                            "shot_id": sid,
+                            "shot_label": shot_label,
+                            "ok": False,
+                            "error": str(e),
+                        }
+
+                    if bool(result.get("ok")):
+                        success += 1
+                        _log_batch_sys_event(
+                            kind="shot-media-batch",
+                            phase="item",
+                            user_id=user_id,
+                            user_name=user_name,
+                            project_id=project_id,
+                            episode_id=episode_id,
+                            job_id=job_id,
+                            item_id=sid,
+                            item_label=result.get("shot_label") or shot_label,
+                            result="success",
+                            message="Shot video generated" if not bool(result.get("skipped")) else "Shot video skipped",
+                            extra={
+                                "mode": mode,
+                                "skipped": bool(result.get("skipped")),
+                                "skip_reason": result.get("skip_reason"),
+                            },
+                        )
+                    else:
+                        failed += 1
+                        error_message = str(result.get("error") or "Unknown error")
+                        errors.append(f"{result.get('shot_label') or shot_label}: {error_message}")
+                        _log_batch_sys_event(
+                            kind="shot-media-batch",
+                            phase="item",
+                            user_id=user_id,
+                            user_name=user_name,
+                            project_id=project_id,
+                            episode_id=episode_id,
+                            job_id=job_id,
+                            item_id=sid,
+                            item_label=result.get("shot_label") or shot_label,
+                            result="failed",
+                            message=error_message,
+                            extra={"mode": mode},
+                        )
+
+                    completed += 1
+                    while len(active_future_map) < max_workers and not _is_stop_requested() and _submit_next_shot(executor):
+                        pass
+
+                    episode = _read_latest_episode()
+                    if not episode:
+                        break
+                    latest = _read_shot_media_batch_status(episode)
+                    latest["completed"] = completed
+                    latest["success"] = success
+                    latest["failed"] = failed
+                    latest["errors"] = errors
+                    latest["updated_at"] = now_bj_iso()
+                    latest["message"] = f"Progress {completed}/{total}" if bool(result.get("ok")) else f"Progress {completed}/{total} (with errors)"
+                    _persist_shot_media_batch_status(db, episode, latest)
+
+                    if _is_stop_requested():
+                        _persist_stopped_status()
+                        return
+
+                    _persist_active_video_status(episode)
+
+            episode = _read_latest_episode()
+            if episode:
+                final_status = _read_shot_media_batch_status(episode)
+                final_status["running"] = False
+                final_status["completed"] = completed
+                final_status["success"] = success
+                final_status["failed"] = failed
+                final_status["errors"] = errors
+                final_status["current_asset_type"] = None
+                final_status["current_asset_label"] = ""
+                final_status["updated_at"] = now_bj_iso()
+                final_status["finished_at"] = final_status["updated_at"]
+                final_status["message"] = f"Batch done: success {success}, failed {failed}"
+                _persist_shot_media_batch_status(db, episode, final_status)
+                _log_batch_sys_event(
+                    kind="shot-media-batch",
+                    phase="end",
+                    user_id=user_id,
+                    user_name=user_name,
+                    project_id=project_id,
+                    episode_id=episode_id,
+                    job_id=job_id,
+                    result="completed",
+                    message=final_status.get("message"),
+                    extra={
+                        "completed": completed,
+                        "success": success,
+                        "failed": failed,
+                        "mode": mode,
+                        "max_concurrency": max_workers,
+                    },
+                )
+            return
 
         for shot in target_shots:
             episode = _read_latest_episode()
@@ -25589,9 +25985,18 @@ def start_shot_media_batch_job(
     if req.shot_ids:
         shots_query = shots_query.filter(Shot.id.in_(req.shot_ids))
     target_shots = shots_query.order_by(Shot.id.asc()).all()
+    if mode == "videos":
+        target_shots = [shot for shot in target_shots if _is_shot_video_batch_eligible(shot, bool(req.overwrite_existing))]
     shot_ids = [int(s.id) for s in target_shots]
     if not shot_ids:
+        if mode == "videos":
+            raise HTTPException(status_code=400, detail="No eligible shots found for video batch task")
         raise HTTPException(status_code=400, detail="No shots found for batch task")
+
+    batch_max_concurrency = _resolve_user_batch_parallel_limit(
+        getattr(current_user, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
+        default=SHOT_MEDIA_BATCH_DEFAULT_CONCURRENCY,
+    )
 
     now_iso = now_bj_iso()
     status_payload = {
@@ -25602,6 +26007,7 @@ def start_shot_media_batch_job(
         "started_by_user_id": int(current_user.id),
         "started_by_username": str(current_user.username or ""),
         "shot_ids": shot_ids,
+        "max_concurrency": batch_max_concurrency,
         "overwrite_existing": bool(req.overwrite_existing),
         "total": len(shot_ids),
         "completed": 0,
@@ -25636,6 +26042,7 @@ def start_shot_media_batch_job(
             "shot_ids": shot_ids,
             "total": len(shot_ids),
             "mode": mode,
+            "max_concurrency": batch_max_concurrency,
             "overwrite_existing": bool(req.overwrite_existing),
         },
     )
