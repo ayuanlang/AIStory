@@ -358,7 +358,7 @@ class LLMService:
     def _infer_provider(self, base_url: str, model: str = "") -> str:
         url = (base_url or "").lower()
         model_lower = (model or "").lower()
-        if "kie.ai" in url or model_lower.startswith("gemini-2.5"):
+        if "kie.ai" in url:
             return "kie"
         if "ark.cn-" in url or "doubao" in model_lower:
             return "doubao"

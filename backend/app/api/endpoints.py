@@ -11431,6 +11431,11 @@ async def regenerate_scene(
             "You MUST preserve project language rules from the prompt file: do not force dialogue, visible text, labels, or screen text into English unless the project language actually requires English.\n"
             "Character generation prompts must preserve full-body framing with shoes visible as the asset baseline.\n"
             "Environment generation prompts must remain clean-plate, no-human prompts: no over-shoulder wording, no shoulder silhouettes, no human reflections, no human shadows, no role labels, and no CHAR references inside environment prompts.\n"
+            "Output must be import-first and parser-safe: do NOT output explanations, bullets, validation notes, or code fences.\n"
+            "The final output must contain exactly 2 parts only: first exactly 1 markdown scene row patch table, then exactly 1 SUBJECTS_JSON object.\n"
+            "SUBJECTS_JSON must be exactly one valid JSON object with top-level keys characters, props, environments, and all three keys must always exist even when empty.\n"
+            "For each entity item, use only the field contract defined by scene_regenerate.txt and scene_analysis.txt; if an identifier is included, only subject_no may appear as an extra import field.\n"
+            "Missing optional strings must use empty string, missing arrays must use empty array, and you must not output null, undefined, metadata wrappers, or parser-hint fields.\n"
             "Return exactly 1 scene row patch in markdown table format plus one SUBJECTS_JSON object for missing entities only.\n"
             "In entity-only mode, scene/shots are not replaced; the row patch may update scene_name / equivalent_duration / core_scene_info / original_script_text / environment_name / linked_characters / key_props when needed to reflect corrected scene grounding and supplemented entities."
         )
@@ -11453,6 +11458,11 @@ async def regenerate_scene(
             "You MUST preserve project language rules from the prompt file: do not force dialogue, visible text, labels, or screen text into English unless the project language actually requires English.\n"
             "Character generation prompts must preserve full-body framing with shoes visible as the asset baseline.\n"
             "Environment generation prompts must remain clean-plate, no-human prompts: no over-shoulder wording, no shoulder silhouettes, no human reflections, no human shadows, no role labels, and no CHAR references inside environment prompts.\n"
+            "Output must be import-first and parser-safe: do NOT output explanations, bullets, validation notes, or code fences.\n"
+            "The final output must contain exactly 2 parts only: markdown scene row patch table(s) first, then exactly 1 SUBJECTS_JSON object.\n"
+            "SUBJECTS_JSON must be exactly one valid JSON object with top-level keys characters, props, environments, and all three keys must always exist even when empty.\n"
+            "For each entity item, use only the field contract defined by scene_regenerate.txt and scene_analysis.txt; if an identifier is included, only subject_no may appear as an extra import field.\n"
+            "Missing optional strings must use empty string, missing arrays must use empty array, and you must not output null, undefined, metadata wrappers, or parser-hint fields.\n"
             f"Return 1 to {safe_max_scenes} regenerated scene rows in markdown table format plus one SUBJECTS_JSON object for missing entities only."
         )
     system_instruction = f"{system_instruction}{regen_injection}"
@@ -11537,6 +11547,10 @@ async def regenerate_scene(
         "- SUBJECTS_JSON must contain ONLY missing/new entities that are not already listed in System-level Subjects Inventory.\n"
         "- Keep existing subject names stable; do not duplicate existing names in SUBJECTS_JSON.\n"
         "- If no missing entity exists for a category, return an empty array for that category.\n\n"
+        "- Output must be parser-safe and directly importable: no explanations, no bullets outside the requested structure, no code fences, no metadata wrapper objects.\n"
+        "- SUBJECTS_JSON top-level keys must be exactly characters, props, environments, and all 3 keys must always exist.\n"
+        "- Each entity item may use only the prompt-defined import fields; if an identifier is included, only subject_no may be added as an extra import field.\n"
+        "- Missing optional strings must use empty string, missing arrays must use empty array, and null/undefined are forbidden.\n\n"
         "Required Output Format:\n"
         f"{mode_specific_output_line}"
         "2) SUBJECTS_JSON: one valid JSON object only, with complete import-ready fields (same semantics as system subjects import):\n"
@@ -27088,6 +27102,7 @@ async def analyze_asset_image(
         billing_service.check_can_proceed(current_user, cost)
 
     llm_config = {
+        "provider": api_setting.provider,
         "api_key": api_setting.api_key,
         "base_url": api_setting.base_url,
         "model": api_setting.model,
@@ -27315,9 +27330,11 @@ async def analyze_entity_image(
         billing_service.check_can_proceed(current_user, cost)
 
     llm_config = {
+        "provider": api_setting.provider,
         "api_key": api_setting.api_key,
         "base_url": api_setting.base_url,
-        "model": api_setting.model
+        "model": api_setting.model,
+        "config": api_setting.config or {}
     }
     logger.info(f"Using Model: {api_setting.model}")
 

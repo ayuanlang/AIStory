@@ -377,6 +377,16 @@ Return only these two parts, in this order:
   "environments": []
 }
 
+## Importer Safety Protocol
+- The final output must contain exactly 2 parts only: first the markdown row patch, then exactly 1 `SUBJECTS_JSON` object. No third section is allowed.
+- The markdown part must be a real markdown table only. Do not place commentary, bullets, section summaries, validation notes, or prose before it or between the table and `SUBJECTS_JSON`.
+- `SUBJECTS_JSON` must be exactly 1 valid JSON object. Do not wrap it in code fences. Do not prepend or append explanatory text.
+- The `SUBJECTS_JSON` top-level keys must be exactly `characters`, `props`, and `environments`, and all 3 keys must always exist. If a category has no new entities, return an empty array.
+- Each entity item may use only the field contract defined in this prompt and aligned with `scene_analysis`. If you include an identifier, only `subject_no` is allowed as an extra import field; do not invent any other extra keys.
+- Missing optional string fields must use an empty string `""`; missing arrays must use `[]`; do not output `null`, `undefined`, or placeholder commentary.
+- The scene row patch and `SUBJECTS_JSON` must stay name-closed: the names/types used in the row patch must match the names/types used in `SUBJECTS_JSON` exactly.
+- Output must be directly importable without cleanup. If any wording would force the importer to strip prose, rewrite the output instead of emitting that prose.
+
 ## SUBJECTS_JSON Item Contract
 
 ### Characters
@@ -548,3 +558,4 @@ Example constraints:
 - Do NOT output any entity that should be reused from inventory.
 - Do NOT overwrite existing entities conceptually; emit only the missing entities that can be safely imported incrementally.
 - Keep output directly importable.
+- Do NOT output any extra JSON wrapper, metadata object, status field, summary field, or parser hint field.
