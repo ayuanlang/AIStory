@@ -20448,6 +20448,7 @@ async def _run_generate_image(
 
         if callable(job_progress_callback):
             image_provider_options["_grsai_task_id_callback"] = job_progress_callback
+            image_provider_options["_provider_task_id_callback"] = job_progress_callback
         if provider_callback_ticket:
             image_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
         if provider_callback_url:
@@ -20468,6 +20469,15 @@ async def _run_generate_image(
         if is_subject_generation and resolved_subject_type:
             image_provider_options["__subject_type"] = resolved_subject_type
             image_provider_options["__asset_type"] = "subject"
+            subject_name_hint = str(
+                getattr(req, "subject_name", None)
+                or getattr(req, "entity_name", None)
+                or request_meta.get("subject_name")
+                or request_meta.get("entity_name")
+                or ""
+            ).strip()
+            if subject_name_hint:
+                image_provider_options["__subject_name"] = subject_name_hint
 
         if max_images_per_call is not None:
             files_urls = image_provider_options.get("filesUrl")
@@ -20921,7 +20931,7 @@ async def _run_generate_image_job(
     req_provider = str(req_payload.get("provider") or "").strip() or None
     req_model = str(req_payload.get("model") or "").strip() or None
 
-    def _on_grsai_task_id(task_id: str) -> None:
+    def _on_provider_task_id(task_id: str) -> None:
         normalized_task_id = str(task_id or "").strip()
         if not normalized_task_id:
             return
@@ -20929,7 +20939,7 @@ async def _run_generate_image_job(
         logger.info(
             "[ImageJob] provider task linked | job_id=%s provider=%s provider_task_id=%s",
             job_id,
-            "grsai",
+            req_provider or "unknown",
             normalized_task_id,
         )
 
@@ -20959,7 +20969,7 @@ async def _run_generate_image_job(
                 req_obj,
                 user,
                 db,
-                job_progress_callback=_on_grsai_task_id,
+                job_progress_callback=_on_provider_task_id,
                 provider_callback_ticket=provider_callback_ticket,
                 provider_callback_url=provider_callback_url,
             ),

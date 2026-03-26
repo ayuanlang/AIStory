@@ -390,6 +390,91 @@ class MediaGenerationService:
             return f"{base_prompt}\n\nNegative prompt constraints: {neg_prompt}"
         return f"Negative prompt constraints: {neg_prompt}"
 
+    def _looks_like_scene_subject_placeholder_prompt(self, prompt: Any) -> bool:
+        text = str(prompt or "").strip().lower()
+        if not text:
+            return False
+        return (
+            "auto-created placeholder from scene subject reference" in text
+            and "subject type:" in text
+            and ("core scene info:" in text or "original script text:" in text)
+        )
+
+    def _extract_structured_prompt_field(self, prompt: Any, label: str) -> str:
+        text = str(prompt or "")
+        if not text:
+            return ""
+        prefix = f"{str(label or '').strip().lower()}:"
+        for block in re.split(r"\n\s*\n", text):
+            stable_block = str(block or "").strip()
+            if not stable_block:
+                continue
+            lower_block = stable_block.lower()
+            if lower_block.startswith(prefix):
+                return stable_block.split(":", 1)[1].strip()
+        return ""
+
+    def _cleanup_prompt_grounding_text(self, value: Any, limit: int = 420) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+
+        cleaned = text.replace("\r", "\n").replace("<br>", " ")
+        cleaned = cleaned.replace("`", "")
+        cleaned = cleaned.replace("**", "")
+        cleaned = re.sub(r"\{([^{}]+)\}", r"\1", cleaned)
+        cleaned = re.sub(r"\b(?:CHAR|PROP|ENV)\s*:\s*\[\s*@?([^\]\(]+)\s*\]\s*\(([^)]*)\)", r"\1", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(?:CHAR|PROP|ENV)\s*:\s*\[\s*@?([^\]]+)\s*\]", r"\1", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\([^)]*ref_image_url\s*:[^)]*\)", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+
+        if len(cleaned) <= limit:
+            return cleaned
+
+        truncated = cleaned[:limit].rsplit(" ", 1)[0].strip()
+        return f"{truncated or cleaned[:limit].strip()}..."
+
+    def _sanitize_kie_placeholder_prompt(self, prompt: Any, subject_type: Optional[str] = None, subject_name: Optional[str] = None) -> str:
+        raw_prompt = str(prompt or "").strip()
+        if not self._looks_like_scene_subject_placeholder_prompt(raw_prompt):
+            return raw_prompt
+
+        resolved_type = str(subject_type or self._extract_structured_prompt_field(raw_prompt, "Subject Type") or "subject").strip().lower()
+        resolved_name = self._cleanup_prompt_grounding_text(subject_name, limit=80)
+        source_scene = self._cleanup_prompt_grounding_text(self._extract_structured_prompt_field(raw_prompt, "Source Scene"), limit=80)
+        source_scene_name = self._cleanup_prompt_grounding_text(self._extract_structured_prompt_field(raw_prompt, "Source Scene Name"), limit=120)
+        scene_environment = self._cleanup_prompt_grounding_text(self._extract_structured_prompt_field(raw_prompt, "Scene Environment"), limit=160)
+        core_scene_info = self._cleanup_prompt_grounding_text(self._extract_structured_prompt_field(raw_prompt, "Core Scene Info"), limit=380)
+        original_script = self._cleanup_prompt_grounding_text(self._extract_structured_prompt_field(raw_prompt, "Original Script Text"), limit=260)
+
+        scene_label = source_scene_name or source_scene
+        grounding_parts: List[str] = []
+        if scene_environment:
+            grounding_parts.append(f"Environment anchor: {scene_environment}.")
+        if scene_label:
+            grounding_parts.append(f"Source scene: {scene_label}.")
+        if core_scene_info:
+            grounding_parts.append(f"Visual grounding: {core_scene_info}.")
+        if original_script:
+            grounding_parts.append(f"Script grounding: {original_script}.")
+
+        subject_label = resolved_name or "the referenced subject"
+        if resolved_type in {"environment", "env"}:
+            prefix = f"Cinematic environment reference still for {subject_label}. Preserve stable space identity, composition anchors, materials, and lighting."
+            suffix = "No characters unless essential to the location. No dialogue text, captions, markdown, labels, or storyboard notes."
+        elif resolved_type in {"prop", "object"}:
+            prefix = f"Cinematic prop reference still for {subject_label}. Focus on the object design, materials, silhouette, and reusable production details."
+            suffix = "Single clear asset focus. No extra hands, no captions, no markdown, no layout notes."
+        else:
+            prefix = f"Cinematic character reference still for {subject_label}. Focus on stable identity, wardrobe, silhouette, and screen-ready realism."
+            suffix = "Single primary subject. No captions, no markdown, no split layout, no storyboard notes."
+
+        sanitized = " ".join([prefix] + grounding_parts + [suffix]).strip()
+        sanitized = re.sub(r"\s+", " ", sanitized).strip()
+        if len(sanitized) > 900:
+            sanitized = sanitized[:900].rsplit(" ", 1)[0].strip() + "..."
+        return sanitized
+
     def _is_grsai_quota_or_throttle_error(self, payload: Any) -> bool:
         text = self._flatten_text(payload).lower()
         markers = [
@@ -7644,7 +7729,6 @@ class MediaGenerationService:
         negative_prompt: Optional[str] = None,
         image_size: Optional[str] = None,
     ):
-        prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = (config.get("api_key") or "").strip()
         if not api_key:
             return {"error": "Missing KIE API key", "submit_failed": True}
@@ -7791,6 +7875,16 @@ class MediaGenerationService:
                     model = i2i_model
 
         tool_conf = config.get("config", {}) or {}
+        subject_type_hint = str(tool_conf.get("__subject_type") or "").strip().lower() or None
+        subject_name_hint = str(
+            tool_conf.get("__subject_name")
+            or tool_conf.get("subject_name")
+            or tool_conf.get("entity_name")
+            or tool_conf.get("name")
+            or ""
+        ).strip() or None
+        prompt = self._sanitize_kie_placeholder_prompt(prompt, subject_type_hint, subject_name_hint)
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
 
         resolved_setting_id = None
         try:
@@ -8111,10 +8205,12 @@ class MediaGenerationService:
                 payload_input.pop("image_size", None)
             else:
                 # Other KIE market image models may still expect image_size-style input.
-                # Map to ratio enum when available; fallback to auto.
-                kie_image_size = normalized_ar or "auto"
+                # Use resolution tier only when an actual size tier is available.
+                kie_image_size = self._normalize_image_size_value(
+                    image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
+                )
                 allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
-                if allowed_image_sizes:
+                if kie_image_size and allowed_image_sizes:
                     mapped_image_size = self._map_image_size_to_allowed(kie_image_size, runtime_enum_catalog.get("image_size"))
                     if mapped_image_size and str(mapped_image_size).strip().lower() != str(kie_image_size).strip().lower():
                         logger.warning(
@@ -8137,7 +8233,10 @@ class MediaGenerationService:
                             fallback_image_size,
                         )
                         kie_image_size = fallback_image_size
-                payload_input["image_size"] = kie_image_size
+                if kie_image_size:
+                    payload_input["image_size"] = kie_image_size
+                else:
+                    payload_input.pop("image_size", None)
         elif gen_type == "video":
             duration_value = 5
             try:
@@ -9225,6 +9324,9 @@ class MediaGenerationService:
         submitted_model = submit_payload.get("model") if isinstance(submit_payload, dict) else model
         initial_submitted_model = str(submitted_model or "").strip()
         veo_retry_models = _build_veo_retry_models(submitted_model) if use_veo_api else []
+        task_id_callback = tool_conf.get("_provider_task_id_callback")
+        if not callable(task_id_callback):
+            task_id_callback = None
 
         if gen_type in {"image", "video"}:
             logger.info(
@@ -9490,6 +9592,18 @@ class MediaGenerationService:
         if not task_id:
             return {"error": "No taskId from KIE", "details": data, "submit_failed": True, "runtime_model": submitted_model}
 
+        if callable(task_id_callback):
+            try:
+                callback_result = task_id_callback(str(task_id))
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+            except Exception as callback_err:
+                logger.warning(
+                    "KIE task_id_callback_failed | task_id=%s error=%s",
+                    task_id,
+                    callback_err,
+                )
+
         if use_veo_api:
             final_generation_type = str((submit_payload or {}).get("generationType") or "").strip()
             final_aspect_ratio = str((submit_payload or {}).get("aspect_ratio") or "").strip()
@@ -9647,13 +9761,17 @@ class MediaGenerationService:
             return deduped
 
         callback_enabled = bool(callback_url and callback_url != "-1")
+        callback_assisted_job = bool(
+            callback_enabled
+            and str(callback_ticket or "").strip().startswith(("image-job-", "video-job-"))
+        )
         is_public_deploy = bool(
             str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
             or str(os.getenv("RENDER") or "").strip()
             or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
         )
 
-        poll_timeout_seconds = 600
+        poll_timeout_seconds = 120 if callback_assisted_job else 600
         try:
             if tool_conf.get("poll_timeout_seconds") is not None:
                 poll_timeout_seconds = max(120, int(tool_conf.get("poll_timeout_seconds")))
@@ -9665,16 +9783,25 @@ class MediaGenerationService:
         # Strategy:
         # - keep callback as the preferred completion path when available
         # - keep polling responsive enough that local state does not lag far behind provider completion
-        poll_interval_seconds = 2
+        poll_interval_seconds = 5 if callback_assisted_job else 2
         if callback_enabled and is_public_deploy:
-            poll_interval_seconds = 3
+            poll_interval_seconds = max(poll_interval_seconds, 3)
         elif callback_enabled:
-            poll_interval_seconds = 2
+            poll_interval_seconds = max(poll_interval_seconds, 2)
         try:
             if tool_conf.get("poll_interval_seconds") is not None:
                 poll_interval_seconds = max(2, int(tool_conf.get("poll_interval_seconds")))
         except Exception:
             pass
+
+        logger.info(
+            "KIE poll strategy | task_id=%s callback_enabled=%s callback_assisted_job=%s timeout_seconds=%s interval_seconds=%s",
+            task_id,
+            callback_enabled,
+            callback_assisted_job,
+            poll_timeout_seconds,
+            poll_interval_seconds,
+        )
 
         poll_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
         last_poll_state_marker: Optional[str] = None
