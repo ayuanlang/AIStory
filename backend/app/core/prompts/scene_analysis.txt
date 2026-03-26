@@ -95,7 +95,11 @@
   1) 轴线反转（跨180°）；
   2) 观察方向切换；
   3) 背景主物体集合变化；
-  - 角色 JSON 示例统一收口（Mandatory）：Part 2A 仅保留一组中文项目与一组英文项目权威示例；其余补充角色样例全部省略，真实输出按同一结构扩展即可。
+  4) 时空层切换且需要独立承载闪回/回忆/往事段落；
+  5) 原剧本中的关键覆盖信息（对白、动作、外观/着装、道具状态、环境细节、字幕/屏幕文字、V.O./O.S.）若继续并入同一 Scene 会造成落点混杂、镜头承载过载或时态不清。
+- Scene 拆分保真规则（Mandatory）：是否拆 Scene 的首要判据不是篇幅长短，而是“是否能完整承载原剧本信息并保持镜头语义清楚”。只要同一 Scene 无法同时清楚覆盖剧本中的动作链、对白链、外观/着装信息、道具状态变化、环境状态或时空层切换，就必须拆分，不得为了省 Scene 数量而压缩信息。
+- 闪回拆 Scene 规则（Mandatory）：凡闪回/回忆段落在时间层、人物年龄态/妆发/服装、环境状态、道具状态或语言事件上与当下时空形成可识别差异，必须拆成独立 Scene（必要时独立 Environment/Character/Prop 变体），禁止把“当下 + 闪回内容”硬塞进同一 Scene 仅靠一句说明带过。
+- 闪回桥接保留规则（Mandatory）：即使闪回被拆成独立 Scene，前一 Scene 的末 Beat 与闪回 Scene 的首 Beat、以及闪回末 Beat 与回到当下 Scene 的首 Beat，仍必须保留明确桥接关系；`Split Reason` 中应写明该拆分由哪一个桥接锚点触发，例如视线、物体特写、声音桥、动作余势、相似构图或光线呼应，禁止只写“进入闪回/回到现在”。
 - 若本行环境存在依赖（`Environment Relation=REUSE/VARIANT_OF`、`Base Environment Reference` 非空或存在 `visual_dependencies`），`Core Scene Info` 必须显式描述依赖环境：写出 `ENV:[依赖环境名]` 与依赖关系（继承锚点/变化点），不得只描述当前环境。
 
 #### {Scene Subjects}（场景实体先抽取，Mandatory）
@@ -188,6 +192,23 @@
 - Beats 必须覆盖原剧本全部信息：动作、对白/台词、表情与情绪反应、人物外观与着装描写、道具状态变化、环境细节、字幕、屏幕文字、V.O./O.S.、语言切换事件。
 - 完整覆盖判定（Mandatory）：凡剧本中能被看见、听见、识别、或会直接影响镜头设计与实体抽取的信息，都必须在 Scene 分析、`{Beats}`、实体抽取、Subject Index 或 Part 2 中找到明确落点；禁止仅保留剧情主干而省略外观描写、动作细节、道具细节、环境细节或对白附带信息。
 - 若 `Project Context` 指定了项目语言，则上述所有语言性信息在覆盖时必须先翻译/转换成项目语言，再写入最终分析结果；若未指定，则沿用剧本原始语言，不得额外英文化。
+
+#### Shot 级下游交付模板（Mandatory）
+- 凡 `{Beats}` 继续下沉为 Shot，必须显式映射到 `Shot ID=EPxx_SCyy_SHzz`，并保持与对应 Beat 一一对应；禁止多个高信息量 Beat 在 Shot 级无说明合并。
+- 每个 Shot 必须至少包含以下 6 个槽位，供下游 `shot_generator` 使用：
+  1. `Shot ID`
+  2. `Source Beat`
+  3. `Core Subjects (1-3)`
+  4. `Start Frame`
+  5. `Video Content`
+  6. `End Frame`
+- Shot 覆盖闭环（Mandatory）：`Start Frame / Video Content / End Frame` 三段合起来必须完整承载该 Shot 对应 Beat 的原剧本信息，不限于动作、对白、表情/情绪、外观/着装、道具状态、环境变化、字幕/屏幕文字、V.O./O.S. 与语言切换事件；禁止只写运动轨迹而漏掉文本信息或外观状态。
+- Shot 单镜保真规则（Mandatory）：若某一 Beat 中同时存在“动作推进 + 关键对白 + 外观/道具状态变化 + 闪回桥接”且单镜无法清楚承载，必须继续拆成多个 Shot，而不是在一个 `Video Content` 里堆砌过量信息。
+- 闪回 Shot 过渡规则（Mandatory）：当 Shot 承担“进入闪回”或“从闪回回切”功能时，`Start Frame` 与 `End Frame` 必须至少有一端明确保留桥接锚点，`Video Content` 必须写清过渡方式（如视线承接、物体特写推进、声音桥延续、动作余势匹配、构图/光线呼应、焦点漂移）；禁止把闪回 Shot 写成单纯的时空跳变硬切。
+- 闪回桥接镜头最小模板（Mandatory）：
+  `Shot ID: EPxx_SCyy_SHzz | Source Beat: Beat n | Core Subjects: {1-3项} | Start Frame: 当前时空中的桥接锚点仍清晰可见，并承接上一镜动作/视线/声音 | Video Content: 通过{视线/物体/声音/动作/构图/光线}完成时空滑移，逐步显露闪回信息 | End Frame: 闪回时空中的新主体、新状态与关键覆盖信息已稳定成立`。
+- 常规 Shot 最小模板（Mandatory）：
+  `Shot ID: EPxx_SCyy_SHzz | Source Beat: Beat n | Core Subjects: CHAR:[@A], PROP:[B], ENV:[C] | Start Frame: {起始位置/起始表情或状态/起始对白或屏幕信息} | Video Content: {动作过程 + 关系变化 + 对白/字幕/音效 + 必要外观/道具/环境细节} | End Frame: {结果位置/结果状态/下一镜可接的稳定画面}`。
 
 ### 3) 实体完备性
 - **维度生成检查 (Dimension Completeness Gate, 强制)**：每个 Scene 在输出前必须先做“实体层 + 提示词层”双重维度验收；该检查只作为内部门禁，不得把 checklist 或“通过/失败”字样输出到最终结果。
@@ -398,6 +419,8 @@
 - **禁止混表（Hard Rule）**：`Subject Index` 与 `Part 2` 不得使用 Markdown 表格展示；请分别使用“编号列表/键值列表 + JSON”。
 
 ### Part 1: Scenes Table (Markdown)
+- `Split Reason` 必须写明该 Scene 为什么单独成立，并明确指出本场主要承载的原剧本覆盖维度，例如对白、动作链、外观/着装变化、道具状态变化、环境状态变化、闪回桥接或语言信息落位；禁止只写“机位变化/方便分镜”这类空泛理由。
+- 若该 Scene 属于闪回/回忆段或承担闪回桥接，`Split Reason` 必须额外写出 `Transition Anchor`（如视线承接、物体特写、声音桥、动作延续、构图呼应），说明它如何从上一 Scene 接入并如何回接下一 Scene；禁止把闪回 Scene 写成无来源、无回路的孤立段落。
 - `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Scene Subjects}`, `{Beats}`。
 - `Core Scene Info` 必须包含 `**{Env Anchor}**: ENV:[<Environment Name>]`，且该名称与本行 `Environment Name` 完全一致。
 - 当 `Environment Relation` 为 `REUSE:<EnvName>` 或 `VARIANT_OF:<EnvName>`（或存在 `visual_dependencies`）时，`Core Scene Info` 还必须包含 `**{Dependent Envs}**`，列出所有依赖环境（`ENV:[...]`）及关系说明。
@@ -417,7 +440,7 @@
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 拆分原因。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
+| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 因{对白/动作/外观变化/道具状态/环境状态/闪回桥接}需要独立承载本场；Transition Anchor={视线/物体特写/声音桥/动作余势/构图呼应}。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手，台词/字幕/音效:{原剧本对应内容}；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）
 - **模板锁定（Mandatory）**：Subject Index 每一行必须严格采用固定骨架，禁止改序、改键、增键、删键：
@@ -506,7 +529,7 @@
 - `CHAR:[@Name]` 仅限引用语境；JSON 内一律 `Name`。
 - 字段语言职责固定（Mandatory）：沿用总则第 12 条与 Part 2 共同双语字段复核；Character 条目只做执行。
 - 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics` 保持显式一致；若这些字段存在而提示词未体现，视为无效 JSON 示例与无效输出。
-- 双语境示例规则（Mandatory）：本节至少同时理解两类示例语境：`中文项目语境示例` 与 `英文项目语境示例`。示例的作用是展示“项目语言如何影响人物设计基线”，不是提供可复用角色原型；真实输出必须按当前剧本重设计。
+- 单语种示例收口规则（Mandatory）：本节只保留 1 组角色 JSON 权威示例，用于展示单个语种项目下的人物设计基线。跨语种覆盖由 Part 2A-2C 整体共同完成，不要求每一类实体都同时放中文与英文两组示例；真实输出必须按当前剧本重设计。
 - 中文项目语境示例：
 ```json
 {
@@ -535,92 +558,12 @@
 }
 ```
 
-- 英文项目语境示例：
-```json
-{
-  "characters": [
-    {
-      "subject_no": "S101",
-      "name": "Lila Ashford",
-      "name_en": "Lila Ashford",
-      "gender": "F",
-      "role": "Conservatory Pianist",
-      "archetype": "Youthful Romantic Idealist",
-      "appearance_cn": "23岁左右，英美语境白人女性，身高约170cm，头身比约1:9，颈线修长，体态轻盈舒展，栗棕色长发低位束成缎带马尾并保留颊侧柔软碎发，白皙偏透的肤色保留真实细纹理与自然红润感，眼神明亮专注，肩颈舒展，胸腰臀比例清楚、女性曲线更明确，整体轻盈修长但不扁平。",
-      "clothing": "当前服装：浅雾蓝短款修身羊绒开衫（珠饰纽扣、肩线贴合），奶油色缎面束身感内搭，烟粉色不对称压褶中长裙，象牙白缎带绑带芭蕾平底鞋，低马尾细缎带，珍珠耳钉。时尚对标：角色定位=女性音乐学院钢琴生；当代风格参考=年轻专业艺术院校群体中的轻柔艺术院校高级感穿搭，强调精致针织、缎面层次、收腰线条、轻盈裙摆与低饱和粉蓝奶油色系；版型/材质/配色关键词=短款羊绒开衫、缎面内搭、不对称压褶中长裙、绑带芭蕾平底鞋、珠饰细节、雾蓝+奶油白+烟粉。其他剧本衣着描述：无。",
-      "action_characteristics": "动作轻柔克制、肩颈放松、手部收束干净、转身缓慢且带有受过音乐训练的姿态控制。",
-      "generation_prompt_cn": "写实现代英文项目角色四视图设定图，Lila Ashford 为英美语境下的年轻女性音乐学院钢琴生。她约23岁，身高约170cm，头身比约1:9，颈线修长，体态轻盈舒展，栗棕色长发低位束成缎带马尾，额前与颊侧留有柔软碎发，白皙偏透的肤色保留真实细纹理与自然红润感，眼神明亮专注，整体呈现成年女性的青春少女感，而不是学生制服化或职场干练模板。她的肩颈舒展，胸腰臀比例清楚、女性曲线更明确，整体依然轻盈修长但不扁平。四个面板保持同一身份、同一服装、同一比例系统，机位为胸口高度固定棚拍视角，视角顺序严格为面部特写、正面全身、侧面全身、反面全身。正面、侧面、反面三张必须都是完整全身入镜且鞋子清晰可见。当前服装统一为浅雾蓝短款修身羊绒开衫，带珠饰纽扣；奶油色缎面束身感内搭；烟粉色不对称压褶中长裙；象牙白缎带绑带芭蕾平底鞋；以及低马尾上的细缎带与珍珠耳钉。下巴自然微抬，肩线放松，手部姿态克制而干净，转身轻柔缓慢，体现受过音乐训练的姿态控制。布光采用柔和主光、低强度正面补光与干净轮廓光，明确皮肤、发丝与面料层次，但避免滤镜化甜腻感。纯白背景，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary character sheet for Lila Ashford, a young female conservatory pianist grounded in an English-language contemporary realism context. Give her a youthful, luminous, heroine-friendly screen presence without drifting into school-uniform coding or childish styling: long chestnut hair tied into a low ribboned ponytail with soft face-framing wisps, clear fair skin with real texture and a faint natural blush, a slim graceful figure with clearly readable bust-waist-hip proportion and more defined feminine curves, and bright attentive eyes that read gentle and idealistic rather than hardened or corporate. She reads as about 23 years old, around 170 cm tall, with an approximately 1:9 head-to-body proportion, an elongated neck line, relaxed shoulders, and poised, music-trained posture. Keep the four panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back from one fixed studio observer position at chest height. The Front, Side, and Back panels must all be full-body with shoes clearly visible. Her wardrobe stays consistent across all panels: a mist-blue cropped cashmere cardigan with jewel buttons, a cream satin corsage-inspired shell top, a dusty-rose asymmetric pleated midi skirt, ivory ribbon-tie ballet flats, pearl stud earrings, and a slim satin ribbon at the ponytail. Her chin stays naturally lifted, her hands rest with quiet control, and each turn feels light, restrained, and youthful in an adult way. Use flattering premium lead-character lighting with a soft key, restrained frontal fill, and a clean rim light that clarifies skin texture, hair shine, and fabric layering without glamour haze. Pure white background, no text, no watermark.",
-      "negative_prompt_en": "childish styling, school uniform coding, plastic skin, anime proportions, extra limbs, waxy face, noisy background, text, watermark",
-      "anchor_description": "female conservatory pianist, low ribboned chestnut ponytail, elongated neck line, gently lifted chin",
-      "visual_dependencies": [],
-      "dependency_strategy": {
-        "type": "Original",
-        "logic": "Original English-project lead character; preserve the low ribboned ponytail, bright eye expression, cardigan-and-pleated-skirt silhouette, and ballet-flat profile as immutable anchors."
-      }
-    }
-  ]
-}
-```
-
-- 补充中文项目语境示例：
-```json
-{
-  "characters": [
-    {
-      "subject_no": "S002",
-      "name": "程雾",
-      "name_en": "Cheng Wu",
-      "gender": "F",
-      "role": "Contemporary Gallery Curator",
-      "archetype": "Controlled Cosmopolitan Tastemaker",
-      "appearance_cn": "31岁左右，东亚女性，身高约172cm，头身比约1:8.75，锁骨与肩颈线条舒展，冷调白皙肤色保留自然细纹理，黑色齐下巴短发一侧收至耳后，五官边界清楚，眼神冷静审视，胸腰臀比例清楚、女性曲线更明确，整体修长利落但并不骨感单薄。",
-      "clothing": "当前服装：石墨灰长款无袖结构感西装马甲（收腰省道、翻驳线锋利），香槟灰斜裁垂坠高领针织上衣，墨黑高腰开衩直筒长裙，深橄榄皮质及膝靴，拉丝金属耳骨夹，细窄金属戒指。时尚对标：角色定位=女性当代画廊策展人；当代风格参考=都市艺术行业中的冷静高审美时装化通勤风格，强调修长腰线、垂坠面料、低饱和矿物色系、雕塑感配饰与非制服化精致完成度；版型/材质/配色关键词=长款无袖马甲、斜裁针织、开衩直筒裙、及膝皮靴、拉丝金属饰品、石墨灰+香槟灰+墨黑+深橄榄。其他剧本衣着描述：无。",
-      "action_characteristics": "动作缓慢而有控制，站姿重心垂直稳定，转身幅度克制，下巴微收，抬手整理作品标签时手势简洁。",
-      "generation_prompt_cn": "写实现代中文项目角色四视图设定图，程雾为都市当代画廊策展人。她约31岁，身高约172cm，头身比约1:8.75，黑色齐下巴短发一侧收至耳后，面部轮廓清楚，肩颈舒展，锁骨与腰线都要可读，胸腰臀比例清楚、女性曲线更明确，整体修长利落但不干瘦。四个面板保持同一身份、同一服装、同一比例系统，机位为胸口高度固定棚拍视角，视角顺序严格为面部特写、正面全身、侧面全身、反面全身。正面、侧面、反面三张必须完整全身入镜且鞋子清晰可见。当前服装统一为石墨灰长款无袖结构感西装马甲，内搭香槟灰斜裁垂坠高领针织上衣，下装为墨黑高腰开衩直筒长裙，鞋履为深橄榄皮质及膝靴，配饰为拉丝金属耳骨夹与细窄金属戒指。整体气质必须是女性艺术行业从业者的高审美都市时装表达，而不是普通办公室套装或宽松休闲穿搭。动作缓慢克制，重心稳定，下巴微收，抬手姿态简洁。布光采用柔和主光、受控正面补光与窄轮廓光，明确面料垂坠、皮靴质感与皮肤微纹理。纯白背景，无文字无水印。",
-      "generation_prompt_en": "Photoreal contemporary character sheet for Cheng Wu, a female contemporary gallery curator in a Chinese-language urban drama context. She reads as about 31 years old, around 172 cm tall, with an approximately 1:8.75 head-to-body proportion, a sleek chin-length black bob tucked behind one ear, a calm appraising gaze, an elongated torso line, clearly readable bust-waist-hip proportion, and more defined feminine curves without losing restraint or realism. Keep the four panels in the strict order facial Close-up, full-body Front, full-body Side, full-body Back from one fixed studio observer position at chest height. The Front, Side, and Back panels must all be full-body with shoes clearly visible. Her wardrobe remains identical in every panel: a graphite longline sleeveless tailored vest with a cinched waist, a champagne-grey bias-cut draped knit top, an ink-black high-waist slit column skirt, deep olive knee-high leather boots, a brushed metal ear cuff, and slim metal rings. The styling should read as fashion-literate urban art-world polish with sculptural accessories and mineral-toned layering, not generic officewear or loose casual clothing. Her motions stay slow and controlled, with a slightly lowered chin, stable vertical balance, and concise hand gestures. Use soft premium lead-character lighting with restrained frontal fill and a narrow rim light to clarify skin texture, fabric drape, and boot structure. Pure white background, no text, no watermark.",
-      "negative_prompt_en": "generic office suit, hoodie, athletic wear, shapeless layers, waxy skin, anime proportions, extra limbs, text, watermark",
-      "anchor_description": "female gallery curator, chin-length tucked bob, elongated waistline, controlled low-velocity turn",
-      "visual_dependencies": [],
-      "dependency_strategy": {
-        "type": "Original",
-        "logic": "Original Chinese-project fashion-forward curator sample; preserve the tucked bob silhouette, cinched long vest outline, slit skirt line, and knee-boot profile as stable anchors."
-      }
-    }
-  ]
-}
-```
-
-- 角色 JSON 示例统一收口（Mandatory）：Part 2A 仅保留一组中文项目与一组英文项目权威示例；额外补充角色样例全部省略，真实输出按同一结构扩展即可。
+- 角色 JSON 示例统一收口（Mandatory）：Part 2A 仅保留 1 组中文项目权威示例；英文项目覆盖由 Part 2B/2C 的示例共同承担，真实输出按当前项目语言与同一 JSON 结构扩展即可。
 
 #### Part 2B — Props
 - 字段语言职责固定（Mandatory）：沿用总则第 12 条与 Part 2 共同双语字段复核；Prop 条目只做执行。
 - 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `type`、`description_cn`、`anchor_description` 保持显式一致；若 `description_cn` 已给出材质、磨损、开合、裂痕、雕刻等信息，提示词不得抽象化吞掉这些特征。
-- 双语境示例规则（Mandatory）：本节示例必须体现“中文项目道具体系”与“英文项目道具体系”的差异。真实输出不得复用示例对象名称、材质组合或地域标签。
-- 中文项目语境示例：
-```json
-{
-  "props": [
-    {
-      "subject_no": "S002",
-      "name": "古董怀表",
-      "name_en": "Antique Pocket Watch",
-      "type": "held/static",
-      "description_cn": "黄铜材质古董怀表，表壳边缘有细小磕碰，镜面有轻微划痕，内盖有雕刻纹路，可开合铰链结构完整。",
-      "generation_prompt_cn": "写实道具四视图：古董怀表，作为手持或静置都能被识别的关键叙事道具进行主资产表达，但当前画面只保留物体本身。必须保留其结构与状态特征：黄铜材质、边缘细小磕碰、镜面轻微划痕、内盖雕刻纹路、可开合且结构完整的铰链。机位锚点位于转台中心，镜头略高于物体中线，视角顺序严格为微距特写、正面、侧面、反面。布光采用左上主光、前侧低强度补光、后侧窄轮廓光，保证金属氧化、划痕与雕刻层次可读。仅允许中性支撑底座，禁止人物、手部和身体部位入画。纯白背景，高分辨率。",
-      "generation_prompt_en": "Photoreal prop sheet for Antique Pocket Watch, treated as a key narrative object that can read as either held or static while the frame itself remains strictly object-only. Preserve the identity cues from its description: brass body, small edge dents, lightly scratched crystal, engraved inner lid pattern, and a complete hinged opening structure in one stable intact state. Render it from a camera centered on the turntable and slightly above the midline, keeping the panels in the strict order macro Close-up, Front, Side, Back. Controlled key from top-left, gentle frontal fill, and a narrow rear rim keep metal oxidation, scratches, and engraved details legible without flattening the object. Neutral support stand allowed, no hands, no characters, no body parts. White background, high-resolution output.",
-      "negative_prompt_en": "plastic toy finish, incorrect modern numerals, broken hinge, extra accessories, hands, fabric backdrop, text, watermark",
-      "anchor_description": "brass case, light edge dents, scratched crystal, engraved inner lid, intact hinge",
-      "visual_dependencies": [],
-      "dependency_strategy": {
-        "type": "Original",
-        "logic": "Original Chinese-project prop; preserve the brass body, engraved lid, hinge structure, and wear pattern anchors."
-      }
-    }
-  ]
-}
-```
-
+- 单语种示例收口规则（Mandatory）：本节只保留 1 组道具 JSON 权威示例，用于展示单个语种项目下的道具体系；跨语种覆盖由 Part 2A-2C 整体共同完成，不要求本节同时放中文与英文两组示例。真实输出不得复用示例对象名称、材质组合或地域标签。
 - 英文项目语境示例：
 ```json
 {
@@ -648,7 +591,7 @@
 #### Part 2C — Environments
 - 字段语言职责固定（Mandatory）：沿用总则第 12 条与 Part 2 共同双语字段复核；Environment 条目只做执行。
 - 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `name/name_en`、`atmosphere`、`visual_params`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic` 保持显式一致；不得只写泛化 cinematic 空镜，而看不出这个环境是什么、处于哪个方向/景别/时段版本、继承了哪个 base。
-- 双语境示例规则（Mandatory）：本节示例必须体现“中文项目环境语境”与“英文项目环境语境”的差异，包括导视语言、建筑使用习惯、办公/家居组织方式与材料细节。真实输出不得直接复用示例空间。
+- 单语种示例收口规则（Mandatory）：本节只保留 1 组环境 JSON 权威示例，用于展示单个语种项目下的环境组织逻辑；跨语种覆盖由 Part 2A-2C 整体共同完成，不要求本节同时放中文与英文两组示例。真实输出不得直接复用示例空间。
 - 中文项目语境示例：
 ```json
 {
@@ -674,30 +617,6 @@
 }
 ```
 
-- 英文项目语境示例：
-```json
-{
-  "environments": [
-    {
-      "subject_no": "S103",
-      "name": "DowntownDetectiveBullpen_Front_Mid_Day",
-      "name_en": "DowntownDetectiveBullpen_Front_Mid_Day",
-      "atmosphere": "Busy restrained daytime tension in an English-speaking city police office",
-      "visual_params": "Mid/Interior/Day",
-      "description_cn": "英文项目都市警探办公区白天版本，开放工位、玻璃会议间、英文公告板与证物柜形成主要空间锚点，动线清晰，适合人物进出与机位调度。",
-      "generation_prompt_cn": "电影级写实英文项目办公环境，都市警探开放办公区正向中景白天版本。该空间属于英语语境城市警务办公室，导视、公告板与桌面文件默认使用英文系统。以 DowntownDetectiveBullpen_Front_Wide_Day 为基础参考，保持开放工位结构、玻璃会议间、证物柜与可通行动线不变，仅收束到当前中景观察版本。环境增量：机位位于走道入口并朝向主工位岛；轴线由左侧切到右侧；可见集合为英文公告板、桌面台灯、文件托盘、玻璃会议间框架与证物柜；排除后侧打印区成为主背景；主光来自右侧高窗日光并辅以顶部冷白办公灯；构图为中广景，主主体为主工位岛，次主体为玻璃会议间与英文公告板。前景为走道边框与地面导向线，中景为工位桌组与证物柜，后景为会议间玻璃与远端办公墙。禁止人物入画。",
-      "generation_prompt_en": "Cinematic photoreal office environment for DowntownDetectiveBullpen_Front_Mid_Day, a daytime medium-view variant of an English-language urban detective bullpen. Keep the open workstation grid, glass meeting room, evidence cabinets, and navigable circulation paths from DowntownDetectiveBullpen_Front_Wide_Day unchanged while shifting into this tighter forward-facing view. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at the aisle entrance facing the main desk island; Axis Side: left -> right; Background Set Change: Visible Set = [English notice board, desk lamp, file trays, glass meeting-room frames, evidence cabinet], Excluded Set = [rear printer zone as dominant backdrop]; Lighting Direction Change: key from right-side high windows with cool white overhead office practicals; Framing Change: medium-wide, primary subject main desk island, secondary subject glass meeting room and English notice board; Dynamic Parts State: None}. FG: aisle edge trim and floor guide markings. MG: desk island cluster and evidence cabinet. BG: glass meeting room planes and rear office wall. No humans in frame.",
-      "negative_prompt_en": "Chinese signage, crowded decor, residential furniture logic, game-like render, plastic materials, people, watermark",
-      "anchor_description": "open workstation grid, glass meeting room, English notice board, evidence cabinet, aisle circulation lines",
-      "visual_dependencies": [],
-      "dependency_strategy": {
-        "type": "Original",
-        "logic": "Original English-project environment; preserve the English signage system, office circulation, and workstation anchors."
-      }
-    }
-  ]
-}
-```
 
 #### Part 2D — Project Visual Backfill JSON (Mandatory)
 - 在 Part 2C 之后，必须额外输出一个 JSON 对象：`project_visual_backfill`。
