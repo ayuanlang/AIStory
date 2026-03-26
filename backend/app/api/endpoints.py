@@ -1840,7 +1840,9 @@ def _get_generation_callback_payload(ticket: str) -> Dict[str, Any]:
 
 def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
     provider_task_id = _extract_job_provider_task_id(job)
-    callback_ticket = _extract_job_provider_callback_ticket(job) or "grsai-image"
+    callback_ticket = _extract_job_provider_callback_ticket(job)
+    if not callback_ticket:
+        return job
     callback_payload = _get_generation_callback_payload(callback_ticket)
     if not callback_payload:
         return job
@@ -1989,7 +1991,9 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
 
 def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
     provider_task_id = _extract_job_provider_task_id(job)
-    callback_ticket = _extract_job_provider_callback_ticket(job) or "video-job"
+    callback_ticket = _extract_job_provider_callback_ticket(job)
+    if not callback_ticket:
+        return job
     callback_payload = _get_generation_callback_payload(callback_ticket)
     if not callback_payload:
         return job
