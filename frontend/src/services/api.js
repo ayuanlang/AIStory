@@ -185,10 +185,6 @@ async function pollTask(taskId, {
                 ...(baseURL ? { baseURL } : {}),
                 // Prevent proxy/browser stale-cache from pinning task status at "running".
                 params: { _ts: Date.now() },
-                headers: {
-                    'Cache-Control': 'no-cache, no-store, max-age=0',
-                    Pragma: 'no-cache',
-                },
             };
             const res = await api.get(`/tasks/${taskId}`, reqConfig);
             notFoundSince = 0;

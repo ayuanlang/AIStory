@@ -102,10 +102,6 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
             try {
                 const response = await api.get(`/tasks/${activeMontageTaskId}`, {
                     params: { _ts: Date.now() },
-                    headers: {
-                        'Cache-Control': 'no-cache, no-store, max-age=0',
-                        Pragma: 'no-cache',
-                    },
                 });
                 if (disposed) return;
                 setActiveMontageTaskStatus(String(response?.data?.status || 'running').trim().toLowerCase() || 'running');
