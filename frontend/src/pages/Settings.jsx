@@ -1224,7 +1224,8 @@ const Settings = () => {
     }, [generationConfig, savedToolConfigs]);
 
     const loadToolConfig = (toolName, type) => {
-        const saved = savedToolConfigs[toolName];
+        const legacyToolName = toolName === "Zlhub Video" ? "Lzhbu Video" : toolName;
+        const saved = savedToolConfigs[toolName] || savedToolConfigs[legacyToolName];
         if (type === 'image') {
             if (saved) {
                 setImgToolKey(saved.apiKey || "");
@@ -1315,7 +1316,7 @@ const Settings = () => {
                     setVidToolModel("doubao-seedance-1-5-pro-251215");
                     setVidToolWebHook("");
                     setVidToolDraft(false);
-                      } else if (toolName === "Lzhbu Video") {
+                                            } else if (toolName === "Zlhub Video" || toolName === "Lzhbu Video") {
                           setVidToolKey("");
                           setVidToolEndpoint("https://zlhub.xiaowaiyou.cn/zhonglian/api/v1/proxy/chat/completions");
                           setVidToolModel("doubao-seedance-2-0");
@@ -1450,7 +1451,7 @@ const Settings = () => {
             if (frontendProviderName.includes("Grsai")) backendProvider = "grsai";
             else if (frontendProviderName === "Stable Diffusion") backendProvider = "stability";
             else if (frontendProviderName === "Doubao Video") backendProvider = "doubao";
-            else if (frontendProviderName === "Lzhbu Video") backendProvider = "lzhbu";
+            else if (frontendProviderName === "Zlhub Video" || frontendProviderName === "Lzhbu Video") backendProvider = "zlhub";
             else if (frontendProviderName === "Wanxiang") backendProvider = "wanxiang";
             else if (frontendProviderName === "Vidu (Video)") backendProvider = "vidu";
             else if (frontendProviderName === "Tencent Hunyuan") backendProvider = "tencent";
@@ -1461,7 +1462,8 @@ const Settings = () => {
             // Get existing to find ID
             const allSettings = await getSettings();
             const existing = allSettings.find(s => 
-                s.provider.toLowerCase() === backendProvider && 
+                ((backendProvider === "zlhub" && ["zlhub", "lzhbu"].includes((s.provider || "").toLowerCase())) ||
+                 (backendProvider !== "zlhub" && (s.provider || "").toLowerCase() === backendProvider)) && 
                 s.category === category &&
                 (s.model || "") === (configData.model || "")
             );

@@ -241,6 +241,7 @@ const UserAdmin = () => {
         base_model: '',
         retry_group: '',
         retry_price_group: '',
+        moderation_aes_key: '',
         config: '{}',
         is_active: false,
         deprecated: false,
@@ -1082,11 +1083,23 @@ const UserAdmin = () => {
         return String(cfg?.retry_price_group || '').trim();
     };
 
+    const getSystemApiModerationAesKey = (row) => {
+        const cfg = getSystemApiConfig(row);
+        return String(
+            cfg?.moderation_aes_key
+            || cfg?.moderationAesKey
+            || cfg?.moderation_key
+            || cfg?.moderationKey
+            || ''
+        ).trim();
+    };
+
     const buildSystemApiConfigPayload = () => {
         const parsed = parseJsonFieldSafe(systemApiForm.config);
         const baseConfig = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ...parsed } : {};
         const retryGroup = String(systemApiForm.retry_group || '').trim();
         const retryPriceGroup = String(systemApiForm.retry_price_group || '').trim();
+        const moderationAesKey = String(systemApiForm.moderation_aes_key || '').trim();
         if (retryGroup) {
             baseConfig.retry_group = retryGroup;
         } else {
@@ -1097,6 +1110,14 @@ const UserAdmin = () => {
         } else {
             delete baseConfig.retry_price_group;
         }
+        if (moderationAesKey) {
+            baseConfig.moderation_aes_key = moderationAesKey;
+        } else {
+            delete baseConfig.moderation_aes_key;
+        }
+        delete baseConfig.moderationAesKey;
+        delete baseConfig.moderation_key;
+        delete baseConfig.moderationKey;
         return baseConfig;
     };
 
@@ -2090,6 +2111,7 @@ const UserAdmin = () => {
                 base_model: '',
                 retry_group: '',
                 retry_price_group: '',
+                moderation_aes_key: '',
                 config: '{}',
                 is_active: false,
                 deprecated: false,
@@ -2143,6 +2165,7 @@ const UserAdmin = () => {
             base_model: row.base_model || '',
             retry_group: getSystemApiRetryGroup(row),
             retry_price_group: getSystemApiRetryPriceGroup(row),
+            moderation_aes_key: getSystemApiModerationAesKey(row),
             config: safeJsonStr(row.config) || '{}',
             is_active: !!row.is_active,
             deprecated: !!row.deprecated,
@@ -7111,6 +7134,17 @@ const UserAdmin = () => {
                                                     onChange={(e) => setSystemApiForm((prev) => ({ ...prev, api_key: e.target.value }))}
                                                     className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
                                                     placeholder={t('可选', 'Optional')}
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">{t('素材审核密钥', 'Asset Moderation Key')}</label>
+                                                <input
+                                                    type="password"
+                                                    value={systemApiForm.moderation_aes_key}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, moderation_aes_key: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                    placeholder={t('保存到 config.moderation_aes_key', 'Saved to config.moderation_aes_key')}
+                                                    autoComplete="new-password"
                                                 />
                                             </div>
                                             <div className="md:col-span-2">

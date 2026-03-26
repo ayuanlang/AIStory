@@ -131,7 +131,7 @@ export const StoreProvider = ({ children }) => {
                         if (prov === 'runway') toolName = "Runway";
                         else if (prov === 'wanxiang') toolName = "Wanxiang";
                         else if (prov === 'doubao') toolName = "Doubao Video";
-                        else if (prov === 'lzhbu') toolName = "Lzhbu Video";
+                        else if (prov === 'zlhub' || prov === 'lzhbu') toolName = "Zlhub Video";
                         else if (prov === 'vidu') toolName = "Vidu (Video)";
                         else if (prov === 'grsai') toolName = "Grsai-Video";
                     } else if (cat === 'Vision') {

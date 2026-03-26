@@ -50,6 +50,13 @@ def _release_db_connection(db: Optional[Session], reason: str = "") -> None:
             logger.debug("[agent_db_release] rollback skipped | reason=%s error=%s", reason, exc)
         else:
             logger.debug("[agent_db_release] rollback skipped | error=%s", exc)
+    try:
+        db.close()
+    except Exception as exc:
+        if reason:
+            logger.debug("[agent_db_release] close skipped | reason=%s error=%s", reason, exc)
+        else:
+            logger.debug("[agent_db_release] close skipped | error=%s", exc)
 
 class AgentService:
     _BASE_BILLING_RULE_KIND = "base_pricing"
@@ -2538,6 +2545,7 @@ Output ONLY the JSON object now."""
                 cfg, self._SYSTEM_MANAGEMENT_PROMPT,
             )
 
+        _release_db_connection(db, "agent_process_system_management_command_llm_intent")
         llm_result, llm_config = await self._analyze_intent_with_fallback(
             user.id, llm_config, _call_with_config,
         )
@@ -3334,6 +3342,7 @@ Output ONLY the JSON object now."""
             async def _call_with_config(cfg):
                 return await llm_service.analyze_intent(request.query, request.context, request.history, cfg)
 
+            _release_db_connection(db, "agent_process_command_llm_intent")
             llm_result, llm_config = await self._analyze_intent_with_fallback(
                 user_id, llm_config, _call_with_config,
             )
@@ -3724,6 +3733,8 @@ Output ONLY the JSON object now."""
             visited = set()
             current_url = url
             final_next_page_url = ""
+
+            _release_db_connection(db, "agent_tool_read_webpage")
 
             for _ in range(max_pages):
                 if not current_url or current_url in visited:

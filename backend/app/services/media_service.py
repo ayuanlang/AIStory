@@ -256,6 +256,9 @@ class MediaGenerationService:
 
     def _vendor_label(self, provider: Any) -> str:
         raw = str(provider or "").strip()
+        normalized = raw.lower()
+        if normalized in {"lzhbu", "zlhub", "zhonglian"}:
+            return "zlhub"
         return raw or "unknown"
 
     def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
@@ -795,7 +798,7 @@ class MediaGenerationService:
             return f"{normalized}/contents/generations/tasks"
         return normalized
 
-    def _normalize_lzhbu_task_query_endpoint(self, endpoint: Optional[str]) -> str:
+    def _normalize_zlhub_task_query_endpoint(self, endpoint: Optional[str]) -> str:
         raw = (endpoint or "").strip()
         if not raw:
             return "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1/proxy/ark/contents/generations/tasks"
@@ -811,25 +814,25 @@ class MediaGenerationService:
             return f"{normalized}/proxy/ark/contents/generations/tasks"
         return normalized
 
-    def _normalize_lzhbu_moderation_endpoint(self, endpoint: Optional[str]) -> str:
+    def _normalize_zlhub_moderation_endpoint(self, endpoint: Optional[str]) -> str:
         raw = (endpoint or "").strip()
         if not raw:
             return "http://118.196.112.236:3428/api/moderation/image"
         return raw.rstrip("/")
 
-    def _normalize_lzhbu_encryption_key(self, raw_key: Any) -> bytes:
+    def _normalize_zlhub_encryption_key(self, raw_key: Any) -> bytes:
         text = str(raw_key or "").strip()
         if not text:
-            raise ValueError("Missing lzhbu moderation AES key")
+            raise ValueError("Missing zlhub moderation AES key")
         if re.fullmatch(r"[0-9a-fA-F]{64}", text):
             return bytes.fromhex(text)
         encoded = text.encode("utf-8")
         if len(encoded) != 32:
-            raise ValueError("lzhbu moderation AES key must be a 64-char hex string or 32-byte text")
+            raise ValueError("zlhub moderation AES key must be a 64-char hex string or 32-byte text")
         return encoded
 
-    def _encrypt_lzhbu_payload(self, payload: Dict[str, Any], raw_key: Any) -> str:
-        key = self._normalize_lzhbu_encryption_key(raw_key)
+    def _encrypt_zlhub_payload(self, payload: Dict[str, Any], raw_key: Any) -> str:
+        key = self._normalize_zlhub_encryption_key(raw_key)
         plaintext = json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         padder = padding.PKCS7(algorithms.AES.block_size).padder()
         padded = padder.update(plaintext) + padder.finalize()
@@ -838,11 +841,11 @@ class MediaGenerationService:
         ciphertext = encryptor.update(padded) + encryptor.finalize()
         return base64.b64encode(ciphertext).decode("ascii")
 
-    def _decrypt_lzhbu_payload(self, encrypted_text: Any, raw_key: Any) -> Dict[str, Any]:
+    def _decrypt_zlhub_payload(self, encrypted_text: Any, raw_key: Any) -> Dict[str, Any]:
         encoded = str(encrypted_text or "").strip()
         if not encoded:
             return {}
-        key = self._normalize_lzhbu_encryption_key(raw_key)
+        key = self._normalize_zlhub_encryption_key(raw_key)
         cipher = Cipher(algorithms.AES(key), modes.ECB())
         decryptor = cipher.decryptor()
         decrypted = decryptor.update(base64.b64decode(encoded)) + decryptor.finalize()
@@ -976,7 +979,6 @@ class MediaGenerationService:
             return ""
 
         # Sora family may interpret @mentions as user cameo references and reject
-        # requests with "Mentioned a user who does not have a cameo".
         cleaned = re.sub(r"@(?=[A-Za-z0-9_\u4e00-\u9fff])", "", text)
         cleaned = re.sub(r"\bCHAR\s*:\s*\[\s*", "CHAR:[", cleaned, flags=re.IGNORECASE)
         return cleaned
@@ -2242,9 +2244,11 @@ class MediaGenerationService:
             "runway": "runway",
             "kling": "kling",
             "runninghub": "runninghub",
-            "lzhbu": "lzhbu",
-            "lzhbu video": "lzhbu",
-            "zhonglian": "lzhbu",
+            "zlhub": "zlhub",
+            "zlhub video": "zlhub",
+            "lzhbu": "zlhub",
+            "lzhbu video": "zlhub",
+            "zhonglian": "zlhub",
         }
         if raw in mapping:
             return mapping[raw]
@@ -2262,7 +2266,7 @@ class MediaGenerationService:
         if cat == "image":
               return normalized in {"doubao", "grsai", "kie", "tencent", "stability", "runninghub", "apiyi", "n1n"}
         if cat == "video":
-            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi", "lzhbu"}
+            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi", "zlhub"}
         if cat == "voice":
               return normalized in {"kie", "runninghub"}
         return bool(normalized)
@@ -2881,6 +2885,10 @@ class MediaGenerationService:
             if effective_duration is None:
                 effective_duration = duration
             effective_image_size = normalized_inputs.get("image_size")
+            effective_provider = self._normalize_provider_name(
+                active_config.get("provider") or provider,
+                category,
+            )
 
             if category == "Image":
                 if width and height:
@@ -2895,7 +2903,7 @@ class MediaGenerationService:
                     active_config["config"]["image_size"] = normalized_image_size
 
                 runtime_result = await self._dispatch_image_generation(
-                    provider,
+                    effective_provider,
                     prompt,
                     active_config,
                     effective_reference_image_url,
@@ -2906,7 +2914,7 @@ class MediaGenerationService:
                 if runtime_result is not None:
                     return runtime_result
 
-                if provider in ["doubao", "ark"]:
+                if effective_provider in ["doubao", "ark"]:
                     return await self._handle_doubao_generation(
                         "image",
                         prompt,
@@ -2916,9 +2924,9 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
-                if provider == "grsai":
+                if effective_provider == "grsai":
                     return await self._handle_grsai_generation("image", prompt, active_config, effective_reference_image_url, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt, image_size=normalized_image_size)
-                if provider == "kie":
+                if effective_provider == "kie":
                     return await self._handle_kie_generation(
                         "image",
                         prompt,
@@ -2928,9 +2936,9 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
-                if provider == "tencent":
+                if effective_provider == "tencent":
                     return await self._handle_tencent_generation("image", prompt, active_config, effective_reference_image_url, negative_prompt=negative_prompt)
-                if provider == "n1n":
+                if effective_provider == "n1n":
                     return await self._handle_n1n_generation(
                         "image",
                         prompt,
@@ -2940,7 +2948,7 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
-                if provider == "apiyi":
+                if effective_provider == "apiyi":
                     return await self._handle_apiyi_generation(
                         "image",
                         prompt,
@@ -2950,7 +2958,7 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
-                if provider == "runninghub":
+                if effective_provider == "runninghub":
                     return await self._handle_runninghub_generation(
                         "image",
                         prompt,
@@ -2960,15 +2968,15 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
-                if provider in ["stability", "stable diffusion"]:
+                if effective_provider in ["stability", "stable diffusion"]:
                     return await self._handle_stability_generation("image", prompt, active_config, effective_reference_image_url, negative_prompt=negative_prompt)
 
-                _debug_log(f"Unsupported Image provider: {provider}", "warning")
+                _debug_log(f"Unsupported Image provider: {effective_provider}", "warning")
                 return {
-                    "error": f"Unsupported image provider: {provider}",
+                    "error": f"Unsupported image provider: {effective_provider}",
                     "submit_failed": True,
                     "details": {
-                        "provider": provider,
+                        "provider": effective_provider,
                         "model": active_config.get("model", "default"),
                         "category": "Image",
                     },
@@ -2976,7 +2984,7 @@ class MediaGenerationService:
 
             if category == "Video":
                 runtime_result = await self._dispatch_video_generation(
-                    provider,
+                    effective_provider,
                     prompt,
                     active_config,
                     effective_reference_image_url,
@@ -2989,11 +2997,11 @@ class MediaGenerationService:
                 if runtime_result is not None:
                     return runtime_result
 
-                if provider in ["doubao", "ark"]:
+                if effective_provider in ["doubao", "ark"]:
                     return await self._handle_doubao_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
-                if provider == "grsai":
+                if effective_provider == "grsai":
                     return await self._handle_grsai_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
-                if provider == "kie":
+                if effective_provider == "kie":
                     return await self._handle_kie_generation(
                         "video",
                         prompt,
@@ -3004,15 +3012,15 @@ class MediaGenerationService:
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                     )
-                if provider == "tencent":
+                if effective_provider == "tencent":
                     return await self._handle_tencent_generation("video", prompt, active_config, effective_reference_image_url, duration=effective_duration, negative_prompt=negative_prompt)
-                if provider in ["wanxiang", "wanx"]:
+                if effective_provider in ["wanxiang", "wanx"]:
                     return await self._handle_wanxiang_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
-                if provider == "vidu":
+                if effective_provider == "vidu":
                     return await self._handle_vidu_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, keyframes=effective_keyframes, negative_prompt=negative_prompt)
-                if provider == "runninghub":
+                if effective_provider == "runninghub":
                     return await self._handle_runninghub_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
-                if provider == "apiyi":
+                if effective_provider == "apiyi":
                     return await self._handle_apiyi_generation(
                         "video",
                         prompt,
@@ -3023,8 +3031,8 @@ class MediaGenerationService:
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                     )
-                if provider == "lzhbu":
-                    return await self._handle_lzhbu_generation(
+                if effective_provider == "zlhub":
+                    return await self._handle_zlhub_generation(
                         "video",
                         prompt,
                         active_config,
@@ -3035,12 +3043,12 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                     )
 
-                _debug_log(f"Unsupported Video provider: {provider}", "warning")
+                _debug_log(f"Unsupported Video provider: {effective_provider}", "warning")
                 return {
-                    "error": f"Unsupported video provider: {provider}",
+                    "error": f"Unsupported video provider: {effective_provider}",
                     "submit_failed": True,
                     "details": {
-                        "provider": provider,
+                        "provider": effective_provider,
                         "model": active_config.get("model", "default"),
                         "duration": duration,
                         "category": "Video",
@@ -3049,7 +3057,7 @@ class MediaGenerationService:
 
             if category == "Voice":
                 runtime_result = await self._dispatch_voice_generation(
-                    provider,
+                    effective_provider,
                     prompt,
                     active_config,
                     effective_duration,
@@ -3058,7 +3066,7 @@ class MediaGenerationService:
                 if runtime_result is not None:
                     return runtime_result
 
-                if provider == "kie":
+                if effective_provider == "kie":
                     return await self._handle_kie_generation(
                         "audio",
                         prompt,
@@ -3067,7 +3075,7 @@ class MediaGenerationService:
                         duration=effective_duration,
                         negative_prompt=negative_prompt,
                     )
-                if provider == "runninghub":
+                if effective_provider == "runninghub":
                     return await self._handle_runninghub_generation(
                         "audio",
                         prompt,
@@ -3076,12 +3084,12 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                     )
 
-                _debug_log(f"Unsupported Voice provider: {provider}", "warning")
+                _debug_log(f"Unsupported Voice provider: {effective_provider}", "warning")
                 return {
-                    "error": f"Unsupported voice provider: {provider}",
+                    "error": f"Unsupported voice provider: {effective_provider}",
                     "submit_failed": True,
                     "details": {
-                        "provider": provider,
+                        "provider": effective_provider,
                         "model": active_config.get("model", "default"),
                         "category": "Voice",
                     },
@@ -4387,13 +4395,7 @@ class MediaGenerationService:
             try:
                 d_int = int(final_duration)
                 if is_seedance_model:
-                    mapped_duration = self._map_duration_nearest(d_int, [4, 8], prefer_higher_on_tie=True)
-                    if mapped_duration is not None:
-                        final_duration = int(mapped_duration)
-                    elif d_int <= 0:
-                        final_duration = 4
-                    else:
-                        final_duration = d_int
+                    final_duration = -1
                 else:
                     # Filter out <=0 and the known-bad default 5 (unless 5 works for some models, but here it failed)
                     if d_int <= 0 or d_int == 5:
@@ -4401,10 +4403,10 @@ class MediaGenerationService:
                     else:
                         final_duration = d_int
             except:
-                final_duration = 4 if is_seedance_model else -1
+                final_duration = -1
 
             if is_seedance_model:
-                _debug_log(f"[DoubaoVideo] duration_in={duration}, duration_cfg={tool_conf.get('duration')}, duration_final={final_duration}, seedance_fallback={[4, 8]}")
+                _debug_log(f"[DoubaoVideo] duration_in={duration}, duration_cfg={tool_conf.get('duration')}, duration_final={final_duration}, seedance_forced_auto=True")
 
             # Map aspect ratio for Doubao (Ark): keep adaptive when provided.
             final_ratio = self._normalize_aspect_ratio_value(aspect_ratio) or "16:9"
@@ -6168,7 +6170,7 @@ class MediaGenerationService:
 
         return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}
 
-    def _extract_lzhbu_task_id(self, value: Any) -> Optional[str]:
+    def _extract_zlhub_task_id(self, value: Any) -> Optional[str]:
         if value is None:
             return None
         if isinstance(value, str):
@@ -6176,21 +6178,21 @@ class MediaGenerationService:
             return text or None
         if isinstance(value, dict):
             for key in ("task_id", "taskId", "id"):
-                candidate = self._extract_lzhbu_task_id(value.get(key))
+                candidate = self._extract_zlhub_task_id(value.get(key))
                 if candidate:
                     return candidate
             for key in ("data", "result"):
-                candidate = self._extract_lzhbu_task_id(value.get(key))
+                candidate = self._extract_zlhub_task_id(value.get(key))
                 if candidate:
                     return candidate
         if isinstance(value, list):
             for item in value:
-                candidate = self._extract_lzhbu_task_id(item)
+                candidate = self._extract_zlhub_task_id(item)
                 if candidate:
                     return candidate
         return None
 
-    def _parse_lzhbu_moderation_decision(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _parse_zlhub_moderation_decision(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         result = {
             "blocked": False,
             "status": None,
@@ -6246,7 +6248,7 @@ class MediaGenerationService:
 
         return result
 
-    async def _maybe_moderate_lzhbu_image(self, image_ref: Any, config: Dict[str, Any], role: str) -> Dict[str, Any]:
+    async def _maybe_moderate_zlhub_image(self, image_ref: Any, config: Dict[str, Any], role: str) -> Dict[str, Any]:
         tool_conf = config.get("config", {}) or {}
         moderation_enabled = bool(tool_conf.get("moderation_enabled", True))
         if not moderation_enabled:
@@ -6271,12 +6273,12 @@ class MediaGenerationService:
                 return {
                     "checked": False,
                     "blocked": True,
-                    "error": "lzhbu moderation credentials missing",
+                    "error": "zlhub moderation credentials missing",
                     "submit_failed": True,
                 }
             return {"checked": False, "blocked": False, "reason": "credentials_missing"}
 
-        moderation_endpoint = self._normalize_lzhbu_moderation_endpoint(
+        moderation_endpoint = self._normalize_zlhub_moderation_endpoint(
             tool_conf.get("moderation_endpoint") or tool_conf.get("moderationEndpoint")
         )
         resolved_ref = str(image_ref or "").strip()
@@ -6289,7 +6291,7 @@ class MediaGenerationService:
         else:
             business_payload = {"image_url": resolved_ref}
 
-        encrypted_data = self._encrypt_lzhbu_payload(business_payload, moderation_key)
+        encrypted_data = self._encrypt_zlhub_payload(business_payload, moderation_key)
         request_payload = {
             "user_id": moderation_user_id,
             "encrypted_data": encrypted_data,
@@ -6317,7 +6319,7 @@ class MediaGenerationService:
             return {
                 "checked": False,
                 "blocked": moderation_required,
-                "error": f"lzhbu moderation request failed: {exc}",
+                "error": f"zlhub moderation request failed: {exc}",
                 "submit_failed": moderation_required,
             }
 
@@ -6325,7 +6327,7 @@ class MediaGenerationService:
             return {
                 "checked": False,
                 "blocked": moderation_required,
-                "error": f"lzhbu moderation failed {resp.status_code}",
+                "error": f"zlhub moderation failed {resp.status_code}",
                 "details": (resp.text or "")[:1000],
                 "submit_failed": moderation_required,
             }
@@ -6340,16 +6342,16 @@ class MediaGenerationService:
             encrypted_response = response_payload.get("encrypted_data") or response_payload.get("encryptedData")
 
         try:
-            decrypted_payload = self._decrypt_lzhbu_payload(encrypted_response, moderation_key) if encrypted_response else response_payload
+            decrypted_payload = self._decrypt_zlhub_payload(encrypted_response, moderation_key) if encrypted_response else response_payload
         except Exception as exc:
             return {
                 "checked": False,
                 "blocked": moderation_required,
-                "error": f"lzhbu moderation decrypt failed: {exc}",
+                "error": f"zlhub moderation decrypt failed: {exc}",
                 "submit_failed": moderation_required,
             }
 
-        decision = self._parse_lzhbu_moderation_decision(decrypted_payload if isinstance(decrypted_payload, dict) else {})
+        decision = self._parse_zlhub_moderation_decision(decrypted_payload if isinstance(decrypted_payload, dict) else {})
         decision.update({
             "checked": True,
             "role": role,
@@ -6357,20 +6359,20 @@ class MediaGenerationService:
         })
         return decision
 
-    async def _handle_lzhbu_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+    async def _handle_zlhub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         if gen_type != "video":
-            return {"error": "lzhbu generation type not supported yet", "submit_failed": True}
+            return {"error": "zlhub generation type not supported yet", "submit_failed": True}
 
         api_key = str(config.get("api_key") or "").strip()
         if not api_key:
-            return {"error": "No lzhbu API Key", "submit_failed": True}
+            return {"error": "No zlhub API Key", "submit_failed": True}
 
         tool_conf = config.get("config", {}) or {}
-        provider_name = self._vendor_label(config.get("provider") or tool_conf.get("provider") or "lzhbu")
+        provider_name = self._vendor_label(config.get("provider") or tool_conf.get("provider") or "zlhub")
         base_url = str(config.get("base_url") or "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1").strip().rstrip("/")
         raw_endpoint = str(tool_conf.get("endpoint") or "").strip()
         endpoint = raw_endpoint or "/proxy/chat/completions"
-        raw_query_endpoint = self._normalize_lzhbu_task_query_endpoint(
+        raw_query_endpoint = self._normalize_zlhub_task_query_endpoint(
             tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint")
         )
         model = str(config.get("model") or "doubao-seedance-2-0").strip()
@@ -6433,7 +6435,7 @@ class MediaGenerationService:
             moderation_candidates.append((resolved_last_frame, "last_frame"))
 
         for candidate_ref, role in moderation_candidates:
-            moderation_result = await self._maybe_moderate_lzhbu_image(candidate_ref, config, role)
+            moderation_result = await self._maybe_moderate_zlhub_image(candidate_ref, config, role)
             moderation_results.append(moderation_result)
             if moderation_result.get("error") and moderation_result.get("submit_failed"):
                 return {
@@ -6525,7 +6527,7 @@ class MediaGenerationService:
                 payload["tools"] = normalized_tools
 
         base_metadata = {
-            "provider": "lzhbu",
+            "provider": "zlhub",
             "provider_label": provider_name,
             "model": model,
             "prompt": prompt,
@@ -6538,12 +6540,12 @@ class MediaGenerationService:
             "resolved_reference_audio_count": len(reference_audio_urls),
             "moderation": moderation_results,
         }
-        return await self._submit_and_poll_lzhbu_video(
+        return await self._submit_and_poll_zlhub_video(
             submit_url,
             query_endpoint,
             payload,
             api_key,
-            "lzhbu_video",
+            "zlhub_video",
             extra_metadata=base_metadata,
         )
 
@@ -7463,7 +7465,7 @@ class MediaGenerationService:
         except Exception as e:
             return {"error": str(e), "submit_failed": True}
 
-    async def _submit_and_poll_lzhbu_video(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
+    async def _submit_and_poll_zlhub_video(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         _debug_log(f"[{log_tag}] Submitting to URL: {submit_url} | Payload: {_strip_base64_from_log(payload)}")
@@ -7503,7 +7505,7 @@ class MediaGenerationService:
                 return {"error": f"Submission Failed {resp.status_code}", "details": (resp.text or "")[:1000], "submit_failed": True}
 
             data = resp.json() if resp.content else {}
-            task_id = self._extract_lzhbu_task_id(data)
+            task_id = self._extract_zlhub_task_id(data)
             if not task_id:
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
 
@@ -8340,37 +8342,32 @@ class MediaGenerationService:
                 else:
                     payload_input.pop("image_size", None)
         elif gen_type == "video":
-            duration_value = 5
-            try:
-                duration_value = int(float(duration if duration is not None else 5))
-            except Exception:
+            if is_seedance_video_model:
+                payload_input["duration"] = "-1" if duration_string_required_model else -1
+            else:
                 duration_value = 5
-            allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-            if isinstance(allowed_durations, list) and allowed_durations:
-                mapped_duration = self._map_duration_nearest(
-                    duration_value,
-                    allowed_durations,
-                    prefer_higher_on_tie=is_seedance_video_model,
-                )
-                if mapped_duration is not None:
-                    duration_value = int(mapped_duration)
+                try:
+                    duration_value = int(float(duration if duration is not None else 5))
+                except Exception:
+                    duration_value = 5
+                allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                if isinstance(allowed_durations, list) and allowed_durations:
+                    mapped_duration = self._map_duration_nearest(
+                        duration_value,
+                        allowed_durations,
+                        prefer_higher_on_tie=is_seedance_video_model,
+                    )
+                    if mapped_duration is not None:
+                        duration_value = int(mapped_duration)
 
-            # KIE Seedance models often reject non-enum durations; if runtime enum is missing,
-            # apply a conservative fallback aligned with common Seedance options.
-            if is_seedance_video_model and (not isinstance(allowed_durations, list) or not allowed_durations):
-                mapped_duration = self._map_duration_nearest(duration_value, [4, 8], prefer_higher_on_tie=True)
-                if mapped_duration is not None:
-                    duration_value = int(mapped_duration)
-
-            max_duration = runtime_enum_catalog.get("max_duration")
-            try:
-                if max_duration is not None:
-                    duration_value = min(int(duration_value), int(max_duration))
-            except Exception:
-                pass
-            # Seedance expects duration as string; keep others numeric as before.
-            duration_normalized = int(max(1, duration_value))
-            payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
+                max_duration = runtime_enum_catalog.get("max_duration")
+                try:
+                    if max_duration is not None:
+                        duration_value = min(int(duration_value), int(max_duration))
+                except Exception:
+                    pass
+                duration_normalized = int(max(1, duration_value))
+                payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
 
             # Propagate project/request-level sound setting to all video models.
             # Previously only kling 2.6 explicitly consumed this flag.
@@ -9262,28 +9259,27 @@ class MediaGenerationService:
 
             current_duration_text = str(payload_input_obj.get("duration") or "").strip()
             if current_duration_text:
-                try:
-                    current_duration_int = int(float(current_duration_text))
-                    allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-                    if isinstance(allowed_durations, list) and allowed_durations:
-                        mapped_duration = self._map_duration_nearest(
-                            current_duration_int,
-                            allowed_durations,
-                            prefer_higher_on_tie=is_seedance_video_model,
-                        )
-                        if mapped_duration is not None:
-                            current_duration_int = int(mapped_duration)
-                    elif is_seedance_video_model:
-                        mapped_duration = self._map_duration_nearest(current_duration_int, [4, 8], prefer_higher_on_tie=True)
-                        if mapped_duration is not None:
-                            current_duration_int = int(mapped_duration)
-                    max_duration = runtime_enum_catalog.get("max_duration")
-                    if max_duration is not None:
-                        current_duration_int = min(int(current_duration_int), int(max_duration))
-                    normalized_duration_int = int(max(1, int(current_duration_int)))
-                    payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
-                except Exception:
-                    pass
+                if is_seedance_video_model:
+                    payload_input_obj["duration"] = "-1" if duration_string_required_model else -1
+                else:
+                    try:
+                        current_duration_int = int(float(current_duration_text))
+                        allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                        if isinstance(allowed_durations, list) and allowed_durations:
+                            mapped_duration = self._map_duration_nearest(
+                                current_duration_int,
+                                allowed_durations,
+                                prefer_higher_on_tie=is_seedance_video_model,
+                            )
+                            if mapped_duration is not None:
+                                current_duration_int = int(mapped_duration)
+                        max_duration = runtime_enum_catalog.get("max_duration")
+                        if max_duration is not None:
+                            current_duration_int = min(int(current_duration_int), int(max_duration))
+                        normalized_duration_int = int(max(1, int(current_duration_int)))
+                        payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
+                    except Exception:
+                        pass
 
             sound_supported = runtime_enum_catalog.get("sound_supported")
             if sound_supported is False and "sound" in payload_input_obj:

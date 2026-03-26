@@ -203,6 +203,13 @@ def _release_db_connection(db: Optional[Session], reason: str = "") -> None:
             logger.debug("[db_release] rollback skipped | reason=%s error=%s", reason, exc)
         else:
             logger.debug("[db_release] rollback skipped | error=%s", exc)
+    try:
+        db.close()
+    except Exception as exc:
+        if reason:
+            logger.debug("[db_release] close skipped | reason=%s error=%s", reason, exc)
+        else:
+            logger.debug("[db_release] close skipped | error=%s", exc)
 
 _VIDEO_DEDUP_WINDOW_SECONDS = 20
 _VIDEO_DEDUP_MAX_CACHE = 256
@@ -4231,6 +4238,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 system_only_messages = [messages[0]]
         except Exception:
             system_only_messages = []
+
+        _release_db_connection(db, "analyze_scene_llm_call")
+
         for seg_idx in range(1, max_segments + 1):
             llm_resp = await llm_service.chat_completion_with_fallback(current_messages, config)
             current_routing = _extract_llm_routing_metadata(llm_resp)
@@ -4739,7 +4749,9 @@ async def translate_text(
         "Text to translate:\n"
         f"{text}"
     )
-    
+
+    _release_db_connection(db, "translate_llm_call")
+
     try:
         llm_resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
         dst = llm_service.sanitize_text_output(str(llm_resp.get("content") or "").strip())
@@ -4947,7 +4959,9 @@ async def refine_prompt(
     try:
         def _post():
             return requests.post(url, json=payload, headers=headers, timeout=60)
-        
+
+        _release_db_connection(db, "refine_prompt_llm_call")
+
         response = await asyncio.to_thread(_post)
         if response.status_code != 200:
              raise HTTPException(status_code=500, detail=f"LLM Error {response.status_code}: {response.text}")
@@ -7638,6 +7652,8 @@ async def generate_project_story_dna_global(
     else:
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
+    _release_db_connection(db, "generate_project_story_dna_global_llm_call")
+
     try:
         generated_payload = await generate_markdown_with_retry(
             user_prompt=user_prompt,
@@ -7705,6 +7721,7 @@ async def generate_project_story_dna_global(
     story_input["generator_kind"] = generator_kind
 
     now_iso = now_bj_iso()
+    project = db.merge(project)
     gi = dict(project.global_info or {})
     if generator_kind == "promo":
         gi["promo_generator_input"] = story_input
@@ -9543,6 +9560,8 @@ async def generate_episode_story_dna(
     else:
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
+    _release_db_connection(db, f"generate_episode_story_dna_{mode}_llm_call")
+
     try:
         generated_payload = await generate_markdown_with_retry(
             user_prompt=user_prompt,
@@ -9604,6 +9623,7 @@ async def generate_episode_story_dna(
 
     now_iso = now_bj_iso()
     if mode == "global":
+        project = db.merge(project)
         global_kind = _normalize_generator_kind(story_input.get("generator_kind")) or "story"
         gi = dict(project.global_info or {})
         if global_kind == "promo":
@@ -9618,6 +9638,7 @@ async def generate_episode_story_dna(
         project.global_info = gi
         db.add(project)
     else:
+        episode = db.merge(episode)
         ei = _episode_info_from_episode(episode)
         ei["story_generator_episode_input"] = story_input
         ei["story_generator_episode_input_updated_at"] = now_iso
@@ -10483,6 +10504,7 @@ async def generate_project_episode_scripts_from_global_framework(
                 f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
                 f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)}"
             )
+            _release_db_connection(db, f"generate_episode_scripts_episode_{ep.id}_llm_call")
             generated_payload = await generate_markdown_with_retry(
                 user_prompt=user_prompt,
                 sys_prompt=sys_prompt_episode,
@@ -10529,6 +10551,7 @@ async def generate_project_episode_scripts_from_global_framework(
             else:
                 billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
+            ep = db.merge(ep)
             ep.script_content = content
             ei = _episode_info_from_episode(ep)
             ei["episode_script_generated_at"] = now_bj_iso()
@@ -14228,6 +14251,8 @@ async def clone_entity_with_llm(
         f"Preferred new name hint (optional): {name_hint or 'None'}\n\n"
         "Now output strict JSON: {\"entity\": {...}}."
     )
+
+    _release_db_connection(db, "clone_entity_with_llm_llm_call")
 
     async def _request_generated_entity(extra_instruction: str = "") -> Dict[str, Any]:
         req_user_prompt = user_prompt
@@ -20529,11 +20554,8 @@ async def _run_generate_image(
             },
         )
 
-        # Ensure the current DB transaction/connection is released before long upstream call.
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        # Ensure the current DB transaction/connection is fully released before long upstream call.
+        _release_db_connection(db, "generate_image_upstream_call")
 
         image_provider_options: Dict[str, Any] = {}
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
@@ -22111,6 +22133,7 @@ async def generate_voice_endpoint(
                 planner_prompt_meta.get("user_prompt_len"),
             )
             try:
+                _release_db_connection(db, "generate_voice_planner_llm_call")
                 planned_payload = await _plan_voice_params_with_llm(
                     current_user.id,
                     stable_prompt,
@@ -22309,6 +22332,8 @@ async def generate_voice_endpoint(
             req.asset_type,
             "voice",
         )
+
+        _release_db_connection(db, "generate_voice_provider_call")
 
         result = await media_service.generate_voice(
             prompt=effective_prompt,
@@ -23284,6 +23309,8 @@ async def _run_generate_video(
             req.asset_type,
             "video",
         )
+
+        _release_db_connection(db, "generate_video_upstream_call")
 
         result = await media_service.generate_video(
             prompt=prompt_text,
@@ -27224,6 +27251,8 @@ async def analyze_asset_image(
                 reserve_details,
             )
 
+        _release_db_connection(db, "analyze_asset_image_llm_call")
+
         response_data = await llm_service.analyze_multimodal(
             prompt=system_prompt,
             image_url=image_url,
@@ -27279,6 +27308,7 @@ async def analyze_asset_image(
         # Save to Asset Meta (Analysis Result)? 
         # Requirement: "Analyzes an asset...". User might expect persistence.
         # We'll save a snippet to 'remark' or 'meta_info.analysis'
+        asset = db.merge(asset)
         if not asset.meta_info: asset.meta_info = {}
         if isinstance(asset.meta_info, dict):
             # Only save short version or full?
@@ -27574,6 +27604,8 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     try:
         logger.info("Sending request to LLM...")
 
+        _release_db_connection(db, "analyze_entity_image_llm_call")
+
         if billing_service.is_token_pricing(db, "analysis_character", api_setting.provider, api_setting.model):
             est = billing_service.estimate_input_output_tokens_from_messages(messages, output_ratio=1.5)
             estimated_image_tokens = 1000
@@ -27777,6 +27809,8 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 
         if not updated_info:
              logger.warning("updated_info is empty! LLM response might not match expected JSON schema.")
+
+        entity = db.merge(entity)
 
         # Update Entity Fields
         if "name_en" in updated_info: entity.name_en = updated_info["name_en"]
