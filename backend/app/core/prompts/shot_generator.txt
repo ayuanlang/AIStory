@@ -36,6 +36,9 @@
   - **继承内容范围**：角色优先继承稳定身份锚点、动作特征、当前服装/外观版本与已定稿 generation prompt 语义；道具优先继承材质、结构、功能、当前状态与依赖关系；环境优先继承 `{Stage}`、空间拓扑、阈值/界面两侧关系、动态部件状态、可行动路径与已定稿环境提示词语义。
   - **不可改写**：上游 packet 中已定稿的 `anchor_description`、名称、稳定身份与依赖逻辑只能继承，不得重命名、重定义、同义改写或另造一套新描述。
   - **镜头语义回写**：若某个 subject packet 明确给出当前状态、破损、持有关系、环境方向版本、dependency chain 或 generation prompt 重点，这些信息必须在对应 shot 的画面描述中被可见地承接，而不是只停留在输入参考区。
+- **Beat 对应与拆分边界 (Beat-to-Shot Mapping Boundary, 强制)**：Shot 阶段默认是一条 Shot 对应一个上游 Beat；若输入中已给出 `Source Beat` / Beat 编号 / Beat 文本，则该 Beat 是本镜的权威语义来源，必须逐镜继承，禁止静默把多个高信息量 Beat 合并进一个 Shot。只有当同一 Beat 在 Shot 层因主体过载、闪回桥接或首尾状态不稳定而必须继续拆解时，才允许扩成多个 Shot，但这些追加 Shot 仍必须共同服务同一上游 Beat，不得顺手吞并相邻 Beat。
+- **单镜全覆盖闭环 (Single-Shot Coverage Closure, 强制)**：每个 Shot 的 `Start Frame`、`Video Content` 与 `End Frame` 合起来，必须完整承接其对应 Beat/剧本片段里的全部关键信息，不限于动作、对白/台词、表情与情绪反应、人物外观与当前着装、道具状态、环境状态变化、字幕、屏幕文字、V.O./O.S. 与语言切换事件。禁止只保留动作路径而吞掉文本信息、造型状态、道具结果或环境结果。
+- **闪回桥接硬规则 (Flashback Bridge Mandate, 强制)**：当本镜承担“进入闪回 / 回忆 / 过去时空”或“从闪回回到当下”的功能时，不得写成纯硬切。`Start Frame` 与 `End Frame` 至少一端必须保留桥接锚点，`Video Content` 必须明确通过视线承接、物体特写、动作余势、声音桥、构图呼应、光线呼应、焦点漂移或时间线索物放大等方式完成时空滑移。若上游 Beat 明示存在闪回桥接语义而当前 Shot 写不出桥接锚点，必须回退为拆 Shot 或回退 Scene 层补桥接，不能硬写成普通切换。
 - **首尾帧主体数量护栏 (Start/End Subject Count Guard, 强制)**：`Start Frame` 与 `End Frame` 中，除 `[Environment Anchor]` 外，优先只保留 **1-3 个核心 subjects**（角色/关键道具合计）。默认不得超过 3 个；若场面调度确实需要更多实体，**第一选择必须是增加 Shot 数量进行拆解**，把信息分摊到连续镜头中，而不是继续往单镜里塞。只有当额外实体本质上只是背景支持、并非该 shot 的核心承载时，才允许将其降级为不单独点名的背景人群/环境组成。
 - **默认审美基调 (Default Aesthetic Bias, 强制)**：当输入未指定特殊风格时，所有镜头默认追求“高审美 + 现代 + 精致 + 电影级视觉享受”：
   - 角色：优先呈现有吸引力、上镜、气质鲜明的形象（可有性感张力但必须 non-explicit，禁止露骨化）。
@@ -103,6 +106,7 @@
 - **主角美化布光优先 (Protagonist Beauty-Light Priority, 强制)**：主角镜头（尤其 Medium Close-up / Close-up）默认优先采用 `butterfly light` / `clamshell` / 软正面主光 + 温和补光 + 清晰眼神光（catchlight）；仅当剧情明确要求反美化时才降级。
 - **环境剧场空间合理性 (Environment Stage-Space Rationality, 强制)**：涉及环境与调度描述时，必须显式保证：可进出路径、可站位区、机位移动走廊、双侧视线可读性、障碍安全间隙，且与当前 Beat 动作物理可达。
 - **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 可以拆分为多个 Shot，根据视觉需要按Beat为单位拆分或合并，长度符合时长限制。
+- **按 Beat 承接优先 (Beat-Carried Shot Priority, 强制)**：在不触发主体过载、闪回桥接或稳定态问题时，优先保持“一镜承接一 Beat”的清晰关系；若确需拆镜，应把拆分理由落实为“主体过载 / 桥接镜 / 结果落稳镜”，而不是无依据切碎或静默并镜。
 - **多主体优先加分镜 (Multi-Subject Relief by Extra Shots, 强制优先于尽量合并)**：当同一时刻/同一 beat 若要清晰承载的核心 subjects 超过 **3 个**时，优先通过增加 Shot 数量来拆解信息，让主动作主体、主受体、关键反应者、关键道具分布到连续镜头中；不得为了少切镜而把 4 个及以上核心 subjects 强压进同一个 Start/End Frame。
 **时长限制 (Duration Management: The 6-10s Control)**：
   - **通用生成适配 (General Generation Baseline)**：所有分镜默认都应规划在 **6s - 10s** 之间。该区间更利于动作连续性、情绪展开与首尾状态落稳。除非上游执行环境有更严格硬限制，否则不要规划 6 秒以下镜头。
@@ -612,9 +616,9 @@
   - `{Composition: Placement, Depth}`
 - **维度生成检查 (Dimension Completeness Gate, 强制)**：每一行 Shot 在最终输出前，必须对 `Shot Logic (CN)`、`Start Frame`、`Video Content`、`End Frame` 四段分别执行一次内部维度验收；该检查只作为内部门禁，不得把 checklist 或“已通过/未通过”字样输出到最终表格。
   - **Start Frame 最低维度槽位**：`[Global Style]`、`Viewpoint Anchor`、`Viewing Direction`、`Viewpoint Setup`、`Focal Length`、`Framing/Angle`、`Noise/Grain Strategy`、`Anti-Copy Constraint`、`Lighting Structure`、`Single-Canvas/Shared-Space Guard`、`Layers`、每个可见核心角色的 `Viewer-Relative Facing`。任一缺失即判该字段无效。
-  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、所有可见角色的可见反应/状态变化、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应。任一缺失即判该字段无效。
+  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、所有可见角色的可见反应/状态变化、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
   - **End Frame 最低维度槽位**：`[Global Style]`、最终 `Viewpoint Anchor`、最终 `Viewing Direction`、最终 `Viewpoint Setup`、重算后的 `Layers`、每个可见核心角色的最终朝向、动作后视觉证据、与 Start/Video 可推导的一致性。任一缺失即判该字段无效。
-  - **Shot Logic (CN) 最低维度槽位**：`场景类型分析`、`时长/主节拍数`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验` 八项必须齐全。任一缺失即判该字段无效。
+  - **Shot Logic (CN) 最低维度槽位**：`场景类型分析`、`时长/主节拍数`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验` 八项必须齐全；若输入已给出 Source Beat 或当前镜头承担闪回桥接/全覆盖闭环职责，逻辑稿中还必须显式反映该镜头承接的是哪个 Beat、覆盖了哪些关键信息、以及是否存在桥接锚点。任一缺失即判该字段无效。
 - **维度门禁触发后禁止带病输出 (No Partial Pass-Through, 强制)**：只要四段中的任一字段未通过维度检查，该 Shot 整行不得输出到最终表格；必须先完成重写，再重新执行同一轮维度检查。
 - **重写机制 (Rewrite Protocol, 强制)**：维度缺失时不得只在原句末尾机械补一个短语糊弄过关，必须按缺口范围重写对应字段，并同步修正受影响的上下游字段。
   - **字段级定向重写 (Targeted Rewrite)**：若仅 `Start Frame` 缺维度，则完整重写 `Start Frame`，并回看 `Video Content` / `End Frame` 是否仍与新的起始状态一致；若不一致，必须一并改写相关字段。
@@ -633,14 +637,15 @@
 - **特别重要：执行顺序调整 (Critical Execution Order)**：
   1. **Classify Shot Type**: 判断镜头类型（Single/Standard/Multi-Keyframe）。
   2. **Resolve Shot Subject Packets**: 先根据当前拟定的 `Associated Entities`，从输入里的 `Relevant Subject Packets` / `Entity Reference` 中精确取出本镜对应的角色/道具/环境描述，建立本镜专用 subject 约束集。
-  3. **Draft Shot Logic (Planning Blueprint)**: **Critical Step**. 在编写具体的英文视觉描述前，**必须先用中文规划**好首帧状态、视频动作演化及尾帧结果的逻辑链，并确保它已吸收本镜 subject packets 中的状态、依赖、空间拓扑与动作限制。这是确保物理与时空连贯的**思考草稿**。
-  4. **Define Viewpoint Physics**: 明确机位物理关系（内/外，高/低，距离）。
-  5. **Generate Start Frame**: 根据 Logic 规划，定义动作的起始状态（必须符合机位物理关系，并承接对应 subject packet 的稳定描述与当前状态）。
-  6. **Generate Duration**: 确定动作需要的总时长（根据动作密度自然估算）。
-  7. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作，并消费本镜 subject packets 里的动作特征、空间条件、状态变化与依赖链。
-  8. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态，并回写本镜涉及 subject 的结果状态。
-  9. **Run Dimension Completeness Gate**: 对 `Shot Logic (CN)` / `Start Frame` / `Video Content` / `End Frame` 执行维度验收；缺项即触发下方重写机制，不得直接输出。
-  10. **Rewrite If Needed, Then Recheck**: 先做字段级定向重写；仍失败则整行回炉重生；重写后必须重新执行同一套维度检查，直到通过后才能输出。
+  3. **Resolve Beat Contract**: 先确认当前 Shot 对应的上游 Beat / `Source Beat` / 剧本文本片段，列出该 Beat 必须被本镜承接的关键信息：动作、对白、表情/情绪、外观/着装、道具状态、环境状态、字幕/屏幕文字、V.O./O.S.、语言事件，以及是否存在闪回桥接。
+  4. **Draft Shot Logic (Planning Blueprint)**: **Critical Step**. 在编写具体的英文视觉描述前，**必须先用中文规划**好首帧状态、视频动作演化及尾帧结果的逻辑链，并确保它已吸收本镜 subject packets 中的状态、依赖、空间拓扑、Beat 覆盖义务与动作限制。这是确保物理与时空连贯的**思考草稿**。
+  5. **Define Viewpoint Physics**: 明确机位物理关系（内/外，高/低，距离）。
+  6. **Generate Start Frame**: 根据 Logic 规划，定义动作的起始状态（必须符合机位物理关系，并承接对应 subject packet 的稳定描述与当前状态；若为闪回桥接镜，起帧必须明确桥接锚点是否仍在场）。
+  7. **Generate Duration**: 确定动作需要的总时长（根据动作密度自然估算）。
+  8. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作，并消费本镜 subject packets 里的动作特征、空间条件、状态变化、依赖链与 Beat 覆盖义务；若存在闪回/回切，必须在此写清桥接方式而非硬切跳变。
+  9. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态，并回写本镜涉及 subject 的结果状态；若为闪回桥接镜，终帧必须明确桥接后的新时空是否已稳定成立。
+  10. **Run Dimension Completeness Gate**: 对 `Shot Logic (CN)` / `Start Frame` / `Video Content` / `End Frame` 执行维度验收，并额外检查该 Shot 是否完整覆盖对应 Beat 的关键信息、是否保留必需桥接锚点；缺项即触发下方重写机制，不得直接输出。
+  11. **Rewrite If Needed, Then Recheck**: 先做字段级定向重写；仍失败则整行回炉重生；重写后必须重新执行同一套维度检查，直到通过后才能输出。
   - **Entity Integrity Check (角色/实体完整性检查)**:
     - **Rule: No Mystery Guests**. 在 `Video Content` 中发生的任何主动行为主体，**必须**显式地出现在 `Start Frame` (开始画面) 或者 `End Frame` (结束画面) 的描述中。
     - **Logic**: 视频生成模型需要首尾帧作为视觉锚点。如果提示词里写了 "John 举起了手"，但 Start Frame 和 End Frame 都没有提到 "John"，模型可能会凭空捏造一个陌生人作为 actor，或导致动作失效。
@@ -966,11 +971,12 @@
 - **强制格式**：
   - **场景类型分析**：本镜所属场景类型 = {Dialogue & Emotion / Action & Chase / Suspense & Thriller / Epic & Scale / Montage & Psychological / Complex Blocking / Visual Transition Focus}；并用 1 句中文说明选择理由与处理规则（必须与「二、场景类型规则」一致）。
   - **预估**：时长 {T}s，主节拍 {N} 个（参照「双层节拍预算」，通常 2-3 个）。
+  - **承接 Beat**：若输入中已给出 `Source Beat` / Beat 编号 / Beat 文本，必须在此用 1 句中文标明“本镜承接 Beat x 的哪个信息重心”；若本镜是同一 Beat 的补充分镜，也必须写清是为主体过载、闪回桥接还是结果落稳而拆出。
   - **动态**：方向 {Direction}，速率 {Speed}，量化 {Relative Ref}。
   - **首帧**：{中文} 描述 T=0s 时的主体稳定状态与位置。
-  - **过程**：{中文} 按主节拍 (P1)(P2)(P3) 罗列核心动作阶段，在主节拍内用自然语言嵌入微节拍细节（表情、呼吸、视线、手部微动作至少覆盖两类）；条件触发时包含停顿/反应节点和动作效果。此处不必强制标注【方向+速率+量化】，但后续生成 English Video Content 时必须根据语境自动补全这些详细物理参数。
+  - **过程**：{中文} 按主节拍 (P1)(P2)(P3) 罗列核心动作阶段，在主节拍内用自然语言嵌入微节拍细节（表情、呼吸、视线、手部微动作至少覆盖两类）；条件触发时包含停顿/反应节点和动作效果。若本镜承担闪回进入/回切，必须在过程里点明桥接锚点与过渡方式。此处不必强制标注【方向+速率+量化】，但后续生成 English Video Content 时必须根据语境自动补全这些详细物理参数。
   - **尾帧**：{中文} 描述 T=End 时的主体落位与最终状态。**必须显式标注**：{稳定态（非动作过渡）: 是/否(原因)}，{近景收束: 是/否(原因)}。
-  - **校验**：{实体完整性: 通过/已强制修正(说明补回了哪些遗漏角色)}。
+  - **校验**：{实体完整性: 通过/已强制修正(说明补回了哪些遗漏角色)}；{Beat 关键信息覆盖: 通过/已补回}；{闪回桥接: 无/已写清桥接锚点}。
 - **作用**：以此为逻辑基准，生成后续的英文 Prompt。如果逻辑不通或密度不足，则视为无效生成。
 - **重写回写责任 (Rewrite Back-Propagation, 强制)**：若后续维度检查发现 `Start/Video/End` 任一字段被重写，必须把对应变化回写到 `Shot Logic (CN)` 的 `首帧/过程/尾帧/校验` 段，确保中文逻辑稿与最终英文字段完全一致，禁止出现“英文已修正、中文蓝图仍是旧版本”的漂移。
 - **分隔符**：六部分内容必须用 `<br>` 换行分隔。
