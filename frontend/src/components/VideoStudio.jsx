@@ -72,6 +72,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
     // Playlist State
     const [playlist, setPlaylist] = useState([]);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isDownloadingAllShots, setIsDownloadingAllShots] = useState(false);
     const [previewUrl, setPreviewUrl] = useState(null);
     const [isCleaningMontage, setIsCleaningMontage] = useState(false);
     const [activeMontageTaskId, setActiveMontageTaskId] = useState(null);
@@ -286,6 +287,44 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
             onLog?.(t('删除历史蒙太奇失败：', 'Failed to delete montage history item: ') + (error.response?.data?.detail || error.message), 'error');
         } finally {
             setIsCleaningMontage(false);
+        }
+    };
+
+    const handleDownloadAllShots = async () => {
+        if (isDownloadingAllShots) return;
+        const uniqueUrls = Array.from(
+            new Set(
+                (Array.isArray(shots) ? shots : [])
+                    .map((shot) => String(shot?.video_url || '').trim())
+                    .filter(Boolean)
+            )
+        );
+
+        if (uniqueUrls.length === 0) {
+            onLog?.(t('当前剧集没有可下载的分镜视频。', 'No shot videos available for download in this episode.'), 'warning');
+            return;
+        }
+
+        setIsDownloadingAllShots(true);
+        try {
+            uniqueUrls.forEach((url, index) => {
+                window.setTimeout(() => {
+                    const anchor = document.createElement('a');
+                    anchor.href = url;
+                    anchor.target = '_blank';
+                    anchor.rel = 'noopener noreferrer';
+                    anchor.download = '';
+                    document.body.appendChild(anchor);
+                    anchor.click();
+                    document.body.removeChild(anchor);
+                }, index * 120);
+            });
+            onLog?.(
+                t(`已触发 ${uniqueUrls.length} 个分镜视频下载。`, `Triggered download for ${uniqueUrls.length} shot videos.`),
+                'success'
+            );
+        } finally {
+            window.setTimeout(() => setIsDownloadingAllShots(false), 500);
         }
     };
 
@@ -526,6 +565,14 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
 
                 <div className="p-4 bg-gray-800 border-t border-gray-700 flex justify-between items-center">
                     <div className="flex items-center gap-4">
+                        <button
+                            onClick={handleDownloadAllShots}
+                            disabled={loading || isDownloadingAllShots || shots.length === 0}
+                            className="flex items-center gap-2 text-sm px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                            {isDownloadingAllShots ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
+                            {isDownloadingAllShots ? t('下载中...', 'Downloading...') : t('下载全部分镜', 'Download All Shots')}
+                        </button>
                         {previewUrl && (
                              <a href={previewUrl} target="_blank" download className="flex items-center gap-2 text-blue-400 hover:text-blue-300 text-sm">
                                           <Download size={16} /> {t('下载蒙太奇', 'Download Montage')}
