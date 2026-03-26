@@ -5,7 +5,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft } from 'lucide-react';
+import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -256,6 +256,175 @@ const collectMatchedEntityImageUrlsFromPrompt = ({
             includeAssociatedEntities,
         }).map((entity) => entity?.image_url)
     );
+};
+
+const SCENE_SUBJECT_TYPE_LABELS = {
+    character: 'Character',
+    prop: 'Prop',
+    environment: 'Environment',
+};
+
+const getSceneSubjectStatusKey = (scene) => String(scene?.id || scene?.scene_no || scene?.scene_name || '');
+
+const splitSceneSubjectNames = (value) => {
+    return String(value || '')
+        .split(/[\n,，;；]/)
+        .map((item) => String(item || '').trim())
+        .filter(Boolean);
+};
+
+const extractSceneSubjectRefs = (scene) => {
+    const refs = [
+        ...splitSceneSubjectNames(scene?.environment_name).map((name) => ({ type: 'environment', name, sourceField: 'environment_name' })),
+        ...splitSceneSubjectNames(scene?.linked_characters).map((name) => ({ type: 'character', name, sourceField: 'linked_characters' })),
+        ...splitSceneSubjectNames(scene?.key_props).map((name) => ({ type: 'prop', name, sourceField: 'key_props' })),
+    ];
+
+    const deduped = [];
+    const seen = new Set();
+    for (const ref of refs) {
+        const normalizedName = normalizeEntityToken(ref?.name || '');
+        if (!normalizedName) continue;
+        const key = `${String(ref?.type || '').trim().toLowerCase()}::${normalizedName}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push({
+            ...ref,
+            normalizedName,
+        });
+    }
+    return deduped;
+};
+
+const findMatchingEntityByType = (entities, type, rawName) => {
+    const normalizedType = String(type || '').trim().toLowerCase();
+    const normalizedName = normalizeEntityToken(rawName || '');
+    if (!normalizedType || !normalizedName) return null;
+    return (Array.isArray(entities) ? entities : []).find((entity) => {
+        if (String(entity?.type || '').trim().toLowerCase() !== normalizedType) return false;
+        return entityTokenMatchesName(entity, normalizedName);
+    }) || null;
+};
+
+const findMissingSceneSubjectRefs = (scene, entities) => {
+    return extractSceneSubjectRefs(scene).filter((ref) => !findMatchingEntityByType(entities, ref.type, ref.name));
+};
+
+const buildSceneSubjectPlaceholderPayload = (scene, ref) => {
+    const sourceSceneLabel = String(scene?.scene_no || scene?.scene_name || scene?.id || '').trim();
+    const sourceSceneName = String(scene?.scene_name || '').trim();
+    const sourceEnv = String(scene?.environment_name || '').trim();
+    const coreInfo = String(scene?.core_scene_info || '').trim();
+    const originalScript = String(scene?.original_script_text || '').trim();
+    const typeLabel = SCENE_SUBJECT_TYPE_LABELS[String(ref?.type || '').trim().toLowerCase()] || 'Subject';
+    const descriptionLines = [
+        `Auto-created placeholder from scene subject reference.`,
+        `Subject Type: ${typeLabel}`,
+        sourceSceneLabel ? `Source Scene: ${sourceSceneLabel}` : '',
+        sourceSceneName ? `Source Scene Name: ${sourceSceneName}` : '',
+        sourceEnv ? `Scene Environment: ${sourceEnv}` : '',
+        ref?.sourceField ? `Source Field: ${ref.sourceField}` : '',
+        coreInfo ? `Core Scene Info: ${coreInfo}` : '',
+        originalScript ? `Original Script Text: ${originalScript}` : '',
+    ].filter(Boolean);
+
+    return {
+        name: String(ref?.name || '').trim(),
+        type: String(ref?.type || '').trim().toLowerCase() || 'character',
+        description: descriptionLines.join('\n\n'),
+        anchor_description: sourceEnv || sourceSceneName || sourceSceneLabel || '',
+        custom_attributes: {
+            auto_placeholder_from_scene_subject: true,
+            source_scene_id: Number(scene?.id || 0) || null,
+            source_scene_no: String(scene?.scene_no || '').trim(),
+            source_scene_name: sourceSceneName,
+            source_field: String(ref?.sourceField || '').trim(),
+        },
+    };
+};
+
+const createMissingSceneSubjectPlaceholders = async ({ projectId, sceneRows = [], existingEntities = [], onLog = null }) => {
+    if (!projectId) {
+        return {
+            createdItems: [],
+            skippedItems: [],
+            failedItems: [],
+            sceneReports: [],
+            countsByType: {
+                character: 0,
+                prop: 0,
+                environment: 0,
+            },
+            entities: Array.isArray(existingEntities) ? existingEntities : [],
+        };
+    }
+
+    const knownEntities = Array.isArray(existingEntities) ? [...existingEntities] : [];
+    const createdItems = [];
+    const skippedItems = [];
+    const failedItems = [];
+    const sceneReports = [];
+    const countsByType = {
+        character: 0,
+        prop: 0,
+        environment: 0,
+    };
+
+    for (const scene of (sceneRows || [])) {
+        const missingRefs = findMissingSceneSubjectRefs(scene, knownEntities);
+        if (missingRefs.length === 0) continue;
+
+        const sceneReport = {
+            sceneId: Number(scene?.id || 0) || null,
+            sceneNo: String(scene?.scene_no || '').trim(),
+            sceneName: String(scene?.scene_name || '').trim(),
+            missing: missingRefs,
+            created: [],
+            skipped: [],
+            failed: [],
+        };
+
+        for (const ref of missingRefs) {
+            const existing = findMatchingEntityByType(knownEntities, ref.type, ref.name);
+            if (existing?.id) {
+                const skipped = { ...ref, id: existing.id };
+                skippedItems.push(skipped);
+                sceneReport.skipped.push(skipped);
+                continue;
+            }
+
+            try {
+                const payload = buildSceneSubjectPlaceholderPayload(scene, ref);
+                const created = await createEntity(projectId, payload);
+                if (created?.id) {
+                    knownEntities.push(created);
+                    countsByType[ref.type] = Number(countsByType[ref.type] || 0) + 1;
+                    const createdItem = { ...ref, id: created.id };
+                    createdItems.push(createdItem);
+                    sceneReport.created.push(createdItem);
+                }
+            } catch (error) {
+                const failedItem = {
+                    ...ref,
+                    error: String(error?.message || error || 'Create subject failed'),
+                };
+                failedItems.push(failedItem);
+                sceneReport.failed.push(failedItem);
+                onLog?.(`Scene subject supplement failed (${ref.type}:${ref.name}): ${failedItem.error}`, 'warning');
+            }
+        }
+
+        sceneReports.push(sceneReport);
+    }
+
+    return {
+        createdItems,
+        skippedItems,
+        failedItems,
+        sceneReports,
+        countsByType,
+        entities: knownEntities,
+    };
 };
 
 const collectMatchedSubjectImageUrlsFromPrompt = ({
@@ -5324,10 +5493,10 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             return t('AI Scene Analysis 检测到结构片段损坏。', 'AI Scene Analysis detected invalid structured fragments.');
         }
         if (normalized === 'ANALYSIS_SUBJECTS_UNVERIFIED') {
-            return t('Subject 一致性无法从 JSON 完整校验。', 'Subject consistency could not be fully verified from JSON.');
+            return '';
         }
         if (normalized === 'ANALYSIS_SUBJECTS_INCOMPLETE') {
-            return t('Subject 一致性告警：场景中出现的部分实体未在 JSON 中完整覆盖。', 'Subject consistency warning: some scene subjects are missing in JSON entities.');
+            return '';
         }
         if (normalized === 'ANALYSIS_LLM_CALL_FAILED_RETRIED') {
             return t('场景分析过程中出现过 LLM 调用失败，系统已自动重试/回退模型继续执行。请关注分析结果与告警详情。', 'LLM call failures occurred during scene analysis; the system retried/fallback to continue. Please review result details and warnings.');
@@ -5335,12 +5504,31 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return '';
     }, [t]);
 
-    const collectAnalysisWarnings = useCallback((result) => {
+    const isLogOnlyAnalysisWarningCode = useCallback((code) => {
+        const normalized = String(code || '').trim().toUpperCase();
+        return normalized === 'ANALYSIS_OUTPUT_TRUNCATED' || normalized === 'ANALYSIS_OUTPUT_CONTINUED';
+    }, []);
+
+    const isLogOnlyAnalysisWarningMessage = useCallback((message) => {
+        const normalized = String(message || '').trim().toLowerCase();
+        if (!normalized) return false;
+        return (
+            normalized.includes('analysis_output_truncated')
+            || normalized.includes('analysis_output_continued')
+            || normalized.includes('response hit a length limit')
+            || normalized.includes('split by length limits and auto-continuation was applied')
+            || normalized.includes('hit a length limit and auto-continuation was applied')
+        );
+    }, []);
+
+    const collectAnalysisWarnings = useCallback((result, options = {}) => {
+        const { includeLogOnly = true } = options || {};
         const warningCodes = [
             ...(Array.isArray(result?.warning_codes) ? result.warning_codes : []),
             ...(Array.isArray(result?.meta?.integrity?.warning_codes) ? result.meta.integrity.warning_codes : []),
         ];
         const localizedByCode = warningCodes
+            .filter((code) => includeLogOnly || !isLogOnlyAnalysisWarningCode(code))
             .map(localizeAnalysisWarningCode)
             .map(msg => String(msg || '').trim())
             .filter(Boolean);
@@ -5348,10 +5536,13 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const fallbackRawWarnings = [
             ...(Array.isArray(result?.warnings) ? result.warnings : []),
             ...(Array.isArray(result?.meta?.integrity?.warnings) ? result.meta.integrity.warnings : []),
-        ].map(w => String(w || '').trim()).filter(Boolean);
+        ]
+            .map(w => String(w || '').trim())
+            .filter(Boolean)
+            .filter((warning) => includeLogOnly || !isLogOnlyAnalysisWarningMessage(warning));
 
         return [...new Set([...localizedByCode, ...fallbackRawWarnings])];
-    }, [localizeAnalysisWarningCode]);
+    }, [isLogOnlyAnalysisWarningCode, isLogOnlyAnalysisWarningMessage, localizeAnalysisWarningCode]);
 
     const localizeAnalysisFailureMessage = useCallback((rawMessage) => {
         const stable = String(rawMessage || '').trim();
@@ -5378,15 +5569,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             return t(
                 '场景分析返回告警：本次返回缺少部分必要结构段，请人工复核；系统仍会继续加载已返回的原文、Markdown 与 JSON。',
                 'Scene analysis returned warnings: some required sections are missing. Please review manually; the system will still load returned raw text, markdown, and JSON.'
-            );
-        }
-        if (
-            normalized.includes('analysis_subjects_unverified')
-            || normalized.includes('subject consistency check could not be verified')
-        ) {
-            return t(
-                '场景分析返回告警：角色、环境或道具的一致性暂未完整校验，请人工复核；系统不会因此阻断加载。',
-                'Scene analysis returned warnings: character/environment/prop consistency could not be fully verified. Please review manually; loading will not be blocked.'
             );
         }
         if (
@@ -6586,14 +6768,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
         const relevantCodes = warningCodes.filter((code) => (
             code === 'ANALYSIS_JSON_INVALID'
-            || code === 'ANALYSIS_SUBJECTS_UNVERIFIED'
-            || code === 'ANALYSIS_SUBJECTS_INCOMPLETE'
+            || code === 'ANALYSIS_STRUCTURE_INCOMPLETE'
         ));
 
-        const report = buildSubjectConsistencyReport(analyzedText || '');
         const reasonLines = [
             ...relevantCodes.map((code) => localizeAnalysisWarningCode(code)).filter(Boolean),
-            ...(report?.ok ? [] : [String(report?.message || '').trim()]),
         ];
         const uniqueReasons = [...new Set(reasonLines.map((line) => String(line || '').trim()).filter(Boolean))];
 
@@ -6612,7 +6791,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         lastSubjectsImportIncompleteAlertRef.current = alertMessage;
         if (onLog) onLog(`Subjects import warning:\n${alertMessage}`, 'warning');
         alert(alertMessage);
-    }, [buildSubjectConsistencyReport, localizeAnalysisWarningCode, onLog, t]);
+    }, [localizeAnalysisWarningCode, onLog, t]);
 
     const handleImportEntities = async () => {
         const payload = getAnalysisEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
@@ -7183,6 +7362,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
     const runAutoImportAndSwitchToScenes = async (analyzedText, options = {}) => {
         const switchToScenes = options?.switchToScenes !== false;
+        const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
         if (typeof onImportText !== 'function') {
             if (onLog) onLog('Import is not available in this context.', 'warning');
             setAnalysisFlowStatus({
@@ -7203,26 +7383,88 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         if (!check.ok && onLog) onLog(`Auto scene-table check skipped: ${check.reason}`, 'warning');
 
         // Keep full analysis payload so entities JSON can be imported in the same run.
-        const importReport = await onImportText(analyzedText || '', 'auto');
+        const importReport = await onImportText(analyzedText || '', 'auto', importOptions);
         if (onLog) onLog('Auto-import finished.', 'success');
 
         if (switchToScenes && typeof onSwitchToScenes === 'function') {
             onSwitchToScenes();
         }
 
-        const noChanges = importReport && importReport.changed === false;
-
-        setAnalysisFlowStatus({
-            phase: 'completed',
-            message: noChanges
-                ? t('分析已完成，导入未检测到可应用的新数据。', 'Analysis completed, but import found no new data to apply.')
-                : (switchToScenes
-                    ? t('分析与导入已完成，已切换到 Scenes。', 'Analysis and import completed, switched to Scenes.')
-                    : t('分析与导入已完成。', 'Analysis and import completed.')),
-        });
-
         return importReport || null;
     };
+
+    const runPostImportSceneSubjectPipeline = useCallback(async (importReport, options = {}) => {
+        const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
+        const emptyReport = {
+            checkedSceneCount: importedSceneRows.length,
+            missingSceneCount: 0,
+            missingItemCount: 0,
+            missingSceneReports: [],
+            supplementReport: {
+                createdItems: [],
+                skippedItems: [],
+                failedItems: [],
+                sceneReports: [],
+                countsByType: { character: 0, prop: 0, environment: 0 },
+            },
+        };
+
+        if (!projectId || importedSceneRows.length === 0) {
+            return emptyReport;
+        }
+
+        setAnalysisFlowStatus({
+            phase: 'checking_scene_subjects',
+            message: t('场景与 subjects 导入完成，正在逐个场景检查实体缺失...', 'Scenes and subjects imported. Checking each scene for missing entities...'),
+        });
+
+        const latestEntities = await fetchEntities(projectId).catch(() => []);
+        const missingSceneReports = importedSceneRows
+            .map((scene) => ({
+                scene,
+                missing: findMissingSceneSubjectRefs(scene, latestEntities),
+            }))
+            .filter((item) => Array.isArray(item.missing) && item.missing.length > 0);
+
+        const missingItemCount = missingSceneReports.reduce((sum, item) => sum + Number(item.missing.length || 0), 0);
+        if (missingSceneReports.length === 0) {
+            onLog?.('Post-import scene entity check passed: no missing scene subjects detected.', 'success');
+            return {
+                ...emptyReport,
+                checkedSceneCount: importedSceneRows.length,
+            };
+        }
+
+        onLog?.(
+            `Post-import scene entity check found missing subjects in ${missingSceneReports.length} scene(s), total missing items=${missingItemCount}.`,
+            'warning'
+        );
+
+        setAnalysisFlowStatus({
+            phase: 'supplementing_scene_subjects',
+            message: t('场景缺失实体检查完成，正在补充缺失实体...', 'Scene entity check finished. Supplementing missing entities...'),
+        });
+
+        const supplementReport = await createMissingSceneSubjectPlaceholders({
+            projectId,
+            sceneRows: missingSceneReports.map((item) => item.scene),
+            existingEntities: latestEntities,
+            onLog,
+        });
+
+        return {
+            checkedSceneCount: importedSceneRows.length,
+            missingSceneCount: missingSceneReports.length,
+            missingItemCount,
+            missingSceneReports: missingSceneReports.map((item) => ({
+                sceneId: Number(item?.scene?.id || 0) || null,
+                sceneNo: String(item?.scene?.scene_no || '').trim(),
+                sceneName: String(item?.scene?.scene_name || '').trim(),
+                missing: item.missing,
+            })),
+            supplementReport: supplementReport || emptyReport.supplementReport,
+        };
+    }, [onLog, projectId, t]);
 
     const parseMarkdownTable = (text) => {
         if (!text || typeof text !== 'string') return null;
@@ -8000,8 +8242,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             }
 
             const integrityWarnings = collectAnalysisWarnings(result);
-            if (integrityWarnings.length > 0) {
-                showAnalysisWarningStatus(integrityWarnings);
+            const displayWarnings = collectAnalysisWarnings(result, { includeLogOnly: false });
+            if (displayWarnings.length > 0) {
+                showAnalysisWarningStatus(displayWarnings);
             }
 
             setLlmRawResultContent(analyzedText || '');
@@ -9197,8 +9440,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
-            phase: 'submitting',
-            message: t('正在提交 LLM 请求...', 'Submitting LLM request...'),
+            phase: 'autosaving',
+            message: t('正在自动保存剧本...', 'Auto-saving script...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -9215,6 +9458,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         let llmReturned = false;
         let runtimeMeta = null;
         let importReport = null;
+        let postImportSceneSubjectReport = null;
         let importWarningMessage = '';
         const phaseMarks = {
             submitStartedAt: startedAt,
@@ -9228,15 +9472,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         };
 
         try {
-            // Do not block analysis start on script autosave.
-            void autoSaveScriptBeforeAnalysis();
+            await autoSaveScriptBeforeAnalysis();
 
             // Include project metadata if available, unless skipped (baked in)
             const metadata = skipMetadata ? null : (project?.global_info || null);
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('LLM 分析中...', 'LLM is analyzing...'),
+                message: t('已提交 LLM，正在等待返回。提交阶段超时约 120s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 120s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
@@ -9289,12 +9532,15 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             }
 
             const integrityWarnings = collectAnalysisWarnings(result);
+            const displayWarnings = collectAnalysisWarnings(result, { includeLogOnly: false });
             if (integrityWarnings.length > 0) {
                 const uniqueWarnings = [...new Set(integrityWarnings.map(w => String(w || '').trim()).filter(Boolean))];
                 if (uniqueWarnings.length > 0) {
                     const warningText = uniqueWarnings.join('\n- ');
                     if (onLog) onLog(`AI Scene Analysis warning:\n- ${warningText}`, 'warning');
-                    showAnalysisWarningStatus(uniqueWarnings);
+                    if (displayWarnings.length > 0) {
+                        showAnalysisWarningStatus(displayWarnings);
+                    }
                 }
             }
 
@@ -9304,7 +9550,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             
             phaseMarks.importStartedAt = Date.now();
             try {
-                importReport = await runAutoImportAndSwitchToScenes(analyzedText, { switchToScenes: false });
+                importReport = await runAutoImportAndSwitchToScenes(analyzedText, {
+                    switchToScenes: false,
+                    importOptions: {
+                        autoSupplementSceneSubjects: false,
+                        suppressAlerts: true,
+                        subjectsJson: result?.subjects_json || null,
+                    },
+                });
                 if (!importReport) {
                     importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
                     setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
@@ -9320,6 +9573,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 phaseMarks.importFinishedAt = Date.now();
             }
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
+
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport);
+            if (importReport && typeof importReport === 'object') {
+                importReport = {
+                    ...importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                };
+            }
 
             // Persist LLM raw output into dedicated DB field (DO NOT overwrite script_content)
             // Keep this after import so import can start immediately when LLM returns.
@@ -9383,6 +9644,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 runtimeMeta,
                 warning: importWarningMessage,
                 error: '',
+            });
+
+            const sceneSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: sceneSupplementCreated > 0
+                    ? t(`分析完成：场景与 subjects 已导入，并已补充 ${sceneSupplementCreated} 个缺失实体。`, `Analysis completed: scenes and subjects were imported, and ${sceneSupplementCreated} missing entities were supplemented.`)
+                    : t('分析完成：场景与 subjects 已导入，导入后场景实体检查已完成。', 'Analysis completed: scenes and subjects were imported, and the post-import scene entity check finished.'),
             });
 
             if (onLog) onLog("AI Analysis applied and saved.", "success");
@@ -9517,8 +9786,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
-            phase: 'submitting',
-            message: t('正在提交 LLM 请求...', 'Submitting LLM request...'),
+            phase: 'autosaving',
+            message: t('正在自动保存剧本...', 'Auto-saving script...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -9535,6 +9804,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         let llmReturned = false;
         let runtimeMeta = null;
         let importReport = null;
+        let postImportSceneSubjectReport = null;
         let importWarningMessage = '';
         const phaseMarks = {
             submitStartedAt: startedAt,
@@ -9548,12 +9818,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         };
 
         try {
-            // Do not block analysis start on script autosave.
-            void autoSaveScriptBeforeAnalysis();
+            await autoSaveScriptBeforeAnalysis();
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('LLM 分析中...', 'LLM is analyzing...'),
+                message: t('已提交 LLM，正在等待返回。提交阶段超时约 120s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 120s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
@@ -9606,12 +9875,15 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             }
 
             const integrityWarnings = collectAnalysisWarnings(result);
+            const displayWarnings = collectAnalysisWarnings(result, { includeLogOnly: false });
             if (integrityWarnings.length > 0) {
                 const uniqueWarnings = [...new Set(integrityWarnings.map(w => String(w || '').trim()).filter(Boolean))];
                 if (uniqueWarnings.length > 0) {
                     const warningText = uniqueWarnings.join('\n- ');
                     if (onLog) onLog(`AI Scene Analysis warning:\n- ${warningText}`, 'warning');
-                    showAnalysisWarningStatus(uniqueWarnings);
+                    if (displayWarnings.length > 0) {
+                        showAnalysisWarningStatus(displayWarnings);
+                    }
                 }
             }
 
@@ -9621,7 +9893,13 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
             phaseMarks.importStartedAt = Date.now();
             try {
-                importReport = await runAutoImportAndSwitchToScenes(analyzedText || "", { switchToScenes: false });
+                importReport = await runAutoImportAndSwitchToScenes(analyzedText || "", {
+                    switchToScenes: false,
+                    importOptions: {
+                        autoSupplementSceneSubjects: false,
+                        suppressAlerts: true,
+                    },
+                });
                 if (!importReport) {
                     importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
                     setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
@@ -9637,6 +9915,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 phaseMarks.importFinishedAt = Date.now();
             }
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
+
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport);
+            if (importReport && typeof importReport === 'object') {
+                importReport = {
+                    ...importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                };
+            }
 
             // Persist the LLM output after import to avoid delaying the import stage.
             const savedByBackend = !!(result?.meta?.saved_to_episode);
@@ -9699,6 +9985,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 runtimeMeta,
                 warning: importWarningMessage,
                 error: '',
+            });
+
+            const sceneSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: sceneSupplementCreated > 0
+                    ? t(`分析完成：场景与 subjects 已导入，并已补充 ${sceneSupplementCreated} 个缺失实体。`, `Analysis completed: scenes and subjects were imported, and ${sceneSupplementCreated} missing entities were supplemented.`)
+                    : t('分析完成：场景与 subjects 已导入，导入后场景实体检查已完成。', 'Analysis completed: scenes and subjects were imported, and the post-import scene entity check finished.'),
             });
 
             setShowAnalysisModal(false);
@@ -9844,14 +10138,16 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                         )}
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                    <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
                         {[
-                            { key: 'submitting', label: t('提交 LLM', 'Submit LLM') },
-                            { key: 'analyzing', label: t('分析中', 'Analyzing') },
-                            { key: 'importing', label: t('导入中', 'Importing') },
+                            { key: 'autosaving', label: t('自动保存', 'Auto Save') },
+                            { key: 'analyzing', label: t('等待 LLM', 'Wait LLM') },
+                            { key: 'importing', label: t('导入场景/实体', 'Import Scenes/Subjects') },
+                            { key: 'checking_scene_subjects', label: t('检查场景缺失', 'Check Scene Gaps') },
+                            { key: 'supplementing_scene_subjects', label: t('补充缺失实体', 'Supplement Missing') },
                             { key: 'completed', label: t('分析报告', 'Report') },
                         ].map((step, idx) => {
-                            const stepOrder = ['submitting', 'analyzing', 'importing', 'completed'];
+                            const stepOrder = ['autosaving', 'analyzing', 'importing', 'checking_scene_subjects', 'supplementing_scene_subjects', 'completed'];
                             const phase = analysisFlowStatus.phase || 'idle';
                             const currentIndex = stepOrder.indexOf(phase);
                             const stepIndex = stepOrder.indexOf(step.key);
@@ -9893,7 +10189,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                         <div className="mb-2 text-[11px] text-amber-200/90">
                             {t('仍在等待后端响应...', 'Still waiting for backend response...')} ({formatDurationMs(analysisHeartbeatElapsedMs)})
                             <span className="ml-2 text-amber-100/80">
-                                {t('通常需要 200s 以上，请耐心等待。', 'This usually takes over 200s, please wait.')}
+                                {t('提交阶段超时约 120s，整体等待最长约 600s；复杂剧本通常需要更久。', 'Submit timeout is about 120s and total wait can take up to about 600s; complex scripts usually take longer.')}
                             </span>
                         </div>
                     )}
@@ -9929,6 +10225,12 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                 {` ${analysisUiReport.importReport?.importedSubjectCounts?.character || 0} ${t('个角色', 'characters')},`}
                                 {` ${analysisUiReport.importReport?.importedSubjectCounts?.environment || 0} ${t('个场景', 'environments')},`}
                                 {` ${analysisUiReport.importReport?.importedSubjectCounts?.prop || 0} ${t('个道具', 'props')}。`}
+                            </div>
+                            <div>
+                                {t('导入后场景检查', 'Post-import Scene Check')}: {t('已检查', 'Checked')}
+                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount || 0} ${t('个场景', 'scenes')},`}
+                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingSceneCount || 0} ${t('个场景存在缺失', 'scenes had gaps')},`}
+                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.createdItems?.length || 0} ${t('个实体已补充', 'entities supplemented')}。`}
                             </div>
                             <div>
                                 {t('一致性检查', 'Consistency Check')}: {
@@ -11569,7 +11871,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
     )
 };
 
-const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false }) => {
+const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false, subjectGap = null, onSupplementSubjects = null, supplementingSubjects = false }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -11665,6 +11967,13 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
         await onDelete(scene);
     };
 
+    const handleSupplementSubjects = async (e) => {
+        e.stopPropagation();
+        if (typeof onSupplementSubjects === 'function') {
+            await onSupplementSubjects(scene, subjectGap);
+        }
+    };
+
     const handleToggleSelect = (e) => {
         e.stopPropagation();
         if (typeof onToggleSelect === 'function') onToggleSelect(scene);
@@ -11672,6 +11981,10 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
 
     const imgUrl = images.length > 0 ? images[currentIndex] : null;
     const shotsBusy = isGenerating || generatingShots;
+    const missingSubjectCount = Number(subjectGap?.missing?.length || 0);
+    const missingSubjectTitle = missingSubjectCount > 0
+        ? subjectGap.missing.map((item) => `${item.type}: ${item.name}`).join('\n')
+        : '';
     const handleSceneImageError = () => {
         if (!imgUrl) return;
         rememberBrokenSceneImageUrl(imgUrl);
@@ -11785,7 +12098,21 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
             
             <div className="p-3 space-y-3 flex-1 flex flex-col">
                 <div className="space-y-1">
-                    <h3 className="font-semibold text-sm text-white line-clamp-1" title={scene.scene_name}>{scene.scene_name || t('未命名场景', 'Untitled Scene')}</h3>
+                    <div className="flex items-center gap-2 min-w-0">
+                        <h3 className="font-semibold text-sm text-white line-clamp-1 min-w-0" title={scene.scene_name}>{scene.scene_name || t('未命名场景', 'Untitled Scene')}</h3>
+                        {missingSubjectCount > 0 && (
+                            <button
+                                type="button"
+                                onClick={handleSupplementSubjects}
+                                disabled={supplementingSubjects}
+                                className="shrink-0 inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100 hover:bg-amber-400/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                                title={missingSubjectTitle || t('存在缺失 subjects，点击补充实体', 'Missing subjects detected. Click to supplement entities.')}
+                            >
+                                {supplementingSubjects ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
+                                <span>{missingSubjectCount}</span>
+                            </button>
+                        )}
+                    </div>
                     <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
                         <div className="truncate min-w-0">
                             <span className="opacity-60">{t('环境：', 'Env:')}</span>{' '}
@@ -11810,6 +12137,21 @@ const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, o
                     </div>
 
                     <div className="space-y-1.5">
+                        {missingSubjectCount > 0 && (
+                            <button
+                                type="button"
+                                onClick={handleSupplementSubjects}
+                                disabled={supplementingSubjects}
+                                className="w-full text-left rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100 hover:bg-amber-400/15 disabled:opacity-60 disabled:cursor-not-allowed"
+                                title={missingSubjectTitle}
+                            >
+                                <div className="flex items-center gap-1 font-semibold">
+                                    {supplementingSubjects ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
+                                    <span>{t(`缺失 ${missingSubjectCount} 个 subjects，点击一键补齐实体`, `Missing ${missingSubjectCount} subjects. Click to supplement entities.`)}</span>
+                                </div>
+                                <div className="mt-1 line-clamp-2 text-amber-50/80">{subjectGap?.missing?.map((item) => item.name).join(' / ')}</div>
+                            </button>
+                        )}
                         {(scene.linked_characters || scene.key_props) ? (
                             <>
                             {scene.linked_characters && (
@@ -11903,6 +12245,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     const [sceneSortDirection, setSceneSortDirection] = useState('desc');
     const [selectedSceneKeys, setSelectedSceneKeys] = useState([]);
     const [entities, setEntities] = useState([]);
+    const [sceneSubjectSupplementingMap, setSceneSubjectSupplementingMap] = useState({});
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [editingScene, setEditingScene] = useState(null);
     const [sceneRegenRequirements, setSceneRegenRequirements] = useState('');
@@ -13200,6 +13543,93 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         refreshSceneShotCounts,
     ]);
 
+    const sceneSubjectGapMap = useMemo(() => {
+        const next = new Map();
+        for (const scene of (Array.isArray(scenes) ? scenes : [])) {
+            const missing = findMissingSceneSubjectRefs(scene, entities);
+            if (missing.length === 0) continue;
+            const key = getSceneSubjectStatusKey(scene);
+            next.set(key, {
+                missing,
+                byType: {
+                    character: missing.filter((item) => item.type === 'character').length,
+                    prop: missing.filter((item) => item.type === 'prop').length,
+                    environment: missing.filter((item) => item.type === 'environment').length,
+                },
+            });
+        }
+        return next;
+    }, [entities, scenes]);
+
+    const handleSupplementSceneSubjects = useCallback(async (sceneCandidate, gapReport = null, options = {}) => {
+        const stableScene = sceneCandidate && typeof sceneCandidate === 'object' ? sceneCandidate : null;
+        if (!stableScene || !projectId) return null;
+
+        const stableGap = (gapReport && typeof gapReport === 'object')
+            ? gapReport
+            : { missing: findMissingSceneSubjectRefs(stableScene, entities) };
+        const missing = Array.isArray(stableGap?.missing) ? stableGap.missing : [];
+        if (missing.length === 0) return {
+            createdItems: [],
+            skippedItems: [],
+            failedItems: [],
+            sceneReports: [],
+            countsByType: { character: 0, prop: 0, environment: 0 },
+        };
+
+        const silent = Boolean(options?.silent);
+        const sceneLabel = String(stableScene?.scene_no || stableScene?.scene_name || stableScene?.id || '').trim() || '#unknown';
+        if (!silent) {
+            const confirmed = await confirmUiMessage(
+                t(
+                    `检测到场景 ${sceneLabel} 缺失 ${missing.length} 个 subjects，是否立即补齐到 Subjects 资产库？`,
+                    `Scene ${sceneLabel} is missing ${missing.length} subjects. Add them to the Subjects library now?`
+                )
+            );
+            if (!confirmed) return null;
+        }
+
+        const statusKey = getSceneSubjectStatusKey(stableScene);
+        setSceneSubjectSupplementingMap((prev) => ({ ...prev, [statusKey]: true }));
+        try {
+            const latestEntities = await fetchEntities(projectId).catch(() => (Array.isArray(entities) ? entities : []));
+            const report = await createMissingSceneSubjectPlaceholders({
+                projectId,
+                sceneRows: [stableScene],
+                existingEntities: latestEntities,
+                onLog,
+            });
+
+            const refreshed = await fetchEntities(projectId).catch(() => report.entities || latestEntities || []);
+            setEntities(Array.isArray(refreshed) ? refreshed : []);
+
+            const createdCount = Array.isArray(report?.createdItems) ? report.createdItems.length : 0;
+            const skippedCount = Array.isArray(report?.skippedItems) ? report.skippedItems.length : 0;
+            const failedCount = Array.isArray(report?.failedItems) ? report.failedItems.length : 0;
+            if (createdCount > 0) {
+                onLog?.(
+                    t(
+                        `场景 ${sceneLabel} 已补齐缺失实体：新增 ${createdCount}，跳过已存在 ${skippedCount}。`,
+                        `Scene ${sceneLabel} subject supplement completed: created ${createdCount}, skipped existing ${skippedCount}.`
+                    ),
+                    'success'
+                );
+            }
+            if (!silent) {
+                const lines = [
+                    t(`场景 ${sceneLabel} 实体补齐完成`, `Scene ${sceneLabel} subject supplement completed`),
+                    t(`新增：${createdCount}`, `Created: ${createdCount}`),
+                    t(`已存在跳过：${skippedCount}`, `Skipped existing: ${skippedCount}`),
+                    t(`失败：${failedCount}`, `Failed: ${failedCount}`),
+                ];
+                alert(lines.join('\n'));
+            }
+            return report;
+        } finally {
+            setSceneSubjectSupplementingMap((prev) => ({ ...prev, [statusKey]: false }));
+        }
+    }, [entities, onLog, projectId, t]);
+
     const buildSceneContentMarkdown = (sceneRows = []) => {
         if (!activeEpisode) return '';
         const contextInfo = `Project: ${project?.title || 'Unknown'} | Episode: ${activeEpisode?.title || 'Unknown'}\n`;
@@ -14207,11 +14637,17 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
             `Linked Characters: ${scene?.linked_characters || ''}`,
             `Key Props: ${scene?.key_props || ''}`,
             '',
+            '[Original Script Grounding]',
+            `${scene?.original_script_text || ''}`,
+            '',
             '[System-level Subjects Inventory]',
             existingEntityBlock,
             '',
             '[User Supplement Requirements]',
             reqText,
+            '',
+            '[Grounding Reminder]',
+            'Use Original Script Grounding to verify whether the current scene is missing characters or has major core scene info / visual-guidance omissions or obvious errors. Minor wording differences that do not affect plot or staging may be ignored. If material omissions or obvious errors exist, repair the scene markdown row patch and keep SUBJECTS_JSON consistent with the repaired row.',
         ].join('\n');
     };
 
@@ -14271,11 +14707,11 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         const confirmed = await confirmUiMessage(
             t(
                 (sceneRegenEntityOnlyMode
-                    ? `将按“仅补实体”模式执行补充实体：注入项目信息、现有 subjects、当前场景内容与补充要求，仅补该场景缺失实体，并按需回填环境锚点/关联角色/关键道具。目标：${label}。是否继续？`
-                    : `将为场景 ${label} 执行补充实体，并在需要时补充新场景行与实体。是否继续？`),
+                    ? `将按“仅补实体”模式执行补充实体：注入项目信息、现有 subjects、当前场景内容、原始剧本文本与补充要求；除补缺失实体外，还会按原始剧本文本校对角色缺失与核心场景信息/视觉指导缺失，并在需要时回写当前场景行。目标：${label}。是否继续？`
+                    : `将为场景 ${label} 执行补充实体，并按原始剧本文本校对场景内容，在需要时补充新场景行与实体。是否继续？`),
                 (sceneRegenEntityOnlyMode
-                    ? `Run scene entity supplement mode for ${label}: inject project context, existing subjects, current scene content, and user requirements; supplement missing entities only; patch environment anchor/linked characters/key props if needed. Continue?`
-                    : `Run Supplement Entities for ${label}: supplement missing entities and add any needed scene rows or entities. Continue?`)
+                    ? `Run scene entity supplement mode for ${label}: inject project context, existing subjects, current scene content, original script text, and user requirements; supplement missing entities and repair the current scene row when original-script grounding shows missing characters or major core-scene omissions/errors. Continue?`
+                    : `Run Supplement Entities for ${label}: supplement missing entities and use original script grounding to repair scene rows when needed. Continue?`)
             )
         );
         if (!confirmed) return;
@@ -14353,7 +14789,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                 phase: 'replace_scene',
                 percent: 58,
                 message: isEntityOnlyMode
-                    ? t('仅补实体模式：刷新当前场景信息...', 'Entity-only mode: refreshing current scene metadata...')
+                    ? t('仅补实体模式：按 markdown 行补丁回写当前场景...', 'Entity-only mode: applying markdown row patch to current scene...')
                     : t('替换旧场景并刷新列表...', 'Replacing old scene and refreshing list...'),
                 error: '',
             });
@@ -14488,10 +14924,10 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
             onLog?.(
                 t(
                     ((Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode))
-                        ? `补充实体完成（仅补实体模式）：未替换场景/分镜，已回填环境锚点、关联角色、关键道具；按 subjects_json 新增 ${importResult.created} 条（复用并跳过 ${importResult.skipped} 条）。${(sceneRegenSubjectResult.summary_lines || []).join('；')}`
+                        ? `补充实体完成（仅补实体模式）：未替换场景/分镜，已按 markdown 行补丁回写当前场景，并校对环境锚点、关联角色、关键道具及核心场景信息；按 subjects_json 新增 ${importResult.created} 条（复用并跳过 ${importResult.skipped} 条）。${(sceneRegenSubjectResult.summary_lines || []).join('；')}`
                         : `补充实体完成：新增 ${generated.length} 个场景变更；按 subjects_json 增量导入 ${importResult.created} 条（跳过已存在 ${importResult.skipped} 条）。${(sceneRegenSubjectResult.summary_lines || []).join('；')}`),
                     ((Boolean(result?.entity_only_mode || sceneRegenEntityOnlyMode))
-                        ? `Entity supplement completed (Entity-only mode): scene/shots unchanged; patched environment anchor, linked characters, key props; created ${importResult.created} entities from subjects_json and reused/skipped ${importResult.skipped}. ${(sceneRegenSubjectResult.summary_lines || []).join('; ')}`
+                        ? `Entity supplement completed (Entity-only mode): scene/shots unchanged; applied the markdown row patch back to the current scene and corrected environment anchor, linked characters, key props, and core scene fields when needed; created ${importResult.created} entities from subjects_json and reused/skipped ${importResult.skipped}. ${(sceneRegenSubjectResult.summary_lines || []).join('; ')}`
                         : `Entity supplement completed: applied ${generated.length} scene change(s); incrementally created ${importResult.created} subject entities from subjects_json and reused/skipped ${importResult.skipped} existing subjects. ${(sceneRegenSubjectResult.summary_lines || []).join('; ')}`)
                 ),
                 'success'
@@ -15098,6 +15534,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                                     key={idx} 
                                     scene={scene} 
                                     entities={entities} 
+                                    subjectGap={sceneSubjectGapMap.get(getSceneSubjectStatusKey(scene)) || null}
+                                    supplementingSubjects={Boolean(sceneSubjectSupplementingMap[getSceneSubjectStatusKey(scene)])}
                                     shotCount={Number(sceneShotCountMap?.[Number(scene?.id || 0)] || 0)}
                                     uiLang={uiLang}
                                     generatingShots={isSceneAiShotsBusy(scene?.id)}
@@ -15106,6 +15544,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                                     onClick={() => setEditingScene(scene)} 
                                     onGenerateShots={handleGenerateShots}
                                     onSupplementShots={handleOpenShotSupplementMenu}
+                                    onSupplementSubjects={handleSupplementSceneSubjects}
                                     onDelete={handleDeleteScene}
                                 />
                             );
@@ -16014,14 +16453,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
     const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 2;
     const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
-    const createSubjectBatchTaskState = () => ({
+    const createSubjectBatchTaskState = useCallback(() => ({
         running: false,
         progress: null,
         scopeKey: '',
         updatedAt: 0,
-    });
+    }), []);
 
-    const normalizeSubjectBatchTask = (rawTask) => {
+    const normalizeSubjectBatchTask = useCallback((rawTask) => {
         const now = Date.now();
         if (!rawTask || typeof rawTask !== 'object') {
             return createSubjectBatchTaskState();
@@ -16038,9 +16477,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             scopeKey: String(rawTask.scopeKey || ''),
             updatedAt,
         };
-    };
+    }, [createSubjectBatchTaskState]);
 
-    const readSubjectBatchRuntimeStorage = () => {
+    const readSubjectBatchRuntimeStorage = useCallback(() => {
         try {
             const raw = localStorage.getItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY);
             if (!raw) return null;
@@ -16054,9 +16493,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         } catch {
             return null;
         }
-    };
+    }, [normalizeSubjectBatchTask]);
 
-    const writeSubjectBatchRuntimeStorage = (runtime) => {
+    const writeSubjectBatchRuntimeStorage = useCallback((runtime) => {
         try {
             if (!runtime || typeof runtime !== 'object') {
                 localStorage.removeItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY);
@@ -16079,7 +16518,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         } catch {
             // ignore storage failures
         }
-    };
+    }, [normalizeSubjectBatchTask]);
 
     const persistedRuntime = readSubjectBatchRuntimeStorage();
 
@@ -16093,12 +16532,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     }
 
     const subjectBatchRuntime = window.__AISTORY_SUBJECT_BATCH_RUNTIME__;
-    const getSubjectBatchSnapshot = () => ({
+    const getSubjectBatchSnapshot = useCallback(() => ({
         generate: { ...subjectBatchRuntime.generate },
         analyze: { ...subjectBatchRuntime.analyze },
         reconstruct: { ...subjectBatchRuntime.reconstruct },
-    });
-    const emitSubjectBatchRuntime = () => {
+    }), [subjectBatchRuntime]);
+    const emitSubjectBatchRuntime = useCallback(() => {
         writeSubjectBatchRuntimeStorage(subjectBatchRuntime);
         const snapshot = getSubjectBatchSnapshot();
         subjectBatchRuntime.listeners.forEach((listener) => {
@@ -16108,8 +16547,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 // ignore listener errors
             }
         });
-    };
-    const updateSubjectBatchTask = (task, patch) => {
+    }, [getSubjectBatchSnapshot, subjectBatchRuntime, writeSubjectBatchRuntimeStorage]);
+    const updateSubjectBatchTask = useCallback((task, patch) => {
         if (!subjectBatchRuntime[task]) return;
         subjectBatchRuntime[task] = {
             ...subjectBatchRuntime[task],
@@ -16117,16 +16556,16 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             updatedAt: Date.now(),
         };
         emitSubjectBatchRuntime();
-    };
-    const subscribeSubjectBatchRuntime = (listener) => {
+    }, [emitSubjectBatchRuntime, subjectBatchRuntime]);
+    const subscribeSubjectBatchRuntime = useCallback((listener) => {
         subjectBatchRuntime.listeners.add(listener);
         return () => {
             subjectBatchRuntime.listeners.delete(listener);
         };
-    };
+    }, [subjectBatchRuntime]);
 
     const { addLog: onLog } = useLog();
-    const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const subjectBatchScopeKey = String(projectId || '');
     const SUBJECT_BATCH_PARALLEL_LIMIT = userBatchParallelLimit;
     const isMountedRef = useRef(false);
@@ -16894,6 +17333,17 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             }
         }
 
+        // Guard: if the global runtime object still shows this task as recently
+        // running, do NOT heal — the batch loop is still alive in a background
+        // closure even though the component remounted with fresh refs.
+        const globalTaskState = subjectBatchRuntime?.[stableTask];
+        if (globalTaskState?.running) {
+            const globalUpdatedAt = Number(globalTaskState?.updatedAt || 0) || 0;
+            if (globalUpdatedAt > 0 && (Date.now() - globalUpdatedAt) < SUBJECT_BATCH_RUNTIME_STALE_MS) {
+                return false;
+            }
+        }
+
         if (sessionRef) {
             sessionRef.current = '';
         }
@@ -16903,7 +17353,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
         clearSubjectBatchRuntimeUi(stableTask);
         return true;
-    }, [clearSubjectBatchRuntimeUi, createSubjectBatchTaskState, hasSubjectBatchJobState]);
+    }, [clearSubjectBatchRuntimeUi, createSubjectBatchTaskState, hasSubjectBatchJobState, subjectBatchRuntime]);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -17292,120 +17742,6 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             clearInterval(timer);
         };
     }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, subjectImageJobs, t]);
-
-    useEffect(() => {
-        const applySnapshot = (snapshot) => {
-            const generateTask = snapshot?.generate || createSubjectBatchTaskState();
-            const analyzeTask = snapshot?.analyze || createSubjectBatchTaskState();
-            const reconstructTask = snapshot?.reconstruct || createSubjectBatchTaskState();
-
-            if (generateTask.scopeKey === subjectBatchScopeKey && generateTask.running) {
-                applyGenerateBatchState(true, generateTask.progress || null);
-            } else {
-                applyGenerateBatchState(false, null);
-            }
-
-            if (analyzeTask.scopeKey === subjectBatchScopeKey && analyzeTask.running) {
-                applyAnalyzeBatchState(true, analyzeTask.progress || null);
-            } else {
-                applyAnalyzeBatchState(false, null);
-            }
-
-            if (reconstructTask.scopeKey === subjectBatchScopeKey && reconstructTask.running) {
-                applyReconstructBatchState(true, reconstructTask.progress || null);
-            } else {
-                applyReconstructBatchState(false, null);
-            }
-        };
-
-        applySnapshot(getSubjectBatchSnapshot());
-        return subscribeSubjectBatchRuntime(applySnapshot);
-    }, [applyAnalyzeBatchState, applyGenerateBatchState, applyReconstructBatchState, subjectBatchScopeKey]);
-
-    useEffect(() => {
-        tryHealSubjectBatchRuntime({
-            task: 'generate',
-            uiRunning: isBatchGeneratingEntities,
-            sessionRef: subjectBatchGenerateSessionRef,
-            activeJobsRef: subjectBatchGenerateActiveJobsRef,
-            jobKind: 'generate',
-            stopRequestedRef: subjectBatchGenerateStopRequestedRef,
-        });
-    }, [isBatchGeneratingEntities, tryHealSubjectBatchRuntime]);
-
-    useEffect(() => {
-        tryHealSubjectBatchRuntime({
-            task: 'analyze',
-            uiRunning: isBatchAnalyzingEntities,
-            sessionRef: subjectBatchAnalyzeSessionRef,
-            stopRequestedRef: subjectBatchAnalyzeStopRequestedRef,
-        });
-    }, [isBatchAnalyzingEntities, tryHealSubjectBatchRuntime]);
-
-    useEffect(() => {
-        tryHealSubjectBatchRuntime({
-            task: 'reconstruct',
-            uiRunning: isBatchReconstructingEntities,
-            sessionRef: subjectBatchReconstructSessionRef,
-            activeJobsRef: subjectBatchReconstructActiveJobsRef,
-            jobKind: 'reconstruct',
-            stopRequestedRef: subjectBatchReconstructStopRequestedRef,
-        });
-    }, [isBatchReconstructingEntities, tryHealSubjectBatchRuntime]);
-
-    useEffect(() => {
-        const hasTopLevelBatchUi = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
-        if (!hasTopLevelBatchUi) return;
-
-        const timer = window.setInterval(() => {
-            const snapshot = getSubjectBatchSnapshot();
-            tryHealSubjectBatchRuntime({
-                task: 'generate',
-                uiRunning: isBatchGeneratingEntities,
-                sessionRef: subjectBatchGenerateSessionRef,
-                activeJobsRef: subjectBatchGenerateActiveJobsRef,
-                jobKind: 'generate',
-                stopRequestedRef: subjectBatchGenerateStopRequestedRef,
-                snapshot,
-                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
-                allowSessionReset: true,
-            });
-
-            tryHealSubjectBatchRuntime({
-                task: 'analyze',
-                uiRunning: isBatchAnalyzingEntities,
-                sessionRef: subjectBatchAnalyzeSessionRef,
-                stopRequestedRef: subjectBatchAnalyzeStopRequestedRef,
-                snapshot,
-                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
-                allowSessionReset: true,
-            });
-
-            tryHealSubjectBatchRuntime({
-                task: 'reconstruct',
-                uiRunning: isBatchReconstructingEntities,
-                sessionRef: subjectBatchReconstructSessionRef,
-                activeJobsRef: subjectBatchReconstructActiveJobsRef,
-                jobKind: 'reconstruct',
-                stopRequestedRef: subjectBatchReconstructStopRequestedRef,
-                snapshot,
-                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
-                allowSessionReset: true,
-            });
-        }, SUBJECT_BATCH_WATCHDOG_INTERVAL_MS);
-
-        return () => {
-            window.clearInterval(timer);
-        };
-    }, [
-        getSubjectBatchSnapshot,
-        isBatchAnalyzingEntities,
-        isBatchGeneratingEntities,
-        isBatchReconstructingEntities,
-        SUBJECT_BATCH_RUNTIME_STALE_MS,
-        SUBJECT_BATCH_WATCHDOG_INTERVAL_MS,
-        tryHealSubjectBatchRuntime,
-    ]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
@@ -19229,29 +19565,33 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 </div>
                 
                 {entities.map(entity => {
-                    const imageActionLocked = isSubjectImageActionLocked(entity);
-                    const hasRunningSubjectImageJob = Boolean(subjectImageJobs[String(entity.id)]);
+                    const trackedJob = subjectImageJobs[String(entity.id)];
+                    const isBatchPending = !trackedJob && isBatchGeneratingEntities && !entity.image_url;
+                    const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
+                    const hasRunningSubjectImageJob = Boolean(trackedJob) || isBatchPending;
                     return (
                     <div 
                         key={entity.id} 
                         onClick={() => setViewingEntity(entity)}
                         className="aspect-[3/4] bg-card border border-white/10 rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all"
                     >
-                        {subjectImageJobs[String(entity.id)] && (
+                        {(trackedJob || isBatchPending) && (
                             <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
                                 {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <RefreshCw className="animate-spin" size={10} />}
                                 {stoppingSubjectImageJobs[String(entity.id)]
                                     ? t('停止中', 'Stopping')
-                                    : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'persisting'
+                                    : isBatchPending
+                                        ? t('排队中', 'Queued')
+                                    : String(trackedJob?.status || '').toLowerCase() === 'persisting'
                                         ? t('同步中', 'Syncing')
-                                    : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'running'
+                                    : String(trackedJob?.status || '').toLowerCase() === 'running'
                                         ? t('运行中', 'Running')
-                                        : String(subjectImageJobs[String(entity.id)]?.status || '').toLowerCase() === 'queued'
+                                        : String(trackedJob?.status || '').toLowerCase() === 'queued'
                                             ? t('排队中', 'Queued')
                                             : t('生成中', 'Generating')}
                             </div>
                         )}
-                        {hasRunningSubjectImageJob && (
+                        {trackedJob && hasRunningSubjectImageJob && (
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -19848,8 +20188,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             <AnimatePresence>
                 {showImageModal && (
                     (() => {
-                        const selectedEntityImageLocked = isSubjectImageActionLocked(selectedEntity);
-                        const selectedEntityHasRunningImageJob = Boolean(selectedEntity?.id && getSubjectImageJobEntry(selectedEntity));
+                        const selectedEntityImageLocked = isSubjectImageActionLocked(selectedEntity) || (isBatchGeneratingEntities && !selectedEntity?.image_url && !getSubjectImageJobEntry(selectedEntity));
+                        const selectedEntityHasRunningImageJob = Boolean(selectedEntity?.id && getSubjectImageJobEntry(selectedEntity)) || (isBatchGeneratingEntities && !selectedEntity?.image_url && !getSubjectImageJobEntry(selectedEntity));
                         return (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
                         <motion.div 
@@ -30781,10 +31121,12 @@ const Editor = ({
         };
     };
 
-    const handleImport = async (text, importType = 'auto') => {
+    const handleImport = async (text, importType = 'auto', importOptions = {}) => {
         text = (typeof text === 'string') ? text : String(text || '');
         const requestedImportType = String(importType || 'auto');
         const effectiveImportType = shouldForceAutoImportForAnalysisBundle(text) ? 'auto' : requestedImportType;
+        const autoSupplementSceneSubjects = importOptions?.autoSupplementSceneSubjects !== false;
+        const suppressAlerts = Boolean(importOptions?.suppressAlerts);
         // Allow modal loading state to paint before heavy parsing/import logic starts.
         await new Promise(resolve => setTimeout(resolve, 0));
         addLog(`Starting Import Analysis (${effectiveImportType})...`, "process");
@@ -30813,6 +31155,15 @@ const Editor = ({
             markers: { script: false, scene: false, shot: false },
             importMode: { requested: requestedImportType, effective: effectiveImportType },
         };
+        let sceneSubjectAutoSupplementReport = {
+            createdItems: [],
+            skippedItems: [],
+            failedItems: [],
+            sceneReports: [],
+            countsByType: { character: 0, prop: 0, environment: 0 },
+            entities: [],
+        };
+        const importedSceneRows = [];
         let postImportStatusNote = '';
         const llmFinalReport = extractFinalConsistencyReport(text);
         const projectVisualBackfill = getProjectVisualBackfillFromJsonText(text);
@@ -30828,16 +31179,33 @@ const Editor = ({
                 jsonBlocks.push(globalInfoPayload);
             }
 
-            const mergedEntities = getMergedEntitiesPayloadFromText(text);
-            if (mergedEntities?.payload) {
-                jsonBlocks.push(mergedEntities.payload);
-                importDiagnostics.entitiesPayloadSource = mergedEntities.source || 'merged';
-                if (String(importDiagnostics.entitiesPayloadSource).includes('subject_index_fallback')) {
-                    importDiagnostics.subjectIndexExtracted =
-                        (Array.isArray(mergedEntities.payload.characters) ? mergedEntities.payload.characters.length : 0)
-                        + (Array.isArray(mergedEntities.payload.props) ? mergedEntities.payload.props.length : 0)
-                        + (Array.isArray(mergedEntities.payload.environments) ? mergedEntities.payload.environments.length : 0);
-                    addLog('Entities payload merged with Subject Index fallback for missing types.', 'warning');
+            // Prefer backend-provided subjects_json (clean, pre-parsed) over
+            // re-parsing raw LLM markdown with heuristic regex extractors.
+            const backendSubjectsJson = importOptions?.subjectsJson || null;
+            const hasBackendSubjects = backendSubjectsJson
+                && typeof backendSubjectsJson === 'object'
+                && (
+                    (Array.isArray(backendSubjectsJson.characters) && backendSubjectsJson.characters.length > 0)
+                    || (Array.isArray(backendSubjectsJson.props) && backendSubjectsJson.props.length > 0)
+                    || (Array.isArray(backendSubjectsJson.environments) && backendSubjectsJson.environments.length > 0)
+                );
+
+            if (hasBackendSubjects) {
+                jsonBlocks.push(backendSubjectsJson);
+                importDiagnostics.entitiesPayloadSource = 'backend_subjects_json';
+                addLog('Using backend-extracted subjects_json for entity import.', 'info');
+            } else {
+                const mergedEntities = getMergedEntitiesPayloadFromText(text);
+                if (mergedEntities?.payload) {
+                    jsonBlocks.push(mergedEntities.payload);
+                    importDiagnostics.entitiesPayloadSource = mergedEntities.source || 'merged';
+                    if (String(importDiagnostics.entitiesPayloadSource).includes('subject_index_fallback')) {
+                        importDiagnostics.subjectIndexExtracted =
+                            (Array.isArray(mergedEntities.payload.characters) ? mergedEntities.payload.characters.length : 0)
+                            + (Array.isArray(mergedEntities.payload.props) ? mergedEntities.payload.props.length : 0)
+                            + (Array.isArray(mergedEntities.payload.environments) ? mergedEntities.payload.environments.length : 0);
+                        addLog('Entities payload merged with Subject Index fallback for missing types.', 'warning');
+                    }
                 }
             }
 
@@ -30919,6 +31287,7 @@ const Editor = ({
         const existingEntities = (id
             ? await fetchEntities(id).catch(() => [])
             : []);
+        let knownEntities = Array.isArray(existingEntities) ? [...existingEntities] : [];
         const normalizeEntityKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${String(name || '').trim().toLowerCase()}`;
         const existingEntityMap = new Map();
         for (const e of (existingEntities || [])) {
@@ -31072,6 +31441,7 @@ const Editor = ({
                                 } else {
                                     const created = await createEntity(id, payload);
                                     if (created?.id) {
+                                        knownEntities.push(created);
                                         existingEntityMap.set(normalizeEntityKey('character', entityName), created);
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('character', entityNameEn), created);
                                         count++;
@@ -31140,6 +31510,7 @@ const Editor = ({
                                 } else {
                                     const created = await createEntity(id, payload);
                                     if (created?.id) {
+                                        knownEntities.push(created);
                                         existingEntityMap.set(normalizeEntityKey('prop', entityName), created);
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('prop', entityNameEn), created);
                                         count++;
@@ -31212,6 +31583,7 @@ const Editor = ({
                                 } else {
                                     const created = await createEntity(id, payload);
                                     if (created?.id) {
+                                        knownEntities.push(created);
                                         existingEntityMap.set(normalizeEntityKey('environment', entityName), created);
                                         if (entityNameEn) existingEntityMap.set(normalizeEntityKey('environment', entityNameEn), created);
                                         count++;
@@ -31318,7 +31690,6 @@ const Editor = ({
                 try { existingScenes = await fetchScenes(activeEpisodeId); } catch(e) {}
                 let currentSceneDbId = null;
                 const deferredShots = [];
-
                 const normalizeSceneNoToken = (value) => {
                     const text = String(value || '')
                         .replace(/<br\s*\/?>/gi, ' ')
@@ -31532,16 +31903,22 @@ const Editor = ({
                                 }
 
                                 addLog(`Processing Scene Row: No=${scData.scene_no} Name=${(scData.scene_name || '').substring(0, 20)}...`, "info");
+                                importedSceneRows.push({
+                                    ...scData,
+                                    id: null,
+                                });
 
                                 const match = existingScenes.find(s => String(s.scene_no) === String(scData.scene_no));
                                 if (match) {
                                     await updateScene(match.id, scData); 
                                     currentSceneDbId = match.id;
+                                    importedSceneRows[importedSceneRows.length - 1].id = match.id;
                                     importStats.scenesUpdated += 1;
                                     addLog(`Updated Scene ${scData.scene_no}`, "success");
                                 } else {
                                     const newScene = await createScene(activeEpisodeId, scData);
                                     currentSceneDbId = newScene.id;
+                                    importedSceneRows[importedSceneRows.length - 1].id = newScene.id;
                                     existingScenes.push(newScene); 
                                     importStats.scenesCreated += 1;
                                     addLog(`Created Scene ${scData.scene_no}`, "success");
@@ -31736,6 +32113,35 @@ const Editor = ({
                     changesMade = true;
                     reloadRequired = true;
                 }
+
+                if (autoSupplementSceneSubjects && id && importedSceneRows.length > 0) {
+                    sceneSubjectAutoSupplementReport = await createMissingSceneSubjectPlaceholders({
+                        projectId: id,
+                        sceneRows: importedSceneRows,
+                        existingEntities: knownEntities,
+                        onLog: addLog,
+                    });
+                    knownEntities = Array.isArray(sceneSubjectAutoSupplementReport?.entities)
+                        ? sceneSubjectAutoSupplementReport.entities
+                        : knownEntities;
+
+                    const autoCreatedCount = Array.isArray(sceneSubjectAutoSupplementReport?.createdItems)
+                        ? sceneSubjectAutoSupplementReport.createdItems.length
+                        : 0;
+                    const autoFailedCount = Array.isArray(sceneSubjectAutoSupplementReport?.failedItems)
+                        ? sceneSubjectAutoSupplementReport.failedItems.length
+                        : 0;
+                    if (autoCreatedCount > 0) {
+                        changesMade = true;
+                        addLog(
+                            `Auto-supplemented missing scene subjects after import: character=${Number(sceneSubjectAutoSupplementReport?.countsByType?.character || 0)}, prop=${Number(sceneSubjectAutoSupplementReport?.countsByType?.prop || 0)}, environment=${Number(sceneSubjectAutoSupplementReport?.countsByType?.environment || 0)}.`,
+                            'success'
+                        );
+                    }
+                    if (autoFailedCount > 0) {
+                        addLog(`Scene subject auto-supplement failed for ${autoFailedCount} item(s).`, 'warning');
+                    }
+                }
              } catch (e) {
                  addLog(`Scene Import Failed: ${e.message}`, "error");
              }
@@ -31800,11 +32206,18 @@ const Editor = ({
 
             const importedSubjectsTotal = importedSubjectCounts.character + importedSubjectCounts.prop + importedSubjectCounts.environment;
             const skippedSubjectsTotal = skippedSubjectItems.length;
+            const autoSupplementCreatedTotal = Array.isArray(sceneSubjectAutoSupplementReport?.createdItems)
+                ? sceneSubjectAutoSupplementReport.createdItems.length
+                : 0;
+            const autoSupplementFailedTotal = Array.isArray(sceneSubjectAutoSupplementReport?.failedItems)
+                ? sceneSubjectAutoSupplementReport.failedItems.length
+                : 0;
             const importedScenesTotal = importStats.scenesCreated + importStats.scenesUpdated;
             const summaryLines = [
                 'Import Successful!',
                 `Subjects: total=${importedSubjectsTotal} (character=${importedSubjectCounts.character}, prop=${importedSubjectCounts.prop}, environment=${importedSubjectCounts.environment})`,
                 `Subjects skipped as existing=${skippedSubjectsTotal}`,
+                `Scene subject auto-supplement: created=${autoSupplementCreatedTotal}, failed=${autoSupplementFailedTotal}`,
                 `Scenes: created=${importStats.scenesCreated}, updated=${importStats.scenesUpdated}, total=${importedScenesTotal}`,
                 `Shots: created=${importStats.shotsCreated}`,
                 `Script lines: ${importStats.scriptLines}`,
@@ -31814,13 +32227,17 @@ const Editor = ({
                 `Markers: script=${importDiagnostics.markers.script}, scene=${importDiagnostics.markers.scene}, shot=${importDiagnostics.markers.shot}`,
             ];
             if (postImportStatusNote) summaryLines.push(postImportStatusNote);
-            alert(summaryLines.join('\n'));
+            if (!suppressAlerts) {
+                alert(summaryLines.join('\n'));
+            }
             return {
                 ok: true,
                 changed: true,
                 importedSubjectCounts,
                 createdSubjectItems,
                 skippedSubjectItems,
+                importedSceneRows,
+                sceneSubjectAutoSupplementReport,
                 importStats,
                 importDiagnostics,
                 postImportStatusNote,
@@ -31834,13 +32251,17 @@ const Editor = ({
                 `Parse diagnostics: source=${importDiagnostics.entitiesPayloadSource}, subject_index_rows=${importDiagnostics.subjectIndexTableRows}, subject_index_extracted=${importDiagnostics.subjectIndexExtracted}, generic_json_blocks=${importStats.genericJsonBlocks}`,
                 `Markers: script=${importDiagnostics.markers.script}, scene=${importDiagnostics.markers.scene}, shot=${importDiagnostics.markers.shot}`,
             ];
-            alert(noChangeLines.join('\n'));
+            if (!suppressAlerts) {
+                alert(noChangeLines.join('\n'));
+            }
             return {
                 ok: true,
                 changed: false,
                 importedSubjectCounts,
                 createdSubjectItems,
                 skippedSubjectItems,
+                importedSceneRows,
+                sceneSubjectAutoSupplementReport,
                 importStats,
                 importDiagnostics,
                 postImportStatusNote,

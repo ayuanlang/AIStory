@@ -4066,8 +4066,8 @@ class MediaGenerationService:
             
             if start_img_url and last_frame_url:
                 # Start + End Frame Mode (Explicit Roles Required)
-                start_ref = self._resolve_ref_for_api(start_img_url, force_data_uri_for_local=True)
-                end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                start_ref = await self._resolve_ref_for_api_async(start_img_url, force_data_uri_for_local=True)
+                end_ref = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
 
                 max_ref_size = 30 * 1024 * 1024
                 start_ref_size = self._data_uri_image_size_bytes(start_ref)
@@ -4089,7 +4089,7 @@ class MediaGenerationService:
                 })
             elif start_img_url:
                 # Start Frame Only - Strict 'first_frame' role required for newer models (1.5 Pro)
-                start_ref = self._resolve_ref_for_api(start_img_url, force_data_uri_for_local=True)
+                start_ref = await self._resolve_ref_for_api_async(start_img_url, force_data_uri_for_local=True)
                 start_ref_size = self._data_uri_image_size_bytes(start_ref)
                 if start_ref_size is not None and start_ref_size > 30 * 1024 * 1024:
                     return {"error": "Doubao reference image too large. Base64 image must be < 30MB."}
@@ -4102,7 +4102,7 @@ class MediaGenerationService:
                 })
             elif last_frame_url:
                 # Last Frame Only (Rare, but use role if strictly End frame)
-                end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                end_ref = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
                 end_ref_size = self._data_uri_image_size_bytes(end_ref)
                 if end_ref_size is not None and end_ref_size > 30 * 1024 * 1024:
                     return {"error": "Doubao reference image too large. Base64 image must be < 30MB."}
@@ -4270,7 +4270,7 @@ class MediaGenerationService:
             if not start_img_src:
                  return {"error": "Vidu Multi-Frame requires a Start Image (Reference Image)"}
                  
-            start_ref = self._resolve_ref_for_api(start_img_src, force_data_uri_for_local=True)
+            start_ref = await self._resolve_ref_for_api_async(start_img_src, force_data_uri_for_local=True)
             if not start_ref: return {"error": "Failed to load Start Image"}
             
             payload["start_image"] = start_ref
@@ -4289,7 +4289,7 @@ class MediaGenerationService:
             
             settings_arr = []
             for kf in keyframes:
-                 resolved_kf = self._resolve_ref_for_api(kf, force_data_uri_for_local=True)
+                 resolved_kf = await self._resolve_ref_for_api_async(kf, force_data_uri_for_local=True)
                  if resolved_kf:
                      # Attempt generic structure. 
                      # If backend rejects, we will know.
@@ -4316,11 +4316,11 @@ class MediaGenerationService:
             if ref_image:
                 refs = ref_image if isinstance(ref_image, list) else [ref_image]
                 if refs:
-                    start_ref = self._resolve_ref_for_api(refs[0], force_data_uri_for_local=True)
+                    start_ref = await self._resolve_ref_for_api_async(refs[0], force_data_uri_for_local=True)
                     if start_ref: images.append(start_ref)
             
             if last_frame_url:
-                end_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                end_ref = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
                 if end_ref:
                      if not images: images.append(end_ref) # Use as start if no start
                      else: images.append(end_ref) # Use as end
@@ -4541,7 +4541,7 @@ class MediaGenerationService:
                                 i,
                                 ref_host_error,
                             )
-                    resolved = self._resolve_ref_for_api(
+                    resolved = await self._resolve_ref_for_api_async(
                         candidate_ref,
                         force_data_uri_for_local=True,
                         prefer_public_upload_url=prefer_public_upload_url,
@@ -4716,9 +4716,9 @@ class MediaGenerationService:
             if ref_image:
                 if is_veo:
                     # Explicitly process for Veo requirements
-                    payload["firstFrameUrl"] = self._process_veo_image(ref_image, aspect_ratio or "16:9")
+                    payload["firstFrameUrl"] = await self._process_veo_image_async(ref_image, aspect_ratio or "16:9")
                 else:
-                    val = self._resolve_ref_for_api(ref_image, force_data_uri_for_local=True)
+                    val = await self._resolve_ref_for_api_async(ref_image, force_data_uri_for_local=True)
                     if val: payload["url"] = val
             elif is_veo:
                 # Veo: firstFrameUrl is Optional. 
@@ -4739,9 +4739,9 @@ class MediaGenerationService:
             
             if last_frame_url:
                 if is_veo:
-                    payload["lastFrameUrl"] = self._process_veo_image(last_frame_url, aspect_ratio or "16:9")
+                    payload["lastFrameUrl"] = await self._process_veo_image_async(last_frame_url, aspect_ratio or "16:9")
                 else:
-                    val = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                    val = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
                     if val: payload["end_reference_image"] = val
 
             # Veo Clean Prompt Logic
@@ -4917,7 +4917,7 @@ class MediaGenerationService:
         if ref_image:
             submit_action = "ImageToImage"
             is_sync = True
-            ref_value = self._resolve_ref_for_api(ref_image, force_data_uri_for_local=False)
+            ref_value = await self._resolve_ref_for_api_async(ref_image, force_data_uri_for_local=False)
             if not ref_value:
                 _debug_log("Failed to load reference image for Tencent I2I", "error")
                 return {"error": "Failed to load reference image for Tencent I2I"}
@@ -5001,7 +5001,7 @@ class MediaGenerationService:
         # kf2v (KeyFrame) uses first_frame_url/last_frame_url, so we exclude it from is_i2v
         is_i2v = "i2v" in model
         
-        first_img = self._resolve_ref_for_api(ref_image, force_data_uri_for_local=True)
+        first_img = await self._resolve_ref_for_api_async(ref_image, force_data_uri_for_local=True)
         
         # Validations
         if is_i2v and not first_img:
@@ -5019,7 +5019,7 @@ class MediaGenerationService:
             input_data["first_frame_url"] = first_img
 
         if last_frame_url:
-            last_img = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+            last_img = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
             if last_img:
                 if is_i2v:
                      logger.warning("[Wanxiang] Warning: Model is i2v but last_frame_url provided. Ignoring.")
@@ -6126,7 +6126,7 @@ class MediaGenerationService:
             raw_ref = str(ref_item or "").strip()
             if not raw_ref:
                 continue
-            data_uri = self._get_image_base64_for_api(raw_ref, force_data_uri=True)
+            data_uri = await self._get_image_base64_for_api_async(raw_ref, force_data_uri=True)
             if not isinstance(data_uri, str) or not data_uri.startswith("data:image/"):
                 return {"error": f"{provider_name} Gemini image editing requires resolvable image inputs", "submit_failed": True}
             marker = ";base64,"
@@ -6376,7 +6376,7 @@ class MediaGenerationService:
                  except Exception:
                      ref_bytes = None
              else:
-                 b64 = self._get_image_base64_for_api(ref_image)
+                 b64 = await self._get_image_base64_for_api_async(ref_image)
                  if b64 and b64 != ref_image:
                      ref_bytes = base64.b64decode(b64)
             
@@ -6430,13 +6430,16 @@ class MediaGenerationService:
                  filename = f"gen_sd_{uuid.uuid4().hex[:8]}.png"
                  UPLOAD_DIR = settings.UPLOAD_DIR
                  if not os.path.isabs(UPLOAD_DIR):
-                     # If relative, make it absolute relative to cwd or backend root to avoid ambiguity
-                     # Assuming cwd is backend root as per main.py execution
                      UPLOAD_DIR = os.path.abspath(UPLOAD_DIR)
                  
                  save_path = os.path.join(UPLOAD_DIR, filename)
-                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                 with open(save_path, "wb") as f: f.write(img_bytes)
+
+                 def _save():
+                     os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                     with open(save_path, "wb") as f:
+                         f.write(img_bytes)
+
+                 await asyncio.to_thread(_save)
                  
                  meta = {"raw": data}
                  meta.update(base_metadata)
@@ -7688,9 +7691,9 @@ class MediaGenerationService:
             ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
             for ref in ref_list:
                 if use_veo_api:
-                    resolved = self._process_veo_image(ref, normalized_ar or "16:9")
+                    resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
                 else:
-                    resolved = self._resolve_ref_for_api(ref, force_data_uri_for_local=True)
+                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, True)
                 if resolved:
                     resolved_refs.append(resolved)
 
@@ -7710,16 +7713,17 @@ class MediaGenerationService:
                 option_refs = [option_refs]
             for ref in option_refs if isinstance(option_refs, list) else []:
                 if use_veo_api:
-                    resolved = self._process_veo_image(ref, normalized_ar or "16:9")
+                    resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
                 else:
-                    resolved = self._resolve_ref_for_api(ref, force_data_uri_for_local=True)
+                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, True)
                 if resolved:
                     resolved_refs.append(resolved)
 
         if resolved_refs:
             preuploaded_refs: List[str] = []
             for idx, ref in enumerate(resolved_refs):
-                hosted_ref = self._upload_kie_ref_to_hosted_url(
+                hosted_ref = await asyncio.to_thread(
+                    self._upload_kie_ref_to_hosted_url,
                     ref,
                     api_key=api_key,
                     upload_path="market-inputs",
@@ -7767,7 +7771,8 @@ class MediaGenerationService:
                 elif "webp" in mime:
                     ext = ".webp"
 
-                uploaded_ref = self._upload_kie_data_uri(
+                uploaded_ref = await asyncio.to_thread(
+                    self._upload_kie_data_uri,
                     normalized_ref,
                     api_key=api_key,
                     file_name=f"sora2-input-{uuid.uuid4().hex[:10]}-{idx + 1}{ext}",
@@ -7784,9 +7789,9 @@ class MediaGenerationService:
             single_ref = tool_conf.get("image_url") or tool_conf.get("imageUrl")
             if single_ref and not resolved_refs:
                 if use_veo_api:
-                    resolved = self._process_veo_image(single_ref, normalized_ar or "16:9")
+                    resolved = await asyncio.to_thread(self._process_veo_image, single_ref, normalized_ar or "16:9")
                 else:
-                    resolved = self._resolve_ref_for_api(single_ref, force_data_uri_for_local=True)
+                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, single_ref, True)
                 if resolved:
                     resolved_refs.append(resolved)
 
@@ -7878,11 +7883,11 @@ class MediaGenerationService:
 
         if last_frame_url and not is_sora2_i2v_model:
             if use_veo_api:
-                last_ref = self._process_veo_image(last_frame_url, normalized_ar or "16:9")
+                last_ref = await self._process_veo_image_async(last_frame_url, normalized_ar or "16:9")
             else:
-                last_ref = self._resolve_ref_for_api(last_frame_url, force_data_uri_for_local=True)
+                last_ref = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
 
-            hosted_last_ref = self._upload_kie_ref_to_hosted_url(
+            hosted_last_ref = await self._upload_kie_ref_to_hosted_url_async(
                 last_ref,
                 api_key=api_key,
                 upload_path="market-inputs",
@@ -9436,7 +9441,10 @@ class MediaGenerationService:
         except Exception as e:
             _debug_log(f"Download failed: {e}", "error")
         return url
-        
+
+    async def _process_veo_image_async(self, url_or_path, aspect_ratio):
+        return await asyncio.to_thread(self._process_veo_image, url_or_path, aspect_ratio)
+
     def _process_veo_image(self, url_or_path, aspect_ratio):
         """Helper to resize/crop images to strictly match Veo aspect ratio requirements"""
         try:
@@ -9545,6 +9553,9 @@ class MediaGenerationService:
             return True
         except Exception:
             return False
+
+    async def _resolve_ref_for_api_async(self, url_or_path, force_data_uri_for_local=True, prefer_public_upload_url=False, data_uri_profile=None):
+        return await asyncio.to_thread(self._resolve_ref_for_api, url_or_path, force_data_uri_for_local, prefer_public_upload_url, data_uri_profile)
 
     def _resolve_ref_for_api(self, url_or_path, force_data_uri_for_local=True, prefer_public_upload_url=False, data_uri_profile: Optional[str] = None):
         if isinstance(url_or_path, list):
@@ -9722,6 +9733,9 @@ class MediaGenerationService:
             logger.warning("KIE data-uri normalize failed | error=%s", str(e)[:300])
             return None
 
+    async def _upload_kie_data_uri_async(self, data_uri, api_key, file_name=None, upload_path="veo-inputs"):
+        return await asyncio.to_thread(self._upload_kie_data_uri, data_uri, api_key, file_name, upload_path)
+
     def _upload_kie_data_uri(self, data_uri: str, api_key: str, file_name: Optional[str] = None, upload_path: str = "veo-inputs") -> Optional[str]:
         if not data_uri or not str(data_uri).startswith("data:"):
             return None
@@ -9856,6 +9870,9 @@ class MediaGenerationService:
         except Exception as e:
             logger.warning("KIE file-url upload exception | error=%s", str(e)[:300])
             return None
+
+    async def _upload_kie_ref_to_hosted_url_async(self, ref_value, api_key, upload_path="market-inputs", file_name_prefix="kie-input"):
+        return await asyncio.to_thread(self._upload_kie_ref_to_hosted_url, ref_value, api_key, upload_path, file_name_prefix)
 
     def _upload_kie_ref_to_hosted_url(self, ref_value: Any, api_key: str, upload_path: str = "market-inputs", file_name_prefix: str = "kie-input") -> Optional[str]:
         ref_text = str(ref_value or "").strip()
@@ -10028,6 +10045,9 @@ class MediaGenerationService:
             if resolved:
                 result.append(resolved)
         return result
+
+    async def _get_image_base64_for_api_async(self, url_or_path, force_data_uri=False, data_uri_profile=None):
+        return await asyncio.to_thread(self._get_image_base64_for_api, url_or_path, force_data_uri, data_uri_profile)
 
     def _get_image_base64_for_api(self, url_or_path, force_data_uri=False, data_uri_profile: Optional[str] = None):
         # Helper to get base64 from local or remote

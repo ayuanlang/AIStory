@@ -17,11 +17,18 @@ This is an entity-supplement task, not a full rewrite task:
 You will receive all of the following together:
 - Project Context
 - Current Scene (Markdown Row)
+- Original Script Grounding
 - Current Scene Subject Seeds
 - System-level Subjects Inventory
 - User Supplement Requirements
 
 You MUST use all of them together.
+
+## Original Script Grounding Rules
+- `Original Script Grounding` is the primary truth source for checking whether the current scene is missing characters, missing key actions, missing spatial anchors, or has major `Core Scene Info` / visual-guidance omissions or obvious errors.
+- You may ignore minor wording differences that do not materially affect plot understanding, staging, or visual guidance.
+- If `Original Script Grounding` reveals materially missing characters or major scene-information omissions / obvious errors, you must repair the current scene markdown row patch, not just append SUBJECTS_JSON.
+- In entity supplement mode, scene/shots are not replaced wholesale, but the returned single-row markdown patch is still allowed and expected to correct `Scene Name`, `Equivalent Duration`, `Core Scene Info`, `Original Script Text`, `Environment Name`, `Linked Characters`, and `Key Props` when grounding shows they are incomplete or obviously wrong.
 
 ## Global Subject Rules
 
@@ -77,6 +84,7 @@ You MUST use all of them together.
 ### Current Scene First
 - Supplement entities only for the provided current scene.
 - Use Current Scene Subject Seeds as high-priority hints, but verify them against the current scene content and User Supplement Requirements.
+- You must also verify the current scene against `Original Script Grounding`; if the current row drops a materially present character, action, object anchor, or visual-guidance fact from the original script, treat that as a required repair.
 - If a seed already corresponds to an existing project subject, reuse it rather than regenerate it.
 - Do not add subjects that are not needed by the current scene.
 
@@ -104,9 +112,11 @@ You MUST use all of them together.
 
 ### Scene Coverage Rules
 - Every missing subject you generate must be grounded by the current scene.
+- Every repaired scene-field change must also be grounded by `Original Script Grounding` or explicit user requirements.
 - Linked Characters must cover all characters who materially act, interact, or are required by the scene reading.
 - Key Props must cover only props with actual scene relevance.
 - Environment Name must reflect the correct reusable environment anchor or required new environment variant.
+- Core Scene Info must preserve the scene's core visual guidance and action logic from `Original Script Grounding`; if the existing row is materially incomplete or obviously wrong, rewrite the row patch to restore those facts.
 - No floating entities: a generated missing subject must also be reflected through the scene row patch where relevant, especially in Environment Name, Linked Characters, or Key Props.
 - Beat-to-shot subject budgeting applies here as well: even when the current scene contains many valid entities, any beat intended to map cleanly into one shot should budget only 1-3 core shot-facing subjects for the downstream Start/End frame, while other entities stay as support/background coverage.
 - Beat-to-shot relief by extra shots also applies here: when a regenerated scene patch would otherwise overload one downstream shot with more than 3 core shot-facing subjects, prefer adding beats/shots over cramming all of them into one focal frame.
@@ -208,6 +218,12 @@ You MUST use all of them together.
   - 若已在 inventory 中存在：只能在当前场景行补丁中引用复用，不得重新输出到 `SUBJECTS_JSON`；
   - 若 inventory 中不存在：必须补入 `SUBJECTS_JSON`，并在当前场景行补丁相关字段中体现；
   - 禁止出现“场景补丁中提到新实体，但 `SUBJECTS_JSON` 没有该实体”或“`SUBJECTS_JSON` 产出新实体，但场景补丁没有任何落点”的情况。
+
+### 二点一、原始剧本文本校对规则
+- `Original Script Grounding` / `Original Script Text` 是当前场景校对的最高事实来源之一，必须用来核查当前场景是否漏掉角色、动作、空间锚点、关键物体或核心视觉指导。
+- 可忽略不影响剧情理解、空间调度或视觉指导的轻微措辞差异；但若出现“角色漏失”“核心动作漏失”“环境/空间锚点漏失”“核心视觉指导明显错误或被弱化”，必须判定为需要修正。
+- 一旦判定需要修正，必须在当前场景 markdown 行补丁中直接改正对应字段，而不是只在 `SUBJECTS_JSON` 中补实体不改场景行。
+- 在 entity supplement mode 下也同样适用：虽然不整场替换 scene/shots，但当前 scene 的单行 markdown 补丁必须足以让程序回写正确的 `Scene Name`、`Equivalent Duration`、`Core Scene Info`、`Original Script Text`、`Environment Name`、`Linked Characters`、`Key Props`。
 
 ### 三、Scene Subjects 抽取规则
 - 每个 Scene 在写场景补丁前必须先完成该场景实体抽取，形成“实体清单 + 实体落点”闭环。

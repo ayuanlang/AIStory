@@ -638,6 +638,10 @@
   1. **Classify Shot Type**: 判断镜头类型（Single/Standard/Multi-Keyframe）。
   2. **Resolve Shot Subject Packets**: 先根据当前拟定的 `Associated Entities`，从输入里的 `Relevant Subject Packets` / `Entity Reference` 中精确取出本镜对应的角色/道具/环境描述，建立本镜专用 subject 约束集。
   3. **Resolve Beat Contract**: 先确认当前 Shot 对应的上游 Beat / `Source Beat` / 剧本文本片段，列出该 Beat 必须被本镜承接的关键信息：动作、对白、表情/情绪、外观/着装、道具状态、环境状态、字幕/屏幕文字、V.O./O.S.、语言事件，以及是否存在闪回桥接。
+     - **上游 Beat 格式说明**：上游 `{Beats}` 只提供空间落位、主体关系、环境交互、动作编排与状态流转信息，**不包含任何镜头语言**（机位、景别、镜高/俯仰、运镜）。所有"怎么拍"决策由本阶段（`shot_generator`）独立完成。
+     - **`[校对: ...]` 标注消费**：若上游 Beat 末尾附有 `[校对: ...]`，表示该 Beat 已修正原剧本不合理动作，Shot 阶段应以修正后版本为准，不得回退到原始不合理动作。
+     - **`[状态触发: ...]` 标注消费**：若上游 Beat 包含 `[状态触发: ...]`，表示该 Beat 的动作导致实体发生外观/着装/道具/环境状态变化（如角色换装、道具损毁）。Shot 阶段必须在对应时间点切换到触发后的新实体名（如从 `CHAR:[@Lin_Trench]` 切换到 `CHAR:[@Lin_NoCoat]`），并确保后续 Shot 继续使用新实体名。
+     - **`{环境交互}` 槽位消费**：上游 Beat 的 `{环境交互}` 描述角色与环境/道具实体的物理接触关系（坐/靠/推/按/拿），Shot 阶段必须将这些交互可见化为 `Start Frame` / `Video Content` / `End Frame` 中的具体空间关系与接触状态。
   4. **Draft Shot Logic (Planning Blueprint)**: **Critical Step**. 在编写具体的英文视觉描述前，**必须先用中文规划**好首帧状态、视频动作演化及尾帧结果的逻辑链，并确保它已吸收本镜 subject packets 中的状态、依赖、空间拓扑、Beat 覆盖义务与动作限制。这是确保物理与时空连贯的**思考草稿**。
   5. **Define Viewpoint Physics**: 明确机位物理关系（内/外，高/低，距离）。
   6. **Generate Start Frame**: 根据 Logic 规划，定义动作的起始状态（必须符合机位物理关系，并承接对应 subject packet 的稳定描述与当前状态；若为闪回桥接镜，起帧必须明确桥接锚点是否仍在场）。

@@ -80,6 +80,11 @@ const Auth = () => {
 
         try {
             if (mode === 'login') {
+                if (!formData.username.trim() || !formData.password) {
+                    setError(t('请输入用户名和密码。', 'Please enter both username and password.'));
+                    setLoading(false);
+                    return;
+                }
                 // Use the JSON login endpoint
                 const response = await apiLogin(formData.username, formData.password);
                 localStorage.setItem('token', response.access_token);

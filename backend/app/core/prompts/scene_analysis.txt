@@ -2,6 +2,7 @@
 # Version: 2026-03-01-concise
 
 ## 最终目标
+0. **Subjects JSON 零省略（SUPREME / 最高准则）**：Part 2 的 `characters` / `props` / `environments` JSON 数组必须**逐条完整输出** Subject Index 中的每一行实体——绝对禁止以"为简洁""for brevity""仅列出主要""only main/key items""full list is in the index"等任何理由省略、截断、摘要化或只保留代表项。`Final Consistency Report` 中三行的 `json_count` 必须等于对应 `subject_index_count`，`is_consistent` 必须全部为 `true`；只要任何一行不满足，整个输出无效，必须补全后重新输出。此条优先级高于一切其他规则和 token 压力。
 1. 场景物理化：把文本变成可执行物理空间（坐标、边界、动线清晰）。
 2. 逻辑拆分：提取最小戏剧单元 Beats，保证因果链完整。
 3. 资产标准化：Environment / Character / Prop 独立且可关联。
@@ -20,8 +21,7 @@
 - 成年女性体态优先级（Mandatory）：对有具体姓名且承担主要叙事功能的成年女性，只要剧情、时代、职业、安全边界、动作功能性与人物设定允许，必须默认优先补全为修长高挑、纤秾有致、曲线明确、肩颈腰胯关系清楚的镜头友好体态；这是成年女性角色的轮廓与版型控制原则，不等于露骨化、夸张色情化或脱离现实。若剧本明确要求相反体态、孕态、病态、未成年或厚重防护状态，以剧本为准。
 - 命名角色主角化扩散规则（Mandatory）：上述主角级美化、发型整理、服装完成度、鞋履/配件完成度与镜头友好布光，不只适用于绝对主角，也必须默认扩散到所有有具体姓名的成年角色。除非剧本明确要求其邋遢、笨重、病弱、老态、低配、狼狈或受特定职业/装备限制，否则不得把有名字角色做成路人化、松垮无版型、灰扑扑、廉价或缺少设计控制的 filler；核心主角可以更强，但所有命名成年角色都至少要达到“可信、好看、可拍”的角色级完成度。
 - 命名角色服装合体优先规则（Mandatory）：对所有有具体姓名的成年角色，只要剧情、时代、职业、安全边界、动作功能性与气候条件未明确要求相反，服装版型默认优先采用修身、合体、贴体或线条清楚的方案，让肩线、腰线、腿线与整体轮廓可读，避免无理由的大廓形、松垮、臃肿、拖沓或把人物包成没有身体结构的布袋感。这里的“优先紧身/修身”指可拍、可播出且符合身份的版型控制，不等于露骨化；未成年角色不适用此条，明确功能防护服、厚重冬装、宽大道袍、病号服、孕态服装或剧情指定宽松穿着时仍以上游事实为准。
-- 服装去平庸硬规则（Mandatory）：角色服装设计必须优先采用当下时尚感强、辨识度高、适合角色身份的方案，至少给出一个独特版型识别点与一个稳定配饰或穿搭收尾。若剧情未明确要求，禁止默认收敛成普通运动衣、普通夹克、普通卫衣、泛休闲套装等低辨识度描述；若必须使用这类单品，也必须通过剪裁、层次、材质、配色、鞋履或配饰把它提升为有设计感、可区分、可复现的角色造型。
-- 未成年角色四视图与安全表达规则（Mandatory）：未成年角色同样必须使用统一的角色四视图/四宫格设定图；这里的未成年明确覆盖儿童、幼儿、低龄孩子、学龄前儿童、青少年，必要时也覆盖婴儿/宝宝角色设定，不得因为年龄更小、幼态更强、脆弱感更重或需要强调状态，就放宽成单张肖像、单张全身像、儿童概念海报或任何“不要 4 宫格/不必 4 宫格”的变体指令。允许变化的只有安全表达约束：必须保持年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；姿态、镜头意图、服装覆盖和措辞都应服务于身份识别与剧情状态，而不是制造成人化吸引力。
+- 服装去平庸硬规则（Mandatory）：角色服装设计必须优先采用当下时尚感强、辨识度高、适合角色身份的方案，至少给出一个独特版型识别点与一个稳定配饰或穿搭收尾。若剧情未明确要求，禁止默认收敛成普通运动衣、普通夹克、普通卫衣、泛休闲套装等低辨识度描述；若必须使用这类单品，也必须通过剪裁、层次、材质、配色、鞋履或配饰把它提升为有设计感、可区分、可复现的角色造型。- **角色与道具四宫格绝对强制（SUPREME / 最高准则）**：所有角色（character）与所有道具（prop）的 `generation_prompt_cn` 和 `generation_prompt_en` 必须严格采用**四宫格/四视图设定图**（4-panel character sheet / 4-view prop study）格式，绝对禁止以任何理由省略、简化、缩减为单张肖像、单张全身像、单张物体图、概念海报、单格参考图、双格或三格变体。不论实体数量、token 压力、角色戏份轻重、道具重要程度、年龄、性别、体型、风格定位或任何其他因素，四宫格都是不可协商的输出格式底线。角色四宫格固定版式为：面部特写（Close-up）+ 正面全身（Front）+ 侧面全身（Side）+ 反面全身（Back），四格缺一即无效；道具四宫格固定版式为：微距特写（Close-up）+ 正面（Front）+ 侧面（Side）+ 反面（Back），四格缺一即无效。提示词必须严格按照本文件 Character Prompt Template / Prop Prompt Template 中的模板示例结构书写，不得自行发明替代版式。此条优先级与"Subjects JSON 零省略"并列最高。- 未成年角色四视图与安全表达规则（Mandatory）：未成年角色同样必须使用统一的角色四视图/四宫格设定图；这里的未成年明确覆盖儿童、幼儿、低龄孩子、学龄前儿童、青少年，必要时也覆盖婴儿/宝宝角色设定，不得因为年龄更小、幼态更强、脆弱感更重或需要强调状态，就放宽成单张肖像、单张全身像、儿童概念海报或任何“不要 4 宫格/不必 4 宫格”的变体指令。允许变化的只有安全表达约束：必须保持年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；姿态、镜头意图、服装覆盖和措辞都应服务于身份识别与剧情状态，而不是制造成人化吸引力。
 - 主角色身高与头身比硬规则（Mandatory）：所有有姓名且承担主要叙事功能的成年角色，`appearance_cn`、`description`、`generation_prompt_cn/en` 必须显式写出身高与头身比，不得省略或只写“高挑”“比例好”。若剧本未明确给出相反证据，默认写为高挑修长、约 1:9 头身的主角色比例；若剧本已锁定年龄、病理、职业体态、特殊身体条件或现实边界，则以剧本为准。
 - 角色反同质化硬规则（Mandatory）：当同一项目、同一集或同一 Scene 中存在两名及以上重要角色时，必须默认执行“显著可区分设计”，禁止把多人写成同一种脸型、同一年龄观感、同类发型、相近体态、同色系服装、同版型外套、同款鞋履或同类配饰的轻微变体。即使剧本未详细描写，也必须主动拉开差异，确保每个主要角色都占有稳定且可复现的独特组合，至少覆盖：脸型轮廓、五官气质、发型/发长/发线、体态比例、肤色/年龄感、主色与辅色、服装版型、材质层次、鞋履识别点、饰品/职业佩戴物。
 - 人物类型先判定硬规则（Mandatory）：当剧本未充分写明人物外形时，必须先判断该人物在当前叙事中的人物类型与生活系统，再进入外观设计；至少先判定其年龄段、社会阶层、职业/功能位、生活方式、审美取向与可见消费层级，再据此生成可拍的外形、发型、服装、鞋履与配件方案。禁止把所有有姓名角色，尤其女性角色，默认收敛成“都市职场干练款”的单一模板；若剧情没有明确限制，必须主动在高知、贵气、文艺、松弛、冷峻、野生、朴素、老钱、潮流、功能主义等不同人物类型之间做有依据的分流设计。
@@ -155,24 +155,28 @@
 - OTS 正反方向切换时必须写视角编号与轴线标注：`视角_01(Front, Axis left, not crossed)`、`视角_02(Reverse, Axis right, crossed/not crossed)`。
 
 #### {Beats}
+> **定位声明**：`{Beats}` 的职责是"在哪 / 谁跟谁 / 做什么 / 变成什么"——即空间落位、主体关系、动作编排与状态流转。所有"怎么拍"决策（机位、景别、镜高/俯仰、运镜、OTS 分切）由下游 `shot_generator` 独立完成，`{Beats}` 不得包含镜头语言。
+
 - 按时间顺序。
 - 必须是可拍摄、可见变化的动作，不得抽象总结。
-- 多主体拆镜规则（Mandatory）：遵循上文“Shot-facing 焦点压缩”上限；单个 shot 若需清晰承载超过 3 个核心 subjects，必须拆镜。
-- OTS 分镜硬规则：任何角色视角切换（A看B 的 OTS -> B看A 的 OTS）必须拆为两个 Beat，并在 Beat 中分别写清机位落点、拍摄朝向与轴线侧；禁止单 Beat 同时描述双向 OTS。
+- 多主体拆镜规则（Mandatory）：遵循上文"Shot-facing 焦点压缩"上限；单个 shot 若需清晰承载超过 3 个核心 subjects，必须拆镜。
+- OTS 拆 Beat 规则（Mandatory）：任何角色视角切换（A 看 B → B 看 A）必须拆为两个 Beat，分别写清各自空间落位与朝向关系；禁止单 Beat 同时描述双向视角。
 - 下游交付约束（Shot 级）：上述 OTS 双 Beat 在 `shot_generator` 阶段必须落成两个独立 Shot（`视角_01` / `视角_02`），不得并镜。
-- OTS 同场双环境规则：当 OTS 正反打在同一 Scene 内执行时，这两个 Beat 必须分别绑定不同环境变体（如 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`），并显式标注 `视角_01/视角_02` 与 `Axis Side` 变化。
+- OTS 同场双环境规则：当 OTS 正反打在同一 Scene 内执行时，这两个 Beat 必须分别绑定不同环境变体（如 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`），并显式标注 `视角_01/视角_02`。
 - 每个 Beat 必须写：
-  1) 视点落位（viewpoint anchor）
-  2) 观察朝向（viewing direction）
-  3) 角色-镜头关系（景深层、左右、朝向、接近/远离）
-  4) 镜头参数（至少景别或镜高/俯仰）
-- 机位/朝向变化时必须写触发原因与变化后视角。
+  1) 空间落位（角色/道具相对 `{Stage}` 与环境实体的位置）
+  2) 主体关系（角色间朝向/视线/接触/距离）
+  3) 动作变化过程（含触发原因、动作路径与顺序）
+  4) 环境交互（角色与环境实体的接触/依赖/使用关系，如"坐在 ENV:[Sofa] 上""手按 PROP:[Switch]"）
+  5) 新状态（位置/朝向/视线/接触/道具状态的变化结果）
+- 剧本校对（Mandatory）：若原剧本动作在物理上不合理（如空间不足、无依赖物体、动线断裂），Beat 必须在保留原意前提下修正，并在 Beat 末尾以 `[校对: ...]` 标注修正理由，例如 `[校对: 原文"从门口飞到窗边"修正为"快步走到窗边"，因室内无飞行条件]`。
+- 实体状态触发（Mandatory）：若某 Beat 的动作导致角色外观/着装/道具状态/环境状态发生需要下游感知的变化，必须在 Beat 内用 `[状态触发: ...]` 显式标注，例如 `[状态触发: CHAR:[@Lin] 脱下风衣 → 后续 Beat 使用 CHAR:[@Lin_NoCoat]]`、`[状态触发: PROP:[Cup] 碎裂 → 后续 Beat 使用 PROP:[CupBroken]]`。
 - 必须写角色与空间关系、角色间位置/朝向/视线/接触关系。
 - 状态变化必须写过渡过程，不可只写结果态。
 - 强制模板：
-  `1. {镜头:位置/朝向/轴线侧} + {空间关系} + {角色-镜头关系} + {主体关系} + {动作变化过程} -> {新状态}`。
+  `1. {空间} + {主体关系} + {环境交互} + {动作变化过程} -> {新状态}`。
 - 最小单行模板（保留）：
-  `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在{ }相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`。
+  `1. {空间:CHAR:[@角色A]在ENV:[...]相对{Stage}位于{ }} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {环境交互:CHAR:[@角色A]{坐在|靠着|手按|推开|拿起}ENV:[...]/PROP:[...]} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}} [校对: ...（若有修正）] [状态触发: ...（若有变化）]`。
 - 槽位缺失即无效，必须补全重写。
 - 必须写入具体对白/字幕/屏幕文字/音效（若该 Beat 存在）。
 - 若 `Project Context` 明确指定目标语言，则上述对白/字幕/屏幕文字/标识语/语言切换描述必须统一转换为该目标语言后再写入 Beat；若未指定，则保持剧本原始语言。禁止把中文项目里的实际对白/文字内容硬写成英文，或把英文剧本里的原始文字无依据改成其他语言。
@@ -183,8 +187,8 @@
 - 角色必须带 `@`；环境/道具不得带 `@`。
 - Script-to-Beats 硬规则：顺序一致、逐项覆盖、台词落位、动作闭环、补桥接动作、禁抽象替代、每 Beat 至少一个可见变化点。
 - 允许增强：角色高光、视觉转场（不脱离剧本逻辑）。
-- 闪回过渡硬规则（Mandatory）：凡剧本存在闪回、回忆、记忆触发、过去时空插入或从当下切入往事，`{Beats}` 必须显式设计过渡 Beat 或过渡镜头语义，通过视线承接、物体特写、动作延续、声音桥、镜面/窗面/灯光/构图呼应、焦点漂移、时间线索物放大等方式完成切镜过渡；禁止把“现在 -> 闪回”直接写成无桥接的硬切。
-- 闪回回切硬规则（Mandatory）：闪回结束回到当下时，同样必须写明回切桥接，不得只写“回到现实/回到现在”。必须交代由哪个画面锚点、动作余势、声音残响或相似构图把过去时空重新接回当前 Scene。
+- 闪回过渡硬规则（Mandatory）：凡剧本存在闪回、回忆、记忆触发、过去时空插入或从当下切入往事，`{Beats}` 必须显式设计过渡 Beat 或过渡镜头语义，通过视线承接、物体特写、动作延续、声音桥、镜面/窗面/灯光/构图呼应、焦点漂移、时间线索物放大等方式完成切镜过渡；禁止把"现在 -> 闪回"直接写成无桥接的硬切。
+- 闪回回切硬规则（Mandatory）：闪回结束回到当下时，同样必须写明回切桥接，不得只写"回到现实/回到现在"。必须交代由哪个画面锚点、动作余势、声音残响或相似构图把过去时空重新接回当前 Scene。
 - 起止状态需稳定（便于 Start/End Frame）。
 - 可补特写/全景以提升覆盖。
 
@@ -214,8 +218,8 @@
 - **维度生成检查 (Dimension Completeness Gate, 强制)**：每个 Scene 在输出前必须先做“实体层 + 提示词层”双重维度验收；该检查只作为内部门禁，不得把 checklist 或“通过/失败”字样输出到最终结果。
   - **实体层最低维度槽位**：`Scene Subjects`、`Linked Characters`、`Key Props`、`Environment Name`、`Layout FG/MG/BG`、`Beats`、`Subject Index`、`Part 2` 之间必须形成同名闭环；任一实体若出现“被提及但未抽取”“被抽取但未落点”“已入 Subject Index 但未入 Part 2”，整场无效。
   - **Environment 提示词最低维度槽位**：`Viewpoint Anchor`、`Viewing Direction`、`FG/MG/BG`、`Primary Subject`、`Secondary Subject`、空间可达/调度可行性、去人物化约束必须齐全；任一缺失即该 environment 条目无效。
-  - **Character 提示词最低维度槽位**：`full body + shoes visible`、固定观察机位、视角序列、光照结构、镜头基线、服装一致性、稳定锚点、差异化轮廓、差异化服装结构/配色、差异化鞋履或配饰识别点、negative_prompt_en 必须齐全；任一缺失即该 character 条目无效。
-  - **Prop 提示词最低维度槽位**：固定观察机位、视角序列、材质锚点、镜头/微距基线、光照结构、状态单一性、negative_prompt_en 必须齐全；任一缺失即该 prop 条目无效。
+  - **Character 提示词最低维度槽位**：`full body + shoes visible`、固定观察机位、视角序列（必须为面部特写+正面全身+侧面全身+反面全身的完整四宫格）、光照结构、镜头基线、服装一致性、稳定锚点、差异化轮廓、差异化服装结构/配色、差异化鞋履或配饰识别点、negative_prompt_en 必须齐全；**若视角序列不满四格（即缺少 Close-up/Front/Side/Back 中的任何一个），或提示词未明确写出四宫格版式控制语句，该 character 条目无效并必须重写**。任一其他维度缺失同样判无效。
+  - **Prop 提示词最低维度槽位**：固定观察机位、视角序列（必须为微距特写+正面+侧面+反面的完整四宫格）、材质锚点、镜头/微距基线、光照结构、状态单一性、negative_prompt_en 必须齐全；**若视角序列不满四格（即缺少 Close-up/Front/Side/Back 中的任何一个），或提示词未明确写出四宫格版式控制语句，该 prop 条目无效并必须重写**。任一其他维度缺失同样判无效。
 - **禁止带病流转 (No Partial Pass-Through, 强制)**：若任一 Scene、Subject Index 行或 Part 2 条目未通过维度检查，不得输出部分结果，也不得把问题留给下游；必须先重写后再执行同一轮检查。
 - **重写机制 (Rewrite Protocol, 强制)**：发现维度缺口时，必须按缺口范围重写，而不是在原条目尾部机械补短语。
   - **实体级重写**：若问题是“漏抽/漏落点/漏映射”，必须重写该 Scene 的实体抽取、Subject Index 映射和对应 Part 2 条目，直到三者闭环一致。
@@ -324,8 +328,7 @@
 
 ### 2) Character Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。
-- 角色模板与规则在本文件内统一维护，避免外部模板漂移。
-- 身份字段显式回写硬规则（Mandatory）：Character 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics`、`anchor_description`。禁止只写“四视图角色图 + 服装 + 布光”，却遗漏人物身份定位、职业气质、性别呈现、年龄外观与动作性格。
+- 角色模板与规则在本文件内统一维护，避免外部模板漂移。- **角色四宫格版式绝对强制（SUPREME / 最高准则）**：所有角色的 `generation_prompt_cn` 和 `generation_prompt_en` 必须严格采用**四宫格/四视图设定图**版式，固定为"面部特写（Close-up）+ 正面全身（Front）+ 侧面全身（Side）+ 反面全身（Back）"四格，缺任何一格即整条提示词无效并必须重写。`generation_prompt_cn` 必须明确写出四宫格版式描述（包含"第一宫左侧特写大宫格约占 40%、右侧三宫各占约 60% 均分"的版式控制语句），`generation_prompt_en` 必须明确写出 `keep the four panels in the strict order: facial Close-up, full-body Front, full-body Side, full-body Back` 及对应版式比例。绝对禁止以任何理由（角色数量多、token 紧张、角色次要、角色简单、动物/生物/非人形、幼儿/儿童/老人等）将四宫格简化为单张肖像、单张全身像、双格或三格变体、概念海报或任何非四宫格版式。**单格即废稿**。- 身份字段显式回写硬规则（Mandatory）：Character 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics`、`anchor_description`。禁止只写“四视图角色图 + 服装 + 布光”，却遗漏人物身份定位、职业气质、性别呈现、年龄外观与动作性格。
 - 字段语言与项目语言沿用总则（Mandatory）：Character 字段语言职责沿用第 12 条；人物设计语境、英文项目误触防护、中文项目异语境防护沿用第 15-17 条，此处不再重复展开。
 - 身份定位优先顺序（Mandatory）：Character prompt 的信息组织顺序默认应为：`身份定位/职业功能 -> 性别与年龄外观 -> 体态脸部与可见锚点 -> 服装与鞋履 -> 动作气质/姿态倾向 -> 机位/视角/布光/镜头`。若顺序调整，仍必须保证上述身份信息显式存在且可机审抽取。
 - 字段落地示例约束（Mandatory）：
@@ -377,8 +380,7 @@
 
 ### 3) Prop Prompt Template
 - 模板已合并到本文件（Merged In-File, Authoritative）。
-- 道具模板与规则在本文件内统一维护，避免外部模板漂移。
-- 字段回写硬规则（Mandatory）：Prop 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`type`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic`。禁止只写“四视图道具图 + 材质”，却遗漏道具类型（held/static）、状态、结构特征、功能身份与依赖来源。
+- 道具模板与规则在本文件内统一维护，避免外部模板漂移。- **道具四宫格版式绝对强制（SUPREME / 最高准则）**：所有道具的 `generation_prompt_cn` 和 `generation_prompt_en` 必须严格采用**四宫格/四视图道具设定图**版式，固定为"微距特写（Close-up）+ 正面（Front）+ 侧面（Side）+ 反面（Back）"四格，缺任何一格即整条提示词无效并必须重写。`generation_prompt_cn` 必须明确写出"视角顺序严格为微距特写、正面、侧面、反面"，`generation_prompt_en` 必须明确写出 `keeping the panels in the strict order Close-up, Front, Side, Back`。绝对禁止以任何理由（道具数量多、token 紧张、道具次要、道具简单、体积太小/太大、状态单一等）将四宫格简化为单张物体图、双格或三格变体、概念图或任何非四宫格版式。**单格即废稿**。- 字段回写硬规则（Mandatory）：Prop 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`type`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic`。禁止只写“四视图道具图 + 材质”，却遗漏道具类型（held/static）、状态、结构特征、功能身份与依赖来源。
 - 字段语言与项目语言沿用总则（Mandatory）：Prop 字段语言职责沿用第 12 条；道具体系语境沿用第 15-17 条，此处不再重复展开。
 - 道具身份落点规则（Mandatory）：Prop prompt 必须明确该物体是什么、属于手持还是静置、当前处于何种单一状态、有哪些不可丢失的识别结构。若 `description_cn` 中有磨损、氧化、裂痕、液位、开合状态、雕刻、标签等信息，必须回写进 prompt 主体段落。
 - 道具纯物体隔离规则（Mandatory）：Prop 的 `generation_prompt_cn/generation_prompt_en` 必须把道具当作纯物体资产生成，不得混入任何剧情进行中的环节或人物介入语义。禁止出现角色正在持握、穿戴、触碰、使用、递交、挥舞、佩戴、挎着、踩着、咬着、端着等动作语义；也禁止出现手、手指、手臂、肩膀、腿、脚、脸、嘴唇、头部、躯干、人物倒影、人物影子或任何身体部位/人物残留。道具图只允许物体本身与中性支撑结构入镜。
@@ -424,6 +426,9 @@
 - `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Scene Subjects}`, `{Beats}`。
 - `Core Scene Info` 必须包含 `**{Env Anchor}**: ENV:[<Environment Name>]`，且该名称与本行 `Environment Name` 完全一致。
 - 当 `Environment Relation` 为 `REUSE:<EnvName>` 或 `VARIANT_OF:<EnvName>`（或存在 `visual_dependencies`）时，`Core Scene Info` 还必须包含 `**{Dependent Envs}**`，列出所有依赖环境（`ENV:[...]`）及关系说明。
+- `Original Script Text` 硬规则（Mandatory）：每个 Scene 行都必须填写该场**真实对应的原始剧本文本片段**，用于后续逐场对照检查缺失；必须直接回填原文中的相关句子、段落或连续片段，禁止改写成摘要、解释、概括、占位或索引引用。
+- `Original Script Text` 禁止占位（Hard Rule）：严禁写 `详见（原始剧本文本）`、`详见原文`、`同上`、`略`、`同前`、`见前文`、`see original script`、`see above`、`refer to raw script` 等任何替代性写法；若该 Scene 对应多句原文，必须把这些原文片段直接写入本列，而不是引用别处。
+- `Original Script Text` 对照保真规则（Mandatory）：本列必须足够支撑后续“按 Scene 对照分析缺失”的人工或程序化核验，因此至少要覆盖该 Scene 真实承载的对白、动作、外观/着装、道具状态、环境信息与语言事件原文；禁止只保留一句主干剧情而丢掉细节句。
 - 二维背景显著变化必须新起 Scene。
 - 每行必须包含并满足：
   - `Episode ID`、`Scene ID`（`EPxx_SCyy` 一致性）
@@ -440,7 +445,7 @@
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 因{对白/动作/外观变化/道具状态/环境状态/闪回桥接}需要独立承载本场；Transition Anchor={视线/物体特写/声音桥/动作余势/构图呼应}。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {镜头} 机位在ENV:[Bed]脚端左侧，朝向{Stage}；{空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿；{角色-镜头关系} CHAR:[@Char A]位于中景偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{动作变化过程} CHAR:[@Char A]前倾半步并抬手，台词/字幕/音效:{原剧本对应内容}；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
+| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 因{对白/动作/外观变化/道具状态/环境状态/闪回桥接}需要独立承载本场；Transition Anchor={视线/物体特写/声音桥/动作余势/构图呼应}。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿，相对{Stage}偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{环境交互} CHAR:[@Char A]坐在ENV:[Bed]边缘；{动作变化过程} CHAR:[@Char A]前倾半步并抬手，台词/字幕/音效:{原剧本对应内容}；-> {新状态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）
 - **模板锁定（Mandatory）**：Subject Index 每一行必须严格采用固定骨架，禁止改序、改键、增键、删键：
@@ -499,8 +504,7 @@
 
 ### Part 2: Entities JSON (Strict Schema)
 
-#### Part 2 共同硬约束（含 Subject 依赖关系）
-- **Scene Subjects 零遗漏硬约束（Mandatory）**：Part 2 的 `characters/props/environments` 必须完整覆盖 Part 1 所有 Scene 中已出现实体；不得只保留“核心代表项”。
+#### Part 2 共同硬约束（含 Subject 依赖关系）- **Subjects JSON 零省略复核（SUPREME / 最高准则）**：Part 2 的 `characters[]`、`props[]`、`environments[]` 三个数组合起来必须与 Subject Index 行数完全一一对应——不论实体数量有多少、不论 token 用量如何、不论是否存在"非核心/低戏份/简单"的实体，都必须逐条输出完整 JSON 对象，绝对禁止省略、合并、截断、摘要化或用任何理由跳过任何一行。- **Scene Subjects 零遗漏硬约束（Mandatory）**：Part 2 的 `characters/props/environments` 必须完整覆盖 Part 1 所有 Scene 中已出现实体；不得只保留“核心代表项”。
 - **一致性判定口径（Mandatory）**：以 Part 1 实体出现集为主键集，逐项核对 Subject Index 与 Part 2。若存在 `Part1出现但Part2缺失`，结果无效。
 - **Subject Index 逐行回填硬约束（Mandatory）**：Subject Index 的每一行必须在 Part 2 中找到同名同类型实体（逐字符一致，类型一致）；任意一行未命中即判无效。
 - **禁止漏行与并行合并（Hard Rule）**：禁止把 Subject Index 多行合并为 Part 2 一行，或仅保留“主实体”省略其余行；必须逐行一一对应。
@@ -650,9 +654,11 @@
   - `json_count`
   - `is_consistent`
   - `difference_note`（不一致时必填）
+- **零省略强制校验（SUPREME / 最高准则）**：三行中每一行都必须满足 `json_count == subject_index_count` 且 `is_consistent == true`。若任何一行不满足（即存在 Subject Index 中有但 Part 2 JSON 中缺失的实体），**整个输出无效**——必须回到 Part 2 补全缺失的实体 JSON 条目后重新输出，绝对不允许以"for brevity / 为简洁 / only main items / 仅列出主要 / full list is in the index"等理由让 `is_consistent=false` 通过。
+- **省略即失败（Hard Rule）**：若 `difference_note` 中出现 `brevity`、`clarity`、`main`、`key`、`representative`、`only contains`、`仅包含`、`仅列出`、`简洁`、`代表`、`主要` 等省略暗示词，系统将判定为无效输出。
 
 | subject_type | subject_index_count | json_count | is_consistent | difference_note |
 | :--- | ---: | ---: | :---: | :--- |
-| character | 3 | 3 | true | none |
-| prop | 2 | 1 | false | JSON missing 1 item |
-| environment | 4 | 4 | true | none |
+| character | 19 | 19 | true | none |
+| prop | 6 | 6 | true | none |
+| environment | 7 | 7 | true | none |

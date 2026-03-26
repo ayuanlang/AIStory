@@ -4041,8 +4041,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             missing_sections = [str(x) for x in (section_meta.get("missing_sections") or []) if str(x)]
             continue_due_to_length = _is_length_finish_reason(part_finish)
             continue_due_to_structure = (
-                provider_name == "kie"
-                and not continue_due_to_length
+                not continue_due_to_length
                 and bool(missing_sections)
                 and seg_idx < max_segments
                 and continuation_by_structure < 3
@@ -4224,6 +4223,19 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         
         response_payload: Dict[str, Any] = {"success": True, "result": result_content, "meta": debug_meta}
 
+        # Extract subjects_json from LLM output so frontend can use pre-parsed
+        # clean JSON instead of re-parsing the raw markdown with heuristic regex.
+        subjects_json = _extract_subjects_json_from_text(result_content)
+        if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments")):
+            cleaned_for_json = sanitize_llm_markdown_output(result_content)
+            subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
+        response_payload["subjects_json"] = subjects_json
+        response_payload["subjects_json_count"] = {
+            "characters": len(subjects_json.get("characters") or []),
+            "props": len(subjects_json.get("props") or []),
+            "environments": len(subjects_json.get("environments") or []),
+        }
+
         subject_consistency_meta = _detect_subject_consistency_warnings(result_content)
         debug_meta["subject_consistency"] = subject_consistency_meta
 
@@ -4313,19 +4325,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         review_required_codes = set()
         review_required_codes.update(integrity_meta.get("warning_codes") or [])
-        review_required_codes.update(sc_warning_codes or [])
-        non_blocking_review_codes = {
-            "ANALYSIS_OUTPUT_TRUNCATED",
+        severe_import_review_codes = {
             "ANALYSIS_JSON_INVALID",
             "ANALYSIS_STRUCTURE_INCOMPLETE",
-            "ANALYSIS_SUBJECTS_UNVERIFIED",
-            "ANALYSIS_SUBJECTS_INCOMPLETE",
         }
-        matched_review_codes = [code for code in non_blocking_review_codes if code in review_required_codes]
+        matched_review_codes = [code for code in severe_import_review_codes if code in review_required_codes]
         if matched_review_codes:
             review_messages: List[str] = []
             review_messages.extend([str(x or "").strip() for x in (integrity_meta.get("warnings") or []) if str(x or "").strip()])
-            review_messages.extend([str(x or "").strip() for x in (sc_warnings or []) if str(x or "").strip()])
             review_messages = list(dict.fromkeys(review_messages))
             logger.warning(
                 "[analyze_scene] import_review_required_non_blocking episode_id=%s codes=%s warnings=%s",
@@ -11165,6 +11172,8 @@ async def regenerate_scene(
         f"Key Props Seed: {str(db_scene.key_props or '').strip() or '(empty)'}",
     ]
     scene_subject_seeds_block = "\n".join(scene_subject_seed_lines)
+    original_script_grounding = str(db_scene.original_script_text or "").strip()
+    original_script_grounding_block = original_script_grounding or "(empty)"
 
     if entity_only_mode:
         regen_injection = (
@@ -11172,7 +11181,10 @@ async def regenerate_scene(
             "[Regeneration Mode Injection]\n"
             "You are in SCENE ENTITY SUPPLEMENT MODE for one existing scene row.\n"
             "Primary objective: supplement the missing entities required by this scene according to [User Requirements] with highest priority.\n"
-            "You MUST use project context + existing subject inventory + current scene content together as the extraction basis.\n"
+            "You MUST use project context + existing subject inventory + current scene content + original script grounding together as the extraction and verification basis.\n"
+            "You MUST use Original Script Text as the ground-truth reference to verify whether linked characters are missing, and whether core scene information has major omissions or obvious visual-guidance errors.\n"
+            "You MAY ignore minor wording differences that do not materially affect story meaning, staging, or visual guidance.\n"
+            "If Original Script Text reveals materially missing characters, core actions, location anchors, or visual-guidance facts, you MUST repair the current scene row patch in markdown instead of only patching entity fields.\n"
             "You MUST follow scene_analysis subject extraction principles: reuse existing subjects first, only add truly missing subjects, and keep naming stable.\n"
             "scene_analysis.txt is the final authority for all subject/entity prompt rules. scene_regenerate.txt must be interpreted to stay aligned with scene_analysis.txt, and if any runtime summary conflicts, scene_analysis.txt wins.\n"
             "You MUST follow the full Chinese subject-sync rules defined in scene_regenerate.txt; if any shorter runtime summary conflicts with those file rules, the file rules win.\n"
@@ -11184,7 +11196,7 @@ async def regenerate_scene(
             "Character generation prompts must preserve full-body framing with shoes visible as the asset baseline.\n"
             "Environment generation prompts must remain clean-plate, no-human prompts: no over-shoulder wording, no shoulder silhouettes, no human reflections, no human shadows, no role labels, and no CHAR references inside environment prompts.\n"
             "Return exactly 1 scene row patch in markdown table format plus one SUBJECTS_JSON object for missing entities only.\n"
-            "In entity-only mode, scene/shots are not replaced; the row patch only updates environment_name / linked_characters / key_props when needed to reflect supplemented entities."
+            "In entity-only mode, scene/shots are not replaced; the row patch may update scene_name / equivalent_duration / core_scene_info / original_script_text / environment_name / linked_characters / key_props when needed to reflect corrected scene grounding and supplemented entities."
         )
     else:
         regen_injection = (
@@ -11192,7 +11204,9 @@ async def regenerate_scene(
             "[Regeneration Mode Injection]\n"
             "You are in FULL SCENE REGENERATION MODE for one existing scene row.\n"
             "Primary objective: regenerate the scene according to [User Requirements] while also supplementing any newly required entities.\n"
-            "You MUST use project context + existing subject inventory + current scene content together as the generation basis.\n"
+            "You MUST use project context + existing subject inventory + current scene content + original script grounding together as the generation basis.\n"
+            "You MUST use Original Script Text as the ground-truth reference to verify whether linked characters are missing, and whether core scene information has major omissions or obvious visual-guidance errors.\n"
+            "You MAY ignore minor wording differences that do not materially affect story meaning, staging, or visual guidance.\n"
             "You MUST follow scene_analysis subject extraction principles: reuse existing subjects first, only add truly missing subjects, and keep naming stable.\n"
             "scene_analysis.txt is the final authority for all subject/entity prompt rules. scene_regenerate.txt must be interpreted to stay aligned with scene_analysis.txt, and if any runtime summary conflicts, scene_analysis.txt wins.\n"
             "You MUST follow the full Chinese subject-sync rules defined in scene_regenerate.txt; if any shorter runtime summary conflicts with those file rules, the file rules win.\n"
@@ -11238,9 +11252,12 @@ async def regenerate_scene(
 
     mode_specific_task_lines = (
         "- This task is mainly for supplementing missing entities of the current scene, not rewriting the whole scene.\n"
+        "- However, you MUST also use Original Script Text to verify missing characters and major core scene info / visual-guidance omissions or obvious errors.\n"
+        "- If such omissions or obvious errors exist, repair them in the single current-scene row patch markdown while keeping the scene identity stable.\n"
         "- Return a single current-scene row patch only; do not split into multiple rows in entity supplement mode.\n"
     ) if entity_only_mode else (
         f"- Regenerate this scene into 1 to {safe_max_scenes} scene rows when needed by user requirements.\n"
+        "- Use Original Script Text to verify missing characters and major core scene info / visual-guidance omissions or obvious errors before finalizing the regenerated row(s).\n"
         "- Supplement any newly required entities at the same time.\n"
     )
 
@@ -11254,11 +11271,14 @@ async def regenerate_scene(
         f"[Project Context]\n{project_context_block}\n\n"
         f"Source Scene Database ID: {db_scene.id}\n\n"
         f"Current Scene (Markdown Row):\n{scene_snapshot}\n\n"
+        f"[Original Script Grounding]\n{original_script_grounding_block}\n\n"
         f"[Current Scene Subject Seeds]\n{scene_subject_seeds_block}\n\n"
         f"{existing_subjects_block}\n\n"
         f"[User Supplement Requirements]\n{user_requirements}\n\n"
         "Task Instructions:\n"
-        "- Use Project Context + Current Scene + Current Scene Subject Seeds + System-level Subjects Inventory together.\n"
+        "- Use Project Context + Current Scene + Original Script Grounding + Current Scene Subject Seeds + System-level Subjects Inventory together.\n"
+        "- Original Script Grounding is the primary truth source for checking whether the current scene is missing characters, missing key actions, missing location anchors, or has major core scene info / visual-guidance errors.\n"
+        "- You may ignore minor wording differences that do not affect plot understanding or visual staging.\n"
         "- Follow scene_analysis extraction principles for characters / props / environments.\n"
         "- scene_analysis.txt is the final authority for subject/entity prompt rules; interpret scene_regenerate.txt and runtime instructions so they stay aligned with scene_analysis.txt.\n"
         "- Follow the full Chinese subject-sync rules in scene_regenerate.txt; if this runtime summary is shorter, the file rules still apply in full.\n"
@@ -11338,6 +11358,10 @@ async def regenerate_scene(
             if not isinstance(preferred_row, dict):
                 preferred_row = {}
 
+            db_scene.scene_name = str(preferred_row.get("scene_name") or "").strip() or fallback_scene_name
+            db_scene.original_script_text = str(preferred_row.get("original_script_text") or "").strip() or fallback_original_script
+            db_scene.equivalent_duration = str(preferred_row.get("equivalent_duration") or "").strip() or fallback_duration
+            db_scene.core_scene_info = str(preferred_row.get("core_scene_info") or "").strip() or fallback_core_info
             db_scene.environment_name = str(preferred_row.get("environment_name") or "").strip() or fallback_env_name
             db_scene.linked_characters = str(preferred_row.get("linked_characters") or "").strip() or fallback_linked_chars
             db_scene.key_props = str(preferred_row.get("key_props") or "").strip() or fallback_key_props
@@ -16206,7 +16230,7 @@ def create_asset_url(
     }
 
 @router.post("/assets/upload", response_model=dict)
-async def upload_asset(
+def upload_asset(
     file: UploadFile = File(...),
     type: str = "image", # image or video
     remark: Optional[str] = None,
@@ -20625,9 +20649,9 @@ async def _run_generate_image(
             request_mode = str(getattr(req, "mode", "") or "").strip().lower()
             if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(result.get("url")):
                 # Only register if not error? result.get("url") check handles it.
-                _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
-                _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
-                _bind_generated_media_to_entity(db, current_user, req, result.get("url"))
+                await asyncio.to_thread(_register_asset_helper, db, current_user.id, result["url"], req, result.get("metadata"))
+                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, result.get("url"))
+                await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, result.get("url"))
             elif request_mode != "joint_diptych":
                 logger.warning(
                     "[ImageResultNormalize] skipped asset registration/bind for temporary provider url | user_id=%s url=%s entity_id=%s shot_id=%s",
@@ -21398,8 +21422,11 @@ async def update_my_avatar(
     if len(content) > max_avatar_bytes:
         raise HTTPException(status_code=413, detail=f"Avatar file too large (max {settings.MAX_AVATAR_UPLOAD_MB}MB)")
 
-    with open(save_path, "wb") as f:
-        f.write(content)
+    def _write_avatar():
+        with open(save_path, "wb") as f:
+            f.write(content)
+
+    await asyncio.to_thread(_write_avatar)
 
     relative_path = os.path.relpath(save_path, upload_root).replace("\\", "/")
     user.avatar_url = f"/uploads/{relative_path}"
@@ -22041,7 +22068,8 @@ async def generate_voice_endpoint(
         # Register voice asset so frontend can resolve metadata panels by URL.
         if voice_url:
             try:
-                _register_asset_helper(
+                await asyncio.to_thread(
+                    _register_asset_helper,
                     db,
                     current_user.id,
                     voice_url,
@@ -22960,8 +22988,8 @@ async def _run_generate_video(
 
         # Register Asset
         if result.get("url"):
-            _register_asset_helper(db, current_user.id, result["url"], req, result.get("metadata"))
-            _bind_generated_media_to_shot(db, current_user, req, result.get("url"))
+            await asyncio.to_thread(_register_asset_helper, db, current_user.id, result["url"], req, result.get("metadata"))
+            await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, result.get("url"))
 
         if reservation_tx:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}
@@ -23339,7 +23367,7 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
 
     _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
 
-    _set_generation_callback_payload(stable_ticket, payload)
+    await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, payload)
     payload_status = str((payload or {}).get("status") or "").strip().lower() if isinstance(payload, dict) else ""
     payload_result_url = _extract_job_result_url(payload if isinstance(payload, dict) else {})
     callback_task_id = _extract_callback_task_id(payload if isinstance(payload, dict) else {})
@@ -26744,12 +26772,13 @@ async def analyze_asset_image(
             
              if local_file_path:
                  logger.info(f"Localhost URL detected. Converting local file {local_file_path} to Base64 for remote LLM.")
-                 with open(local_file_path, "rb") as image_file:
-                     encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-                     # Determine mime type
+                 def _read_and_encode():
+                     with open(local_file_path, "rb") as image_file:
+                         encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
                      ext = os.path.splitext(local_file_path)[1].lower().replace(".", "")
                      mime = "image/png" if ext == "png" else "image/jpeg"
-                     image_url = f"data:{mime};base64,{encoded_string}"
+                     return f"data:{mime};base64,{encoded_string}"
+                 image_url = await asyncio.to_thread(_read_and_encode)
              else:
                  logger.warning(f"Could not find local file for {image_url} to convert to Base64. Remote LLM might fail to fetch.")
 
@@ -27078,16 +27107,16 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         
         if local_file_path:
             try:
-                with open(local_file_path, "rb") as image_file:
-                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+                def _read_and_encode_entity():
+                    with open(local_file_path, "rb") as image_file:
+                        encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
                     ext = os.path.splitext(local_file_path)[1].lower().replace(".", "")
                     mime = "image/png" if ext == "png" else "image/jpeg"
-                    # Handle jpg as jpeg for mime
                     if ext == "jpg": mime = "image/jpeg"
                     if ext == "webp": mime = "image/webp"
-                    
-                    image_url_final = f"data:{mime};base64,{encoded_string}"
-                    logger.info(f"Converted local image {local_file_path} to Base64 (Size: {len(image_url_final)} chars)")
+                    return f"data:{mime};base64,{encoded_string}"
+                image_url_final = await asyncio.to_thread(_read_and_encode_entity)
+                logger.info(f"Converted local image {local_file_path} to Base64 (Size: {len(image_url_final)} chars)")
             except Exception as e:
                 logger.error(f"Failed to encode local image {local_file_path}: {e}")
                 
