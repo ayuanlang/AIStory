@@ -16,7 +16,7 @@ from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_ser
 from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_registry, get_skill_meta
 from app.services.llm_service import llm_service
 from app.services.payment_service import payment_service
-from app.services.task_manager import submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async, cancel as _cancel_task
+from app.services.task_manager import create_task_record as _create_task_record, submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async, cancel as _cancel_task, set_task_status as _set_task_status
 from app.services.system_default_api_service import get_task_default_system_setting, list_task_default_system_settings
 from app.services.system_api_runtime_cache import resolve_system_api_cached
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
@@ -378,13 +378,18 @@ def _prune_recent_analyze_scene_tasks_locked(now_ts: float) -> None:
 def poll_task(task_id: str, current_user: User = Depends(get_current_user)):
     info = _get_task_status(task_id, user_id=current_user.id)
     if info is None:
+        info = _generation_task_status(task_id, user_id=current_user.id)
+    if info is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return info
 
 
 @router.post("/tasks/{task_id}/cancel")
 def cancel_task(task_id: str, current_user: User = Depends(get_current_user)):
+    _cancel_generation_task_ref(task_id, user_id=current_user.id, reason="Task canceled by user request")
     info = _cancel_task(task_id, user_id=current_user.id, reason="Task canceled by user request")
+    if info is None:
+        info = _generation_task_status(task_id, user_id=current_user.id)
     if info is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return info
@@ -501,6 +506,21 @@ def _submit_generation_background_task(
 def _process_generation_queue_task(kind: str, job_id: str, user_id: int, payload: Dict[str, Any]) -> None:
     safe_kind = str(kind or "").strip().lower()
     req_payload = dict(payload or {})
+    if safe_kind == "montage":
+        _set_task_status(job_id, status="running")
+        project_id = int(req_payload.get("project_id") or 0)
+        items_payload = req_payload.get("items") or []
+        if project_id <= 0:
+            raise ValueError("Montage task missing project_id")
+        if not isinstance(items_payload, list) or not items_payload:
+            raise ValueError("Montage task missing items")
+        try:
+            url = create_montage(project_id, items_payload)
+        except Exception as exc:
+            _set_task_status(job_id, status="failed", error=str(exc), error_code=500)
+            raise
+        _set_task_status(job_id, status="completed", result={"url": url})
+        return
     if safe_kind == "image":
         provider_callback_ticket = f"image-job-{job_id}"
         provider_callback_url = ""
@@ -27029,14 +27049,19 @@ async def generate_montage(
     try:
         items_payload = [item.dict() for item in request.items]
         if async_mode:
-            def _work() -> Dict[str, Any]:
-                url = create_montage(project_id, items_payload)
-                return {"url": url}
-
-            task_id = _submit_task(
-                _work,
+            task_id = _create_task_record(
                 user_id=current_user.id,
                 kind="montage",
+                status="pending",
+            )
+            _submit_generation_background_task(
+                job_id=task_id,
+                kind="montage",
+                user_id=current_user.id,
+                payload={
+                    "project_id": int(project_id),
+                    "items": items_payload,
+                },
             )
             return {"task_id": task_id, "async": True}
 
@@ -27044,7 +27069,13 @@ async def generate_montage(
         return {"url": url}
     except Exception as e:
         logger.error(f"Montage failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        detail = str(e)
+        lowered = detail.lower()
+        if isinstance(e, ValueError):
+            raise HTTPException(status_code=400, detail=detail)
+        if "busy" in lowered:
+            raise HTTPException(status_code=429, detail=detail)
+        raise HTTPException(status_code=500, detail=detail)
 
 
 @router.delete("/projects/{project_id}/montage")

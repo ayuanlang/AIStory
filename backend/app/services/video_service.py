@@ -1,6 +1,7 @@
 import os
 import uuid
 import logging
+import threading
 from moviepy import VideoFileClip, concatenate_videoclips
 from app.core.config import settings
 from app.core.mp4_faststart import optimize_mp4_faststart
@@ -8,6 +9,11 @@ from app.core.mp4_faststart import optimize_mp4_faststart
 logger = logging.getLogger(__name__)
 
 _MONTAGE_FFMPEG_THREADS = max(1, min(2, int(os.getenv("MONTAGE_FFMPEG_THREADS", "1") or 1)))
+_MONTAGE_MAX_CONCURRENT = max(1, min(2, int(os.getenv("MONTAGE_MAX_CONCURRENT", "1") or 1)))
+_MONTAGE_ACQUIRE_TIMEOUT_SECONDS = max(5, int(os.getenv("MONTAGE_ACQUIRE_TIMEOUT_SECONDS", "15") or 15))
+_MONTAGE_MAX_ITEMS = max(1, int(os.getenv("MONTAGE_MAX_ITEMS", "24") or 24))
+_MONTAGE_MAX_TOTAL_SECONDS = max(30.0, float(os.getenv("MONTAGE_MAX_TOTAL_SECONDS", "240") or 240.0))
+_MONTAGE_RENDER_SLOTS = threading.BoundedSemaphore(_MONTAGE_MAX_CONCURRENT)
 
 def create_montage(project_id: int, items: list) -> str:
     """
@@ -15,7 +21,18 @@ def create_montage(project_id: int, items: list) -> str:
     items: List of dicts with keys: url, speed, trim_start, trim_end
     Returns: URL of generated video
     """
+    if not isinstance(items, list) or not items:
+        raise ValueError("No montage clips submitted")
+    if len(items) > _MONTAGE_MAX_ITEMS:
+        raise ValueError(f"Too many montage clips (max={_MONTAGE_MAX_ITEMS})")
+
+    acquired = _MONTAGE_RENDER_SLOTS.acquire(timeout=_MONTAGE_ACQUIRE_TIMEOUT_SECONDS)
+    if not acquired:
+        raise RuntimeError("Montage renderer is busy, please retry shortly")
+
     clips = []
+    final_clip = None
+    total_duration_seconds = 0.0
     
     try:
         for item in items:
@@ -68,6 +85,13 @@ def create_montage(project_id: int, items: list) -> str:
                 if speed != 1.0 and speed > 0:
                     clip = clip.with_speed_scaled(speed)
 
+                effective_duration = max(0.0, float(end_time - trim_start)) / max(speed, 0.001)
+                total_duration_seconds += effective_duration
+                if total_duration_seconds > _MONTAGE_MAX_TOTAL_SECONDS:
+                    raise ValueError(
+                        f"Montage total duration exceeded limit ({_MONTAGE_MAX_TOTAL_SECONDS:.0f}s)"
+                    )
+
                 # Resize to common size? Or assume same size?
                 # moviepy concatenate might fail if sizes differ.
                 # Let's resize everything to 720p or just the size of the first clip?
@@ -116,7 +140,14 @@ def create_montage(project_id: int, items: list) -> str:
     except Exception as e:
         logger.error(f"Montage generation failed: {e}")
         # Clean up
+        if final_clip is not None:
+            try:
+                final_clip.close()
+            except Exception:
+                pass
         for clip in clips:
             try: clip.close() 
             except: pass
         raise e
+    finally:
+        _MONTAGE_RENDER_SLOTS.release()

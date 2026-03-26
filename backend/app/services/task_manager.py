@@ -182,6 +182,56 @@ class _TaskRecord:
         self.cancel_reason = ""
 
 
+def _get_or_load_task_record(task_id: str) -> Optional["_TaskRecord"]:
+    with _lock:
+        rec = _tasks.get(task_id)
+    if rec is None:
+        rec = _load_task_from_db(task_id)
+        if rec is not None:
+            with _lock:
+                _tasks[task_id] = rec
+    return rec
+
+
+def create_task_record(*, task_id: Optional[str] = None, user_id: Optional[int] = None, kind: str = "llm", status: str = "pending") -> str:
+    stable_task_id = str(task_id or uuid.uuid4().hex)
+    rec = _TaskRecord(stable_task_id, user_id, kind)
+    rec.status = str(status or "pending").strip().lower() or "pending"
+    if rec.status in {"completed", "failed", "canceled"}:
+        rec.finished_at = time.time()
+
+    with _lock:
+        _evict_stale()
+        _tasks[stable_task_id] = rec
+    _save_task_to_db(rec)
+    return stable_task_id
+
+
+def set_task_status(
+    task_id: str,
+    *,
+    status: str,
+    result: Any = None,
+    error: Optional[str] = None,
+    error_code: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    rec = _get_or_load_task_record(str(task_id))
+    if rec is None:
+        return None
+
+    stable_status = str(status or "pending").strip().lower() or "pending"
+    rec.status = stable_status
+    rec.result = result if stable_status == "completed" else None
+    rec.error = str(error) if error else None
+    rec.error_code = error_code
+    if stable_status in {"completed", "failed", "canceled"}:
+        rec.finished_at = time.time()
+    else:
+        rec.finished_at = None
+    _save_task_to_db(rec)
+    return get_status(rec.task_id, user_id=rec.user_id)
+
+
 def _evict_stale():
     """Remove completed/failed tasks older than TTL.  Called under _lock."""
     now = time.time()
@@ -273,13 +323,7 @@ def get_status(task_id: str, user_id: Optional[int] = None) -> Optional[Dict[str
     Return task status dict, or None if not found.
     If user_id is provided, only return if it matches the task owner.
     """
-    with _lock:
-        rec = _tasks.get(task_id)
-    if rec is None:
-        rec = _load_task_from_db(task_id)
-        if rec is not None:
-            with _lock:
-                _tasks[task_id] = rec
+    rec = _get_or_load_task_record(task_id)
     if rec is None:
         return None
     if user_id is not None and rec.user_id is not None and rec.user_id != user_id:
@@ -325,13 +369,7 @@ def cancel(task_id: str, user_id: Optional[int] = None, reason: str = "Task canc
     Mark a task as canceled. This is cooperative cancellation: running work may
     still finish in the background, but polling immediately returns canceled.
     """
-    with _lock:
-        rec = _tasks.get(task_id)
-    if rec is None:
-        rec = _load_task_from_db(task_id)
-        if rec is not None:
-            with _lock:
-                _tasks[task_id] = rec
+    rec = _get_or_load_task_record(task_id)
     if rec is None:
         return None
     if user_id is not None and rec.user_id is not None and rec.user_id != user_id:
