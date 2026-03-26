@@ -17931,6 +17931,27 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             alert("No entity or image selected.");
             return;
         }
+
+        const formatEntityAnalysisError = (error) => {
+            const detail = error?.response?.data?.detail;
+            if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+                const parts = [
+                    detail.message,
+                    detail.code,
+                    detail.stage,
+                    (detail.provider || detail.model)
+                        ? `provider=${detail.provider || 'unknown'} model=${detail.model || 'unknown'}`
+                        : '',
+                ].filter(Boolean);
+                if (parts.length > 0) return parts.join(' | ');
+                try {
+                    return JSON.stringify(detail);
+                } catch {
+                    return error?.message || 'Unknown analysis error';
+                }
+            }
+            return detail || error?.message || 'Unknown analysis error';
+        };
         
         setIsAnalyzingEntity(true);
         if (onLog) onLog(`Analyzing image for subject ${entity.name}...`, "process");
@@ -17944,7 +17965,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             if (onLog) onLog("Subject updated from analysis.", "success");
         } catch (e) {
             console.error(e);
-            alert("Analysis failed: " + (e.response?.data?.detail || e.message));
+            alert("Analysis failed: " + formatEntityAnalysisError(e));
             if (onLog) onLog("Analysis failed.", "error");
         } finally {
             setIsAnalyzingEntity(false);

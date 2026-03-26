@@ -27106,7 +27106,11 @@ async def analyze_asset_image(
         "api_key": api_setting.api_key,
         "base_url": api_setting.base_url,
         "model": api_setting.model,
-        "config": api_setting.config or {}
+        "config": {
+            **(api_setting.config or {}),
+            "response_format": {"type": "json_object"},
+            "include_thoughts": False,
+        }
     }
 
     # 3. Load System Prompt
@@ -27338,6 +27342,31 @@ async def analyze_entity_image(
     }
     logger.info(f"Using Model: {api_setting.model}")
 
+    def _build_entity_analysis_error_detail(
+        code: str,
+        message: str,
+        stage: str,
+        *,
+        preview: Optional[str] = None,
+        repair_attempted: Optional[bool] = None,
+        finish_reason: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "code": code,
+            "message": message,
+            "stage": stage,
+            "entity_id": entity_id,
+            "provider": str(api_setting.provider or "").strip() or None,
+            "model": str(api_setting.model or "").strip() or None,
+        }
+        if preview:
+            payload["preview"] = str(preview or "")[:160]
+        if repair_attempted is not None:
+            payload["repair_attempted"] = bool(repair_attempted)
+        if finish_reason not in (None, ""):
+            payload["finish_reason"] = finish_reason
+        return payload
+
     # 3. Construct System Prompt based on Entity Type
     entity_type = (entity.type or "character").lower()
 
@@ -27436,7 +27465,12 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
          # Fallback generic
          schema_instruction = "Return a JSON object with keys: name_en, description_cn, generation_prompt_cn, generation_prompt_en."
 
-    system_prompt = f"{base_instruction}\n\n{schema_instruction}\n\nConstraint: Return ONLY the raw JSON object. Do not include markdown formatting (like ```json), no <think> tags, no reasoning process, and no conversational text."
+    system_prompt = (
+        f"{base_instruction}\n\n{schema_instruction}\n\n"
+        "Constraint: Return ONLY the raw JSON object. "
+        "The first non-whitespace character of your output MUST be '{' and the last character MUST be '}'. "
+        "Do not include markdown formatting (like ```json), no <think> tags, no reasoning process, and no conversational text."
+    )
 
     # 4. Construct Image URL & Current Info
     
@@ -27531,6 +27565,11 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
             ]
         }
     ]
+
+    messages[1]["content"][0]["text"] = (
+        f"{messages[1]['content'][0]['text']}\n\n"
+        "Output contract: reply with JSON only, begin immediately with '{', and do not output any explanation or thinking text."
+    )
     
     try:
         logger.info("Sending request to LLM...")
@@ -27586,7 +27625,16 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         content = re.sub(r"<think>.*?</think>", "", str(result_content or ""), flags=re.DOTALL | re.IGNORECASE).strip()
 
         if not content:
-            raise HTTPException(status_code=502, detail="LLM returned empty content for entity analysis")
+            raise HTTPException(
+                status_code=502,
+                detail=_build_entity_analysis_error_detail(
+                    "entity_analysis_empty_content",
+                    "LLM returned empty content for entity analysis",
+                    "initial_response",
+                    repair_attempted=False,
+                    finish_reason=(llm_response or {}).get("finish_reason"),
+                ),
+            )
 
         # Strip fenced code blocks if present.
         content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
@@ -27611,12 +27659,20 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         data = _extract_first_json_payload(content)
         if data is None:
             preview = content[:300].replace("\n", " ")
-            logger.warning("Entity analysis JSON parse first-pass failed. content_preview=%s", preview)
+            logger.warning(
+                "Entity analysis JSON parse first-pass failed | entity_id=%s provider=%s model=%s finish_reason=%s content_preview=%s",
+                entity_id,
+                api_setting.provider,
+                api_setting.model,
+                (llm_response or {}).get("finish_reason"),
+                preview,
+            )
 
             # One-shot repair retry: ask the same model to convert output into strict JSON only.
             repair_system = (
                 "You are a strict JSON formatter. "
                 "Convert the user's text into a valid JSON object only. "
+                "The first character must be '{' and the last character must be '}'. "
                 "No markdown fences, no explanation, no extra text."
             )
             repair_user = (
@@ -27650,26 +27706,61 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 else:
                     repair_preview = repair_text[:300].replace("\n", " ")
                     logger.error(
-                        "Entity analysis JSON parse failed after repair retry. content_preview=%s repair_preview=%s",
+                        "Entity analysis JSON parse failed after repair retry | entity_id=%s provider=%s model=%s initial_finish_reason=%s repair_finish_reason=%s content_preview=%s repair_preview=%s",
+                        entity_id,
+                        api_setting.provider,
+                        api_setting.model,
+                        (llm_response or {}).get("finish_reason"),
+                        (repair_response or {}).get("finish_reason"),
                         preview,
                         repair_preview,
                     )
-                    raise HTTPException(status_code=422, detail="LLM returned non-JSON content for entity analysis")
+                    raise HTTPException(
+                        status_code=422,
+                        detail=_build_entity_analysis_error_detail(
+                            "entity_analysis_non_json",
+                            "LLM returned non-JSON content for entity analysis",
+                            "repair_parse",
+                            preview=repair_preview,
+                            repair_attempted=True,
+                            finish_reason=(repair_response or {}).get("finish_reason") or (llm_response or {}).get("finish_reason"),
+                        ),
+                    )
             except HTTPException:
                 raise
             except Exception as repair_err:
                 logger.error(
-                    "Entity analysis JSON repair retry failed: %s | content_preview=%s",
+                    "Entity analysis JSON repair retry failed | entity_id=%s provider=%s model=%s err=%s content_preview=%s",
+                    entity_id,
+                    api_setting.provider,
+                    api_setting.model,
                     str(repair_err),
                     preview,
                 )
-                raise HTTPException(status_code=422, detail="LLM returned non-JSON content for entity analysis")
+                raise HTTPException(
+                    status_code=422,
+                    detail=_build_entity_analysis_error_detail(
+                        "entity_analysis_json_repair_failed",
+                        "Entity analysis JSON repair retry failed",
+                        "repair_request",
+                        preview=preview,
+                        repair_attempted=True,
+                    ),
+                )
 
         if isinstance(data, list):
             data = data[0] if data else {}
 
         if not isinstance(data, dict):
-            raise HTTPException(status_code=422, detail="Entity analysis JSON must be an object")
+            raise HTTPException(
+                status_code=422,
+                detail=_build_entity_analysis_error_detail(
+                    "entity_analysis_invalid_json_root",
+                    "Entity analysis JSON must be an object",
+                    "parsed_payload",
+                    repair_attempted=data is not None,
+                ),
+            )
                   
         # Extract the core object based on type
         updated_info = {}
