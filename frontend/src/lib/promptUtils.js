@@ -1,6 +1,30 @@
 
 import { entityTokenMatchesName, normalizeEntityToken } from './entityToken';
 
+const isSubjectEntity = (entity) => {
+    const typeValue = String(entity?.type || '').trim().toLowerCase();
+    return typeValue === 'subject' || typeValue === 'character' || typeValue === 'char';
+};
+
+const buildSubjectRefIndexMap = (sourceText = '', entities = []) => {
+    const indexMap = new Map();
+    const refs = [];
+    const matches = String(sourceText || '').match(/[\[【](.*?)[\]】]/g) || [];
+
+    for (const token of matches) {
+        const cleanKey = normalizeEntityToken(token);
+        const entity = (Array.isArray(entities) ? entities : []).find((candidate) => entityTokenMatchesName(candidate, cleanKey));
+        if (!entity || !isSubjectEntity(entity)) continue;
+
+        const imageUrl = String(entity?.image_url || '').trim();
+        if (!imageUrl) continue;
+        if (!refs.includes(imageUrl)) refs.push(imageUrl);
+        indexMap.set(String(entity?.id || ''), refs.indexOf(imageUrl) + 1);
+    }
+
+    return indexMap;
+};
+
 /**
  * Processes a prompt string by replacing variables.
  * 
@@ -50,6 +74,10 @@ export const processPrompt = (prompt, episodeInfo, entities) => {
 
     // 2. Subject Reference Replacement
     // regex to capture content inside []
+    const safeEntities = Array.isArray(entities) ? entities : [];
+    const injectedEntities = new Set();
+    const subjectRefIndexMap = buildSubjectRefIndexMap(finalPrompt, safeEntities);
+
     finalPrompt = finalPrompt.replace(/\[(.*?)\]/g, (match, p1, offset, source) => {
          // Skip if it was Global Style (though likely handled above, but regex order matters)
          const cleanKey = normalizeEntityToken(p1);
@@ -61,12 +89,20 @@ export const processPrompt = (prompt, episodeInfo, entities) => {
          
          // Match against entities
          // Requirement: "Input chinese or english name can match"
-         const safeEntities = Array.isArray(entities) ? entities : [];
          const target = safeEntities.find((entity) => cleanKey && entityTokenMatchesName(entity, cleanKey));
          
          if (target) {
              const anchor = target.anchor_description || target.description || "";
-             return anchor ? `${match}(${anchor})` : match;
+             const entityId = String(target?.id || '');
+             const refNo = isSubjectEntity(target) ? subjectRefIndexMap.get(entityId) : null;
+
+             if (injectedEntities.has(cleanKey)) {
+                 return refNo ? `${match}(ref_image_url: #${refNo})` : match;
+             }
+
+             injectedEntities.add(cleanKey);
+             const anchorWithRef = [anchor, refNo ? `ref_image_url: #${refNo}` : ''].filter(Boolean).join(' | ');
+             return anchorWithRef ? `${match}(${anchorWithRef})` : match;
          }
          
          // If no match found, keep original text (or strip? usually keep for other tags)

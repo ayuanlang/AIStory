@@ -6776,8 +6776,9 @@ class MediaGenerationService:
             if human_fidelity is not None:
                 payload["human_fidelity"] = human_fidelity
 
-        raw_callback_url = str(tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or tool_conf.get("callBackUrl") or "").strip()
-        callback_ticket = "n1n-kling-image"
+        internal_callback_url = str(tool_conf.get("_provider_callback_url") or "").strip()
+        raw_callback_url = str(internal_callback_url or tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or tool_conf.get("callBackUrl") or "").strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or "n1n-kling-image"
         callback_tool_conf = dict(tool_conf or {})
         if raw_callback_url:
             callback_tool_conf.setdefault("callback_url", raw_callback_url)
@@ -8599,8 +8600,10 @@ class MediaGenerationService:
                 if "prompt_optimizer" not in payload_input:
                     payload_input["prompt_optimizer"] = bool(tool_conf.get("prompt_optimizer", True))
 
+        internal_callback_url = str(tool_conf.get("_provider_callback_url") or "").strip()
         raw_callback_url = str(
-            tool_conf.get("webHook")
+            internal_callback_url
+            or tool_conf.get("webHook")
             or tool_conf.get("callBackUrl")
             or tool_conf.get("callback_url")
             or tool_conf.get("callbackUrl")
@@ -8608,7 +8611,7 @@ class MediaGenerationService:
             or os.getenv("AISTORY_KIE_CALLBACK_URL")
             or ""
         ).strip()
-        callback_ticket = f"kie-{gen_type}"
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"kie-{gen_type}"
         callback_tool_conf = dict(tool_conf or {})
         if raw_callback_url:
             callback_tool_conf.setdefault("callBackUrl", raw_callback_url)

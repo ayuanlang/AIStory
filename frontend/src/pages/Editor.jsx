@@ -25580,6 +25580,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         };
 
         const subjectRefIndexMap = computeSubjectRefIndexMap(styleAdjustedText);
+        const injectedEntities = new Set();
 
         const regex = /[\[【](.*?)[\]】]/g;
         let newText = styleAdjustedText;
@@ -25615,6 +25616,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                     const anchor = entity.anchor_description || entity.description || '';
                     const isSubject = isSubjectEntity(entity);
                     const refNo = isSubject ? subjectRefIndexMap.get(String(entity?.id || '')) : null;
+
+                    if (injectedEntities.has(cleanKey)) {
+                        return refNo ? `${match}(ref_image_url: #${refNo})` : match;
+                    }
+
+                    injectedEntities.add(cleanKey);
                     const anchorWithRef = [
                         anchor,
                         (isSubject && refNo) ? `ref_image_url: #${refNo}` : ''

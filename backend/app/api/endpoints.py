@@ -20797,12 +20797,71 @@ def _build_generation_callback_payload(kind: str, job: Dict[str, Any]) -> Dict[s
     }
 
 
+def _extract_local_generation_callback_ticket(callback_url: str) -> str:
+    stable_url = str(callback_url or "").strip()
+    if not stable_url:
+        return ""
+
+    try:
+        parsed = urllib.parse.urlparse(stable_url)
+    except Exception:
+        return ""
+
+    path = str(parsed.path or "").strip()
+    api_prefix = str(settings.API_V1_STR or "").strip() or "/api/v1"
+    callback_prefix = f"{api_prefix}/generate/callback/"
+    if not path.startswith(callback_prefix):
+        return ""
+
+    expected_hosts: Set[str] = set()
+    render_external_url = str(settings.RENDER_EXTERNAL_URL or "").strip()
+    if render_external_url:
+        try:
+            expected_host = str(urllib.parse.urlparse(render_external_url).netloc or "").strip().lower()
+            if expected_host:
+                expected_hosts.add(expected_host)
+        except Exception:
+            pass
+
+    expected_hosts.update({
+        "localhost",
+        "localhost:8000",
+        "127.0.0.1",
+        "127.0.0.1:8000",
+    })
+
+    request_host = str(parsed.netloc or "").strip().lower()
+    if request_host and expected_hosts and request_host not in expected_hosts:
+        return ""
+
+    ticket = path[len(callback_prefix):].strip().strip("/")
+    if not ticket:
+        return ""
+    try:
+        return urllib.parse.unquote(ticket)
+    except Exception:
+        return ticket
+
+
 async def _dispatch_generation_callback(kind: str, callback_url: str, job: Dict[str, Any]) -> None:
     if not callback_url:
         return
 
     callback_payload = _build_generation_callback_payload(kind, job)
     callback_result_url = _extract_job_result_url(callback_payload.get("result"))
+    local_ticket = _extract_local_generation_callback_ticket(callback_url)
+    if local_ticket:
+        await asyncio.to_thread(_set_generation_callback_payload, local_ticket, callback_payload)
+        logger.info(
+            "[GenerationCallback] dispatched locally kind=%s job_id=%s callback_ticket=%s has_result_url=%s result_url=%s",
+            kind,
+            job.get("job_id"),
+            local_ticket,
+            bool(callback_result_url),
+            callback_result_url or None,
+        )
+        return
+
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "AIStory-Callback/1.0",
