@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchScenes, fetchShots, waitForAsyncTask, stopAsyncTask, deleteMontageResult } from '../services/api';
+import { fetchScenes, fetchShots, api, waitForAsyncTask, stopAsyncTask, deleteMontageResult } from '../services/api';
 import { Loader2, Play, Plus, Trash2, Film, Save, Clock, Scissors, ChevronRight, GripVertical, Download } from 'lucide-react';
 import { getUiLang, tUI } from '../lib/uiLang';
 
