@@ -559,23 +559,41 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             });
             setProjectShareCounts(nextCounts);
 
-            const unreadEntries = await Promise.all(
-                (Array.isArray(sorted) ? sorted : []).map(async (item) => {
-                    try {
-                        if (!item?.id) return [item?.id, 0];
-                        const threads = await fetchProjectReviewThreads(item.id);
-                        const unreadCount = Array.isArray(threads)
-                            ? threads.filter((thread) => !!thread?.has_unread).length
-                            : 0;
-                        return [item.id, unreadCount];
-                    } catch {
-                        return [item?.id, 0];
-                    }
-                })
-            );
             const nextUnreadCounts = {};
-            unreadEntries.forEach(([projectId, count]) => {
-                if (projectId != null) nextUnreadCounts[projectId] = count;
+            try {
+                // Fetch once and aggregate by project_id to avoid N per-project review thread requests.
+                const [inboxRows, outboxRows] = await Promise.all([
+                    fetchReviewInboxThreads(),
+                    fetchReviewOutboxThreads(),
+                ]);
+
+                const mergedRows = [
+                    ...(Array.isArray(inboxRows) ? inboxRows : []),
+                    ...(Array.isArray(outboxRows) ? outboxRows : []),
+                ];
+                const seenThreadIds = new Set();
+
+                mergedRows.forEach((thread) => {
+                    const threadId = Number(thread?.id || 0);
+                    if (threadId > 0) {
+                        if (seenThreadIds.has(threadId)) return;
+                        seenThreadIds.add(threadId);
+                    }
+
+                    if (!thread?.has_unread) return;
+                    const projectId = Number(thread?.project_id || 0);
+                    if (projectId <= 0) return;
+                    nextUnreadCounts[projectId] = Number(nextUnreadCounts[projectId] || 0) + 1;
+                });
+            } catch {
+                // Keep unread counts at zero if review endpoints are temporarily unavailable.
+            }
+
+            (Array.isArray(sorted) ? sorted : []).forEach((item) => {
+                const projectId = Number(item?.id || 0);
+                if (projectId > 0 && nextUnreadCounts[projectId] == null) {
+                    nextUnreadCounts[projectId] = 0;
+                }
             });
             setProjectUnreadReviewCounts(nextUnreadCounts);
         } catch (error) {

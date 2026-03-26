@@ -274,6 +274,23 @@ class LLMService:
 
         return False
 
+    def _is_runtime_shutdown_text(self, text: Any) -> bool:
+        stable = str(text or "").strip().lower()
+        if not stable:
+            return False
+        markers = [
+            "cannot schedule new futures after shutdown",
+            "executor shutdown has been called",
+            "event loop is closed",
+            "cannot schedule new futures",
+        ]
+        return any(marker in stable for marker in markers)
+
+    def _is_runtime_shutdown_error(self, error: Any) -> bool:
+        if isinstance(error, RuntimeError) and self._is_runtime_shutdown_text(str(error)):
+            return True
+        return self._is_runtime_shutdown_text(self._flatten_transport_error_text(error))
+
     def _is_ambiguous_submit_transport_error(self, error: Any) -> bool:
         if error is None or self._is_retryable_proxy_fallback_error(error):
             return False
@@ -1206,6 +1223,13 @@ class LLMService:
                  return {"content": f"Error: Unexpected response format from Doubao: {data}", "usage": {}}
                  
         except Exception as e:
+            if self._is_runtime_shutdown_error(e):
+                logger.error(
+                    "LLM multimodal request aborted: runtime executor/event loop is shutting down | provider=doubao model=%s err=%s",
+                    model,
+                    str(e)[:200],
+                )
+                return {"content": "Error: 服务正在关闭或重启，线程池暂不可用，请稍后重试。", "usage": {}}
             error_kind = "exception"
             if isinstance(e, requests.exceptions.Timeout):
                 error_kind = "timeout"
@@ -1330,6 +1354,13 @@ class LLMService:
                 )
             except Exception as exc:
                 last_error = exc
+                if self._is_runtime_shutdown_error(exc):
+                    logger.warning(
+                        "[llm_fallback] intent aborted: runtime is shutting down, skip fallback chain | provider=%s model=%s",
+                        attempt_provider,
+                        attempt_model,
+                    )
+                    raise
                 logger.warning(
                     "[llm_fallback] intent attempt %s/%s failed | provider=%s model=%s err=%s",
                     idx,
@@ -2012,6 +2043,17 @@ class LLMService:
 
         try:
             response = await asyncio.to_thread(_request, False)
+        except RuntimeError as e:
+            if self._is_runtime_shutdown_error(e):
+                logger.error(
+                    "LLM request aborted: runtime executor/event loop is shutting down | provider=%s model=%s url=%s err=%s",
+                    provider,
+                    model,
+                    url,
+                    str(e)[:200],
+                )
+                raise Exception(self._vendor_failed_message(provider, "服务正在关闭或重启，线程池暂不可用，请稍后重试"))
+            raise
         except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
             _debug_log(f"[DEBUG][LLM][{provider}] Connection failed ({str(e)[:120]}), retrying without proxy...", "warning")
             logger.warning(f"Connection failed ({str(e)}). Retrying without proxy (connect_timeout={DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS}s)...")
@@ -2697,6 +2739,12 @@ class LLMService:
             if not content.startswith("Error:"):
                 return self._attach_routing_metadata(result, config)
             last_err = content
+            if self._is_runtime_shutdown_text(content):
+                logger.warning(
+                    "[llm_fallback] active attempt %d/2 aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
+                    attempt, config.get("provider"), config.get("model"),
+                )
+                return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, config)
             logger.warning(
                 "[llm_fallback] active attempt %d/2 failed | provider=%s model=%s err=%s",
                 attempt, config.get("provider"), config.get("model"), content[:200],
@@ -2717,6 +2765,12 @@ class LLMService:
             if not content.startswith("Error:"):
                 return self._attach_routing_metadata(result, fb_cfg)
             last_err = content
+            if self._is_runtime_shutdown_text(content):
+                logger.warning(
+                    "[llm_fallback] fallback %d/%d aborted: runtime shutting down | provider=%s model=%s",
+                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
+                )
+                return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, fb_cfg)
             logger.warning(
                 "[llm_fallback] fallback %d/%d failed | provider=%s model=%s err=%s",
                 idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), content[:200],
@@ -2771,6 +2825,14 @@ class LLMService:
                 raise
             except Exception as e:
                 last_exc = e
+                if self._is_runtime_shutdown_error(e):
+                    logger.warning(
+                        "[llm_fallback] chat_completion active attempt %d/2 aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
+                        attempt,
+                        config.get("provider"),
+                        config.get("model"),
+                    )
+                    raise
                 _record_failed_attempt(config.get("provider"), config.get("model"), "active", attempt, e)
                 logger.warning(
                     "[llm_fallback] chat_completion active attempt %d/2 failed | provider=%s model=%s err=%s",
@@ -2796,6 +2858,15 @@ class LLMService:
                 raise
             except Exception as e:
                 last_exc = e
+                if self._is_runtime_shutdown_error(e):
+                    logger.warning(
+                        "[llm_fallback] chat_completion fallback %d/%d aborted: runtime shutting down | provider=%s model=%s",
+                        idx,
+                        len(fallbacks),
+                        fb_cfg.get("provider"),
+                        fb_cfg.get("model"),
+                    )
+                    raise
                 _record_failed_attempt(fb_cfg.get("provider"), fb_cfg.get("model"), "fallback", idx, e)
                 logger.warning(
                     "[llm_fallback] chat_completion fallback %d/%d failed | provider=%s model=%s err=%s",

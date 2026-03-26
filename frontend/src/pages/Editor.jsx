@@ -310,6 +310,17 @@ const findMissingSceneSubjectRefs = (scene, entities) => {
     return extractSceneSubjectRefs(scene).filter((ref) => !findMatchingEntityByType(entities, ref.type, ref.name));
 };
 
+const findCrossTypeEntityMatches = (entities, rawName, expectedType) => {
+    const normalizedName = normalizeEntityToken(rawName || '');
+    const stableType = String(expectedType || '').trim().toLowerCase();
+    if (!normalizedName) return [];
+    return (Array.isArray(entities) ? entities : []).filter((entity) => {
+        const entityType = String(entity?.type || '').trim().toLowerCase();
+        if (!entityType || entityType === stableType) return false;
+        return entityTokenMatchesName(entity, normalizedName);
+    });
+};
+
 const buildSceneSubjectPlaceholderPayload = (scene, ref) => {
     const sourceSceneLabel = String(scene?.scene_no || scene?.scene_name || scene?.id || '').trim();
     const sourceSceneName = String(scene?.scene_name || '').trim();
@@ -7440,17 +7451,38 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             'warning'
         );
 
-        setAnalysisFlowStatus({
-            phase: 'supplementing_scene_subjects',
-            message: t('场景缺失实体检查完成，正在补充缺失实体...', 'Scene entity check finished. Supplementing missing entities...'),
+        const formattedMissingLogs = missingSceneReports
+            .map((item) => {
+                const sceneNo = String(item?.scene?.scene_no || '').trim();
+                const sceneName = String(item?.scene?.scene_name || '').trim();
+                const sceneLabel = sceneNo || sceneName || `#${item?.scene?.id || 'unknown'}`;
+                const details = (item.missing || []).map((ref) => {
+                    const conflicts = findCrossTypeEntityMatches(latestEntities, ref?.name, ref?.type);
+                    const conflictLabel = conflicts.length > 0
+                        ? ` | cross_type_matches=${conflicts.map((c) => `${c?.type || 'unknown'}:${c?.name || c?.name_en || c?.id || 'unknown'}`).join(';')}`
+                        : '';
+                    return `${ref.type}:${ref.name} [field=${ref.sourceField || '-'}]${conflictLabel}`;
+                });
+                return `scene=${sceneLabel} -> ${details.join(' || ')}`;
+            })
+            .filter(Boolean);
+
+        formattedMissingLogs.forEach((line) => {
+            onLog?.(`[SceneSubjectGap] ${line}`, 'warning');
         });
 
-        const supplementReport = await createMissingSceneSubjectPlaceholders({
-            projectId,
-            sceneRows: missingSceneReports.map((item) => item.scene),
-            existingEntities: latestEntities,
-            onLog,
+        setAnalysisFlowStatus({
+            phase: 'checking_scene_subjects',
+            message: t(
+                `场景缺失实体检查完成：发现 ${missingItemCount} 项缺失。未自动补充，待你确认后再执行。`,
+                `Scene entity gap check completed: ${missingItemCount} missing items found. Auto-supplement is disabled until your confirmation.`
+            ),
         });
+
+        onLog?.(
+            `Post-import scene entity check summary: missing_scenes=${missingSceneReports.length}, missing_items=${missingItemCount}, auto_supplement=disabled(waiting_user_confirmation).`,
+            'warning'
+        );
 
         return {
             checkedSceneCount: importedSceneRows.length,
@@ -7462,7 +7494,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 sceneName: String(item?.scene?.scene_name || '').trim(),
                 missing: item.missing,
             })),
-            supplementReport: supplementReport || emptyReport.supplementReport,
+            supplementReport: emptyReport.supplementReport,
+            pendingUserConfirmation: true,
         };
     }, [onLog, projectId, t]);
 
@@ -7995,6 +8028,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
     const analysisStopRequestedRef = useRef(false);
     const analysisRunInFlightRef = useRef(false);
     const lastSubjectsImportIncompleteAlertRef = useRef('');
+    const ANALYSIS_TASK_MAX_AGE_MS = 10 * 60 * 1000;
+    const ANALYSIS_TASK_MARKER_TTL_MS = 12 * 60 * 1000;
+    const AI_SHOTS_TASK_MARKER_TTL_MS = 12 * 60 * 1000;
 
     const isTaskCanceledError = useCallback((error) => {
         if (!error) return false;
@@ -8021,8 +8057,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             const startedAt = Number(parsed?.startedAt || 0);
             if (!taskId) return null;
             if (!Number.isFinite(startedAt) || startedAt <= 0) return { taskId, startedAt: Date.now() };
-            // Expire stale markers after 30 minutes.
-            if ((Date.now() - startedAt) > (30 * 60 * 1000)) {
+            // Align marker TTL with task polling timeout to avoid endless resume loops after reload.
+            if ((Date.now() - startedAt) > ANALYSIS_TASK_MARKER_TTL_MS) {
                 window.localStorage.removeItem(key);
                 return null;
             }
@@ -8030,7 +8066,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         } catch (_) {
             return null;
         }
-    }, [getAnalysisTaskStorageKey]);
+    }, [ANALYSIS_TASK_MARKER_TTL_MS, getAnalysisTaskStorageKey]);
 
     const saveAnalysisTaskMarker = useCallback((episodeId, marker) => {
         try {
@@ -8180,6 +8216,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             }
         }
 
+        if (!settled) {
+            throw new Error('AI Scene Analysis timed out while waiting for async task result (resume deadline reached).');
+        }
         await analyzePromise;
         if (resolvedError) throw resolvedError;
         if (settled) return resolvedValue;
@@ -8192,6 +8231,17 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         analysisResumeInFlightRef.current = true;
 
         const startedAt = Number(marker?.startedAt || Date.now());
+        const elapsedMs = Math.max(0, Date.now() - startedAt);
+        const remainingTimeoutMs = Math.max(0, ANALYSIS_TASK_MAX_AGE_MS - elapsedMs);
+        if (remainingTimeoutMs <= 0) {
+            clearAnalysisTaskMarker(activeEpisode.id);
+            setAnalysisFlowStatus({
+                phase: 'warning',
+                message: t('检测到过期的分析任务恢复标记，已自动清理。', 'Detected an expired analysis task marker and cleared it automatically.'),
+            });
+            analysisResumeInFlightRef.current = false;
+            return;
+        }
         const phaseMarks = {
             submitStartedAt: startedAt,
             analyzeStartedAt: startedAt,
@@ -8227,7 +8277,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         try {
             const baselineText = String(activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '').trim();
             const result = await awaitAnalyzeSceneWithRecovery(
-                () => waitForAsyncTask(marker.taskId, { interval: 1200, timeout: 600000 }),
+                () => waitForAsyncTask(marker.taskId, { interval: 2500, timeout: remainingTimeoutMs }),
                 { startedAt, baselineText }
             );
             const analyzedText = extractAnalysisTextFromResult(result);
@@ -8335,6 +8385,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
     }, [
         activeEpisode?.id,
+        ANALYSIS_TASK_MAX_AGE_MS,
         buildSubjectConsistencyReport,
         clearAnalysisTaskMarker,
         collectAnalysisWarnings,
@@ -9646,11 +9697,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 error: '',
             });
 
-            const sceneSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: sceneSupplementCreated > 0
-                    ? t(`分析完成：场景与 subjects 已导入，并已补充 ${sceneSupplementCreated} 个缺失实体。`, `Analysis completed: scenes and subjects were imported, and ${sceneSupplementCreated} missing entities were supplemented.`)
+                message: postImportMissingItems > 0
+                    ? t(`分析完成：场景与 subjects 已导入。检测到 ${postImportMissingItems} 个缺失实体，未自动补充，待你确认后执行。`, `Analysis completed: scenes and subjects were imported. ${postImportMissingItems} missing entities were detected; auto-supplement is disabled until your confirmation.`)
                     : t('分析完成：场景与 subjects 已导入，导入后场景实体检查已完成。', 'Analysis completed: scenes and subjects were imported, and the post-import scene entity check finished.'),
             });
 
@@ -9987,11 +10038,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 error: '',
             });
 
-            const sceneSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: sceneSupplementCreated > 0
-                    ? t(`分析完成：场景与 subjects 已导入，并已补充 ${sceneSupplementCreated} 个缺失实体。`, `Analysis completed: scenes and subjects were imported, and ${sceneSupplementCreated} missing entities were supplemented.`)
+                message: postImportMissingItems > 0
+                    ? t(`分析完成：场景与 subjects 已导入。检测到 ${postImportMissingItems} 个缺失实体，未自动补充，待你确认后执行。`, `Analysis completed: scenes and subjects were imported. ${postImportMissingItems} missing entities were detected; auto-supplement is disabled until your confirmation.`)
                     : t('分析完成：场景与 subjects 已导入，导入后场景实体检查已完成。', 'Analysis completed: scenes and subjects were imported, and the post-import scene entity check finished.'),
             });
 
@@ -10230,7 +10281,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                 {t('导入后场景检查', 'Post-import Scene Check')}: {t('已检查', 'Checked')}
                                 {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount || 0} ${t('个场景', 'scenes')},`}
                                 {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingSceneCount || 0} ${t('个场景存在缺失', 'scenes had gaps')},`}
-                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.createdItems?.length || 0} ${t('个实体已补充', 'entities supplemented')}。`}
+                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount || 0} ${t('个缺失待确认补充', 'missing entities pending confirmation')}。`}
                             </div>
                             <div>
                                 {t('一致性检查', 'Consistency Check')}: {
@@ -12488,8 +12539,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
             if (!taskId || !Number.isFinite(sceneId) || sceneId <= 0) return null;
 
             const normalizedStartedAt = (Number.isFinite(startedAt) && startedAt > 0) ? startedAt : Date.now();
-            // Expire stale marker after 30 minutes.
-            if ((Date.now() - normalizedStartedAt) > (30 * 60 * 1000)) {
+            // Align marker TTL with task polling timeout to avoid endless resume loops after reload.
+            if ((Date.now() - normalizedStartedAt) > AI_SHOTS_TASK_MARKER_TTL_MS) {
                 window.localStorage.removeItem(key);
                 return null;
             }
@@ -12497,7 +12548,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         } catch (_) {
             return null;
         }
-    }, [getAiShotsTaskStorageKey, getAiShotsTaskActiveSceneKey]);
+    }, [AI_SHOTS_TASK_MARKER_TTL_MS, getAiShotsTaskStorageKey, getAiShotsTaskActiveSceneKey]);
 
     const saveAiShotsTaskMarker = useCallback((episodeId, marker) => {
         try {
@@ -14393,6 +14444,19 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         aiShotsResumeInFlightRef.current = true;
 
         const sceneId = Number(marker.sceneId);
+        const startedAt = Number(marker?.startedAt || Date.now());
+        const elapsedMs = Math.max(0, Date.now() - startedAt);
+        const remainingTimeoutMs = Math.max(0, ANALYSIS_TASK_MAX_AGE_MS - elapsedMs);
+        if (remainingTimeoutMs <= 0) {
+            clearAiShotsTaskMarker(activeEpisode.id, sceneId);
+            setAiShotsFlowStatus({
+                phase: 'failed',
+                sceneId,
+                message: t('检测到过期的 AI Shots 任务恢复标记，已自动清理。', 'Detected an expired AI Shots task marker and cleared it automatically.'),
+            });
+            aiShotsResumeInFlightRef.current = false;
+            return;
+        }
         setAiShotsFlowStatus({
             phase: 'generating',
             sceneId,
@@ -14400,7 +14464,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         });
 
         try {
-            const result = await waitForAsyncTask(marker.taskId, { interval: 1200, timeout: 600000 });
+            const result = await waitForAsyncTask(marker.taskId, { interval: 2500, timeout: remainingTimeoutMs });
             clearAiShotsTaskMarker(activeEpisode.id, sceneId);
             await finalizeAiShotsGenerationResult({ sceneId, result });
         } catch (e) {
@@ -31132,8 +31196,11 @@ const Editor = ({
         text = (typeof text === 'string') ? text : String(text || '');
         const requestedImportType = String(importType || 'auto');
         const effectiveImportType = shouldForceAutoImportForAnalysisBundle(text) ? 'auto' : requestedImportType;
-        const autoSupplementSceneSubjects = importOptions?.autoSupplementSceneSubjects !== false;
+        const autoSupplementSceneSubjects = false;
         const suppressAlerts = Boolean(importOptions?.suppressAlerts);
+        if (importOptions?.autoSupplementSceneSubjects === true) {
+            addLog('Import option autoSupplementSceneSubjects=true was ignored: auto supplement is disabled and now requires manual confirmation.', 'warning');
+        }
         // Allow modal loading state to paint before heavy parsing/import logic starts.
         await new Promise(resolve => setTimeout(resolve, 0));
         addLog(`Starting Import Analysis (${effectiveImportType})...`, "process");
@@ -31899,10 +31966,25 @@ const Editor = ({
                                     equivalent_duration: getSceneVal(['equivalentduration', 'duration', 'equivalent_duration'], isNewSceneFormat ? 4 : 2),
                                     core_scene_info: getSceneVal(['coresceneinfo', 'coregoal', 'core_scene_info'], isNewSceneFormat ? 5 : 3),
                                     original_script_text: getSceneVal(['originalscripttext', 'description', 'original_script_text'], isNewSceneFormat ? 6 : 4),
-                                    environment_name: getSceneVal(['environmentname', 'environment', 'environment_name'], isNewSceneFormat ? 7 : 5),
-                                    linked_characters: getSceneVal(['linkedcharacters', 'linked_characters'], isNewSceneFormat ? 11 : 6),
-                                    key_props: getSceneVal(['keyprops', 'key_props'], isNewSceneFormat ? 12 : 7)
+                                    environment_name: getSceneVal(['environmentname', 'environment', 'environment_name', '环境名称', '环境', '环境锚点'], isNewSceneFormat ? 7 : 5),
+                                    linked_characters: getSceneVal(['linkedcharacters', 'linked_characters', '关联角色', '角色', 'characters'], isNewSceneFormat ? 11 : 6),
+                                    key_props: getSceneVal(['keyprops', 'key_props', '关键道具', '道具', 'props'], isNewSceneFormat ? 12 : 7)
                                 };
+
+                                const linkedByHeader = sceneHeaderMap['linkedcharacters'] !== undefined
+                                    || sceneHeaderMap['关联角色'] !== undefined
+                                    || sceneHeaderMap['角色'] !== undefined
+                                    || sceneHeaderMap['characters'] !== undefined;
+                                const propsByHeader = sceneHeaderMap['keyprops'] !== undefined
+                                    || sceneHeaderMap['关键道具'] !== undefined
+                                    || sceneHeaderMap['道具'] !== undefined
+                                    || sceneHeaderMap['props'] !== undefined;
+                                if (!linkedByHeader || !propsByHeader) {
+                                    addLog(
+                                        `Scene row import used fallback columns for subject fields (linked_by_header=${linkedByHeader}, props_by_header=${propsByHeader}) scene_no=${scData.scene_no || '(empty)'}.`,
+                                        'warning'
+                                    );
+                                }
                                 
                                 if (!scData.scene_no || String(scData.scene_no).trim().length === 0) {
                                     // addLog("Skipping empty Scene row", "info"); // Optional log

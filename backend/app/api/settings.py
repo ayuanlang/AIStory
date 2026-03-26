@@ -7646,7 +7646,7 @@ def create_system_setting_for_manage(
     return _setting_to_out(db, new_setting)
 
 
-@router.post("/settings/system/manage/{setting_id}", response_model=SystemAPISettingOut)
+@router.post("/settings/system/manage/{setting_id:int}", response_model=SystemAPISettingOut)
 def update_system_setting_for_manage(
     setting_id: int,
     payload: SystemAPISettingManageUpdate,
@@ -9432,7 +9432,7 @@ def import_system_settings_for_manage(
     }
 
 
-@router.delete("/settings/system/manage/{setting_id}")
+@router.delete("/settings/system/manage/{setting_id:int}")
 def delete_system_setting_for_manage(
     setting_id: int,
     db: Session = Depends(get_db),

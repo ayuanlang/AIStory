@@ -15,12 +15,14 @@ import time
 import traceback
 import uuid
 import json
+import os
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 # How long (seconds) completed/failed results stay in memory before eviction.
 _RESULT_TTL = 600  # 10 minutes
+_RUNNING_TASK_MAX_AGE_SECONDS = max(300, int(os.getenv("ASYNC_TASK_MAX_AGE_SECONDS", "1200")))
 
 # Global task store  {task_id: _TaskRecord}
 _tasks: Dict[str, "_TaskRecord"] = {}
@@ -282,6 +284,24 @@ def get_status(task_id: str, user_id: Optional[int] = None) -> Optional[Dict[str
         return None
     if user_id is not None and rec.user_id is not None and rec.user_id != user_id:
         return None
+
+    if rec.status in {"pending", "running"}:
+        now_ts = time.time()
+        created_at = float(rec.created_at or now_ts)
+        if (now_ts - created_at) > _RUNNING_TASK_MAX_AGE_SECONDS:
+            rec.status = "failed"
+            rec.error_code = 504
+            rec.error = f"Task timed out after {_RUNNING_TASK_MAX_AGE_SECONDS}s"
+            rec.finished_at = now_ts
+            _save_task_to_db(rec)
+            logger.warning(
+                "Task %s timed out and was marked failed | kind=%s user=%s age_s=%s limit_s=%s",
+                rec.task_id,
+                rec.kind,
+                rec.user_id,
+                int(max(0, now_ts - created_at)),
+                _RUNNING_TASK_MAX_AGE_SECONDS,
+            )
 
     info: Dict[str, Any] = {
         "task_id": rec.task_id,

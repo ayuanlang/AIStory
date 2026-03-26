@@ -409,6 +409,15 @@ GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
 GENERATION_CALLBACK_LOCK = threading.Lock()
 GENERATION_CALLBACK_TTL_SECONDS = max(300, int(os.getenv("GENERATION_CALLBACK_TTL_SECONDS", "1800")))
 GENERATION_CALLBACK_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_generation_callbacks")
+GENERATION_CALLBACK_MAX_BYTES = max(4096, int(os.getenv("GENERATION_CALLBACK_MAX_BYTES", "65536")))
+GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS = max(5, int(os.getenv("GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS", "30")))
+GENERATION_CALLBACK_NO_MATCH_LOG_CACHE: Dict[str, float] = {}
+GENERATION_CALLBACK_NO_MATCH_LOG_LOCK = threading.Lock()
+GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, int(os.getenv("GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY", "4") or 4))
+GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
+GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
+GENERATION_CALLBACK_ASYNC_INFLIGHT: Dict[str, float] = {}
+GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK = threading.Lock()
 WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
 WEBHOOK_REPLAY_LOCK = threading.Lock()
 _UNSIGNED_WEBHOOK_WARNING_EMITTED = False
@@ -638,11 +647,13 @@ def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> No
     if not stable_ticket:
         return
 
+    normalized_payload = _compact_generation_callback_payload(payload)
+
     callback_record = {
         "ticket": stable_ticket,
         "received_ts": time.time(),
         "received_at": now_bj_iso(),
-        "payload": payload if isinstance(payload, dict) else {},
+        "payload": normalized_payload,
     }
 
     with GENERATION_CALLBACK_LOCK:
@@ -713,6 +724,93 @@ def _extract_callback_task_id(payload: Dict[str, Any]) -> str:
                 return normalized
 
     return ""
+
+
+def _extract_generation_job_id_from_ticket(kind: str, callback_ticket: str) -> str:
+    stable_kind = str(kind or "").strip().lower()
+    stable_ticket = str(callback_ticket or "").strip()
+    if not stable_ticket:
+        return ""
+
+    if stable_kind == "image":
+        prefix = "image-job-"
+    elif stable_kind == "video":
+        prefix = "video-job-"
+    else:
+        return ""
+
+    if not stable_ticket.startswith(prefix):
+        return ""
+
+    job_id = stable_ticket[len(prefix):].strip()
+    if re.fullmatch(r"[0-9a-fA-F]{32}", job_id):
+        return job_id.lower()
+    return ""
+
+
+def _should_log_callback_no_match(kind: str, callback_ticket: str) -> bool:
+    stable_key = f"{str(kind or '').strip().lower()}:{str(callback_ticket or '').strip()}"
+    if not stable_key.strip(":"):
+        return False
+
+    now_ts = time.time()
+    with GENERATION_CALLBACK_NO_MATCH_LOG_LOCK:
+        stale_keys = [
+            key
+            for key, seen_ts in GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.items()
+            if (now_ts - float(seen_ts or 0.0)) > GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS
+        ]
+        for key in stale_keys:
+            GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.pop(key, None)
+
+        previous_seen = float(GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.get(stable_key) or 0.0)
+        if previous_seen and (now_ts - previous_seen) < GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS:
+            return False
+
+        GENERATION_CALLBACK_NO_MATCH_LOG_CACHE[stable_key] = now_ts
+        return True
+
+
+def _compact_generation_callback_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    try:
+        stable_json = json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":"))
+    except Exception:
+        stable_json = ""
+
+    if stable_json and len(stable_json.encode("utf-8", errors="ignore")) <= GENERATION_CALLBACK_MAX_BYTES:
+        return dict(payload)
+
+    callback_task_id = _extract_callback_task_id(payload)
+    callback_status = _normalize_generation_status(payload.get("status"))
+    callback_result_url = _extract_job_result_url(payload)
+
+    compact: Dict[str, Any] = {
+        "status": callback_status or str(payload.get("status") or "").strip() or None,
+        "task_id": callback_task_id or None,
+        "taskId": callback_task_id or None,
+        "result_url": callback_result_url or None,
+        "error": str(payload.get("error") or "").strip() or None,
+        "failure_reason": str(payload.get("failure_reason") or "").strip() or None,
+        "payload_truncated": True,
+    }
+
+    data_block = payload.get("data")
+    if isinstance(data_block, dict):
+        compact["data"] = {
+            "id": str(data_block.get("id") or data_block.get("task_id") or data_block.get("taskId") or "").strip() or None,
+            "status": str(data_block.get("status") or "").strip() or None,
+            "result_url": _extract_job_result_url(data_block) or None,
+            "error": str(data_block.get("error") or data_block.get("message") or "").strip() or None,
+        }
+
+    if stable_json:
+        compact["payload_size_bytes"] = len(stable_json.encode("utf-8", errors="ignore"))
+        compact["payload_excerpt"] = stable_json[:4096]
+
+    return {k: v for k, v in compact.items() if v not in (None, "", [])}
 
 
 def _prune_webhook_replay_locked() -> None:
@@ -1914,6 +2012,32 @@ def _find_image_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
     matches: List[Tuple[str, Dict[str, Any]]] = []
     seen_job_ids: Set[str] = set()
 
+    direct_job_id = _extract_generation_job_id_from_ticket("image", stable_ticket)
+    if direct_job_id:
+        with IMAGE_JOB_LOCK:
+            direct_live = dict(IMAGE_JOB_STORE.get(direct_job_id) or {})
+        if direct_live:
+            if not direct_live.get("provider_callback_ticket"):
+                direct_live["provider_callback_ticket"] = stable_ticket
+                _set_image_job(direct_job_id, provider_callback_ticket=stable_ticket)
+                with IMAGE_JOB_LOCK:
+                    direct_live = dict(IMAGE_JOB_STORE.get(direct_job_id) or direct_live)
+            if _extract_job_provider_callback_ticket(direct_live) in {"", stable_ticket}:
+                return [(direct_job_id, direct_live)]
+
+        direct_db = _read_image_job_file(direct_job_id)
+        if isinstance(direct_db, dict):
+            if not direct_db.get("provider_callback_ticket"):
+                _set_image_job(direct_job_id, provider_callback_ticket=stable_ticket)
+                with IMAGE_JOB_LOCK:
+                    hydrated = dict(IMAGE_JOB_STORE.get(direct_job_id) or {})
+                if hydrated:
+                    direct_db = hydrated
+            if _extract_job_provider_callback_ticket(direct_db) in {"", stable_ticket}:
+                with IMAGE_JOB_LOCK:
+                    IMAGE_JOB_STORE[direct_job_id] = dict(direct_db)
+                return [(direct_job_id, dict(direct_db))]
+
     with IMAGE_JOB_LOCK:
         live_jobs = [(job_id, dict(job or {})) for job_id, job in IMAGE_JOB_STORE.items()]
 
@@ -1970,7 +2094,8 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
 
     matched_jobs = _find_image_jobs_by_provider_callback_ticket(stable_ticket)
     if not matched_jobs:
-        logger.info("[ImageJob] provider callback received with no matching image job | callback_ticket=%s", stable_ticket)
+        if _should_log_callback_no_match("image", stable_ticket):
+            logger.info("[ImageJob] provider callback received with no matching image job | callback_ticket=%s", stable_ticket)
         return
 
     for job_id, job in matched_jobs:
@@ -2065,6 +2190,32 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
     matches: List[Tuple[str, Dict[str, Any]]] = []
     seen_job_ids: Set[str] = set()
 
+    direct_job_id = _extract_generation_job_id_from_ticket("video", stable_ticket)
+    if direct_job_id:
+        with VIDEO_JOB_LOCK:
+            direct_live = dict(VIDEO_JOB_STORE.get(direct_job_id) or {})
+        if direct_live:
+            if not direct_live.get("provider_callback_ticket"):
+                direct_live["provider_callback_ticket"] = stable_ticket
+                _set_video_job(direct_job_id, provider_callback_ticket=stable_ticket)
+                with VIDEO_JOB_LOCK:
+                    direct_live = dict(VIDEO_JOB_STORE.get(direct_job_id) or direct_live)
+            if _extract_job_provider_callback_ticket(direct_live) in {"", stable_ticket}:
+                return [(direct_job_id, direct_live)]
+
+        direct_db = _read_video_job_file(direct_job_id)
+        if isinstance(direct_db, dict):
+            if not direct_db.get("provider_callback_ticket"):
+                _set_video_job(direct_job_id, provider_callback_ticket=stable_ticket)
+                with VIDEO_JOB_LOCK:
+                    hydrated = dict(VIDEO_JOB_STORE.get(direct_job_id) or {})
+                if hydrated:
+                    direct_db = hydrated
+            if _extract_job_provider_callback_ticket(direct_db) in {"", stable_ticket}:
+                with VIDEO_JOB_LOCK:
+                    VIDEO_JOB_STORE[direct_job_id] = dict(direct_db)
+                return [(direct_job_id, dict(direct_db))]
+
     with VIDEO_JOB_LOCK:
         live_jobs = [(job_id, dict(job or {})) for job_id, job in VIDEO_JOB_STORE.items()]
 
@@ -2121,7 +2272,8 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
 
     matched_jobs = _find_video_jobs_by_provider_callback_ticket(stable_ticket)
     if not matched_jobs:
-        logger.info("[VideoJob] provider callback received with no matching video job | callback_ticket=%s", stable_ticket)
+        if _should_log_callback_no_match("video", stable_ticket):
+            logger.info("[VideoJob] provider callback received with no matching video job | callback_ticket=%s", stable_ticket)
         return
 
     for job_id, job in matched_jobs:
@@ -2144,6 +2296,53 @@ def _apply_no_store_headers(response: Response) -> None:
     response.headers["Cache-Control"] = "no-cache, no-store, max-age=0, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
+
+
+def _mark_generation_callback_inflight(ticket: str) -> bool:
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        return False
+    now_ts = time.time()
+    with GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK:
+        stale = [
+            key
+            for key, ts in GENERATION_CALLBACK_ASYNC_INFLIGHT.items()
+            if (now_ts - float(ts or 0.0)) > GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS
+        ]
+        for key in stale:
+            GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(key, None)
+        if stable_ticket in GENERATION_CALLBACK_ASYNC_INFLIGHT:
+            return False
+        GENERATION_CALLBACK_ASYNC_INFLIGHT[stable_ticket] = now_ts
+    return True
+
+
+def _clear_generation_callback_inflight(ticket: str) -> None:
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        return
+    with GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK:
+        GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(stable_ticket, None)
+
+
+async def _process_generation_callback_async(ticket: str, payload: Dict[str, Any]) -> None:
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        return
+    try:
+        async with GENERATION_CALLBACK_FINALIZE_SEMAPHORE:
+            await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, payload)
+            if stable_ticket.startswith("image-job-"):
+                await _finalize_image_jobs_from_provider_callback(stable_ticket)
+            elif stable_ticket.startswith("video-job-"):
+                await _finalize_video_jobs_from_provider_callback(stable_ticket)
+            else:
+                await _finalize_image_jobs_from_provider_callback(stable_ticket)
+                await _finalize_video_jobs_from_provider_callback(stable_ticket)
+    except Exception:
+        logger.exception("[GenerationCallback] async finalize failed | ticket=%s", stable_ticket)
+    finally:
+        _clear_generation_callback_inflight(stable_ticket)
 
 
 def _build_provider_alias_lookup(db: Session) -> Dict[str, str]:
@@ -12086,6 +12285,8 @@ class SceneAiShotsBatchStartRequest(BaseModel):
 SCENE_AI_SHOTS_BATCH_STATUS_KEY = "scene_ai_shots_batch_status"
 SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC = 300
 SCENE_AI_SHOTS_BATCH_DEFAULT_CONCURRENCY = 3
+SCENE_AI_SHOTS_BATCH_STATUS_ERROR_LIMIT = max(5, int(os.getenv("SCENE_AI_SHOTS_BATCH_STATUS_ERROR_LIMIT", "20") or 20))
+SCENE_AI_SHOTS_BATCH_STATUS_ERROR_MAX_CHARS = max(80, int(os.getenv("SCENE_AI_SHOTS_BATCH_STATUS_ERROR_MAX_CHARS", "240") or 240))
 
 
 def _read_scene_ai_shots_batch_status(episode: Episode) -> Dict[str, Any]:
@@ -12138,6 +12339,47 @@ def _persist_scene_ai_shots_batch_status(db: Session, episode: Episode, status_p
     target_episode.episode_info = info
     db.add(target_episode)
     db.commit()
+
+
+def _build_scene_ai_shots_batch_status_response(status_payload: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(status_payload or {})
+    response_payload: Dict[str, Any] = {
+        "running": bool(payload.get("running")),
+        "status": str(payload.get("status") or ("running" if payload.get("running") else "idle")).strip().lower(),
+        "project_id": payload.get("project_id"),
+        "episode_id": payload.get("episode_id"),
+        "started_by_user_id": payload.get("started_by_user_id"),
+        "started_by_username": payload.get("started_by_username"),
+        "max_concurrency": payload.get("max_concurrency"),
+        "total": int(payload.get("total") or 0),
+        "completed": int(payload.get("completed") or 0),
+        "success": int(payload.get("success") or 0),
+        "failed": int(payload.get("failed") or 0),
+        "current_scene_id": payload.get("current_scene_id"),
+        "current_scene_label": str(payload.get("current_scene_label") or "").strip(),
+        "message": str(payload.get("message") or "").strip()[:512],
+        "stop_requested": bool(payload.get("stop_requested")),
+        "force_stopped": bool(payload.get("force_stopped")),
+        "stopped_by_user": bool(payload.get("stopped_by_user")),
+        "started_at": payload.get("started_at"),
+        "updated_at": payload.get("updated_at"),
+        "finished_at": payload.get("finished_at"),
+    }
+
+    raw_errors = payload.get("errors") or []
+    safe_errors: List[str] = []
+    for item in (raw_errors if isinstance(raw_errors, list) else []):
+        txt = str(item or "").strip()
+        if not txt:
+            continue
+        safe_errors.append(txt[:SCENE_AI_SHOTS_BATCH_STATUS_ERROR_MAX_CHARS])
+        if len(safe_errors) >= SCENE_AI_SHOTS_BATCH_STATUS_ERROR_LIMIT:
+            break
+    response_payload["errors"] = safe_errors
+    response_payload["errors_total"] = len(raw_errors) if isinstance(raw_errors, list) else len(safe_errors)
+    response_payload["errors_truncated"] = bool(response_payload["errors_total"] > len(safe_errors))
+    response_payload["poll_interval_ms"] = 2500
+    return response_payload
 
 
 def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int) -> Dict[str, Any]:
@@ -12542,9 +12784,12 @@ def start_scene_ai_shots_batch(
 @router.get("/episodes/{episode_id}/scenes/ai_shots/batch/status", response_model=Dict[str, Any])
 def get_scene_ai_shots_batch_status(
     episode_id: int,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _apply_no_store_headers(response)
+    response.headers["X-Poll-Interval-Ms"] = "2500"
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
@@ -12566,7 +12811,7 @@ def get_scene_ai_shots_batch_status(
         status_payload["finished_at"] = status_payload.get("finished_at") or now_iso
         status_payload["message"] = "Recovered orphaned task state (no active worker)"
         _persist_scene_ai_shots_batch_status(db, episode, status_payload)
-    return status_payload
+    return _build_scene_ai_shots_batch_status_response(status_payload)
 
 
 @router.post("/episodes/{episode_id}/scenes/ai_shots/batch/stop", response_model=Dict[str, Any])
@@ -23465,9 +23710,11 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
         payload_result_url or None,
         getattr(getattr(request, "client", None), "host", None),
     )
-    await _finalize_image_jobs_from_provider_callback(stable_ticket)
-    await _finalize_video_jobs_from_provider_callback(stable_ticket)
-    return {"ok": True, "ticket": stable_ticket}
+    if _mark_generation_callback_inflight(stable_ticket):
+        asyncio.create_task(_process_generation_callback_async(stable_ticket, payload if isinstance(payload, dict) else {}))
+    else:
+        logger.info("[GenerationCallback] duplicate callback acknowledged while finalize in-flight | ticket=%s", stable_ticket)
+    return {"ok": True, "ticket": stable_ticket, "accepted": True}
 
 
 @router.get("/generate/callback/{ticket}")

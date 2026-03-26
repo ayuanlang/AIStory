@@ -1,7 +1,7 @@
 {
   "version": 2,
   "exported_at": "2026-03-06T13:24:00.804850+00:00",
-  "count": 141,
+  "count": 148,
   "items": [
     {
       "name": "Doubao (Volcengine)",
@@ -1599,6 +1599,394 @@
         "moderation_user_id": "",
         "moderation_aes_key": "",
         "generate_audio": false,
+        "provider_api_key_strategy": "random"
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "moderation",
+        "chat_completions"
+      ]
+    },
+    {
+      "name": "lzhbu doubao-seedance-1-5-pro",
+      "category": "Video",
+      "provider": "lzhbu",
+      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "model": "doubao-seedance-1-5-pro",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true
+        }
+      },
+      "supplier_info": {
+        "lzhbu": {
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "supports_generate_audio": true,
+          "supports_web_search": true,
+          "submit_protocol": "chat_completions_async_task"
+        }
+      },
+      "config": {
+        "endpoint": "/proxy/chat/completions",
+        "query_endpoint": "/proxy/ark/contents/generations/tasks",
+        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "moderation_enabled": true,
+        "moderation_required": true,
+        "moderation_user_id": "",
+        "moderation_aes_key": "",
+        "generate_audio": true,
+        "provider_api_key_strategy": "random"
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "moderation",
+        "chat_completions",
+        "audio"
+      ]
+    },
+    {
+      "name": "lzhbu doubao-seedance-1-5-pro-silent",
+      "category": "Video",
+      "provider": "lzhbu",
+      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "model": "doubao-seedance-1-5-pro-silent",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true
+        }
+      },
+      "supplier_info": {
+        "lzhbu": {
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "supports_generate_audio": true,
+          "supports_web_search": true,
+          "submit_protocol": "chat_completions_async_task"
+        }
+      },
+      "config": {
+        "endpoint": "/proxy/chat/completions",
+        "query_endpoint": "/proxy/ark/contents/generations/tasks",
+        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "moderation_enabled": true,
+        "moderation_required": true,
+        "moderation_user_id": "",
+        "moderation_aes_key": "",
+        "generate_audio": false,
+        "provider_api_key_strategy": "random"
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "moderation",
+        "chat_completions"
+      ]
+    },
+    {
+      "name": "lzhbu doubao-seedance-1-5-pro-draft",
+      "category": "Video",
+      "provider": "lzhbu",
+      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "model": "doubao-seedance-1-5-pro-draft",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true
+        }
+      },
+      "supplier_info": {
+        "lzhbu": {
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "supports_generate_audio": true,
+          "supports_web_search": true,
+          "submit_protocol": "chat_completions_async_task"
+        }
+      },
+      "config": {
+        "endpoint": "/proxy/chat/completions",
+        "query_endpoint": "/proxy/ark/contents/generations/tasks",
+        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "moderation_enabled": true,
+        "moderation_required": true,
+        "moderation_user_id": "",
+        "moderation_aes_key": "",
+        "generate_audio": true,
+        "draft": true,
+        "provider_api_key_strategy": "random"
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "moderation",
+        "chat_completions",
+        "audio",
+        "draft"
+      ]
+    },
+    {
+      "name": "lzhbu doubao-seedance-1-5-pro-draft-silent",
+      "category": "Video",
+      "provider": "lzhbu",
+      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "model": "doubao-seedance-1-5-pro-draft-silent",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true
+        }
+      },
+      "supplier_info": {
+        "lzhbu": {
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "supports_generate_audio": true,
+          "supports_web_search": true,
+          "submit_protocol": "chat_completions_async_task"
+        }
+      },
+      "config": {
+        "endpoint": "/proxy/chat/completions",
+        "query_endpoint": "/proxy/ark/contents/generations/tasks",
+        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "moderation_enabled": true,
+        "moderation_required": true,
+        "moderation_user_id": "",
+        "moderation_aes_key": "",
+        "generate_audio": false,
+        "draft": true,
+        "provider_api_key_strategy": "random"
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "moderation",
+        "chat_completions",
+        "draft"
+      ]
+    },
+    {
+      "name": "lzhbu doubao-seedance-1-0-pro",
+      "category": "Video",
+      "provider": "lzhbu",
+      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "model": "doubao-seedance-1-0-pro",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true
+        }
+      },
+      "supplier_info": {
+        "lzhbu": {
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "supports_generate_audio": true,
+          "supports_web_search": true,
+          "submit_protocol": "chat_completions_async_task"
+        }
+      },
+      "config": {
+        "endpoint": "/proxy/chat/completions",
+        "query_endpoint": "/proxy/ark/contents/generations/tasks",
+        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "moderation_enabled": true,
+        "moderation_required": true,
+        "moderation_user_id": "",
+        "moderation_aes_key": "",
+        "provider_api_key_strategy": "random"
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "moderation",
+        "chat_completions"
+      ]
+    },
+    {
+      "name": "lzhbu doubao-seedance-1-0-pro-fast",
+      "category": "Video",
+      "provider": "lzhbu",
+      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "model": "doubao-seedance-1-0-pro-fast",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true
+        }
+      },
+      "supplier_info": {
+        "lzhbu": {
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "supports_generate_audio": true,
+          "supports_web_search": true,
+          "submit_protocol": "chat_completions_async_task"
+        }
+      },
+      "config": {
+        "endpoint": "/proxy/chat/completions",
+        "query_endpoint": "/proxy/ark/contents/generations/tasks",
+        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "moderation_enabled": true,
+        "moderation_required": true,
+        "moderation_user_id": "",
+        "moderation_aes_key": "",
+        "provider_api_key_strategy": "random"
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "moderation",
+        "chat_completions"
+      ]
+    },
+    {
+      "name": "lzhbu doubao-seedance-1-0-lite",
+      "category": "Video",
+      "provider": "lzhbu",
+      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "model": "doubao-seedance-1-0-lite",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true
+        }
+      },
+      "supplier_info": {
+        "lzhbu": {
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "supports_generate_audio": true,
+          "supports_web_search": true,
+          "submit_protocol": "chat_completions_async_task"
+        }
+      },
+      "config": {
+        "endpoint": "/proxy/chat/completions",
+        "query_endpoint": "/proxy/ark/contents/generations/tasks",
+        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "moderation_enabled": true,
+        "moderation_required": true,
+        "moderation_user_id": "",
+        "moderation_aes_key": "",
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,

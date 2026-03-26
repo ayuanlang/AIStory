@@ -174,9 +174,12 @@ async function pollTask(taskId, {
     baseURL = undefined,
     notFoundGraceMs = LLM_TASK_NOT_FOUND_GRACE_MS,
 } = {}) {
+    const startedAt = Date.now();
+    let attempts = 0;
   const deadline = Date.now() + timeout;
     let notFoundSince = 0;
   while (Date.now() < deadline) {
+                attempts += 1;
         try {
             const reqConfig = {
                 ...(baseURL ? { baseURL } : {}),
@@ -217,8 +220,19 @@ async function pollTask(taskId, {
             throw error;
     }
   }
-  throw new Error('LLM task polling timed out');
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
+    throw new Error(`LLM task polling timed out after ${elapsedMs}ms (task_id=${taskId}, attempts=${attempts})`);
 }
+
+const waitForAsyncTaskSingleFlight = async (taskId, pollOptions = {}) => {
+        const baseURL = String(pollOptions?.baseURL || api.defaults.baseURL || '').trim();
+        const key = buildSingleFlightKey(`TASK_POLL:${baseURL}:${taskId}`, {
+                timeout: Number(pollOptions?.timeout || 0),
+                interval: Number(pollOptions?.interval || 0),
+                notFoundGraceMs: Number(pollOptions?.notFoundGraceMs || 0),
+        });
+        return runSingleFlight(key, () => pollTask(taskId, pollOptions || {}));
+};
 
 /**
  * Wrapper: POST to an LLM endpoint with ?async=1, then poll for result.
@@ -236,7 +250,7 @@ async function asyncLLMPost(url, data, config = {}) {
             }
         }
         const submitBaseURL = res?.config?.baseURL || api.defaults.baseURL;
-        return await pollTask(res.data.task_id, {
+        return await waitForAsyncTaskSingleFlight(res.data.task_id, {
             ...(config.pollOptions || {}),
             // Keep polling on the same backend host that created the task.
             baseURL: (config.pollOptions && config.pollOptions.baseURL) || submitBaseURL,
@@ -247,7 +261,7 @@ async function asyncLLMPost(url, data, config = {}) {
 
 export const waitForAsyncTask = async (taskId, pollOptions = {}) => {
     if (!taskId) throw new Error('Missing taskId');
-    return await pollTask(taskId, pollOptions || {});
+    return await waitForAsyncTaskSingleFlight(taskId, pollOptions || {});
 };
 
 export const stopAsyncTask = async (taskId) => {

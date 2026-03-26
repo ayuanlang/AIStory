@@ -57,7 +57,7 @@ services:
       - key: GZIP_MINIMUM_SIZE
         value: "1024"
       - key: WEB_CONCURRENCY
-        value: "2"
+        value: "1"
       - key: GUNICORN_TIMEOUT
         value: "600"
       - key: GUNICORN_GRACEFUL_TIMEOUT
@@ -65,9 +65,9 @@ services:
       - key: GUNICORN_KEEPALIVE
         value: "15"
       - key: GUNICORN_MAX_REQUESTS
-        value: "10000"
+        value: "0"
       - key: GUNICORN_MAX_REQUESTS_JITTER
-        value: "1000"
+        value: "0"
       - key: DB_POOL_SIZE
         value: "5"
       - key: DB_MAX_OVERFLOW
