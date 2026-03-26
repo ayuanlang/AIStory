@@ -16166,6 +16166,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
     const [subjectNotification, setSubjectNotification] = useState(null);
     const [subjectImageJobs, setSubjectImageJobs] = useState({});
     const [stoppingSubjectImageJobs, setStoppingSubjectImageJobs] = useState({});
+    const [subjectGenerationHistory, setSubjectGenerationHistory] = useState([]);
+    const [subjectGenerationHistoryLoading, setSubjectGenerationHistoryLoading] = useState(false);
+    const [subjectGenerationHistoryDeletingId, setSubjectGenerationHistoryDeletingId] = useState('');
     const subjectImageJobsRef = useRef({});
     const subjectImageJobPollingRef = useRef(false);
     const subjectImageJobPollTokenRef = useRef(0);
@@ -16216,6 +16219,95 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         const stableJobKind = payload?.jobKind === 'reconstruct' ? 'reconstruct' : 'generate';
         return `subject-library/project:${stableScopeId}/entity:${stableEntityId}/${stableJobKind}`;
     }, [projectId]);
+
+    const extractSubjectHistoryField = useCallback((item, fieldName) => {
+        if (!item || typeof item !== 'object') return '';
+        const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+        const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+        const context = item?.context && typeof item.context === 'object' ? item.context : {};
+        const directValue = item?.[fieldName];
+        if (directValue !== undefined && directValue !== null && String(directValue).trim() !== '') return directValue;
+        const metaValue = metadata?.[fieldName];
+        if (metaValue !== undefined && metaValue !== null && String(metaValue).trim() !== '') return metaValue;
+        const payloadValue = payload?.[fieldName];
+        if (payloadValue !== undefined && payloadValue !== null && String(payloadValue).trim() !== '') return payloadValue;
+        const contextValue = context?.[fieldName];
+        if (contextValue !== undefined && contextValue !== null && String(contextValue).trim() !== '') return contextValue;
+        return '';
+    }, []);
+
+    const normalizeSubjectGenerationHistory = useCallback((items) => {
+        const list = Array.isArray(items) ? items : [];
+        return list
+            .map((item) => {
+                const result = item?.result;
+                const resultUrl = typeof result === 'string'
+                    ? String(result).trim()
+                    : String(result?.url || result?.result_url || result?.image_url || '').trim();
+                const jobKind = String(extractSubjectHistoryField(item, 'jobKind') || '').trim().toLowerCase();
+                return {
+                    ...item,
+                    entityId: String(extractSubjectHistoryField(item, 'entity_id') || extractSubjectHistoryField(item, 'ownerEntityId') || '').trim(),
+                    projectId: String(extractSubjectHistoryField(item, 'project_id') || extractSubjectHistoryField(item, 'ownerScopeId') || '').trim(),
+                    subjectName: String(extractSubjectHistoryField(item, 'subject_name') || extractSubjectHistoryField(item, 'entity_name') || '').trim(),
+                    resultUrl,
+                    displayLabel: jobKind === 'reconstruct' ? t('主体重构', 'Subject Reconstruction') : t('主体生图', 'Subject Image Generation'),
+                    createdAtMs: Date.parse(String(item?.created_at || item?.started_at || item?.finished_at || '')) || 0,
+                };
+            })
+            .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+    }, [extractSubjectHistoryField, t]);
+
+    const fetchSubjectGenerationHistory = useCallback(async (entity) => {
+        const stableEntityId = String(entity?.id || entity || '').trim();
+        if (!stableEntityId) {
+            setSubjectGenerationHistory([]);
+            return;
+        }
+
+        setSubjectGenerationHistoryLoading(true);
+        try {
+            const imagePool = await getGenerationJobPool({ kind: 'image', running_only: false, limit: 300 });
+            const normalized = normalizeSubjectGenerationHistory(imagePool?.items || []);
+            const filtered = normalized.filter((item) => {
+                if (item.projectId && String(projectId || '').trim() && item.projectId !== String(projectId || '').trim()) {
+                    return false;
+                }
+                return item.entityId === stableEntityId;
+            });
+            setSubjectGenerationHistory(filtered.slice(0, 12));
+        } catch (e) {
+            onLog?.(`Failed to load subject generation history: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+            setSubjectGenerationHistory([]);
+        } finally {
+            setSubjectGenerationHistoryLoading(false);
+        }
+    }, [getGenerationJobPool, normalizeSubjectGenerationHistory, onLog, projectId]);
+
+    useEffect(() => {
+        if (!selectedEntity?.id) {
+            setSubjectGenerationHistory([]);
+            return;
+        }
+        fetchSubjectGenerationHistory(selectedEntity);
+    }, [fetchSubjectGenerationHistory, selectedEntity]);
+
+    const handleDeleteSubjectGenerationHistoryItem = useCallback(async (item) => {
+        const kind = String(item?.kind || '').trim();
+        const jobId = String(item?.job_id || '').trim();
+        if (!kind || !jobId || !selectedEntity?.id) return;
+
+        setSubjectGenerationHistoryDeletingId(jobId);
+        try {
+            await deleteGenerationJob(kind, jobId);
+            await fetchSubjectGenerationHistory(selectedEntity);
+            onLog?.(t('主体历史任务记录已删除。', 'Subject history item deleted.'), 'warning');
+        } catch (e) {
+            onLog?.(t('删除主体历史失败：', 'Failed to delete subject history item: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
+        } finally {
+            setSubjectGenerationHistoryDeletingId('');
+        }
+    }, [deleteGenerationJob, fetchSubjectGenerationHistory, onLog, selectedEntity, t]);
 
     const forceClearSubjectImageJob = useCallback(async (entityId, payload, reason) => {
         const stableEntityId = String(entityId || payload?.ownerEntityId || '').trim();
@@ -20236,6 +20328,98 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                 )}
                                             </div>
                                         </div>
+
+                                        <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div>
+                                                    <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
+                                                    <div className="text-[11px] text-muted-foreground">{t('显示该主体最近的生图与重构结果。', 'Recent subject image and reconstruction results for this subject.')}</div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => fetchSubjectGenerationHistory(selectedEntity)}
+                                                    disabled={subjectGenerationHistoryLoading || !selectedEntity?.id}
+                                                    className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
+                                                >
+                                                    <RefreshCw className={subjectGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
+                                                    {t('刷新', 'Refresh')}
+                                                </button>
+                                            </div>
+                                            {subjectGenerationHistoryLoading ? (
+                                                <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-6 text-xs text-muted-foreground">
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                    {t('正在加载主体生成历史...', 'Loading subject generation history...')}
+                                                </div>
+                                            ) : subjectGenerationHistory.length === 0 ? (
+                                                <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
+                                                    {t('该主体还没有生成历史。', 'No generation history for this subject yet.')}
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-2 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
+                                                    {subjectGenerationHistory.map((item) => {
+                                                        const itemId = String(item?.job_id || item?.id || Math.random()).trim();
+                                                        const status = String(item?.status || '').trim().toLowerCase();
+                                                        const canPreview = Boolean(item?.resultUrl);
+                                                        const createdText = item?.created_at ? new Date(item.created_at).toLocaleString() : '-';
+                                                        const isDeleting = subjectGenerationHistoryDeletingId === itemId;
+                                                        return (
+                                                            <div key={itemId} className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                                                                <div className="flex gap-3">
+                                                                    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-black/40 flex items-center justify-center">
+                                                                        {canPreview ? (
+                                                                            <SafeImage src={item.resultUrl} className="h-full w-full object-cover" fallback={<ImageIcon className="h-5 w-5 opacity-40" />} />
+                                                                        ) : (
+                                                                            <ImageIcon className="h-5 w-5 opacity-40" />
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="min-w-0 flex-1 space-y-1">
+                                                                        <div className="flex items-start justify-between gap-2">
+                                                                            <div className="min-w-0">
+                                                                                <div className="truncate text-sm font-semibold text-white">{item.displayLabel}</div>
+                                                                                <div className="text-[11px] text-muted-foreground truncate">{item.subjectName || selectedEntity?.name || '-'}</div>
+                                                                            </div>
+                                                                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : status === 'failed' ? 'bg-red-500/15 text-red-200' : status === 'canceled' ? 'bg-slate-500/20 text-slate-200' : 'bg-amber-500/15 text-amber-100'}`}>
+                                                                                {status || 'unknown'}
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="text-[11px] text-muted-foreground">{createdText}</div>
+                                                                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => canPreview && updateEntityImage(item.resultUrl)}
+                                                                                disabled={!canPreview}
+                                                                                className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
+                                                                            >
+                                                                                <ImageIcon size={12} />
+                                                                                {t('设为当前', 'Use Result')}
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => canPreview && window.open(getFullUrl(item.resultUrl), '_blank', 'noopener,noreferrer')}
+                                                                                disabled={!canPreview}
+                                                                                className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
+                                                                            >
+                                                                                <ExternalLink size={12} />
+                                                                                {t('查看', 'Open')}
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleDeleteSubjectGenerationHistoryItem(item)}
+                                                                                disabled={isDeleting}
+                                                                                className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                                                                            >
+                                                                                {isDeleting ? <Loader2 className="animate-spin" size={12} /> : <Trash2 size={12} />}
+                                                                                {isDeleting ? t('删除中', 'Deleting') : t('删除记录', 'Delete Record')}
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
                                         
                                     </div>
                                 )}
@@ -20474,6 +20658,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const mediaRebindAttemptedRef = useRef('');
     const generationMediaBaselineRef = useRef({});
     const startFrameAutoInheritRef = useRef('');
+    const [shotGenerationHistory, setShotGenerationHistory] = useState([]);
+    const [shotGenerationHistoryLoading, setShotGenerationHistoryLoading] = useState(false);
+    const [shotGenerationHistoryDeletingId, setShotGenerationHistoryDeletingId] = useState('');
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
     const SHOT_MEDIA_STARTUP_GRACE_MS = 15000;
     const IMAGE_JOB_STATE_TTL_MS = 1000 * 60 * 60;
@@ -20509,6 +20696,132 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             : (payload?.ownerMediaKind === 'end' ? 'end' : (mediaKind === 'video' ? 'video' : (mediaKind === 'end' ? 'end' : 'start')));
         return `shot-editor/episode:${stableEpisodeId}${stableSceneId ? `/scene:${stableSceneId}` : ''}/shot:${stableShotId}/${stableMediaKind}`;
     }, [activeEpisode?.id, resolveShotSceneId]);
+
+    const extractGenerationHistoryField = useCallback((item, fieldName) => {
+        if (!item || typeof item !== 'object') return '';
+        const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+        const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+        const context = item?.context && typeof item.context === 'object' ? item.context : {};
+        const directValue = item?.[fieldName];
+        if (directValue !== undefined && directValue !== null && String(directValue).trim() !== '') return directValue;
+        const metaValue = metadata?.[fieldName];
+        if (metaValue !== undefined && metaValue !== null && String(metaValue).trim() !== '') return metaValue;
+        const payloadValue = payload?.[fieldName];
+        if (payloadValue !== undefined && payloadValue !== null && String(payloadValue).trim() !== '') return payloadValue;
+        const contextValue = context?.[fieldName];
+        if (contextValue !== undefined && contextValue !== null && String(contextValue).trim() !== '') return contextValue;
+        return '';
+    }, []);
+
+    const resolveGenerationHistoryResultUrl = useCallback((item) => {
+        const result = item?.result;
+        if (typeof result === 'string') return String(result).trim();
+        if (result && typeof result === 'object') {
+            return String(result.url || result.result_url || result.image_url || result.video_url || '').trim();
+        }
+        return '';
+    }, []);
+
+    const resolveGenerationHistoryMediaKind = useCallback((item) => {
+        const explicitMediaKind = String(extractGenerationHistoryField(item, 'ownerMediaKind') || '').trim().toLowerCase();
+        if (explicitMediaKind) return explicitMediaKind;
+        const assetType = String(extractGenerationHistoryField(item, 'asset_type') || '').trim().toLowerCase();
+        if (assetType.includes('end')) return 'end';
+        if (assetType.includes('start')) return 'start';
+        if (assetType.includes('subject')) return 'subject';
+        if (assetType.includes('video')) return 'video';
+        return String(item?.kind || '').trim().toLowerCase() || 'image';
+    }, [extractGenerationHistoryField]);
+
+    const buildGenerationHistoryLabel = useCallback((item) => {
+        const mediaKind = resolveGenerationHistoryMediaKind(item);
+        if (mediaKind === 'video') return t('视频生成', 'Video Generation');
+        if (mediaKind === 'end') return t('结束帧生成', 'End Frame Generation');
+        if (mediaKind === 'start') return t('起始帧生成', 'Start Frame Generation');
+        if (mediaKind === 'subject') {
+            const jobKind = String(extractGenerationHistoryField(item, 'jobKind') || '').trim().toLowerCase();
+            return jobKind === 'reconstruct' ? t('主体重构', 'Subject Reconstruction') : t('主体生图', 'Subject Image Generation');
+        }
+        return t('图片生成', 'Image Generation');
+    }, [extractGenerationHistoryField, resolveGenerationHistoryMediaKind, t]);
+
+    const normalizeScopedGenerationHistory = useCallback((items) => {
+        const list = Array.isArray(items) ? items : [];
+        return list
+            .map((item) => {
+                const resultUrl = resolveGenerationHistoryResultUrl(item);
+                return {
+                    ...item,
+                    entityId: String(extractGenerationHistoryField(item, 'entity_id') || extractGenerationHistoryField(item, 'ownerEntityId') || '').trim(),
+                    shotId: String(extractGenerationHistoryField(item, 'shot_id') || extractGenerationHistoryField(item, 'ownerShotId') || '').trim(),
+                    projectId: String(extractGenerationHistoryField(item, 'project_id') || extractGenerationHistoryField(item, 'ownerScopeId') || '').trim(),
+                    shotName: String(extractGenerationHistoryField(item, 'shot_name') || '').trim(),
+                    subjectName: String(extractGenerationHistoryField(item, 'subject_name') || extractGenerationHistoryField(item, 'entity_name') || '').trim(),
+                    mediaKind: resolveGenerationHistoryMediaKind(item),
+                    resultUrl,
+                    displayLabel: buildGenerationHistoryLabel(item),
+                    createdAtMs: Date.parse(String(item?.created_at || item?.started_at || item?.finished_at || '')) || 0,
+                };
+            })
+            .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+    }, [buildGenerationHistoryLabel, extractGenerationHistoryField, resolveGenerationHistoryMediaKind, resolveGenerationHistoryResultUrl]);
+
+    const fetchShotGenerationHistory = useCallback(async (shot) => {
+        const stableShotId = String(shot?.id || shot || '').trim();
+        if (!stableShotId) {
+            setShotGenerationHistory([]);
+            return;
+        }
+
+        setShotGenerationHistoryLoading(true);
+        try {
+            const [imagePool, videoPool] = await Promise.all([
+                getGenerationJobPool({ kind: 'image', running_only: false, limit: 300 }),
+                getGenerationJobPool({ kind: 'video', running_only: false, limit: 300 }),
+            ]);
+            const normalized = normalizeScopedGenerationHistory([
+                ...(Array.isArray(imagePool?.items) ? imagePool.items : []),
+                ...(Array.isArray(videoPool?.items) ? videoPool.items : []),
+            ]);
+            const filtered = normalized.filter((item) => {
+                if (item.projectId && String(projectId || '').trim() && item.projectId !== String(projectId || '').trim()) {
+                    return false;
+                }
+                return item.shotId === stableShotId;
+            });
+            setShotGenerationHistory(filtered.slice(0, 16));
+        } catch (e) {
+            onLog?.(`Failed to load shot generation history: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+            setShotGenerationHistory([]);
+        } finally {
+            setShotGenerationHistoryLoading(false);
+        }
+    }, [getGenerationJobPool, normalizeScopedGenerationHistory, onLog, projectId]);
+
+    useEffect(() => {
+        if (!editingShot?.id) {
+            setShotGenerationHistory([]);
+            return;
+        }
+        fetchShotGenerationHistory(editingShot);
+    }, [editingShot, fetchShotGenerationHistory]);
+
+    const handleDeleteShotGenerationHistoryItem = useCallback(async (item) => {
+        const kind = String(item?.kind || '').trim();
+        const jobId = String(item?.job_id || '').trim();
+        if (!kind || !jobId || !editingShot?.id) return;
+
+        setShotGenerationHistoryDeletingId(jobId);
+        try {
+            await deleteGenerationJob(kind, jobId);
+            await fetchShotGenerationHistory(editingShot);
+            onLog?.(t('镜头历史任务记录已删除。', 'Shot history item deleted.'), 'warning');
+        } catch (e) {
+            onLog?.(t('删除镜头历史失败：', 'Failed to delete shot history item: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
+        } finally {
+            setShotGenerationHistoryDeletingId('');
+        }
+    }, [deleteGenerationJob, editingShot, fetchShotGenerationHistory, onLog, t]);
 
     const createShotBatchProgressState = useCallback(() => ({
         current: 0,
@@ -28727,6 +29040,95 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                     setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(v) });
                                                                 }} type="video" />
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
+                                                                <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                                    <div className="flex items-center justify-between gap-2">
+                                                                        <div>
+                                                                            <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
+                                                                            <div className="text-[11px] text-muted-foreground">{t('显示该分镜最近的首帧、尾帧与视频生成记录。', 'Recent start frame, end frame, and video generation records for this shot.')}</div>
+                                                                        </div>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => fetchShotGenerationHistory(editingShot)}
+                                                                            disabled={shotGenerationHistoryLoading || !editingShot?.id}
+                                                                            className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
+                                                                        >
+                                                                            <RefreshCw className={shotGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
+                                                                            {t('刷新', 'Refresh')}
+                                                                        </button>
+                                                                    </div>
+                                                                    {shotGenerationHistoryLoading ? (
+                                                                        <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-6 text-xs text-muted-foreground">
+                                                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                                                            {t('正在加载镜头生成历史...', 'Loading shot generation history...')}
+                                                                        </div>
+                                                                    ) : shotGenerationHistory.length === 0 ? (
+                                                                        <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
+                                                                            {t('该分镜还没有生成历史。', 'No generation history for this shot yet.')}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                                                                            {shotGenerationHistory.map((item) => {
+                                                                                const itemId = String(item?.job_id || item?.id || Math.random()).trim();
+                                                                                const status = String(item?.status || '').trim().toLowerCase();
+                                                                                const canPreview = Boolean(item?.resultUrl);
+                                                                                const isVideoItem = item?.mediaKind === 'video' || String(item?.kind || '').trim().toLowerCase() === 'video';
+                                                                                const createdText = item?.created_at ? new Date(item.created_at).toLocaleString() : '-';
+                                                                                const isDeleting = shotGenerationHistoryDeletingId === itemId;
+                                                                                return (
+                                                                                    <div key={itemId} className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                                                                                        <div className="flex gap-3">
+                                                                                            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-black/40 flex items-center justify-center">
+                                                                                                {canPreview ? (
+                                                                                                    isVideoItem ? (
+                                                                                                        <video src={getFullUrl(item.resultUrl)} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                                                                                                    ) : (
+                                                                                                        <SafeImage src={item.resultUrl} className="h-full w-full object-cover" fallback={<ImageIcon className="h-5 w-5 opacity-40" />} />
+                                                                                                    )
+                                                                                                ) : isVideoItem ? (
+                                                                                                    <Video className="h-5 w-5 opacity-40" />
+                                                                                                ) : (
+                                                                                                    <ImageIcon className="h-5 w-5 opacity-40" />
+                                                                                                )}
+                                                                                            </div>
+                                                                                            <div className="min-w-0 flex-1 space-y-1">
+                                                                                                <div className="flex items-start justify-between gap-2">
+                                                                                                    <div className="min-w-0">
+                                                                                                        <div className="truncate text-sm font-semibold text-white">{item.displayLabel}</div>
+                                                                                                        <div className="text-[11px] text-muted-foreground truncate">{item.shotName || editingShot?.shot_name || editingShot?.shot_number || '-'}</div>
+                                                                                                    </div>
+                                                                                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : status === 'failed' ? 'bg-red-500/15 text-red-200' : status === 'canceled' ? 'bg-slate-500/20 text-slate-200' : 'bg-amber-500/15 text-amber-100'}`}>
+                                                                                                        {status || 'unknown'}
+                                                                                                    </span>
+                                                                                                </div>
+                                                                                                <div className="text-[11px] text-muted-foreground">{createdText}</div>
+                                                                                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                                                                                    <button
+                                                                                                        type="button"
+                                                                                                        onClick={() => canPreview && window.open(getFullUrl(item.resultUrl), '_blank', 'noopener,noreferrer')}
+                                                                                                        disabled={!canPreview}
+                                                                                                        className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
+                                                                                                    >
+                                                                                                        <ExternalLink size={12} />
+                                                                                                        {t('查看', 'Open')}
+                                                                                                    </button>
+                                                                                                    <button
+                                                                                                        type="button"
+                                                                                                        onClick={() => handleDeleteShotGenerationHistoryItem(item)}
+                                                                                                        disabled={isDeleting}
+                                                                                                        className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                                                                                                    >
+                                                                                                        {isDeleting ? <Loader2 className="animate-spin" size={12} /> : <Trash2 size={12} />}
+                                                                                                        {isDeleting ? t('删除中', 'Deleting') : t('删除记录', 'Delete Record')}
+                                                                                                    </button>
+                                                                                                </div>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     );

@@ -202,6 +202,7 @@ def _bootstrap_db_post_init() -> None:
 
 
 _RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
+_RUN_GENERATION_QUEUE_WORKER_ON_START = os.getenv("RUN_GENERATION_QUEUE_WORKER_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _warm_runtime_caches() -> None:
@@ -260,6 +261,11 @@ async def lifespan(app: FastAPI):
         logger.info("Application startup: critical DB bootstrap complete")
     else:
         logger.warning("RUN_DB_BOOTSTRAP_ON_START is disabled; skipping startup DB bootstrap")
+    if _RUN_GENERATION_QUEUE_WORKER_ON_START:
+        logger.info("Application startup: generation queue worker enabled in web process")
+        await asyncio.to_thread(endpoints.start_generation_queue_worker)
+    else:
+        logger.info("Application startup: generation queue worker disabled in web process")
     yield
 
 

@@ -7,7 +7,9 @@ from app.core.mp4_faststart import optimize_mp4_faststart
 
 logger = logging.getLogger(__name__)
 
-async def create_montage(project_id: int, items: list) -> str:
+_MONTAGE_FFMPEG_THREADS = max(1, min(2, int(os.getenv("MONTAGE_FFMPEG_THREADS", "1") or 1)))
+
+def create_montage(project_id: int, items: list) -> str:
     """
     Stitches clips together.
     items: List of dicts with keys: url, speed, trim_start, trim_end
@@ -94,7 +96,7 @@ async def create_montage(project_id: int, items: list) -> str:
             codec="libx264", 
             audio_codec="aac",
             fps=24, 
-            threads=4,
+            threads=_MONTAGE_FFMPEG_THREADS,
             logger=None # Suppress TQDM output to stdout
         )
 

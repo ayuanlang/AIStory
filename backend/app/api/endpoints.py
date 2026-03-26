@@ -390,7 +390,7 @@ IMAGE_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_ACTIVE_SCOPE_STORE: Dict[str, str] = {}
 IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
 IMAGE_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_image_jobs")
-IMAGE_JOB_TASKS: Dict[str, asyncio.Task] = {}
+IMAGE_JOB_TASKS: Dict[str, Any] = {}
 
 VIDEO_JOB_STORE: Dict[str, Dict[str, Any]] = {}
 VIDEO_JOB_LOCK = threading.Lock()
@@ -400,7 +400,7 @@ VIDEO_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 VIDEO_ACTIVE_SCOPE_STORE: Dict[str, str] = {}
 VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
 VIDEO_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_video_jobs")
-VIDEO_JOB_TASKS: Dict[str, asyncio.Task] = {}
+VIDEO_JOB_TASKS: Dict[str, Any] = {}
 
 IMAGE_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("IMAGE_JOB_MAX_RUNNING_SECONDS", "900")))
 VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SECONDS", "1200")))
@@ -427,6 +427,105 @@ _GENERATION_JOB_POOL_CACHE_MAX_ITEMS = max(32, int(os.getenv("GENERATION_JOB_POO
 _GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_STALE_DELETE_SECONDS", "3600") or 3600))
 _GENERATION_JOB_POOL_CACHE_LOCK = threading.Lock()
 _GENERATION_JOB_POOL_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _generation_task_status(task_ref: Any, *, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    if isinstance(task_ref, str):
+        try:
+            from app.services.generation_task_queue import get_generation_task_status
+
+            queue_info = get_generation_task_status(task_ref)
+            if queue_info is not None:
+                return queue_info
+        except Exception:
+            pass
+        return _get_task_status(task_ref, user_id=user_id)
+    if isinstance(task_ref, asyncio.Task):
+        return {"status": "running" if not task_ref.done() else "completed"}
+    return None
+
+
+def _generation_task_is_active(task_ref: Any, *, user_id: Optional[int] = None) -> bool:
+    info = _generation_task_status(task_ref, user_id=user_id)
+    return str((info or {}).get("status") or "").strip().lower() in {"queued", "pending", "running"}
+
+
+def _cancel_generation_task_ref(task_ref: Any, *, user_id: Optional[int] = None, reason: str = "Task canceled by user") -> None:
+    if isinstance(task_ref, str):
+        try:
+            from app.services.generation_task_queue import cancel_generation_task
+
+            cancel_generation_task(task_ref, reason=reason)
+        except Exception:
+            pass
+        try:
+            _cancel_task(task_ref, user_id=user_id, reason=reason)
+        except Exception:
+            pass
+        return
+    if isinstance(task_ref, asyncio.Task):
+        try:
+            task_ref.cancel()
+        except Exception:
+            pass
+
+
+def _submit_generation_background_task(
+    *,
+    job_id: str,
+    kind: str,
+    user_id: int,
+    payload: Dict[str, Any],
+) -> str:
+    from app.services.generation_task_queue import enqueue_generation_task
+
+    return enqueue_generation_task(job_id=job_id, kind=kind, user_id=user_id, payload=payload)
+
+
+def _process_generation_queue_task(kind: str, job_id: str, user_id: int, payload: Dict[str, Any]) -> None:
+    safe_kind = str(kind or "").strip().lower()
+    req_payload = dict(payload or {})
+    if safe_kind == "image":
+        provider_callback_ticket = f"image-job-{job_id}"
+        provider_callback_url = ""
+        try:
+            provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
+        except Exception:
+            provider_callback_url = ""
+        asyncio.run(
+            _run_generate_image_job(
+                job_id,
+                int(user_id),
+                req_payload,
+                provider_callback_ticket=provider_callback_ticket,
+                provider_callback_url=provider_callback_url,
+            )
+        )
+        return
+    if safe_kind == "video":
+        provider_callback_ticket = f"video-job-{job_id}"
+        provider_callback_url = ""
+        try:
+            provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
+        except Exception:
+            provider_callback_url = ""
+        asyncio.run(
+            _run_generate_video_job(
+                job_id,
+                int(user_id),
+                req_payload,
+                provider_callback_ticket=provider_callback_ticket,
+                provider_callback_url=provider_callback_url,
+            )
+        )
+        return
+    raise ValueError(f"Unsupported generation queue task kind: {kind}")
+
+
+def start_generation_queue_worker() -> None:
+    from app.services.generation_task_queue import start_generation_task_worker
+
+    start_generation_task_worker(_process_generation_queue_task)
 
 
 def _prune_generation_job_pool_cache_locked(now_ts: float) -> None:
@@ -732,6 +831,12 @@ def _image_job_file_path(job_id: str) -> str:
 
 def _write_image_job_file(job_id: str, payload: Dict[str, Any]) -> None:
     try:
+        from app.services.generation_task_queue import upsert_generation_job_state
+
+        upsert_generation_job_state(kind="image", job_id=job_id, payload=payload)
+    except Exception as e:
+        logger.warning("failed to persist image job state in db job_id=%s err=%s", job_id, e)
+    try:
         os.makedirs(IMAGE_JOB_FILE_DIR, exist_ok=True)
         path = _image_job_file_path(job_id)
         with open(path, "w", encoding="utf-8") as f:
@@ -741,6 +846,15 @@ def _write_image_job_file(job_id: str, payload: Dict[str, Any]) -> None:
 
 
 def _read_image_job_file(job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        from app.services.generation_task_queue import get_generation_job_state
+
+        db_state = get_generation_job_state(kind="image", job_id=job_id)
+        if isinstance(db_state, dict):
+            db_state["job_id"] = db_state.get("job_id") or str(job_id)
+            return db_state
+    except Exception as e:
+        logger.warning("failed to read image job state from db job_id=%s err=%s", job_id, e)
     try:
         path = _image_job_file_path(job_id)
         if not os.path.exists(path):
@@ -1267,6 +1381,12 @@ def _video_job_file_path(job_id: str) -> str:
 
 def _write_video_job_file(job_id: str, payload: Dict[str, Any]) -> None:
     try:
+        from app.services.generation_task_queue import upsert_generation_job_state
+
+        upsert_generation_job_state(kind="video", job_id=job_id, payload=payload)
+    except Exception as e:
+        logger.warning("failed to persist video job state in db job_id=%s err=%s", job_id, e)
+    try:
         os.makedirs(VIDEO_JOB_FILE_DIR, exist_ok=True)
         path = _video_job_file_path(job_id)
         with open(path, "w", encoding="utf-8") as f:
@@ -1276,6 +1396,15 @@ def _write_video_job_file(job_id: str, payload: Dict[str, Any]) -> None:
 
 
 def _read_video_job_file(job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        from app.services.generation_task_queue import get_generation_job_state
+
+        db_state = get_generation_job_state(kind="video", job_id=job_id)
+        if isinstance(db_state, dict):
+            db_state["job_id"] = db_state.get("job_id") or str(job_id)
+            return db_state
+    except Exception as e:
+        logger.warning("failed to read video job state from db job_id=%s err=%s", job_id, e)
     try:
         path = _video_job_file_path(job_id)
         if not os.path.exists(path):
@@ -1793,6 +1922,23 @@ def _find_image_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
         seen_job_ids.add(job_id)
 
     try:
+        from app.services.generation_task_queue import find_generation_job_states_by_callback_ticket
+
+        db_jobs = find_generation_job_states_by_callback_ticket(kind="image", callback_ticket=stable_ticket, limit=50)
+        for db_job in db_jobs:
+            if not isinstance(db_job, dict):
+                continue
+            job_id = str(db_job.get("job_id") or "").strip()
+            if not job_id or job_id in seen_job_ids:
+                continue
+            with IMAGE_JOB_LOCK:
+                IMAGE_JOB_STORE[job_id] = dict(db_job)
+            matches.append((job_id, dict(db_job)))
+            seen_job_ids.add(job_id)
+    except Exception as exc:
+        logger.warning("[ImageJob] failed to scan db callback ticket matches | callback_ticket=%s error=%s", stable_ticket, exc)
+
+    try:
         if os.path.isdir(IMAGE_JOB_FILE_DIR):
             for entry in os.listdir(IMAGE_JOB_FILE_DIR):
                 if not entry.endswith(".json"):
@@ -1839,6 +1985,155 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
         if not callback_url:
             continue
         await _dispatch_generation_callback("image", callback_url, updated_job)
+
+
+def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    provider_task_id = _extract_job_provider_task_id(job)
+    callback_ticket = _extract_job_provider_callback_ticket(job) or "video-job"
+    callback_payload = _get_generation_callback_payload(callback_ticket)
+    if not callback_payload:
+        return job
+
+    callback_task_id = _extract_callback_task_id(callback_payload)
+    if provider_task_id and callback_task_id and callback_task_id != provider_task_id:
+        return job
+
+    normalized_status = _normalize_generation_status(callback_payload.get("status"))
+    current_status = _normalize_generation_status(job.get("status"))
+    result = _build_result_from_provider_callback(callback_payload)
+    current_result_url = _extract_job_result_url(job.get("result"))
+    callback_result_url = _extract_job_result_url(result or {})
+    current_error = str(job.get("error") or "").strip()
+    current_has_stable_result = bool(current_result_url) and not _is_ephemeral_provider_media_url(current_result_url)
+    callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
+
+    updates: Dict[str, Any] = {}
+    if callback_result_url and callback_result_url != current_result_url and not (current_has_stable_result and callback_has_ephemeral_result):
+        updates["result"] = result
+    elif callback_result_url and current_has_stable_result and callback_has_ephemeral_result:
+        logger.info(
+            "[VideoJob] ignored callback temporary result url because stable result already exists | job_id=%s callback_ticket=%s current_result_url=%s callback_result_url=%s",
+            job_id,
+            callback_ticket,
+            current_result_url,
+            callback_result_url,
+        )
+
+    if normalized_status in {"succeeded", "failed", "canceled"} and normalized_status != current_status:
+        updates["status"] = normalized_status
+        if not job.get("finished_at"):
+            updates["finished_at"] = now_bj_iso()
+
+    if normalized_status == "succeeded":
+        if current_error:
+            updates["error"] = None
+    elif normalized_status in {"failed", "canceled"}:
+        failure_parts = [str(callback_payload.get("failure_reason") or "").strip(), str(callback_payload.get("error") or "").strip()]
+        failure_text = " | ".join([part for part in failure_parts if part])
+        if failure_text and failure_text != current_error:
+            updates["error"] = failure_text
+
+    if not updates:
+        return job
+
+    if provider_task_id:
+        updates.setdefault("provider_task_id", provider_task_id)
+    _set_video_job(job_id, **updates)
+    with VIDEO_JOB_LOCK:
+        updated = dict(VIDEO_JOB_STORE.get(job_id) or {})
+    logger.info(
+        "[VideoJob] finalized from provider callback | job_id=%s callback_ticket=%s provider_task_id=%s status=%s has_result_url=%s result_url=%s",
+        job_id,
+        callback_ticket,
+        provider_task_id,
+        updates.get("status") or current_status or None,
+        bool(callback_result_url),
+        callback_result_url or None,
+    )
+    return updated or job
+
+
+def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[Tuple[str, Dict[str, Any]]]:
+    stable_ticket = str(callback_ticket or "").strip()
+    if not stable_ticket:
+        return []
+
+    matches: List[Tuple[str, Dict[str, Any]]] = []
+    seen_job_ids: Set[str] = set()
+
+    with VIDEO_JOB_LOCK:
+        live_jobs = [(job_id, dict(job or {})) for job_id, job in VIDEO_JOB_STORE.items()]
+
+    for job_id, job in live_jobs:
+        if _extract_job_provider_callback_ticket(job) != stable_ticket:
+            continue
+        matches.append((job_id, job))
+        seen_job_ids.add(job_id)
+
+    try:
+        from app.services.generation_task_queue import find_generation_job_states_by_callback_ticket
+
+        db_jobs = find_generation_job_states_by_callback_ticket(kind="video", callback_ticket=stable_ticket, limit=50)
+        for db_job in db_jobs:
+            if not isinstance(db_job, dict):
+                continue
+            job_id = str(db_job.get("job_id") or "").strip()
+            if not job_id or job_id in seen_job_ids:
+                continue
+            with VIDEO_JOB_LOCK:
+                VIDEO_JOB_STORE[job_id] = dict(db_job)
+            matches.append((job_id, dict(db_job)))
+            seen_job_ids.add(job_id)
+    except Exception as exc:
+        logger.warning("[VideoJob] failed to scan db callback ticket matches | callback_ticket=%s error=%s", stable_ticket, exc)
+
+    try:
+        if os.path.isdir(VIDEO_JOB_FILE_DIR):
+            for entry in os.listdir(VIDEO_JOB_FILE_DIR):
+                if not entry.endswith(".json"):
+                    continue
+                job_id = entry[:-5].strip()
+                if not job_id or job_id in seen_job_ids:
+                    continue
+                file_job = _read_video_job_file(job_id)
+                if not isinstance(file_job, dict):
+                    continue
+                if _extract_job_provider_callback_ticket(file_job) != stable_ticket:
+                    continue
+                with VIDEO_JOB_LOCK:
+                    VIDEO_JOB_STORE[job_id] = dict(file_job)
+                matches.append((job_id, dict(file_job)))
+                seen_job_ids.add(job_id)
+    except Exception as exc:
+        logger.warning("[VideoJob] failed to scan callback ticket matches | callback_ticket=%s error=%s", stable_ticket, exc)
+
+    return matches
+
+
+async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> None:
+    stable_ticket = str(callback_ticket or "").strip()
+    if not stable_ticket:
+        return
+
+    matched_jobs = _find_video_jobs_by_provider_callback_ticket(stable_ticket)
+    if not matched_jobs:
+        logger.info("[VideoJob] provider callback received with no matching video job | callback_ticket=%s", stable_ticket)
+        return
+
+    for job_id, job in matched_jobs:
+        previous_status = _normalize_generation_status(job.get("status"))
+        previous_result_url = _extract_job_result_url(job.get("result"))
+        updated_job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
+        updated_status = _normalize_generation_status(updated_job.get("status"))
+        updated_result_url = _extract_job_result_url(updated_job.get("result"))
+
+        if updated_status == previous_status and updated_result_url == previous_result_url:
+            continue
+
+        callback_url = _resolve_callback_url_from_payload(updated_job)
+        if not callback_url:
+            continue
+        await _dispatch_generation_callback("video", callback_url, updated_job)
 
 
 def _apply_no_store_headers(response: Response) -> None:
@@ -20732,7 +21027,7 @@ def _maybe_finalize_stuck_job(
     job_id: str,
     job: Dict[str, Any],
     set_job_func: Any,
-    task_store: Dict[str, asyncio.Task],
+    task_store: Dict[str, Any],
     lock: threading.Lock,
     timeout_seconds: int,
 ) -> Dict[str, Any]:
@@ -20754,11 +21049,7 @@ def _maybe_finalize_stuck_job(
 
     with lock:
         task_ref = task_store.get(job_id)
-    if task_ref:
-        try:
-            task_ref.cancel()
-        except Exception:
-            pass
+    _cancel_generation_task_ref(task_ref or job_id, user_id=job.get("user_id"), reason=f"{kind} job timed out")
 
     with lock:
         updated = dict((IMAGE_JOB_STORE if kind == "image" else VIDEO_JOB_STORE).get(job_id) or {})
@@ -20887,18 +21178,12 @@ async def submit_generate_image_endpoint(
         str(req_payload.get("prompt") or "").strip().replace("\n", " ")[:160] or None,
     )
 
-    async def _deferred_image_job_start() -> None:
-        # Let FastAPI flush submit response first, then start heavy background work.
-        await asyncio.sleep(0)
-        await _run_generate_image_job(
-            job_id,
-            current_user.id,
-            req_payload,
-            provider_callback_ticket=provider_callback_ticket,
-            provider_callback_url=provider_callback_url,
-        )
-
-    image_task = asyncio.create_task(_deferred_image_job_start())
+    image_task = _submit_generation_background_task(
+        job_id=job_id,
+        kind="image",
+        user_id=int(current_user.id),
+        payload=req_payload,
+    )
     with IMAGE_JOB_LOCK:
         IMAGE_JOB_TASKS[job_id] = image_task
     return {"job_id": job_id, "status": "queued", "created_at": now}
@@ -20931,6 +21216,8 @@ def get_generate_image_job_status(
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = _maybe_finalize_image_job_from_grsai_callback(job_id, job)
+    owner_id = job.get("user_id")
+    owner_username = str(job.get("username") or "").strip()
 
     image_status = str(job.get("status") or "").strip().lower()
     if image_status in {"queued", "running"}:
@@ -20945,16 +21232,10 @@ def get_generate_image_job_status(
             )
             with IMAGE_JOB_LOCK:
                 task_ref = IMAGE_JOB_TASKS.get(job_id)
-            if task_ref:
-                try:
-                    task_ref.cancel()
-                except Exception:
-                    pass
+            _cancel_generation_task_ref(task_ref or job_id, user_id=owner_id, reason=timeout_message)
             with IMAGE_JOB_LOCK:
                 job = dict(IMAGE_JOB_STORE.get(job_id) or job)
 
-    owner_id = job.get("user_id")
-    owner_username = str(job.get("username") or "").strip()
     current_user_id = current_claims.get("user_id")
     current_username = str(current_claims.get("username") or "").strip()
     is_superuser = bool(current_claims.get("is_superuser"))
@@ -21801,7 +22082,13 @@ async def generate_voice_endpoint(
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
-async def _run_generate_video(req: VideoGenerationRequest, current_user: User, db: Session):
+async def _run_generate_video(
+    req: VideoGenerationRequest,
+    current_user: User,
+    db: Session,
+    provider_callback_ticket: Optional[str] = None,
+    provider_callback_url: Optional[str] = None,
+):
     reservation_tx = None
     runtime_target = _resolve_media_runtime_target(
         provider=req.provider,
@@ -22493,6 +22780,10 @@ async def _run_generate_video(req: VideoGenerationRequest, current_user: User, d
             output_format=video_output_format,
             mode=normalized_mode,
         )
+        if provider_callback_ticket:
+            video_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
+        if provider_callback_url:
+            video_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
         is_kie_kling3_video = bool(
             resolved_video_provider == "kie"
             and resolved_video_model in {"kling-3.0/video", "kling3", "kling-3.0", "kling-3-0"}
@@ -22863,9 +23154,17 @@ def _set_video_job(job_id: str, **fields) -> None:
     _clear_generation_job_pool_cache()
 
 
-async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[str, Any]) -> None:
+async def _run_generate_video_job(
+    job_id: str,
+    user_id: int,
+    req_payload: Dict[str, Any],
+    provider_callback_ticket: Optional[str] = None,
+    provider_callback_url: Optional[str] = None,
+) -> None:
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
+    req_provider = str(req_payload.get("provider") or "").strip() or None
+    req_model = str(req_payload.get("model") or "").strip() or None
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -22879,8 +23178,22 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
 
         req_obj = VideoGenerationRequest(**req_payload)
         _set_video_job(job_id, status="running", started_at=now_bj_iso())
+        logger.info(
+            "[VideoJob] started | job_id=%s user_id=%s provider=%s model=%s callback_ticket=%s",
+            job_id,
+            user_id,
+            req_provider,
+            req_model,
+            provider_callback_ticket or None,
+        )
         result = await asyncio.wait_for(
-            _run_generate_video(req_obj, user, db),
+            _run_generate_video(
+                req_obj,
+                user,
+                db,
+                provider_callback_ticket=provider_callback_ticket,
+                provider_callback_url=provider_callback_url,
+            ),
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
         )
         _set_video_job(
@@ -22891,6 +23204,18 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
             error=None,
         )
     except asyncio.TimeoutError:
+        with VIDEO_JOB_LOCK:
+            current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        current_status = _normalize_generation_status(current_job.get("status"))
+        current_result_url = _extract_job_result_url(current_job.get("result"))
+        if current_status == "succeeded" and current_result_url:
+            logger.info(
+                "[VideoJob] timeout ignored after callback finalization | job_id=%s provider_task_id=%s result_url=%s",
+                job_id,
+                _extract_job_provider_task_id(current_job) or None,
+                current_result_url,
+            )
+            return
         _set_video_job(
             job_id,
             status="failed",
@@ -22898,6 +23223,18 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
             error=f"video job timed out after {VIDEO_JOB_MAX_RUNNING_SECONDS}s",
         )
     except asyncio.CancelledError:
+        with VIDEO_JOB_LOCK:
+            current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        current_status = _normalize_generation_status(current_job.get("status"))
+        current_result_url = _extract_job_result_url(current_job.get("result"))
+        if current_status == "succeeded" and current_result_url:
+            logger.info(
+                "[VideoJob] cancellation ignored after callback finalization | job_id=%s provider_task_id=%s result_url=%s",
+                job_id,
+                _extract_job_provider_task_id(current_job) or None,
+                current_result_url,
+            )
+            return
         _set_video_job(
             job_id,
             status="canceled",
@@ -22906,6 +23243,34 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
         )
         raise
     except HTTPException as e:
+        with VIDEO_JOB_LOCK:
+            current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        current_status = _normalize_generation_status(current_job.get("status"))
+        current_result_url = _extract_job_result_url(current_job.get("result"))
+        if current_status == "succeeded" and current_result_url:
+            logger.info(
+                "[VideoJob] http error ignored after callback finalization | job_id=%s detail=%s provider_task_id=%s",
+                job_id,
+                str(e.detail),
+                _extract_job_provider_task_id(current_job) or None,
+            )
+            return
+        if _is_ambiguous_image_submit_detail(e.detail):
+            _set_video_job(
+                job_id,
+                status="running",
+                error=None,
+                ambiguous_submit=True,
+                ambiguous_submit_at=now_bj_iso(),
+                upstream_submit_state="unknown",
+            )
+            logger.warning(
+                "[VideoJob] ambiguous submit retained as running | job_id=%s callback_ticket=%s detail=%s",
+                job_id,
+                provider_callback_ticket or None,
+                str(e.detail),
+            )
+            return
         logger.warning(
             "[VideoJob] failed | job_id=%s user_id=%s detail=%s",
             job_id,
@@ -22919,6 +23284,18 @@ async def _run_generate_video_job(job_id: str, user_id: int, req_payload: Dict[s
             error=str(e.detail),
         )
     except Exception as e:
+        with VIDEO_JOB_LOCK:
+            current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        current_status = _normalize_generation_status(current_job.get("status"))
+        current_result_url = _extract_job_result_url(current_job.get("result"))
+        if current_status == "succeeded" and current_result_url:
+            logger.info(
+                "[VideoJob] exception ignored after callback finalization | job_id=%s error=%s provider_task_id=%s",
+                job_id,
+                str(e),
+                _extract_job_provider_task_id(current_job) or None,
+            )
+            return
         logger.exception(
             "[VideoJob] unexpected failure | job_id=%s user_id=%s",
             job_id,
@@ -22976,6 +23353,7 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
         getattr(getattr(request, "client", None), "host", None),
     )
     await _finalize_image_jobs_from_provider_callback(stable_ticket)
+    await _finalize_video_jobs_from_provider_callback(stable_ticket)
     return {"ok": True, "ticket": stable_ticket}
 
 
@@ -23030,6 +23408,8 @@ async def submit_generate_video_endpoint(
     idempotency_key = explicit_idempotency_key or fingerprint_token
     job_id = ""
     now = now_bj_iso()
+    provider_callback_ticket = ""
+    provider_callback_url = ""
 
     store_keys: List[str] = []
     if idempotency_key:
@@ -23093,6 +23473,12 @@ async def submit_generate_video_endpoint(
     if not job_id:
         job_id = uuid.uuid4().hex
 
+    provider_callback_ticket = f"video-job-{job_id}"
+    try:
+        provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
+    except Exception:
+        provider_callback_url = ""
+
     _set_video_job(
         job_id,
         status="queued",
@@ -23107,6 +23493,7 @@ async def submit_generate_video_endpoint(
         shot_number=req_payload.get("shot_number"),
         shot_name=req_payload.get("shot_name"),
         asset_type=req_payload.get("asset_type"),
+        provider_callback_ticket=provider_callback_ticket,
         created_at=now,
         started_at=None,
         finished_at=None,
@@ -23114,7 +23501,12 @@ async def submit_generate_video_endpoint(
         error=None,
     )
 
-    video_task = asyncio.create_task(_run_generate_video_job(job_id, current_user.id, req_payload))
+    video_task = _submit_generation_background_task(
+        job_id=job_id,
+        kind="video",
+        user_id=int(current_user.id),
+        payload=req_payload,
+    )
     with VIDEO_JOB_LOCK:
         VIDEO_JOB_TASKS[job_id] = video_task
     return {"job_id": job_id, "status": "queued", "created_at": now}
@@ -23146,6 +23538,10 @@ def get_generate_video_job_status(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
+    owner_id = job.get("user_id")
+    owner_username = str(job.get("username") or "").strip()
+
     video_status = str(job.get("status") or "").strip().lower()
     if video_status in {"queued", "running"}:
         elapsed_seconds = _resolve_job_elapsed_seconds(job)
@@ -23159,16 +23555,10 @@ def get_generate_video_job_status(
             )
             with VIDEO_JOB_LOCK:
                 task_ref = VIDEO_JOB_TASKS.get(job_id)
-            if task_ref:
-                try:
-                    task_ref.cancel()
-                except Exception:
-                    pass
+            _cancel_generation_task_ref(task_ref or job_id, user_id=owner_id, reason=timeout_message)
             with VIDEO_JOB_LOCK:
                 job = dict(VIDEO_JOB_STORE.get(job_id) or job)
 
-    owner_id = job.get("user_id")
-    owner_username = str(job.get("username") or "").strip()
     current_user_id = current_claims.get("user_id")
     current_username = str(current_claims.get("username") or "").strip()
     is_superuser = bool(current_claims.get("is_superuser"))
@@ -23386,7 +23776,7 @@ def get_generation_job_pool(
                 item = dict(payload or {})
                 item["job_id"] = item.get("job_id") or job_id
                 item["kind"] = "image"
-                item["has_task"] = job_id in IMAGE_JOB_TASKS
+                item["has_task"] = _generation_task_is_active(IMAGE_JOB_TASKS.get(job_id) or str(job_id), user_id=item.get("user_id"))
                 items.append(item)
 
             for stale_id in stale_image_job_ids:
@@ -23421,7 +23811,7 @@ def get_generation_job_pool(
                 item = dict(payload or {})
                 item["job_id"] = item.get("job_id") or job_id
                 item["kind"] = "video"
-                item["has_task"] = job_id in VIDEO_JOB_TASKS
+                item["has_task"] = _generation_task_is_active(VIDEO_JOB_TASKS.get(job_id) or str(job_id), user_id=item.get("user_id"))
                 items.append(item)
 
             for stale_id in stale_video_job_ids:
@@ -23962,11 +24352,11 @@ def stop_generation_job(
         error="Force stopped by user" if force else "Cancelled by user",
     )
 
-    if task_ref:
-        try:
-            task_ref.cancel()
-        except Exception:
-            pass
+    _cancel_generation_task_ref(
+        task_ref or job_id,
+        user_id=owner_id,
+        reason="Force stopped by user" if force else "Cancelled by user",
+    )
 
     # Force: also remove task ref from store to prevent further polling
     if force:
@@ -24129,11 +24519,14 @@ def delete_generation_job(
         for key in stale_idempotency_keys:
             idempotency_store.pop(key, None)
 
-    if task_ref:
-        try:
-            task_ref.cancel()
-        except Exception:
-            pass
+    _cancel_generation_task_ref(task_ref or job_id, user_id=owner_id, reason="Deleted from job history")
+
+    try:
+        from app.services.generation_task_queue import delete_generation_job_state
+
+        delete_generation_job_state(kind=safe_kind, job_id=job_id)
+    except Exception:
+        pass
 
     try:
         if os.path.exists(file_path):
@@ -24190,11 +24583,7 @@ def stop_all_generation_jobs(
             if not current_user.is_superuser and owner_id != current_user.id:
                 continue
             _set_image_job(jid, status="canceled", finished_at=now_iso, error="Cancelled by stop-all")
-            if task_ref:
-                try:
-                    task_ref.cancel()
-                except Exception:
-                    pass
+            _cancel_generation_task_ref(task_ref or jid, user_id=owner_id, reason="Cancelled by stop-all")
             stopped += 1
             touched.append(f"image:{jid}")
 
@@ -24213,11 +24602,7 @@ def stop_all_generation_jobs(
             if not current_user.is_superuser and owner_id != current_user.id:
                 continue
             _set_video_job(jid, status="canceled", finished_at=now_iso, error="Cancelled by stop-all")
-            if task_ref:
-                try:
-                    task_ref.cancel()
-                except Exception:
-                    pass
+            _cancel_generation_task_ref(task_ref or jid, user_id=owner_id, reason="Cancelled by stop-all")
             stopped += 1
             touched.append(f"video:{jid}")
 
@@ -26182,18 +26567,79 @@ class MontageItem(BaseModel):
 class MontageRequest(BaseModel):
     items: List[MontageItem]
 
+
+class MontageDeleteRequest(BaseModel):
+    url: str
+
 @router.post("/projects/{project_id}/montage")
 async def generate_montage(
     project_id: int,
     request: MontageRequest,
+    async_mode: bool = Query(False),
     current_user: User = Depends(get_current_user)
 ):
     try:
-        url = await create_montage(project_id, [item.dict() for item in request.items])
+        items_payload = [item.dict() for item in request.items]
+        if async_mode:
+            def _work() -> Dict[str, Any]:
+                url = create_montage(project_id, items_payload)
+                return {"url": url}
+
+            task_id = _submit_task(
+                _work,
+                user_id=current_user.id,
+                kind="montage",
+            )
+            return {"task_id": task_id, "async": True}
+
+        url = create_montage(project_id, items_payload)
         return {"url": url}
     except Exception as e:
         logger.error(f"Montage failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/projects/{project_id}/montage")
+async def delete_montage(
+    project_id: int,
+    request: MontageDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_project_access(db, int(project_id), current_user)
+
+    raw_url = str(request.url or "").strip()
+    if not raw_url:
+        raise HTTPException(status_code=400, detail="Montage url is required")
+
+    if "/uploads/" in raw_url:
+        relative_path = raw_url.split("/uploads/", 1)[1]
+    else:
+        relative_path = os.path.basename(raw_url)
+
+    relative_path = str(relative_path or "").replace("\\", "/").lstrip("/")
+    filename = os.path.basename(relative_path)
+    expected_prefix = f"montage_{int(project_id)}_"
+    if not filename or not filename.startswith(expected_prefix) or not filename.endswith(".mp4"):
+        raise HTTPException(status_code=400, detail="Invalid montage file")
+
+    upload_root = os.path.abspath(settings.UPLOAD_DIR)
+    file_path = os.path.abspath(os.path.join(upload_root, relative_path))
+    if os.path.commonpath([upload_root, file_path]) != upload_root:
+        raise HTTPException(status_code=400, detail="Invalid montage path")
+
+    if not os.path.exists(file_path):
+        return {"status": "success", "deleted": False, "message": "Montage file not found"}
+
+    try:
+        os.remove(file_path)
+    except FileNotFoundError:
+        return {"status": "success", "deleted": False, "message": "Montage file not found"}
+    except Exception as exc:
+        logger.warning("Failed to delete montage file project_id=%s path=%s error=%s", project_id, file_path, exc)
+        raise HTTPException(status_code=500, detail="Failed to delete montage file")
+
+    return {"status": "success", "deleted": True, "url": raw_url}
 
 
 class AnalyzeImageRequest(BaseModel):

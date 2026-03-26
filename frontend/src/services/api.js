@@ -256,6 +256,15 @@ export const stopAsyncTask = async (taskId) => {
     return response.data;
 };
 
+export const deleteMontageResult = async (projectId, url) => {
+    if (!projectId) throw new Error('Missing projectId');
+    if (!url) throw new Error('Missing montage url');
+    const response = await api.delete(`/projects/${projectId}/montage`, {
+        data: { url },
+    });
+    return response.data;
+};
+
 const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
     const parsed = Number(import.meta?.env?.VITE_VIDEO_JOB_TIMEOUT_MS || 10 * 60 * 1000);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -263,6 +272,68 @@ const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
     }
     return Math.min(10 * 60 * 1000, Math.max(60 * 1000, parsed));
 })();
+
+const IMAGE_STATUS_MAX_CONCURRENT = (() => {
+    const parsed = Number(import.meta?.env?.VITE_IMAGE_STATUS_MAX_CONCURRENT || 2);
+    if (!Number.isFinite(parsed)) return 2;
+    return Math.max(1, Math.min(4, Math.floor(parsed)));
+})();
+
+let imageStatusInFlight = 0;
+const imageStatusWaitQueue = [];
+const imageStatusSingleFlight = new Map();
+
+const acquireImageStatusSlot = async () => {
+    if (imageStatusInFlight < IMAGE_STATUS_MAX_CONCURRENT) {
+        imageStatusInFlight += 1;
+        return;
+    }
+    await new Promise((resolve) => {
+        imageStatusWaitQueue.push(resolve);
+    });
+    imageStatusInFlight += 1;
+};
+
+const releaseImageStatusSlot = () => {
+    imageStatusInFlight = Math.max(0, imageStatusInFlight - 1);
+    const next = imageStatusWaitQueue.shift();
+    if (typeof next === 'function') {
+        next();
+    }
+};
+
+const fetchImageJobStatusLimited = async (jobId, { baseURL } = {}) => {
+    const stableJobId = String(jobId || '').trim();
+    if (!stableJobId) {
+        throw new Error('Missing image job id');
+    }
+
+    const singleFlightKey = `${String(baseURL || '')}::${stableJobId}`;
+    const existing = imageStatusSingleFlight.get(singleFlightKey);
+    if (existing) {
+        return existing;
+    }
+
+    const pending = (async () => {
+        await acquireImageStatusSlot();
+        try {
+            const response = await api.get(
+                `/generate/image/jobs/${stableJobId}`,
+                buildNoCachePollConfig(baseURL)
+            );
+            return response?.data || {};
+        } finally {
+            releaseImageStatusSlot();
+        }
+    })();
+
+    imageStatusSingleFlight.set(singleFlightKey, pending);
+    try {
+        return await pending;
+    } finally {
+        imageStatusSingleFlight.delete(singleFlightKey);
+    }
+};
 
 const VIDEO_STATUS_MAX_CONCURRENT = (() => {
     const parsed = Number(import.meta?.env?.VITE_VIDEO_STATUS_MAX_CONCURRENT || 2);
@@ -1536,7 +1607,7 @@ const resolveDefaultCallbackPollingEnabled = () => {
     if (explicit === '0' || explicit === 'false' || explicit === 'no' || explicit === 'off') {
         return false;
     }
-    return !isLocalDeployment();
+    return false;
 };
 
 const DEFAULT_CALLBACK_POLLING_ENABLED = resolveDefaultCallbackPollingEnabled();
@@ -1613,11 +1684,7 @@ const pollImageJobUntilDone = async (
     while (Date.now() - start < timeoutMs) {
         if (cancelledRef?.current) throw new Error('Image job polling cancelled');
         try {
-            const response = await api.get(
-                `/generate/image/jobs/${jobId}`,
-                buildNoCachePollConfig(baseURL)
-            );
-            const data = response?.data || {};
+            const data = await fetchImageJobStatusLimited(jobId, { baseURL });
             const status = String(data.status || '').toLowerCase();
             const result = normalizeGenerationResult(data);
 
@@ -1855,8 +1922,7 @@ export const submitImageGenerationJob = async (prompt, provider = null, ref_imag
 };
 
 export const getImageGenerationJobStatus = async (jobId) => {
-    const response = await api.get(`/generate/image/jobs/${jobId}`, buildNoCachePollConfig());
-    return response.data;
+    return await fetchImageJobStatusLimited(jobId);
 };
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, ref_video_urls = null, last_frame_url = null, duration = 5, options = {}, keyframes = [], negative_prompt = null) => {

@@ -1,7 +1,65 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { fetchScenes, fetchShots, api } from '../services/api';
+import React, { useState, useEffect } from 'react';
+import { fetchScenes, fetchShots, api, waitForAsyncTask, stopAsyncTask, deleteMontageResult } from '../services/api';
 import { Loader2, Play, Plus, Trash2, Film, Save, Clock, Scissors, ChevronRight, GripVertical, Download } from 'lucide-react';
 import { getUiLang, tUI } from '../lib/uiLang';
+
+const buildMontageHistoryStorageKey = (projectId) => {
+    const stableProjectId = String(projectId || '').trim();
+    return stableProjectId ? `aistory.montageHistory.${stableProjectId}` : '';
+};
+
+const readMontageHistory = (projectId) => {
+    const storageKey = buildMontageHistoryStorageKey(projectId);
+    if (!storageKey) return [];
+    try {
+        const raw = localStorage.getItem(storageKey);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+};
+
+const writeMontageHistory = (projectId, items) => {
+    const storageKey = buildMontageHistoryStorageKey(projectId);
+    if (!storageKey) return;
+    const stableItems = Array.isArray(items) ? items.slice(0, 12) : [];
+    if (stableItems.length === 0) {
+        localStorage.removeItem(storageKey);
+        return;
+    }
+    localStorage.setItem(storageKey, JSON.stringify(stableItems));
+};
+
+const formatMontageTime = (value) => {
+    const ts = Number(value || 0);
+    if (!Number.isFinite(ts) || ts <= 0) return '';
+    try {
+        return new Date(ts).toLocaleString();
+    } catch {
+        return '';
+    }
+};
+
+const getMontageProgressMeta = (status, startedAt) => {
+    const stableStatus = String(status || '').trim().toLowerCase();
+    const elapsedMs = Math.max(0, Date.now() - Number(startedAt || Date.now()));
+    const runningPercent = Math.min(88, 24 + Math.floor(elapsedMs / 4000) * 6);
+
+    if (stableStatus === 'queued' || stableStatus === 'pending') {
+        return { labelZh: '排队中', labelEn: 'Queued', percent: 16 };
+    }
+    if (stableStatus === 'completed') {
+        return { labelZh: '已完成', labelEn: 'Completed', percent: 100 };
+    }
+    if (stableStatus === 'failed') {
+        return { labelZh: '失败', labelEn: 'Failed', percent: 100 };
+    }
+    if (stableStatus === 'canceled' || stableStatus === 'cancelled') {
+        return { labelZh: '已取消', labelEn: 'Canceled', percent: 100 };
+    }
+    return { labelZh: '渲染中', labelEn: 'Rendering', percent: runningPercent };
+};
 
 const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
     const uiLang = getUiLang();
@@ -15,10 +73,80 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
     const [playlist, setPlaylist] = useState([]);
     const [isGenerating, setIsGenerating] = useState(false);
     const [previewUrl, setPreviewUrl] = useState(null);
+    const [isCleaningMontage, setIsCleaningMontage] = useState(false);
+    const [activeMontageTaskId, setActiveMontageTaskId] = useState(null);
+    const [activeMontageTaskStatus, setActiveMontageTaskStatus] = useState('idle');
+    const [activeMontageStartedAt, setActiveMontageStartedAt] = useState(0);
+    const [montageHistory, setMontageHistory] = useState([]);
 
     useEffect(() => {
         loadData();
     }, [activeEpisode]);
+
+    useEffect(() => {
+        setMontageHistory(readMontageHistory(projectId));
+    }, [projectId]);
+
+    useEffect(() => {
+        writeMontageHistory(projectId, montageHistory);
+    }, [montageHistory, projectId]);
+
+    useEffect(() => {
+        if (!activeMontageTaskId) {
+            setActiveMontageTaskStatus('idle');
+            return undefined;
+        }
+
+        let disposed = false;
+        const pollTaskStatus = async () => {
+            try {
+                const response = await api.get(`/tasks/${activeMontageTaskId}`, {
+                    params: { _ts: Date.now() },
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, max-age=0',
+                        Pragma: 'no-cache',
+                    },
+                });
+                if (disposed) return;
+                setActiveMontageTaskStatus(String(response?.data?.status || 'running').trim().toLowerCase() || 'running');
+            } catch {
+                if (!disposed) {
+                    setActiveMontageTaskStatus('running');
+                }
+            }
+        };
+
+        pollTaskStatus();
+        const timer = window.setInterval(pollTaskStatus, 2000);
+        return () => {
+            disposed = true;
+            window.clearInterval(timer);
+        };
+    }, [activeMontageTaskId]);
+
+    const pushMontageHistoryItem = (url, options = {}) => {
+        const stableUrl = String(url || '').trim();
+        if (!stableUrl) return;
+        setMontageHistory((prev) => {
+            const withoutDup = (Array.isArray(prev) ? prev : []).filter((item) => String(item?.url || '').trim() !== stableUrl);
+            return [
+                {
+                    id: String(options.id || `${Date.now()}-${Math.random()}`),
+                    url: stableUrl,
+                    createdAt: Number(options.createdAt || Date.now()),
+                    clipCount: Number(options.clipCount || playlist.length || 0),
+                    label: String(options.label || '').trim(),
+                },
+                ...withoutDup,
+            ].slice(0, 12);
+        });
+    };
+
+    const removeMontageHistoryItem = (url) => {
+        const stableUrl = String(url || '').trim();
+        if (!stableUrl) return;
+        setMontageHistory((prev) => (Array.isArray(prev) ? prev : []).filter((item) => String(item?.url || '').trim() !== stableUrl));
+    };
 
     const loadData = async () => {
         if (!activeEpisode) return;
@@ -49,6 +177,8 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
             url: shot.video_url,
             thumbnail: shot.image_url, // Assuming shot has image_url as thumbnail
             shotNumber: shot.shot_number,
+            shotName: String(shot.shot_name || shot.title || shot.description || '').trim(),
+            shotDisplayName: String(shot.shot_name || '').trim() || t(`镜头 ${shot.shot_number}`, `Shot ${shot.shot_number}`),
             description: shot.description,
             speed: 1.0,
             trimStart: 0,
@@ -82,10 +212,11 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
         
         setIsGenerating(true);
         setPreviewUrl(null);
+        setActiveMontageStartedAt(Date.now());
+        setActiveMontageTaskStatus('queued');
         
         try {
-            // We'll add this endpoint to api.js later, calling it directly for now or via helper
-            const response = await api.post(`/projects/${projectId}/montage`, {
+            const response = await api.post(`/projects/${projectId}/montage?async_mode=1`, {
                 items: playlist.map(item => ({
                     url: item.url,
                     speed: parseFloat(item.speed),
@@ -93,16 +224,91 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                     trim_end: parseFloat(item.trimEnd)
                 }))
             });
-            
-            if (response.data.url) {
+
+            if (response.data?.task_id && response.data?.async) {
+                setActiveMontageTaskId(response.data.task_id);
+                onLog?.(t('蒙太奇渲染任务已提交，后台处理中。', 'Montage render task submitted and running in background.'), 'info');
+                const result = await waitForAsyncTask(response.data.task_id, { timeout: 30 * 60 * 1000, interval: 3000 });
+                if (result?.url) {
+                    setPreviewUrl(result.url);
+                    pushMontageHistoryItem(result.url, {
+                        id: response.data.task_id,
+                        createdAt: Date.now(),
+                        clipCount: playlist.length,
+                        label: playlist[0]?.shotDisplayName || '',
+                    });
+                    onLog("Montage generated successfully!", "success");
+                }
+            } else if (response.data.url) {
                 setPreviewUrl(response.data.url);
+                pushMontageHistoryItem(response.data.url, {
+                    createdAt: Date.now(),
+                    clipCount: playlist.length,
+                    label: playlist[0]?.shotDisplayName || '',
+                });
                 onLog("Montage generated successfully!", "success");
             }
         } catch (error) {
             console.error(error);
             onLog("Failed to generate montage: " + (error.response?.data?.detail || error.message), "error");
         } finally {
+            setActiveMontageTaskId(null);
             setIsGenerating(false);
+        }
+    };
+
+    const handleClearMontage = async () => {
+        const activeTaskId = activeMontageTaskId;
+        const stablePreviewUrl = String(previewUrl || '').trim();
+        if (!activeTaskId && !stablePreviewUrl) return;
+
+        setIsCleaningMontage(true);
+        try {
+            if (activeTaskId) {
+                await stopAsyncTask(activeTaskId);
+                setActiveMontageTaskId(null);
+                onLog?.(t('已取消蒙太奇渲染任务。', 'Montage render task canceled.'), 'warning');
+            }
+            if (stablePreviewUrl) {
+                await deleteMontageResult(projectId, stablePreviewUrl);
+                removeMontageHistoryItem(stablePreviewUrl);
+                onLog?.(t('已清理蒙太奇结果文件。', 'Montage result file cleared.'), 'warning');
+            }
+            setPreviewUrl(null);
+        } catch (error) {
+            console.error(error);
+            onLog?.(
+                t('清理蒙太奇失败：', 'Failed to clear montage: ') + (error.response?.data?.detail || error.message),
+                'error'
+            );
+        } finally {
+            setIsCleaningMontage(false);
+            setIsGenerating(false);
+        }
+    };
+
+    const handleSelectMontageHistoryItem = (item) => {
+        const stableUrl = String(item?.url || '').trim();
+        if (!stableUrl) return;
+        setPreviewUrl(stableUrl);
+    };
+
+    const handleDeleteMontageHistoryItem = async (item) => {
+        const stableUrl = String(item?.url || '').trim();
+        if (!stableUrl) return;
+        setIsCleaningMontage(true);
+        try {
+            await deleteMontageResult(projectId, stableUrl);
+            removeMontageHistoryItem(stableUrl);
+            if (String(previewUrl || '').trim() === stableUrl) {
+                setPreviewUrl(null);
+            }
+            onLog?.(t('已删除历史蒙太奇结果。', 'Historical montage result deleted.'), 'warning');
+        } catch (error) {
+            console.error(error);
+            onLog?.(t('删除历史蒙太奇失败：', 'Failed to delete montage history item: ') + (error.response?.data?.detail || error.message), 'error');
+        } finally {
+            setIsCleaningMontage(false);
         }
     };
 
@@ -115,6 +321,8 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
         const effectiveDuration = (item.originalDuration - item.trimStart - item.trimEnd) / item.speed;
         return acc + (effectiveDuration > 0 ? effectiveDuration : 0);
     }, 0);
+
+    const montageProgressMeta = getMontageProgressMeta(activeMontageTaskStatus, activeMontageStartedAt);
 
     return (
         <div className="h-full flex flex-col md:flex-row gap-4 p-4 text-gray-100 overflow-hidden">
@@ -155,8 +363,8 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                                     </div>
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-medium truncate">{t(`镜头 ${shot.shot_number}`, `Shot ${shot.shot_number}`)}</div>
-                                    <div className="text-xs text-gray-400 truncate">{shot.description}</div>
+                                    <div className="text-sm font-medium truncate">{String(shot.shot_name || '').trim() || t(`镜头 ${shot.shot_number}`, `Shot ${shot.shot_number}`)}</div>
+                                    <div className="text-xs text-gray-400 truncate">{String(shot.shot_id || shot.shot_number || '').trim() || shot.description}</div>
                                 </div>
                             </div>
                         ))
@@ -176,6 +384,94 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-950/50">
+                    <div className="bg-gray-900/70 border border-gray-800 rounded-lg overflow-hidden">
+                        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-900">
+                            <div className="flex items-center gap-2 text-sm font-medium text-gray-200">
+                                <Play size={16} /> {t('结果预览', 'Result Preview')}
+                            </div>
+                            {(previewUrl || activeMontageTaskId) && (
+                                <button
+                                    onClick={handleClearMontage}
+                                    disabled={isCleaningMontage}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-xs rounded bg-red-600/15 text-red-300 hover:bg-red-600/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                >
+                                    {isCleaningMontage ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
+                                    {activeMontageTaskId ? t('取消并清理', 'Cancel & Clear') : t('清理结果', 'Clear Result')}
+                                </button>
+                            )}
+                        </div>
+                        <div className="aspect-video bg-black flex items-center justify-center">
+                            {previewUrl ? (
+                                <video
+                                    key={previewUrl}
+                                    src={previewUrl}
+                                    controls
+                                    preload="metadata"
+                                    className="w-full h-full"
+                                />
+                            ) : isGenerating ? (
+                                <div className="flex flex-col items-center gap-3 text-gray-400">
+                                    <Loader2 className="animate-spin" size={28} />
+                                    <div className="w-64 max-w-[80%] space-y-2">
+                                        <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-gray-500">
+                                            <span>{t(montageProgressMeta.labelZh, montageProgressMeta.labelEn)}</span>
+                                            <span>{montageProgressMeta.percent}%</span>
+                                        </div>
+                                        <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                                            <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${montageProgressMeta.percent}%` }} />
+                                        </div>
+                                    </div>
+                                    <span className="text-sm">{t('蒙太奇渲染中，完成后会显示在这里。', 'Montage is rendering and will appear here when finished.')}</span>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col items-center gap-3 text-gray-500">
+                                    <Film size={28} />
+                                    <span className="text-sm">{t('渲染完成后的蒙太奇会显示在这里。', 'Rendered montage will appear here.')}</span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {montageHistory.length > 0 && (
+                        <div className="bg-gray-900/60 border border-gray-800 rounded-lg p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div className="text-sm font-medium text-gray-200">{t('最近结果', 'Recent Results')}</div>
+                                <div className="text-[11px] uppercase tracking-[0.14em] text-gray-500">{montageHistory.length}</div>
+                            </div>
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                                {montageHistory.map((item) => (
+                                    <div key={item.id} className="border border-gray-800 rounded-lg bg-black/20 overflow-hidden">
+                                        <button
+                                            onClick={() => handleSelectMontageHistoryItem(item)}
+                                            className="w-full text-left p-3 hover:bg-white/5 transition-colors"
+                                        >
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="text-sm font-medium text-gray-100 truncate">{item.label || t('蒙太奇结果', 'Montage Result')}</div>
+                                                    <div className="text-xs text-gray-400 truncate">{t('片段数：', 'Clips: ')}{Number(item.clipCount || 0)}</div>
+                                                    <div className="text-[11px] text-gray-500 truncate">{formatMontageTime(item.createdAt)}</div>
+                                                </div>
+                                                <Play size={14} className="text-gray-500 shrink-0 mt-1" />
+                                            </div>
+                                        </button>
+                                        <div className="px-3 pb-3 flex items-center justify-between gap-3">
+                                            <a href={item.url} target="_blank" download className="text-xs text-blue-400 hover:text-blue-300">
+                                                {t('下载', 'Download')}
+                                            </a>
+                                            <button
+                                                onClick={() => handleDeleteMontageHistoryItem(item)}
+                                                disabled={isCleaningMontage}
+                                                className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+                                            >
+                                                {t('删除', 'Delete')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     {playlist.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-gray-500 border-2 border-dashed border-gray-800 rounded-lg">
                             <Film size={48} className="mb-4 opacity-20" />
@@ -195,7 +491,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                                     <div className="w-32 h-20 bg-black rounded overflow-hidden flex-shrink-0 relative">
                                         {item.thumbnail && <img src={item.thumbnail} className="w-full h-full object-cover opacity-50" />}
                                         <div className="absolute inset-0 flex items-center justify-center">
-                                            <span className="text-xs font-mono bg-black/50 px-1 rounded text-white">{t(`镜头 ${item.shotNumber}`, `Shot ${item.shotNumber}`)}</span>
+                                            <span className="text-xs font-mono bg-black/50 px-1 rounded text-white">{item.shotDisplayName}</span>
                                         </div>
                                     </div>
 
@@ -262,7 +558,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                     
                     <button 
                         onClick={handleGenerateMontage}
-                        disabled={playlist.length === 0 || isGenerating}
+                        disabled={playlist.length === 0 || isGenerating || isCleaningMontage}
                         className="flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                         {isGenerating ? <Loader2 className="animate-spin" size={18} /> : <Film size={18} />}
