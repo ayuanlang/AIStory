@@ -12188,22 +12188,22 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int)
 
 
 def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id: int, batch_max_concurrency: int) -> None:
-    db = SessionLocal()
     try:
-        episode = db.query(Episode).filter(Episode.id == episode_id).first()
-        user = db.query(User).filter(User.id == user_id).first()
-        if not episode or not user:
-            return
+        with SessionLocal() as init_db:
+            episode = init_db.query(Episode).filter(Episode.id == episode_id).first()
+            user = init_db.query(User).filter(User.id == user_id).first()
+            if not episode or not user:
+                return
 
-        user_name = str(user.username or f"user_{user_id}")
-        project_id = int(episode.project_id)
+            user_name = str(user.username or f"user_{user_id}")
+            project_id = int(episode.project_id)
+            scene_label_map: Dict[int, str] = {}
+            for sid in scene_ids:
+                sc = init_db.query(Scene).filter(Scene.id == sid, Scene.episode_id == episode_id).first()
+                if sc:
+                    scene_label_map[sid] = str(sc.scene_no or sc.scene_name or f"#{sid}")
+
         job_id = f"scene-ai-shots-batch:{int(episode_id)}"
-
-        scene_label_map: Dict[int, str] = {}
-        for sid in scene_ids:
-            sc = db.query(Scene).filter(Scene.id == sid, Scene.episode_id == episode_id).first()
-            if sc:
-                scene_label_map[sid] = str(sc.scene_no or sc.scene_name or f"#{sid}")
 
         total = len(scene_ids)
         completed = 0
@@ -12211,21 +12211,21 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
         failed = 0
         errors: List[str] = []
 
-        def _read_latest_episode() -> Optional[Episode]:
-            db.expire_all()
+        def _read_latest_episode(session: Session) -> Optional[Episode]:
             return (
-                db.query(Episode)
+                session.query(Episode)
                 .execution_options(populate_existing=True)
                 .filter(Episode.id == episode_id)
                 .first()
             )
 
         def _stop_requested() -> bool:
-            latest_episode = _read_latest_episode()
-            if not latest_episode:
-                return True
-            latest_status = _read_scene_ai_shots_batch_status(latest_episode)
-            return bool(latest_status.get("stop_requested") or latest_status.get("force_stopped"))
+            with SessionLocal() as status_db:
+                latest_episode = _read_latest_episode(status_db)
+                if not latest_episode:
+                    return True
+                latest_status = _read_scene_ai_shots_batch_status(latest_episode)
+                return bool(latest_status.get("stop_requested") or latest_status.get("force_stopped"))
 
         effective_batch_max_concurrency = _resolve_user_batch_parallel_limit(
             batch_max_concurrency,
@@ -12237,25 +12237,27 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
         def _active_scene_ids() -> List[int]:
             return list(active_future_map.values())
 
-        def _persist_active_scene_status(latest_episode: Optional[Episode], latest_message: Optional[str] = None) -> None:
-            if not latest_episode:
-                return
-            latest_status = _read_scene_ai_shots_batch_status(latest_episode)
-            active_scene_ids = _active_scene_ids()
-            active_scene_labels = [scene_label_map.get(sid) or f"#{sid}" for sid in active_scene_ids]
-            latest_status["current_scene_id"] = active_scene_ids[0] if len(active_scene_ids) == 1 else None
-            latest_status["current_scene_label"] = " / ".join(active_scene_labels)
-            latest_status["current_scene_started_at"] = now_bj_iso() if active_scene_ids else latest_status.get("current_scene_started_at")
-            latest_status["updated_at"] = now_bj_iso()
-            if latest_message is not None:
-                latest_status["message"] = latest_message
-            elif active_scene_labels:
-                latest_status["message"] = (
-                    f"Processing scenes {', '.join(active_scene_labels)}..."
-                    if len(active_scene_labels) > 1
-                    else f"Processing scene {active_scene_labels[0]}..."
-                )
-            _persist_scene_ai_shots_batch_status(db, latest_episode, latest_status)
+        def _persist_active_scene_status(latest_message: Optional[str] = None) -> None:
+            with SessionLocal() as status_db:
+                latest_episode = _read_latest_episode(status_db)
+                if not latest_episode:
+                    return
+                latest_status = _read_scene_ai_shots_batch_status(latest_episode)
+                active_scene_ids = _active_scene_ids()
+                active_scene_labels = [scene_label_map.get(sid) or f"#{sid}" for sid in active_scene_ids]
+                latest_status["current_scene_id"] = active_scene_ids[0] if len(active_scene_ids) == 1 else None
+                latest_status["current_scene_label"] = " / ".join(active_scene_labels)
+                latest_status["current_scene_started_at"] = now_bj_iso() if active_scene_ids else latest_status.get("current_scene_started_at")
+                latest_status["updated_at"] = now_bj_iso()
+                if latest_message is not None:
+                    latest_status["message"] = latest_message
+                elif active_scene_labels:
+                    latest_status["message"] = (
+                        f"Processing scenes {', '.join(active_scene_labels)}..."
+                        if len(active_scene_labels) > 1
+                        else f"Processing scene {active_scene_labels[0]}..."
+                    )
+                _persist_scene_ai_shots_batch_status(status_db, latest_episode, latest_status)
 
         def _submit_next_scene(executor: ThreadPoolExecutor) -> bool:
             nonlocal next_scene_index
@@ -12271,32 +12273,34 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
             while len(active_future_map) < max_workers and _submit_next_scene(executor):
                 pass
 
-            episode = _read_latest_episode()
-            if episode and _stop_requested():
-                latest = _read_scene_ai_shots_batch_status(episode)
-                latest["running"] = False
-                latest["completed"] = completed
-                latest["success"] = success
-                latest["failed"] = failed
-                latest["errors"] = errors
-                latest["finished_at"] = now_bj_iso()
-                latest["stopped_by_user"] = True
-                latest["message"] = "Stopped by user request"
-                _persist_scene_ai_shots_batch_status(db, episode, latest)
-                _log_batch_sys_event(
-                    kind="scene-ai-shots-batch",
-                    phase="end",
-                    user_id=user_id,
-                    user_name=user_name,
-                    project_id=project_id,
-                    episode_id=episode_id,
-                    job_id=job_id,
-                    result="canceled",
-                    message="Stopped by user request",
-                    extra={"completed": completed, "success": success, "failed": failed},
-                )
+            if _stop_requested():
+                with SessionLocal() as status_db:
+                    episode = _read_latest_episode(status_db)
+                    if episode:
+                        latest = _read_scene_ai_shots_batch_status(episode)
+                        latest["running"] = False
+                        latest["completed"] = completed
+                        latest["success"] = success
+                        latest["failed"] = failed
+                        latest["errors"] = errors
+                        latest["finished_at"] = now_bj_iso()
+                        latest["stopped_by_user"] = True
+                        latest["message"] = "Stopped by user request"
+                        _persist_scene_ai_shots_batch_status(status_db, episode, latest)
+                        _log_batch_sys_event(
+                            kind="scene-ai-shots-batch",
+                            phase="end",
+                            user_id=user_id,
+                            user_name=user_name,
+                            project_id=project_id,
+                            episode_id=episode_id,
+                            job_id=job_id,
+                            result="canceled",
+                            message="Stopped by user request",
+                            extra={"completed": completed, "success": success, "failed": failed},
+                        )
                 return
-            _persist_active_scene_status(episode)
+            _persist_active_scene_status()
 
             while active_future_map:
                 completed_future = next(as_completed(list(active_future_map.keys())))
@@ -12346,40 +12350,70 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                     )
 
                 completed += 1
-                episode = _read_latest_episode()
-                if not episode:
-                    break
+                with SessionLocal() as progress_db:
+                    episode = _read_latest_episode(progress_db)
+                    if not episode:
+                        break
 
-                latest = _read_scene_ai_shots_batch_status(episode)
-                latest["completed"] = completed
-                latest["success"] = success
-                latest["failed"] = failed
-                latest["errors"] = errors
-                latest["current_scene_id"] = sid
-                latest["current_scene_label"] = result.get("scene_label") or scene_label
-                latest["updated_at"] = now_bj_iso()
-                latest["message"] = f"Progress {completed}/{total}"
-                _persist_scene_ai_shots_batch_status(db, episode, latest)
+                    latest = _read_scene_ai_shots_batch_status(episode)
+                    latest["completed"] = completed
+                    latest["success"] = success
+                    latest["failed"] = failed
+                    latest["errors"] = errors
+                    latest["current_scene_id"] = sid
+                    latest["current_scene_label"] = result.get("scene_label") or scene_label
+                    latest["updated_at"] = now_bj_iso()
+                    latest["message"] = f"Progress {completed}/{total}"
+                    _persist_scene_ai_shots_batch_status(progress_db, episode, latest)
 
                 if not _stop_requested():
                     while len(active_future_map) < max_workers and _submit_next_scene(executor):
                         pass
 
-                _persist_active_scene_status(_read_latest_episode())
+                _persist_active_scene_status()
 
         if _stop_requested() and next_scene_index < len(scene_ids):
-            episode = _read_latest_episode()
+            with SessionLocal() as status_db:
+                episode = _read_latest_episode(status_db)
+                if episode:
+                    latest_after_batch = _read_scene_ai_shots_batch_status(episode)
+                    latest_after_batch["running"] = False
+                    latest_after_batch["completed"] = completed
+                    latest_after_batch["success"] = success
+                    latest_after_batch["failed"] = failed
+                    latest_after_batch["errors"] = errors
+                    latest_after_batch["finished_at"] = now_bj_iso()
+                    latest_after_batch["stopped_by_user"] = True
+                    latest_after_batch["message"] = "Stopped by user request"
+                    _persist_scene_ai_shots_batch_status(status_db, episode, latest_after_batch)
+                    _log_batch_sys_event(
+                        kind="scene-ai-shots-batch",
+                        phase="end",
+                        user_id=user_id,
+                        user_name=user_name,
+                        project_id=project_id,
+                        episode_id=episode_id,
+                        job_id=job_id,
+                        result="canceled",
+                        message="Stopped by user request",
+                        extra={"completed": completed, "success": success, "failed": failed},
+                    )
+            return
+
+        with SessionLocal() as final_db:
+            episode = final_db.query(Episode).filter(Episode.id == episode_id).first()
             if episode:
-                latest_after_batch = _read_scene_ai_shots_batch_status(episode)
-                latest_after_batch["running"] = False
-                latest_after_batch["completed"] = completed
-                latest_after_batch["success"] = success
-                latest_after_batch["failed"] = failed
-                latest_after_batch["errors"] = errors
-                latest_after_batch["finished_at"] = now_bj_iso()
-                latest_after_batch["stopped_by_user"] = True
-                latest_after_batch["message"] = "Stopped by user request"
-                _persist_scene_ai_shots_batch_status(db, episode, latest_after_batch)
+                final_status = _read_scene_ai_shots_batch_status(episode)
+                final_status["running"] = False
+                final_status["completed"] = completed
+                final_status["success"] = success
+                final_status["failed"] = failed
+                final_status["errors"] = errors
+                final_status["finished_at"] = now_bj_iso()
+                final_status["updated_at"] = final_status["finished_at"]
+                final_status["stopped_by_user"] = bool(final_status.get("stop_requested"))
+                final_status["message"] = f"Batch done: success {success}, failed {failed}"
+                _persist_scene_ai_shots_batch_status(final_db, episode, final_status)
                 _log_batch_sys_event(
                     kind="scene-ai-shots-batch",
                     phase="end",
@@ -12388,64 +12422,37 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                     project_id=project_id,
                     episode_id=episode_id,
                     job_id=job_id,
-                    result="canceled",
-                    message="Stopped by user request",
+                    result="completed",
+                    message=final_status.get("message"),
                     extra={"completed": completed, "success": success, "failed": failed},
                 )
-            return
-
-        episode = db.query(Episode).filter(Episode.id == episode_id).first()
-        if episode:
-            final_status = _read_scene_ai_shots_batch_status(episode)
-            final_status["running"] = False
-            final_status["completed"] = completed
-            final_status["success"] = success
-            final_status["failed"] = failed
-            final_status["errors"] = errors
-            final_status["finished_at"] = now_bj_iso()
-            final_status["updated_at"] = final_status["finished_at"]
-            final_status["stopped_by_user"] = bool(final_status.get("stop_requested"))
-            final_status["message"] = f"Batch done: success {success}, failed {failed}"
-            _persist_scene_ai_shots_batch_status(db, episode, final_status)
-            _log_batch_sys_event(
-                kind="scene-ai-shots-batch",
-                phase="end",
-                user_id=user_id,
-                user_name=user_name,
-                project_id=project_id,
-                episode_id=episode_id,
-                job_id=job_id,
-                result="completed",
-                message=final_status.get("message"),
-                extra={"completed": completed, "success": success, "failed": failed},
-            )
     except Exception as e:
         try:
-            episode = db.query(Episode).filter(Episode.id == episode_id).first()
-            if episode:
-                failed_status = _read_scene_ai_shots_batch_status(episode)
-                failed_status["running"] = False
-                failed_status["finished_at"] = now_bj_iso()
-                failed_status["updated_at"] = failed_status["finished_at"]
-                failed_status["message"] = f"Batch failed: {str(e)}"
-                failed_status["errors"] = list(failed_status.get("errors") or []) + [str(e)]
-                _persist_scene_ai_shots_batch_status(db, episode, failed_status)
-                _log_batch_sys_event(
-                    kind="scene-ai-shots-batch",
-                    phase="end",
-                    user_id=user_id,
-                    user_name=str((user.username if 'user' in locals() and user else "") or f"user_{user_id}"),
-                    project_id=int(episode.project_id),
-                    episode_id=episode_id,
-                    job_id=f"scene-ai-shots-batch:{int(episode_id)}",
-                    result="failed",
-                    message=str(e),
-                )
+            with SessionLocal() as error_db:
+                episode = error_db.query(Episode).filter(Episode.id == episode_id).first()
+                if episode:
+                    failed_status = _read_scene_ai_shots_batch_status(episode)
+                    failed_status["running"] = False
+                    failed_status["finished_at"] = now_bj_iso()
+                    failed_status["updated_at"] = failed_status["finished_at"]
+                    failed_status["message"] = f"Batch failed: {str(e)}"
+                    failed_status["errors"] = list(failed_status.get("errors") or []) + [str(e)]
+                    _persist_scene_ai_shots_batch_status(error_db, episode, failed_status)
+                    _log_batch_sys_event(
+                        kind="scene-ai-shots-batch",
+                        phase="end",
+                        user_id=user_id,
+                        user_name=str((user.username if 'user' in locals() and user else "") or f"user_{user_id}"),
+                        project_id=int(episode.project_id),
+                        episode_id=episode_id,
+                        job_id=f"scene-ai-shots-batch:{int(episode_id)}",
+                        result="failed",
+                        message=str(e),
+                    )
         except Exception:
             pass
     finally:
         _clear_episode_worker(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id))
-        db.close()
 
 
 @router.post("/episodes/{episode_id}/scenes/ai_shots/batch/start", response_model=Dict[str, Any])
@@ -19901,6 +19908,7 @@ async def generate_image_endpoint(
     db: Session = Depends(get_db)
 ):
     try:
+        _release_db_connection(db, "generate_image_sync_wait")
         return await asyncio.wait_for(_run_generate_image(req, current_user, db), timeout=IMAGE_SYNC_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         raise HTTPException(
@@ -20882,6 +20890,7 @@ async def _run_generate_image_job(
             req_provider,
             req_model,
         )
+        _release_db_connection(db, "image_job_wait_for_generation")
         result = await asyncio.wait_for(
             _run_generate_image(
                 req_obj,
@@ -21601,6 +21610,7 @@ async def generate_video_endpoint(
 
         existing_task = _VIDEO_INFLIGHT_BY_KEY.get(dedup_key)
         if existing_task is None:
+            _release_db_connection(db, "generate_video_sync_wait")
             existing_task = asyncio.create_task(_run_generate_video(req, current_user, db))
             _VIDEO_INFLIGHT_BY_KEY[dedup_key] = existing_task
             created_task = True
@@ -21613,6 +21623,7 @@ async def generate_video_endpoint(
             )
 
     try:
+        _release_db_connection(db, "generate_video_sync_wait_existing")
         result = await existing_task
     finally:
         if created_task:
@@ -23214,6 +23225,7 @@ async def _run_generate_video_job(
             req_model,
             provider_callback_ticket or None,
         )
+        _release_db_connection(db, "video_job_wait_for_generation")
         result = await asyncio.wait_for(
             _run_generate_video(
                 req_obj,
