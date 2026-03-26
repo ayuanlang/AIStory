@@ -20,6 +20,8 @@ import mimetypes
 from PIL import Image
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union, Callable
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
@@ -655,6 +657,62 @@ class MediaGenerationService:
         if "/api/v3" in normalized and "contents/generations/tasks" not in normalized:
             return f"{normalized}/contents/generations/tasks"
         return normalized
+
+    def _normalize_lzhbu_task_query_endpoint(self, endpoint: Optional[str]) -> str:
+        raw = (endpoint or "").strip()
+        if not raw:
+            return "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1/proxy/ark/contents/generations/tasks"
+
+        normalized = raw.rstrip("/")
+        if "{task_id}" in normalized:
+            return normalized
+        if normalized.endswith("/proxy/ark/contents/generations/tasks"):
+            return normalized
+        if normalized.endswith("/proxy/ark/contents/generations"):
+            return f"{normalized}/tasks"
+        if normalized.endswith("/api/v1"):
+            return f"{normalized}/proxy/ark/contents/generations/tasks"
+        return normalized
+
+    def _normalize_lzhbu_moderation_endpoint(self, endpoint: Optional[str]) -> str:
+        raw = (endpoint or "").strip()
+        if not raw:
+            return "http://118.196.112.236:3428/api/moderation/image"
+        return raw.rstrip("/")
+
+    def _normalize_lzhbu_encryption_key(self, raw_key: Any) -> bytes:
+        text = str(raw_key or "").strip()
+        if not text:
+            raise ValueError("Missing lzhbu moderation AES key")
+        if re.fullmatch(r"[0-9a-fA-F]{64}", text):
+            return bytes.fromhex(text)
+        encoded = text.encode("utf-8")
+        if len(encoded) != 32:
+            raise ValueError("lzhbu moderation AES key must be a 64-char hex string or 32-byte text")
+        return encoded
+
+    def _encrypt_lzhbu_payload(self, payload: Dict[str, Any], raw_key: Any) -> str:
+        key = self._normalize_lzhbu_encryption_key(raw_key)
+        plaintext = json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        padder = padding.PKCS7(algorithms.AES.block_size).padder()
+        padded = padder.update(plaintext) + padder.finalize()
+        cipher = Cipher(algorithms.AES(key), modes.ECB())
+        encryptor = cipher.encryptor()
+        ciphertext = encryptor.update(padded) + encryptor.finalize()
+        return base64.b64encode(ciphertext).decode("ascii")
+
+    def _decrypt_lzhbu_payload(self, encrypted_text: Any, raw_key: Any) -> Dict[str, Any]:
+        encoded = str(encrypted_text or "").strip()
+        if not encoded:
+            return {}
+        key = self._normalize_lzhbu_encryption_key(raw_key)
+        cipher = Cipher(algorithms.AES(key), modes.ECB())
+        decryptor = cipher.decryptor()
+        decrypted = decryptor.update(base64.b64decode(encoded)) + decryptor.finalize()
+        unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
+        plain = unpadder.update(decrypted) + unpadder.finalize()
+        parsed = json.loads(plain.decode("utf-8"))
+        return parsed if isinstance(parsed, dict) else {"raw": parsed}
 
     def _normalize_aspect_ratio_value(self, aspect_ratio: Optional[str]) -> Optional[str]:
         raw = str(aspect_ratio or "").strip()
@@ -2047,6 +2105,9 @@ class MediaGenerationService:
             "runway": "runway",
             "kling": "kling",
             "runninghub": "runninghub",
+            "lzhbu": "lzhbu",
+            "lzhbu video": "lzhbu",
+            "zhonglian": "lzhbu",
         }
         if raw in mapping:
             return mapping[raw]
@@ -2064,7 +2125,7 @@ class MediaGenerationService:
         if cat == "image":
               return normalized in {"doubao", "grsai", "kie", "tencent", "stability", "runninghub", "apiyi", "n1n"}
         if cat == "video":
-            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi"}
+            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi", "lzhbu"}
         if cat == "voice":
               return normalized in {"kie", "runninghub"}
         return bool(normalized)
@@ -2816,6 +2877,17 @@ class MediaGenerationService:
                     return await self._handle_runninghub_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if provider == "apiyi":
                     return await self._handle_apiyi_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
+                if provider == "lzhbu":
+                    return await self._handle_lzhbu_generation(
                         "video",
                         prompt,
                         active_config,
@@ -5909,6 +5981,385 @@ class MediaGenerationService:
 
         return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}
 
+    def _extract_lzhbu_task_id(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        if isinstance(value, dict):
+            for key in ("task_id", "taskId", "id"):
+                candidate = self._extract_lzhbu_task_id(value.get(key))
+                if candidate:
+                    return candidate
+            for key in ("data", "result"):
+                candidate = self._extract_lzhbu_task_id(value.get(key))
+                if candidate:
+                    return candidate
+        if isinstance(value, list):
+            for item in value:
+                candidate = self._extract_lzhbu_task_id(item)
+                if candidate:
+                    return candidate
+        return None
+
+    def _parse_lzhbu_moderation_decision(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = {
+            "blocked": False,
+            "status": None,
+            "reason": None,
+            "raw": payload or {},
+        }
+
+        containers: List[Any] = [payload]
+        if isinstance(payload, dict):
+            for key in ("data", "result", "moderation", "output"):
+                if payload.get(key) is not None:
+                    containers.append(payload.get(key))
+
+        safe_statuses = {"pass", "passed", "approved", "allow", "allowed", "safe", "ok", "success", "compliant"}
+        block_statuses = {"block", "blocked", "reject", "rejected", "fail", "failed", "unsafe", "violation", "violated", "non_compliant"}
+
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+
+            for key in ("blocked", "is_blocked", "flagged"):
+                if key in container:
+                    blocked = bool(container.get(key))
+                    result["blocked"] = blocked
+                    result["status"] = key
+                    result["reason"] = str(container.get("reason") or container.get("message") or key)
+                    return result
+
+            for key in ("pass", "passed", "approved", "is_safe", "safe", "compliant"):
+                if key in container:
+                    allowed = bool(container.get(key))
+                    result["blocked"] = not allowed
+                    result["status"] = key
+                    result["reason"] = str(container.get("reason") or container.get("message") or key)
+                    return result
+
+            status = str(
+                container.get("status")
+                or container.get("result")
+                or container.get("verdict")
+                or container.get("decision")
+                or ""
+            ).strip().lower()
+            if status:
+                result["status"] = status
+                result["reason"] = str(container.get("reason") or container.get("message") or status)
+                if status in safe_statuses:
+                    result["blocked"] = False
+                    return result
+                if status in block_statuses:
+                    result["blocked"] = True
+                    return result
+
+        return result
+
+    async def _maybe_moderate_lzhbu_image(self, image_ref: Any, config: Dict[str, Any], role: str) -> Dict[str, Any]:
+        tool_conf = config.get("config", {}) or {}
+        moderation_enabled = bool(tool_conf.get("moderation_enabled", True))
+        if not moderation_enabled:
+            return {"checked": False, "blocked": False, "reason": "disabled"}
+
+        moderation_user_id = str(
+            tool_conf.get("moderation_user_id")
+            or tool_conf.get("moderationUserId")
+            or tool_conf.get("user_id")
+            or ""
+        ).strip()
+        moderation_key = str(
+            tool_conf.get("moderation_aes_key")
+            or tool_conf.get("moderationAesKey")
+            or tool_conf.get("moderation_key")
+            or tool_conf.get("moderationKey")
+            or ""
+        ).strip()
+        moderation_required = bool(tool_conf.get("moderation_required", True))
+        if not moderation_user_id or not moderation_key:
+            if moderation_required:
+                return {
+                    "checked": False,
+                    "blocked": True,
+                    "error": "lzhbu moderation credentials missing",
+                    "submit_failed": True,
+                }
+            return {"checked": False, "blocked": False, "reason": "credentials_missing"}
+
+        moderation_endpoint = self._normalize_lzhbu_moderation_endpoint(
+            tool_conf.get("moderation_endpoint") or tool_conf.get("moderationEndpoint")
+        )
+        resolved_ref = str(image_ref or "").strip()
+        if not resolved_ref:
+            return {"checked": False, "blocked": False, "reason": "empty_ref"}
+
+        business_payload: Dict[str, Any]
+        if resolved_ref.startswith("data:image/") and "," in resolved_ref:
+            business_payload = {"image_base64": resolved_ref.split(",", 1)[1]}
+        else:
+            business_payload = {"image_url": resolved_ref}
+
+        encrypted_data = self._encrypt_lzhbu_payload(business_payload, moderation_key)
+        request_payload = {
+            "user_id": moderation_user_id,
+            "encrypted_data": encrypted_data,
+        }
+
+        headers = {"Content-Type": "application/json"}
+
+        def _post_moderation(use_proxy: bool = True):
+            kwargs = {
+                "json": request_payload,
+                "headers": headers,
+                "timeout": (15, 60),
+                "verify": False,
+            }
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.post(moderation_endpoint, **kwargs)
+
+        try:
+            try:
+                resp = await asyncio.to_thread(_post_moderation, True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                resp = await asyncio.to_thread(_post_moderation, False)
+        except requests.exceptions.RequestException as exc:
+            return {
+                "checked": False,
+                "blocked": moderation_required,
+                "error": f"lzhbu moderation request failed: {exc}",
+                "submit_failed": moderation_required,
+            }
+
+        if resp.status_code != 200:
+            return {
+                "checked": False,
+                "blocked": moderation_required,
+                "error": f"lzhbu moderation failed {resp.status_code}",
+                "details": (resp.text or "")[:1000],
+                "submit_failed": moderation_required,
+            }
+
+        try:
+            response_payload = resp.json() if resp.content else {}
+        except Exception:
+            response_payload = {}
+
+        encrypted_response = None
+        if isinstance(response_payload, dict):
+            encrypted_response = response_payload.get("encrypted_data") or response_payload.get("encryptedData")
+
+        try:
+            decrypted_payload = self._decrypt_lzhbu_payload(encrypted_response, moderation_key) if encrypted_response else response_payload
+        except Exception as exc:
+            return {
+                "checked": False,
+                "blocked": moderation_required,
+                "error": f"lzhbu moderation decrypt failed: {exc}",
+                "submit_failed": moderation_required,
+            }
+
+        decision = self._parse_lzhbu_moderation_decision(decrypted_payload if isinstance(decrypted_payload, dict) else {})
+        decision.update({
+            "checked": True,
+            "role": role,
+            "input_ref": _strip_query_from_log_url(resolved_ref),
+        })
+        return decision
+
+    async def _handle_lzhbu_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+        if gen_type != "video":
+            return {"error": "lzhbu generation type not supported yet", "submit_failed": True}
+
+        api_key = str(config.get("api_key") or "").strip()
+        if not api_key:
+            return {"error": "No lzhbu API Key", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        provider_name = self._vendor_label(config.get("provider") or tool_conf.get("provider") or "lzhbu")
+        base_url = str(config.get("base_url") or "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1").strip().rstrip("/")
+        raw_endpoint = str(tool_conf.get("endpoint") or "").strip()
+        endpoint = raw_endpoint or "/proxy/chat/completions"
+        raw_query_endpoint = self._normalize_lzhbu_task_query_endpoint(
+            tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint")
+        )
+        model = str(config.get("model") or "doubao-seedance-2-0").strip()
+        if re.match(r"^https?://", endpoint, flags=re.IGNORECASE):
+            submit_url = endpoint
+        elif not raw_endpoint and "/proxy/chat/completions" in base_url.lower():
+            submit_url = base_url
+        else:
+            submit_url = f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
+
+        if re.match(r"^https?://", raw_query_endpoint, flags=re.IGNORECASE):
+            query_endpoint = raw_query_endpoint
+        elif "/proxy/chat/completions" in submit_url.lower() and not str(tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint") or "").strip():
+            query_endpoint = re.sub(r"/proxy/chat/completions/?$", "/proxy/ark/contents/generations/tasks", submit_url, flags=re.IGNORECASE)
+        else:
+            query_endpoint = f"{base_url}{raw_query_endpoint if raw_query_endpoint.startswith('/') else '/' + raw_query_endpoint}"
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+
+        raw_image_refs = ref_image if isinstance(ref_image, list) else [ref_image]
+        resolved_image_refs: List[str] = []
+        for item in raw_image_refs:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            resolved = await self._resolve_ref_for_api_async(
+                text,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            if resolved:
+                resolved_image_refs.append(str(resolved).strip())
+        resolved_image_refs = [item for item in dict.fromkeys(resolved_image_refs) if item]
+
+        resolved_last_frame = None
+        if str(last_frame_url or "").strip():
+            resolved_last_frame = await self._resolve_ref_for_api_async(
+                last_frame_url,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+            )
+            resolved_last_frame = str(resolved_last_frame or "").strip() or None
+
+        reference_video_urls = self._resolve_public_media_urls(
+            tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls") or []
+        )
+        reference_audio_urls = self._resolve_public_media_urls(
+            tool_conf.get("reference_audio_urls") or tool_conf.get("ref_audio_urls") or []
+        )
+
+        moderation_results: List[Dict[str, Any]] = []
+        moderation_candidates: List[tuple[str, str]] = []
+        if resolved_image_refs:
+            if len(resolved_image_refs) == 1 and not resolved_last_frame:
+                moderation_candidates.append((resolved_image_refs[0], "first_frame"))
+            else:
+                for idx, item in enumerate(resolved_image_refs):
+                    moderation_candidates.append((item, "first_frame" if idx == 0 else "reference_image"))
+        if resolved_last_frame:
+            moderation_candidates.append((resolved_last_frame, "last_frame"))
+
+        for candidate_ref, role in moderation_candidates:
+            moderation_result = await self._maybe_moderate_lzhbu_image(candidate_ref, config, role)
+            moderation_results.append(moderation_result)
+            if moderation_result.get("error") and moderation_result.get("submit_failed"):
+                return {
+                    "error": moderation_result.get("error"),
+                    "details": moderation_result.get("details"),
+                    "submit_failed": True,
+                }
+            if moderation_result.get("blocked"):
+                return {
+                    "error": f"{provider_name} moderation blocked reference material",
+                    "details": moderation_result,
+                    "submit_failed": True,
+                }
+
+        content_payload: List[Dict[str, Any]] = []
+        if prompt_text:
+            content_payload.append({"type": "text", "text": prompt_text})
+
+        if resolved_image_refs:
+            if len(resolved_image_refs) == 1 and not resolved_last_frame:
+                content_payload.append({
+                    "type": "image_url",
+                    "image_url": {"url": resolved_image_refs[0]},
+                    "role": "first_frame",
+                })
+            else:
+                for idx, item in enumerate(resolved_image_refs):
+                    content_payload.append({
+                        "type": "image_url",
+                        "image_url": {"url": item},
+                        "role": "first_frame" if idx == 0 else "reference_image",
+                    })
+        if resolved_last_frame:
+            content_payload.append({
+                "type": "image_url",
+                "image_url": {"url": resolved_last_frame},
+                "role": "last_frame",
+            })
+        for item in reference_video_urls:
+            content_payload.append({
+                "type": "video_url",
+                "video_url": {"url": item},
+                "role": "reference_video",
+            })
+        for item in reference_audio_urls:
+            content_payload.append({
+                "type": "audio_url",
+                "audio_url": {"url": item},
+                "role": "reference_audio",
+            })
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "stream": False,
+            "messages": [{
+                "role": "user",
+                "content": content_payload,
+            }],
+        }
+
+        normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
+        if normalized_ratio:
+            payload["ratio"] = normalized_ratio
+
+        try:
+            payload["duration"] = int(duration or tool_conf.get("duration") or 5)
+        except Exception:
+            payload["duration"] = 5
+
+        for source_key, target_key in (("resolution", "resolution"), ("generate_audio", "generate_audio")):
+            if tool_conf.get(source_key) is not None:
+                payload[target_key] = tool_conf.get(source_key)
+
+        raw_tools = tool_conf.get("tools")
+        if raw_tools is None and tool_conf.get("web_search"):
+            raw_tools = ["web_search"]
+        if isinstance(raw_tools, str):
+            raw_tools = [raw_tools]
+        if isinstance(raw_tools, list):
+            normalized_tools: List[Dict[str, Any]] = []
+            for item in raw_tools:
+                if isinstance(item, dict) and item.get("type"):
+                    normalized_tools.append(item)
+                    continue
+                name = str(item or "").strip().lower()
+                if name == "web_search":
+                    normalized_tools.append({"type": "web_search"})
+            if normalized_tools:
+                payload["tools"] = normalized_tools
+
+        base_metadata = {
+            "provider": "lzhbu",
+            "provider_label": provider_name,
+            "model": model,
+            "prompt": prompt,
+            "submit_url": submit_url,
+            "query_endpoint": query_endpoint,
+            "requested_duration": payload.get("duration"),
+            "requested_aspect_ratio": payload.get("ratio"),
+            "resolved_reference_count": len(resolved_image_refs),
+            "resolved_reference_video_count": len(reference_video_urls),
+            "resolved_reference_audio_count": len(reference_audio_urls),
+            "moderation": moderation_results,
+        }
+        return await self._submit_and_poll_lzhbu_video(
+            submit_url,
+            query_endpoint,
+            payload,
+            api_key,
+            "lzhbu_video",
+            extra_metadata=base_metadata,
+        )
+
     def _resolve_apiyi_chat_video_model(self, model: str, aspect_ratio: Optional[str] = None, duration: Optional[int] = None) -> str:
         normalized_model = str(model or "").strip() or "sora_video2"
         normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
@@ -6823,6 +7274,107 @@ class MediaGenerationService:
             return {"error": "Upstream request failed", "details": details, "submit_failed": True}
         except Exception as e:
             return {"error": str(e), "submit_failed": True}
+
+    async def _submit_and_poll_lzhbu_video(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+        _debug_log(f"[{log_tag}] Submitting to URL: {submit_url} | Payload: {_strip_base64_from_log(payload)}")
+
+        def _submit(use_proxy: bool = True, connection_close: bool = False):
+            request_headers = dict(headers)
+            if connection_close:
+                request_headers["Connection"] = "close"
+            kwargs = {
+                "json": payload,
+                "headers": request_headers,
+                "timeout": (30, 120),
+                "verify": False,
+            }
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.post(submit_url, **kwargs)
+
+        def _poll(task_id: str, use_proxy: bool = True):
+            normalized_query = str(query_url or "").strip()
+            target_url = normalized_query.replace("{task_id}", urllib.parse.quote(task_id)) if "{task_id}" in normalized_query else f"{normalized_query.rstrip('/')}/{urllib.parse.quote(task_id)}"
+            kwargs = {"headers": headers, "timeout": 30, "verify": False}
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.get(target_url, **kwargs)
+
+        try:
+            try:
+                resp = await asyncio.to_thread(_submit, True, False)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                try:
+                    resp = await asyncio.to_thread(_submit, False, False)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                    resp = await asyncio.to_thread(_submit, False, True)
+
+            if resp.status_code not in [200, 201]:
+                return {"error": f"Submission Failed {resp.status_code}", "details": (resp.text or "")[:1000], "submit_failed": True}
+
+            data = resp.json() if resp.content else {}
+            task_id = self._extract_lzhbu_task_id(data)
+            if not task_id:
+                return {"error": "No Task ID", "details": data, "submit_failed": True}
+
+            max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+            for _ in range(max_attempts):
+                await asyncio.sleep(poll_interval_seconds)
+                try:
+                    p_resp = await asyncio.to_thread(_poll, task_id, True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    p_resp = await asyncio.to_thread(_poll, task_id, False)
+                except requests.exceptions.Timeout:
+                    continue
+
+                if p_resp.status_code != 200:
+                    continue
+
+                try:
+                    p_data = p_resp.json() if p_resp.content else {}
+                except Exception:
+                    continue
+
+                container = p_data.get("data") if isinstance(p_data.get("data"), dict) else p_data
+                status = str(
+                    (container or {}).get("status")
+                    or (container or {}).get("state")
+                    or p_data.get("status")
+                    or p_data.get("state")
+                    or ""
+                ).strip().lower()
+
+                content = (container or {}).get("content") if isinstance((container or {}).get("content"), dict) else {}
+                media_url = None
+                if isinstance(content, dict):
+                    media_url = content.get("video_url") or content.get("url")
+                if not media_url and isinstance((container or {}).get("result"), dict):
+                    media_url = (container or {}).get("result", {}).get("video_url") or (container or {}).get("result", {}).get("url")
+                if not media_url:
+                    media_url = (container or {}).get("video_url") or (container or {}).get("url") or p_data.get("video_url") or p_data.get("url")
+
+                if status in {"succeeded", "success", "completed", "done"} or (not status and media_url):
+                    if not media_url:
+                        return {
+                            "error": "Generation completed without video URL",
+                            "details": p_data,
+                            "submit_failed": True,
+                        }
+                    metadata = {"raw": p_data, "submit_raw": data, "task_id": task_id}
+                    if extra_metadata:
+                        metadata.update(extra_metadata)
+                    return {"url": media_url, "metadata": metadata}
+
+                if status in {"failed", "error", "canceled", "cancelled", "rejected"}:
+                    return {"error": "Generation Failed", "details": p_data}
+
+            return {"error": f"Timeout after {poll_timeout_seconds}s"}
+        except requests.exceptions.RequestException as exc:
+            return {"error": "Upstream request failed", "details": str(exc), "submit_failed": True}
+        except Exception as exc:
+            return {"error": str(exc), "submit_failed": True}
 
     async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None, task_id_callback: Optional[Callable[[str], Any]] = None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}

@@ -1555,6 +1555,61 @@
       "tags": null
     },
     {
+      "name": "lzhbu doubao-seedance-2-0",
+      "category": "Video",
+      "provider": "lzhbu",
+      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "model": "doubao-seedance-2-0",
+      "modality": {
+        "generation_modes": [
+          "t2v",
+          "i2v"
+        ],
+        "input_formats": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "capability_flags": {
+          "supports_first_frame": true,
+          "supports_last_frame": true
+        }
+      },
+      "supplier_info": {
+        "lzhbu": {
+          "reference_roles": [
+            "first_frame",
+            "last_frame",
+            "reference_image",
+            "reference_video",
+            "reference_audio"
+          ],
+          "supports_generate_audio": true,
+          "supports_web_search": true,
+          "submit_protocol": "chat_completions_async_task"
+        }
+      },
+      "config": {
+        "endpoint": "/proxy/chat/completions",
+        "query_endpoint": "/proxy/ark/contents/generations/tasks",
+        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "moderation_enabled": true,
+        "moderation_required": true,
+        "moderation_user_id": "",
+        "moderation_aes_key": "",
+        "generate_audio": false,
+        "provider_api_key_strategy": "random"
+      },
+      "deprecated": false,
+      "is_active": false,
+      "tags": [
+        "async",
+        "moderation",
+        "chat_completions"
+      ]
+    },
+    {
       "name": "doubao seedance-1.5-pro (有声/token计费)",
       "category": "Video",
       "provider": "doubao",

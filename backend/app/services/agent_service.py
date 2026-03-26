@@ -39,6 +39,18 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
+
+def _release_db_connection(db: Optional[Session], reason: str = "") -> None:
+    if db is None:
+        return
+    try:
+        db.rollback()
+    except Exception as exc:
+        if reason:
+            logger.debug("[agent_db_release] rollback skipped | reason=%s error=%s", reason, exc)
+        else:
+            logger.debug("[agent_db_release] rollback skipped | error=%s", exc)
+
 class AgentService:
     _BASE_BILLING_RULE_KIND = "base_pricing"
     _BASE_BILLING_RULE_PRIORITY = -100000
@@ -4165,6 +4177,7 @@ Output ONLY the JSON object now."""
             billing_service.check_balance(db, user_id, image_task_type, gen_provider, gen_model)
             
             try:
+                _release_db_connection(db, "agent_generate_project_asset_image")
                 gen_result = await self._generate_image_with_metadata(prompt, llm_config, user_id=user_id, reference_image_url=reference_image_url)
                 
                 # 2. Deduct Credits
@@ -4192,6 +4205,7 @@ Output ONLY the JSON object now."""
             try:
                 prompt = params.get("prompt", "")
                 prompt = self._enrich_prompt_if_possible(prompt, project_id)
+                _release_db_connection(db, "agent_generate_image_text_to_image")
                 gen_result = await self._generate_image_with_metadata(prompt, llm_config, user_id=user_id)
                 
                 billing_service.deduct_credits(db, user_id, image_task_type, gen_provider, gen_model, {"item": "image_from_tool"})
@@ -4214,6 +4228,7 @@ Output ONLY the JSON object now."""
                 prompt = params.get("prompt", "")
                 prompt = self._enrich_prompt_if_possible(prompt, project_id)
                 image_url = params.get("image_url", "")
+                _release_db_connection(db, "agent_generate_image_image_to_image")
                 gen_result = await self._generate_image_with_metadata(prompt, llm_config, user_id=user_id, reference_image_url=image_url)
                 
                 billing_service.deduct_credits(db, user_id, image_task_type, gen_provider, gen_model, {"item": "i2i_from_tool"})
@@ -4239,6 +4254,7 @@ Output ONLY the JSON object now."""
                 target_type = context.get("target_type", "scene_item")
                 duration = -1
 
+                _release_db_connection(db, "agent_generate_video_text_to_video")
                 gen_result = await self._generate_video_with_metadata(prompt, llm_config, user_id=user_id, duration=duration)
 
                 billing_details = {"item": "video_from_tool"}
@@ -4307,6 +4323,7 @@ Output ONLY the JSON object now."""
                 target_type = context.get("target_type", "scene_item")
                 duration = -1
 
+                _release_db_connection(db, "agent_generate_video_image_to_video")
                 gen_result = await self._generate_video_with_metadata(
                     prompt, 
                     llm_config, 

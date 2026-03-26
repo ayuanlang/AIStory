@@ -17,6 +17,7 @@ export const PROVIDER_LABELS = {
         "Grsai-Video (Upload)": "Grsai (File Upload)",
         "Stable Video": "Stable Video Component",
         "Doubao Video": "Doubao (豆包 - Volcengine)",
+        "Lzhbu Video": "Lzhbu (中联 / Seedance 2.0)",
         "Wanxiang": "Wanxiang (通义万相 - Aliyun)",
         "Vidu (Video)": "Vidu (Shengshu)"
     }
@@ -100,6 +101,9 @@ export const MODEL_OPTIONS = {
         "Doubao Video": [
             { label: "Doubao Video", value: "doubao-vid-s-251128" },
             { label: "Doubao Video Pro", value: "doubao-seedance-1-5-pro-251215" }
+        ],
+        "Lzhbu Video": [
+            { label: "Doubao Seedance 2.0", value: "doubao-seedance-2-0" }
         ],
         "Wanxiang": [
             { label: "WanX 2.1 (Image2Video)", value: "wanx2.1-i2v-plus" },

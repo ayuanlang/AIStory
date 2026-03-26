@@ -25677,6 +25677,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         success = 0
         failed = 0
         errors: List[str] = []
+        _release_db_connection(db, "shot_media_batch_bootstrap")
 
         def _read_latest_episode() -> Optional[Episode]:
             db.expire_all()
@@ -25716,6 +25717,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 message="Stopped by user request",
                 extra={"completed": completed, "success": success, "failed": failed},
             )
+            _release_db_connection(db, "shot_media_batch_stopped_status")
 
         def _is_stop_requested() -> bool:
             if cancel_event and cancel_event.is_set():
@@ -25724,6 +25726,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             if not latest_episode:
                 return True
             latest_status = _read_shot_media_batch_status(latest_episode)
+            _release_db_connection(db, "shot_media_batch_stop_check")
             return bool(latest_status.get("stop_requested") or latest_status.get("force_stopped"))
 
         async def _run_stage_with_retry(coro_factory: Any, stage_label: str, shot_label: str, max_attempts: int = 3) -> Any:
@@ -25739,6 +25742,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         latest_status["message"] = f"Retrying {stage_label} for shot {shot_label} ({attempt}/{max_attempts})..."
                         latest_status["updated_at"] = now_bj_iso()
                         _persist_shot_media_batch_status(db, latest_episode, latest_status)
+                        _release_db_connection(db, "shot_media_batch_retry_status")
 
                 try:
                     return await _run_cancellable(coro_factory())
@@ -25796,6 +25800,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         else f"Processing shot {active_shot_labels[0]} · Video..."
                     )
                 _persist_shot_media_batch_status(db, latest_episode, latest_status)
+                _release_db_connection(db, "shot_media_batch_active_video_status")
 
             def _submit_next_shot(executor: ThreadPoolExecutor) -> bool:
                 nonlocal next_shot_index
@@ -25894,6 +25899,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                     latest["updated_at"] = now_bj_iso()
                     latest["message"] = f"Progress {completed}/{total}" if bool(result.get("ok")) else f"Progress {completed}/{total} (with errors)"
                     _persist_shot_media_batch_status(db, episode, latest)
+                    _release_db_connection(db, "shot_media_batch_video_progress")
 
                     if _is_stop_requested():
                         _persist_stopped_status()
@@ -25933,6 +25939,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         "max_concurrency": max_workers,
                     },
                 )
+                _release_db_connection(db, "shot_media_batch_video_final")
             return
 
         for shot in target_shots:
@@ -25950,6 +25957,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
             latest["message"] = f"Processing shot {shot_label}..."
             latest["updated_at"] = now_bj_iso()
             _persist_shot_media_batch_status(db, episode, latest)
+            _release_db_connection(db, "shot_media_batch_shot_start")
 
             shot_ok = True
             try:
@@ -25999,6 +26007,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             latest["message"] = f"Processing shot {shot_label} · Start Frame..."
                             latest["updated_at"] = now_bj_iso()
                             _persist_shot_media_batch_status(db, episode, latest)
+                            _release_db_connection(db, "shot_media_batch_start_status")
 
                             start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, entity_lookup)
                             logger.info(
@@ -26091,6 +26100,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             latest["message"] = f"Processing shot {shot_label} · End Frame..."
                             latest["updated_at"] = now_bj_iso()
                             _persist_shot_media_batch_status(db, episode, latest)
+                            _release_db_connection(db, "shot_media_batch_end_status")
 
                             end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, entity_lookup)
                             logger.info(
@@ -26146,6 +26156,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         latest["message"] = f"Processing shot {shot_label} · Video..."
                         latest["updated_at"] = now_bj_iso()
                         _persist_shot_media_batch_status(db, episode, latest)
+                        _release_db_connection(db, "shot_media_batch_video_status")
 
                         video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
                         video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
@@ -26321,6 +26332,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 f"Progress {completed}/{total}" if shot_ok else f"Progress {completed}/{total} (with errors)"
             )
             _persist_shot_media_batch_status(db, episode, latest)
+            _release_db_connection(db, "shot_media_batch_progress")
 
         episode = _read_latest_episode()
         if episode:
@@ -26348,6 +26360,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 message=final_status.get("message"),
                 extra={"completed": completed, "success": success, "failed": failed, "mode": mode},
             )
+            _release_db_connection(db, "shot_media_batch_final")
     except Exception as e:
         try:
             db.expire_all()
@@ -26378,6 +26391,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                     result="failed",
                     message=str(e),
                 )
+                _release_db_connection(db, "shot_media_batch_error")
         except Exception:
             pass
     finally:

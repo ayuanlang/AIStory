@@ -1315,6 +1315,12 @@ const Settings = () => {
                     setVidToolModel("doubao-seedance-1-5-pro-251215");
                     setVidToolWebHook("");
                     setVidToolDraft(false);
+                      } else if (toolName === "Lzhbu Video") {
+                          setVidToolKey("");
+                          setVidToolEndpoint("https://zlhub.xiaowaiyou.cn/zhonglian/api/v1/proxy/chat/completions");
+                          setVidToolModel("doubao-seedance-2-0");
+                          setVidToolWebHook("");
+                          setVidToolDraft(false);
                  } else if (toolName === "Wanxiang") {
                      setVidToolKey("");
                      setVidToolEndpoint("https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis");
@@ -1444,6 +1450,7 @@ const Settings = () => {
             if (frontendProviderName.includes("Grsai")) backendProvider = "grsai";
             else if (frontendProviderName === "Stable Diffusion") backendProvider = "stability";
             else if (frontendProviderName === "Doubao Video") backendProvider = "doubao";
+            else if (frontendProviderName === "Lzhbu Video") backendProvider = "lzhbu";
             else if (frontendProviderName === "Wanxiang") backendProvider = "wanxiang";
             else if (frontendProviderName === "Vidu (Video)") backendProvider = "vidu";
             else if (frontendProviderName === "Tencent Hunyuan") backendProvider = "tencent";
