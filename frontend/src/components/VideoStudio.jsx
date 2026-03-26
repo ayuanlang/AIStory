@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchScenes, fetchShots, api, waitForAsyncTask, stopAsyncTask, deleteMontageResult } from '../services/api';
+import { fetchScenes, fetchShots, waitForAsyncTask, stopAsyncTask, deleteMontageResult } from '../services/api';
 import { Loader2, Play, Plus, Trash2, Film, Save, Clock, Scissors, ChevronRight, GripVertical, Download } from 'lucide-react';
 import { getUiLang, tUI } from '../lib/uiLang';
 
@@ -94,30 +94,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
     useEffect(() => {
         if (!activeMontageTaskId) {
             setActiveMontageTaskStatus('idle');
-            return undefined;
         }
-
-        let disposed = false;
-        const pollTaskStatus = async () => {
-            try {
-                const response = await api.get(`/tasks/${activeMontageTaskId}`, {
-                    params: { _ts: Date.now() },
-                });
-                if (disposed) return;
-                setActiveMontageTaskStatus(String(response?.data?.status || 'running').trim().toLowerCase() || 'running');
-            } catch {
-                if (!disposed) {
-                    setActiveMontageTaskStatus('running');
-                }
-            }
-        };
-
-        pollTaskStatus();
-        const timer = window.setInterval(pollTaskStatus, 2000);
-        return () => {
-            disposed = true;
-            window.clearInterval(timer);
-        };
     }, [activeMontageTaskId]);
 
     const pushMontageHistoryItem = (url, options = {}) => {
@@ -223,9 +200,11 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
 
             if (response.data?.task_id && response.data?.async) {
                 setActiveMontageTaskId(response.data.task_id);
+                setActiveMontageTaskStatus('running');
                 onLog?.(t('蒙太奇渲染任务已提交，后台处理中。', 'Montage render task submitted and running in background.'), 'info');
                 const result = await waitForAsyncTask(response.data.task_id, { timeout: 30 * 60 * 1000, interval: 3000 });
                 if (result?.url) {
+                    setActiveMontageTaskStatus('completed');
                     setPreviewUrl(result.url);
                     pushMontageHistoryItem(result.url, {
                         id: response.data.task_id,
@@ -236,6 +215,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                     onLog("Montage generated successfully!", "success");
                 }
             } else if (response.data.url) {
+                setActiveMontageTaskStatus('completed');
                 setPreviewUrl(response.data.url);
                 pushMontageHistoryItem(response.data.url, {
                     createdAt: Date.now(),
@@ -246,6 +226,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
             }
         } catch (error) {
             console.error(error);
+            setActiveMontageTaskStatus('failed');
             onLog("Failed to generate montage: " + (error.response?.data?.detail || error.message), "error");
         } finally {
             setActiveMontageTaskId(null);
