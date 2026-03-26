@@ -197,6 +197,7 @@ You MUST use all of them together.
 - 自然语言默认跟随剧本原始语言；但若 `Project Context` 中明确给出 `Language`，则该项目语言为最高优先级，必须覆盖剧本文本原始语言。
 - 仅固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移。
 - 固定双语输出字段契约（Mandatory）：`generation_prompt_cn`、`appearance_cn`、`description_cn` 等带 `_cn` 的字段始终必须输出中文；`generation_prompt_en`、`negative_prompt_en`、`name_en` 等带 `_en` 的字段始终必须输出英文；`anchor_description` 始终必须输出英文短语。以上字段语言契约不受项目语言影响。
+- `name_en` 命名格式硬规则（Mandatory）：`name_en` 必须使用自然英文分词并以空格分隔，优先采用 Title Case，例如 `Demon Slayer Captain`、`Harbor Office Front Mid Night`、`Police ID Badge Lanyard`。禁止驼峰、下划线、连字符或无分词拼接形式，如 `DemonSlayerCaptain`、`Demon_Slayer_Captain`、`demon-slayer-captain`、`HarborOffice_Front_Mid_Night`。若名称里包含方向、景别、昼夜或状态语义，也必须继续写成自然英文词组，不得回退成工程式 token 拼接。
 - 字段语言与画面内语言区分（Mandatory）：`Project Context.Language` 影响的是设计语境、命名语境与画面中实际会被看见/听见的语言内容，不改变字段本身的中英文职责。即使项目语言为英文，`generation_prompt_cn` 仍必须用中文；即使项目语言为中文，`generation_prompt_en` 仍必须用英文。
 - 每个实体必须同时输出 `generation_prompt_cn` 与 `generation_prompt_en` 且语义一致，`anchor_description` 必须英文短语。
 - 当 `Project Context` 明确指定目标语言时，剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、口号、书信/消息内容、以及任何“角色正在说某种语言/切换语言”的语言事件，都必须转换并改写为目标语言后再写入结果；若 `Project Context` 未指定 `Language`，则上述语言性内容默认保持剧本原始语言。禁止无依据地统一改成英文。
@@ -513,12 +514,12 @@ Important:
   "environments": [
     {
       "name": "港口办公室_正向_中景_夜",
-      "name_en": "HarborOffice_Front_Mid_Night",
+      "name_en": "Harbor Office Front Mid Night",
       "atmosphere": "Rainy tense night with restrained noir contrast",
       "visual_params": "Mid/Interior/Night",
       "description_cn": "港口办公区夜景，玻璃隔断与桌面灯形成主视觉锚点，空间可达且便于角色进出与机位移动。",
-      "generation_prompt_cn": "电影级写实剧情风格。以 HarborOffice_Front_Wide_Night 为基础参考，保持建筑结构与材质锚点不变。环境增量：机位在走廊门槛处，朝内看向主办公桌区域；轴线由左侧切换到右侧；可见背景包含玻璃隔断、台灯、挂钟，排除后部储物架成为主背景；主光来自前右侧台灯，辅以走廊冷色补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市反射光。画面中不得出现人物。",
-      "generation_prompt_en": "Cinematic photoreal drama style. Use HarborOffice_Front_Wide_Night as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at corridor threshold facing inward to main desk zone; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock], Excluded Set = [rear storage shelves as dominant backdrop]; Lighting Direction Change: key from front-right practical desk lamp with cool corridor spill fill; Framing Change: medium-wide, primary subject desk cluster, secondary subject window reflection line; Dynamic Parts State: None}. FG: door frame edge and entry mat. MG: desk cluster and practical lamp as composition anchor. BG: rain-streaked city reflections through glass. No humans or characters in frame.",
+      "generation_prompt_cn": "电影级写实剧情风格。以 Harbor Office Front Wide Night 为基础参考，保持建筑结构与材质锚点不变。环境增量：机位在走廊门槛处，朝内看向主办公桌区域；轴线由左侧切换到右侧；可见背景包含玻璃隔断、台灯、挂钟，排除后部储物架成为主背景；主光来自前右侧台灯，辅以走廊冷色补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市反射光。画面中不得出现人物。",
+      "generation_prompt_en": "Cinematic photoreal drama style. Use Harbor Office Front Wide Night as visual base; keep architecture and material anchors unchanged. Environment Delta = {Viewpoint Anchor/Viewing Direction: viewpoint at corridor threshold facing inward to main desk zone; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock], Excluded Set = [rear storage shelves as dominant backdrop]; Lighting Direction Change: key from front-right practical desk lamp with cool corridor spill fill; Framing Change: medium-wide, primary subject desk cluster, secondary subject window reflection line; Dynamic Parts State: None}. FG: door frame edge and entry mat. MG: desk cluster and practical lamp as composition anchor. BG: rain-streaked city reflections through glass. No humans or characters in frame.",
       "negative_prompt_en": "people, shoulder silhouette, human reflection, human shadow, over-the-shoulder framing, text, watermark",
       "anchor_description": "glass partition, desk lamp cluster, wall clock, rain-streaked office reflection",
       "visual_dependencies": [],

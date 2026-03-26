@@ -151,6 +151,7 @@ def _is_polling_log_suppressed(method: str, path: str) -> bool:
     key = f"{method} {path}"
     suppressed_patterns = [
         r"^GET /api/v1/tasks/[^/]+$",
+        r"^GET /api/v1/projects/\d+/shares/?$",
         r"^GET /api/v1/projects/\d+/episodes$",
         r"^GET /api/v1/episodes/\d+/shots$",
         r"^GET /api/v1/projects/\d+/script_generator/episodes/scripts/status$",

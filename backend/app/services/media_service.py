@@ -130,6 +130,40 @@ class MediaGenerationService:
         }
         return aliases.get(raw, raw)
 
+    def _get_media_routing_limit(
+        self,
+        category: str,
+        suffix: str,
+        default: int,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        raw_default = default
+        try:
+            raw_default = int(default)
+        except Exception:
+            raw_default = minimum
+        raw_default = max(minimum, min(maximum, raw_default))
+
+        env_keys = [
+            f"{str(category or '').strip().upper()}_{suffix}",
+            f"MEDIA_{suffix}",
+        ]
+        for env_key in env_keys:
+            raw_value = str(os.getenv(env_key, "")).strip()
+            if not raw_value:
+                continue
+            try:
+                return max(minimum, min(maximum, int(raw_value)))
+            except Exception:
+                logger.warning(
+                    "Invalid media routing limit env ignored | key=%s value=%s default=%s",
+                    env_key,
+                    raw_value,
+                    raw_default,
+                )
+        return raw_default
+
     def _is_n1n_kling_image_row(self, row: Any) -> bool:
         model_lower = str(getattr(row, "model", "") or "").strip().lower()
         if model_lower == "kling_image":
@@ -320,6 +354,24 @@ class MediaGenerationService:
         ambiguous_submit = bool(payload.get("ambiguous_submit"))
         submit_failed = bool(payload.get("submit_failed"))
         has_error = bool(payload.get("error"))
+
+        # Content policy / moderation denials are deterministic and should not
+        # trigger provider fallback loops.
+        failure_text = self._flatten_text(payload).lower()
+        non_retryable_markers = (
+            "output_moderation",
+            "moderation blocked",
+            "moderation blocked reference material",
+            "content policy",
+            "policy violation",
+            "safety violation",
+            "unsafe content",
+            "内容审核",
+            "审核拦截",
+            "违规",
+        )
+        if any(marker in failure_text for marker in non_retryable_markers):
+            return {"retryable": False, "reason": "policy_blocked", "has_output": False}
 
         if has_output:
             return {"retryable": False, "reason": "success", "has_output": True}
@@ -3188,7 +3240,30 @@ class MediaGenerationService:
         )
 
         fallback_candidates: List[Dict[str, Any]] = []
+        effective_fallback_candidate_limit = max(0, int(fallback_candidate_limit or 0))
+        total_attempt_limit: Optional[int] = None
         if media_retry_mode:
+            selected_candidate_retry_limit = None
+            try:
+                if (selected_candidate or {}).get("retry_limit") is not None:
+                    selected_candidate_retry_limit = int((selected_candidate or {}).get("retry_limit"))
+            except Exception:
+                selected_candidate_retry_limit = None
+
+            retry_limit = self._get_media_routing_limit(
+                category,
+                "ROUTING_PRIMARY_RETRY_LIMIT",
+                selected_candidate_retry_limit if selected_candidate_retry_limit is not None else int(primary_retry_limit or 2),
+                1,
+                5,
+            )
+            effective_fallback_candidate_limit = self._get_media_routing_limit(
+                category,
+                "ROUTING_FALLBACK_CANDIDATE_LIMIT",
+                effective_fallback_candidate_limit or 1,
+                0,
+                5,
+            )
             fallback_candidates = sorted(
                 [
                     c for c in candidates
@@ -3204,8 +3279,19 @@ class MediaGenerationService:
                     int(x.get("avg_price_estimate", 10**9) or 10**9),
                     int(x.get("id", 0) or 0),
                 ),
-            )[:3]
-            retry_limit = 2
+            )
+            if effective_fallback_candidate_limit > 0:
+                fallback_candidates = fallback_candidates[:effective_fallback_candidate_limit]
+            else:
+                fallback_candidates = []
+
+            total_attempt_limit = self._get_media_routing_limit(
+                category,
+                "ROUTING_TOTAL_ATTEMPT_LIMIT",
+                min(3, retry_limit + max(0, effective_fallback_candidate_limit)),
+                1,
+                8,
+            )
         else:
             if strategy == self.USER_API_STRATEGY_LOW_PRICE_REPLACE:
                 fallback_candidates = sorted(
@@ -3222,8 +3308,8 @@ class MediaGenerationService:
                         int(x.get("id", 0) or 0),
                     ),
                 )
-                if fallback_candidate_limit and fallback_candidate_limit > 0:
-                    fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
+                if effective_fallback_candidate_limit and effective_fallback_candidate_limit > 0:
+                    fallback_candidates = fallback_candidates[: int(effective_fallback_candidate_limit)]
             elif strategy == self.USER_API_STRATEGY_SMART_DEFAULT:
                 fallback_candidates = sorted(
                     [
@@ -3239,7 +3325,8 @@ class MediaGenerationService:
                         int(x.get("id", 0) or 0),
                     ),
                 )
-                fallback_candidates = fallback_candidates[:3]
+                if effective_fallback_candidate_limit and effective_fallback_candidate_limit > 0:
+                    fallback_candidates = fallback_candidates[: int(effective_fallback_candidate_limit)]
             elif legacy_strategy and smart_enabled:
                 fallback_candidates = sorted(
                     [
@@ -3255,8 +3342,8 @@ class MediaGenerationService:
                         int(x.get("id", 0) or 0),
                     ),
                 )
-                if fallback_candidate_limit and fallback_candidate_limit > 0:
-                    fallback_candidates = fallback_candidates[: int(fallback_candidate_limit)]
+                if effective_fallback_candidate_limit and effective_fallback_candidate_limit > 0:
+                    fallback_candidates = fallback_candidates[: int(effective_fallback_candidate_limit)]
 
             retry_limit = max(1, int(primary_retry_limit or 3))
             if legacy_strategy:
@@ -3320,6 +3407,21 @@ class MediaGenerationService:
                 continue
             seen.add(key)
             deduped_attempts.append(item)
+
+        if media_retry_mode and total_attempt_limit is not None and len(deduped_attempts) > total_attempt_limit:
+            deduped_attempts = deduped_attempts[:total_attempt_limit]
+
+        logger.info(
+            "Media routing plan | category=%s user_id=%s provider=%s model=%s active_retry_limit=%s fallback_limit=%s total_attempt_limit=%s planned_attempts=%s",
+            category,
+            user_id,
+            effective_provider,
+            baseline_config.get("model"),
+            retry_limit,
+            effective_fallback_candidate_limit,
+            total_attempt_limit if media_retry_mode else len(deduped_attempts),
+            len(deduped_attempts),
+        )
 
         final_error: Dict[str, Any] = {"error": "Generation failed"}
         fallback_unlocked = False

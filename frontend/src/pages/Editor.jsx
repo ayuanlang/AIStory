@@ -273,6 +273,27 @@ const splitSceneSubjectNames = (value) => {
         .filter(Boolean);
 };
 
+const buildSceneSubjectNameCandidates = (rawName) => {
+    const source = String(rawName || '').trim();
+    const candidates = new Set();
+
+    const pushCandidate = (value) => {
+        const normalized = normalizeEntityToken(value || '');
+        if (normalized) candidates.add(normalized);
+    };
+
+    pushCandidate(source);
+
+    // Split common bilingual separators so CN/EN either side can match.
+    source
+        .split(/\s*[\/|｜]|\s+-\s+|\s+–\s+|\s+—\s+|\s*\(\s*|\s*\)\s*/)
+        .map((part) => String(part || '').trim())
+        .filter(Boolean)
+        .forEach(pushCandidate);
+
+    return Array.from(candidates);
+};
+
 const extractSceneSubjectRefs = (scene) => {
     const refs = [
         ...splitSceneSubjectNames(scene?.environment_name).map((name) => ({ type: 'environment', name, sourceField: 'environment_name' })),
@@ -298,11 +319,11 @@ const extractSceneSubjectRefs = (scene) => {
 
 const findMatchingEntityByType = (entities, type, rawName) => {
     const normalizedType = String(type || '').trim().toLowerCase();
-    const normalizedName = normalizeEntityToken(rawName || '');
-    if (!normalizedType || !normalizedName) return null;
+    const nameCandidates = buildSceneSubjectNameCandidates(rawName);
+    if (!normalizedType || nameCandidates.length === 0) return null;
     return (Array.isArray(entities) ? entities : []).find((entity) => {
         if (String(entity?.type || '').trim().toLowerCase() !== normalizedType) return false;
-        return entityTokenMatchesName(entity, normalizedName);
+        return nameCandidates.some((candidate) => entityTokenMatchesName(entity, candidate));
     }) || null;
 };
 
@@ -311,13 +332,13 @@ const findMissingSceneSubjectRefs = (scene, entities) => {
 };
 
 const findCrossTypeEntityMatches = (entities, rawName, expectedType) => {
-    const normalizedName = normalizeEntityToken(rawName || '');
+    const nameCandidates = buildSceneSubjectNameCandidates(rawName);
     const stableType = String(expectedType || '').trim().toLowerCase();
-    if (!normalizedName) return [];
+    if (!nameCandidates.length) return [];
     return (Array.isArray(entities) ? entities : []).filter((entity) => {
         const entityType = String(entity?.type || '').trim().toLowerCase();
         if (!entityType || entityType === stableType) return false;
-        return entityTokenMatchesName(entity, normalizedName);
+        return nameCandidates.some((candidate) => entityTokenMatchesName(entity, candidate));
     });
 };
 
@@ -7439,7 +7460,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
         const missingItemCount = missingSceneReports.reduce((sum, item) => sum + Number(item.missing.length || 0), 0);
         if (missingSceneReports.length === 0) {
-            onLog?.('Post-import scene entity check passed: no missing scene subjects detected.', 'success');
+            onLog?.('Post-import scene entity check passed: no missing scene subjects detected. Supplement step skipped.', 'success');
             return {
                 ...emptyReport,
                 checkedSceneCount: importedSceneRows.length,
@@ -7472,16 +7493,27 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         });
 
         setAnalysisFlowStatus({
-            phase: 'checking_scene_subjects',
+            phase: 'supplementing_scene_subjects',
             message: t(
-                `场景缺失实体检查完成：发现 ${missingItemCount} 项缺失。未自动补充，待你确认后再执行。`,
-                `Scene entity gap check completed: ${missingItemCount} missing items found. Auto-supplement is disabled until your confirmation.`
+                `场景缺失实体检查完成：发现 ${missingItemCount} 项缺失。正在逐个场景补充缺失实体...`,
+                `Scene entity gap check completed: ${missingItemCount} missing items found. Supplementing missing entities scene by scene...`
             ),
         });
 
+        const supplementReport = await createMissingSceneSubjectPlaceholders({
+            projectId,
+            sceneRows: missingSceneReports.map((item) => item.scene),
+            existingEntities: latestEntities,
+            onLog,
+        });
+
+        const createdCount = Number(supplementReport?.createdItems?.length || 0);
+        const skippedCount = Number(supplementReport?.skippedItems?.length || 0);
+        const failedCount = Number(supplementReport?.failedItems?.length || 0);
+
         onLog?.(
-            `Post-import scene entity check summary: missing_scenes=${missingSceneReports.length}, missing_items=${missingItemCount}, auto_supplement=disabled(waiting_user_confirmation).`,
-            'warning'
+            `Post-import scene entity supplement summary: missing_scenes=${missingSceneReports.length}, missing_items=${missingItemCount}, created=${createdCount}, skipped=${skippedCount}, failed=${failedCount}.`,
+            failedCount > 0 ? 'warning' : 'success'
         );
 
         return {
@@ -7494,8 +7526,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 sceneName: String(item?.scene?.scene_name || '').trim(),
                 missing: item.missing,
             })),
-            supplementReport: emptyReport.supplementReport,
-            pendingUserConfirmation: true,
+            supplementReport: supplementReport || emptyReport.supplementReport,
+            pendingUserConfirmation: false,
         };
     }, [onLog, projectId, t]);
 
@@ -9556,6 +9588,14 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             const analyzedText = extractAnalysisTextFromResult(result);
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
+            setAnalysisFlowStatus({
+                phase: 'processing_output_workspace',
+                message: t('LLM 已返回：正在保存原始返回并填写分析输出工作区（Output Workspace）...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
+            });
+            setAnalysisFlowStatus({
+                phase: 'processing_output_workspace',
+                message: t('LLM 已返回：正在保存原始返回并填写分析输出工作区（Output Workspace）...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
+            });
 
             if (result && result.meta) {
                 try {
@@ -9598,8 +9638,28 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             setLlmRawResultContent(analyzedText);
             setLlmResultContent(normalizeLlmMarkdownTable(analyzedText));
             lastLoadedAnalysisRef.current = analyzedText;
+
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            phaseMarks.persistStartedAt = Date.now();
+            try {
+                if (!savedByBackend) {
+                    if (onLog) onLog('Saving raw LLM output to episode analysis field...', 'process');
+                    await persistLlmResultContent(analyzedText);
+                } else {
+                    if (onLog) onLog('LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
+                    await refreshAnalysisFromDB();
+                }
+            } catch (persistErr) {
+                if (onLog) onLog(`Raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+            } finally {
+                phaseMarks.persistFinishedAt = Date.now();
+            }
             
             phaseMarks.importStartedAt = Date.now();
+            setAnalysisFlowStatus({
+                phase: 'importing',
+                message: t('正在导入 Markdown 与 JSON 到工作区...', 'Importing Markdown and JSON into workspace...'),
+            });
             try {
                 importReport = await runAutoImportAndSwitchToScenes(analyzedText, {
                     switchToScenes: false,
@@ -9631,24 +9691,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
-            }
-
-            // Persist LLM raw output into dedicated DB field (DO NOT overwrite script_content)
-            // Keep this after import so import can start immediately when LLM returns.
-            const savedByBackend = !!(result?.meta?.saved_to_episode);
-            phaseMarks.persistStartedAt = Date.now();
-            try {
-                if (!savedByBackend) {
-                    if (onLog) onLog('Saving LLM result (separate field) after import...', 'process');
-                    await persistLlmResultContent(analyzedText);
-                } else {
-                    if (onLog) onLog('LLM result already saved by backend. Refreshing local episode cache...', 'info');
-                    await refreshAnalysisFromDB();
-                }
-            } catch (persistErr) {
-                if (onLog) onLog(`Analysis result saved with warning: ${persistErr?.message || persistErr}`, 'warning');
-            } finally {
-                phaseMarks.persistFinishedAt = Date.now();
             }
 
             let firstPassReport = null;
@@ -9698,11 +9740,18 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             });
 
             const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+            const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+            const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: postImportMissingItems > 0
-                    ? t(`分析完成：场景与 subjects 已导入。检测到 ${postImportMissingItems} 个缺失实体，未自动补充，待你确认后执行。`, `Analysis completed: scenes and subjects were imported. ${postImportMissingItems} missing entities were detected; auto-supplement is disabled until your confirmation.`)
-                    : t('分析完成：场景与 subjects 已导入，导入后场景实体检查已完成。', 'Analysis completed: scenes and subjects were imported, and the post-import scene entity check finished.'),
+                    ? (
+                        postImportSupplementFailed > 0
+                            ? t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充成功 ${postImportSupplementCreated} 项、失败 ${postImportSupplementFailed} 项、跳过 ${postImportSupplementSkipped} 项。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                            : t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充 ${postImportSupplementCreated} 项（跳过 ${postImportSupplementSkipped} 项）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                    )
+                    : t('分析完成：未检测到实体缺失，流程已结束。', 'Analysis completed: no missing entities detected, workflow finished.'),
             });
 
             if (onLog) onLog("AI Analysis applied and saved.", "success");
@@ -9942,13 +9991,34 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
             lastLoadedAnalysisRef.current = analyzedText || "";
 
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            phaseMarks.persistStartedAt = Date.now();
+            try {
+                if (!savedByBackend) {
+                    if (onLog) onLog('Saving advanced raw LLM output to episode analysis field...', 'process');
+                    await persistLlmResultContent(analyzedText || '');
+                } else {
+                    if (onLog) onLog('Advanced LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
+                    await refreshAnalysisFromDB();
+                }
+            } catch (persistErr) {
+                if (onLog) onLog(`Advanced raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+            } finally {
+                phaseMarks.persistFinishedAt = Date.now();
+            }
+
             phaseMarks.importStartedAt = Date.now();
+            setAnalysisFlowStatus({
+                phase: 'importing',
+                message: t('正在导入 Markdown 与 JSON 到工作区...', 'Importing Markdown and JSON into workspace...'),
+            });
             try {
                 importReport = await runAutoImportAndSwitchToScenes(analyzedText || "", {
                     switchToScenes: false,
                     importOptions: {
                         autoSupplementSceneSubjects: false,
                         suppressAlerts: true,
+                        subjectsJson: result?.subjects_json || null,
                     },
                 });
                 if (!importReport) {
@@ -9973,23 +10043,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
-            }
-
-            // Persist the LLM output after import to avoid delaying the import stage.
-            const savedByBackend = !!(result?.meta?.saved_to_episode);
-            phaseMarks.persistStartedAt = Date.now();
-            try {
-                if (!savedByBackend) {
-                    if (onLog) onLog('Saving advanced LLM result (separate field) after import...', 'process');
-                    await persistLlmResultContent(analyzedText || '');
-                } else {
-                    if (onLog) onLog('Advanced LLM result already saved by backend. Refreshing local episode cache...', 'info');
-                    await refreshAnalysisFromDB();
-                }
-            } catch (persistErr) {
-                if (onLog) onLog(`Advanced analysis result saved with warning: ${persistErr?.message || persistErr}`, 'warning');
-            } finally {
-                phaseMarks.persistFinishedAt = Date.now();
             }
 
             let firstPassReport = null;
@@ -10039,11 +10092,18 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             });
 
             const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+            const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+            const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: postImportMissingItems > 0
-                    ? t(`分析完成：场景与 subjects 已导入。检测到 ${postImportMissingItems} 个缺失实体，未自动补充，待你确认后执行。`, `Analysis completed: scenes and subjects were imported. ${postImportMissingItems} missing entities were detected; auto-supplement is disabled until your confirmation.`)
-                    : t('分析完成：场景与 subjects 已导入，导入后场景实体检查已完成。', 'Analysis completed: scenes and subjects were imported, and the post-import scene entity check finished.'),
+                    ? (
+                        postImportSupplementFailed > 0
+                            ? t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充成功 ${postImportSupplementCreated} 项、失败 ${postImportSupplementFailed} 项、跳过 ${postImportSupplementSkipped} 项。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                            : t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充 ${postImportSupplementCreated} 项（跳过 ${postImportSupplementSkipped} 项）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                    )
+                    : t('分析完成：未检测到实体缺失，流程已结束。', 'Analysis completed: no missing entities detected, workflow finished.'),
             });
 
             setShowAnalysisModal(false);
@@ -10281,7 +10341,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                                 {t('导入后场景检查', 'Post-import Scene Check')}: {t('已检查', 'Checked')}
                                 {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount || 0} ${t('个场景', 'scenes')},`}
                                 {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingSceneCount || 0} ${t('个场景存在缺失', 'scenes had gaps')},`}
-                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount || 0} ${t('个缺失待确认补充', 'missing entities pending confirmation')}。`}
+                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount || 0} ${t('个缺失项', 'missing items')},`}
+                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.createdItems?.length || 0} ${t('个已补充', 'supplemented')},`}
+                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.failedItems?.length || 0} ${t('个补充失败', 'supplement failed')}。`}
                             </div>
                             <div>
                                 {t('一致性检查', 'Consistency Check')}: {
@@ -12278,6 +12340,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
     const defaultSceneRegenRequirement = t('补充所缺实体', 'Supplement missing entities');
     const SCENE_AI_SHOTS_BATCH_KIND = 'scene-ai-shots-batch';
     const SCENE_AI_SHOTS_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
+    const ANALYSIS_TASK_MAX_AGE_MS = 10 * 60 * 1000;
+    const AI_SHOTS_TASK_MARKER_TTL_MS = 12 * 60 * 1000;
     const createBatchAiShotsProgressState = () => ({
         running: false,
         total: 0,

@@ -3455,6 +3455,19 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             text = re.sub(r"\s+", " ", text)
             return text
 
+        def _normalize_subject_compare_key(value: Any) -> str:
+            stable = _normalize_subject_name(value)
+            if not stable:
+                return ""
+            # Insert spaces for camelCase/PascalCase boundaries before compact compare.
+            stable = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", stable)
+            stable = stable.lower()
+            # Treat spaces/underscores/hyphens as equivalent for EN names.
+            stable = re.sub(r"[\s_\-]+", "", stable)
+            # Remove remaining punctuation/noise while keeping CJK/letters/digits.
+            stable = re.sub(r"[^\w\u4e00-\u9fff]", "", stable)
+            return stable
+
         def _extract_subjects_from_analysis_text(text: str) -> List[str]:
             raw = str(text or "")
             if not raw:
@@ -3522,12 +3535,23 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             json_subjects: List[str] = []
             for section in ("characters", "props", "environments"):
                 for item in entities_payload.get(section, []):
-                    normalized = _normalize_subject_name(item.get("name") or item.get("name_en") or "")
-                    if normalized:
-                        json_subjects.append(normalized)
+                    for raw_name in (item.get("name"), item.get("name_en")):
+                        normalized = _normalize_subject_name(raw_name or "")
+                        if normalized:
+                            json_subjects.append(normalized)
 
-            markdown_set = {s.lower(): s for s in markdown_subjects}
-            json_set = {s.lower(): s for s in json_subjects}
+            markdown_set = {}
+            for s in markdown_subjects:
+                key = _normalize_subject_compare_key(s)
+                if key and key not in markdown_set:
+                    markdown_set[key] = s
+
+            json_set = {}
+            for s in json_subjects:
+                key = _normalize_subject_compare_key(s)
+                if key and key not in json_set:
+                    json_set[key] = s
+
             missing = [display for key, display in markdown_set.items() if key not in json_set]
 
             warning_codes: List[str] = []
@@ -3639,6 +3663,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "Each negative_prompt_en must be English-only, style-aware, and aligned to that entity's generation_prompt_en. "
                 "For live-action realism, explicitly exclude plastic/waxy/CGI look and other realism-breaking artifacts."
             )
+
+        system_instruction += (
+            "\n\n"
+            "# Output Hard Constraint (English Naming)\n"
+            "For every entity JSON item, name_en MUST use natural English word spacing. "
+            "Use readable Title Case phrases like 'Demon Slayer Captain' or 'Harbor Office Front Mid Night', "
+            "and avoid 'DemonSlayerCaptain', 'Demon_Slayer_Captain', 'demon-slayer-captain', or 'HarborOffice_Front_Mid_Night'."
+        )
 
         # Inject authoritative character canon (if provided via episode_id)
         try:
@@ -3816,6 +3848,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 meta_parts.append(f"Language: {project_language}")
                 if any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
                     meta_parts.append("Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.")
+                    meta_parts.append("Subject Naming Rule (EN): Use spaces between English words in name_en and keep it as a readable Title Case phrase (e.g., 'Demon Slayer Captain', 'Harbor Office Front Mid Night'). Do NOT use snake_case, kebab-case, camelCase, or concatenated forms like 'DemonSlayerCaptain' or 'HarborOffice_Front_Mid_Night'.")
                     meta_parts.append("Subject Prompt Rule: Every subject JSON item must include BOTH generation_prompt_cn and generation_prompt_en, and the two prompts must be semantically aligned.")
             else:
                 meta_parts.append("Language: (empty)")
