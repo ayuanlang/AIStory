@@ -16832,6 +16832,65 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
     const { addLog: onLog } = useLog();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
+
+    const normalizeSubjectNameForLibrary = useCallback((value) => {
+        let text = String(value || '').trim();
+        if (!text) return '';
+        text = text
+            .replace(/[（【〔［]/g, '(')
+            .replace(/[）】〕］]/g, ')')
+            .replace(/[“”'"‘’`]/g, '')
+            .replace(/[\u2010-\u2015]/g, '-');
+        text = text.replace(/^CHAR:\s*/i, '');
+        text = text.replace(/^PROP:\s*/i, '');
+        text = text.replace(/^ENV:\s*/i, '');
+        text = text.replace(/^\[/, '').replace(/\]$/, '');
+        text = text.replace(/^@/, '').trim();
+        text = text.replace(/[\s_-]+/g, ' ').trim();
+        return text;
+    }, []);
+
+    const parseVisualDependencies = useCallback((value) => {
+        let candidates = [];
+
+        if (Array.isArray(value)) {
+            candidates = value;
+        } else if (typeof value === 'string') {
+            const raw = String(value || '').trim();
+            if (!raw) return [];
+
+            if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed)) {
+                        candidates = parsed;
+                    } else if (typeof parsed === 'string') {
+                        candidates = [parsed];
+                    }
+                } catch (_) {
+                    candidates = [];
+                }
+            }
+
+            if (candidates.length === 0) {
+                candidates = raw.split(/[\n,，;；|]/);
+            }
+        } else if (value != null) {
+            candidates = [value];
+        }
+
+        const out = [];
+        const seen = new Set();
+        for (const item of candidates) {
+            const normalized = normalizeSubjectNameForLibrary(item);
+            const key = normalizeEntityToken(normalized).replace(/[^\p{L}\p{N}\u4e00-\u9fff]/gu, '');
+            if (!normalized || !key || seen.has(key)) continue;
+            seen.add(key);
+            out.push(normalized);
+        }
+        return out;
+    }, [normalizeSubjectNameForLibrary]);
+
     const subjectBatchScopeKey = String(projectId || '');
     const SUBJECT_BATCH_PARALLEL_LIMIT = userBatchParallelLimit;
     const isMountedRef = useRef(false);
