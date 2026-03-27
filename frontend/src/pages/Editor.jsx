@@ -273,6 +273,65 @@ const splitSceneSubjectNames = (value) => {
         .filter(Boolean);
 };
 
+const normalizeSceneSubjectDefaultType = (value) => {
+    const stable = String(value || '').trim().toLowerCase();
+    if (stable === 'char') return 'character';
+    if (stable === 'characters') return 'character';
+    if (stable === 'props') return 'prop';
+    if (stable === 'env') return 'environment';
+    if (stable === 'environments') return 'environment';
+    return stable;
+};
+
+const parseTypedSceneSubjectToken = (rawToken, defaultType) => {
+    const stableDefaultType = normalizeSceneSubjectDefaultType(defaultType) || 'character';
+    const tokenText = String(rawToken || '').trim().replace(/^`+|`+$/g, '').trim();
+    if (!tokenText) {
+        return {
+            type: stableDefaultType,
+            name: '',
+        };
+    }
+
+    const typedMatch = tokenText.match(/^\s*(CHAR|PROP|ENV)\s*:\s*\[\s*([^\]]+?)\s*\]\s*$/i);
+    if (!typedMatch) {
+        return {
+            type: stableDefaultType,
+            name: tokenText,
+        };
+    }
+
+    const rawType = String(typedMatch[1] || '').trim().toLowerCase();
+    let resolvedType = stableDefaultType;
+    if (rawType === 'char') resolvedType = 'character';
+    else if (rawType === 'prop') resolvedType = 'prop';
+    else if (rawType === 'env') resolvedType = 'environment';
+
+    let cleanName = String(typedMatch[2] || '').trim();
+    if (resolvedType === 'character') {
+        cleanName = cleanName.replace(/^@+/, '').trim();
+    }
+
+    return {
+        type: resolvedType,
+        name: cleanName,
+    };
+};
+
+const extractSceneSubjectRefsFromField = (value, defaultType, sourceField) => {
+    const stableDefaultType = normalizeSceneSubjectDefaultType(defaultType) || 'character';
+    return splitSceneSubjectNames(value)
+        .map((token) => {
+            const parsed = parseTypedSceneSubjectToken(token, stableDefaultType);
+            return {
+                type: parsed.type || stableDefaultType,
+                name: parsed.name,
+                sourceField,
+            };
+        })
+        .filter((item) => String(item?.name || '').trim());
+};
+
 const buildSceneSubjectNameCandidates = (rawName) => {
     const source = String(rawName || '').trim();
     const candidates = new Set();
@@ -296,9 +355,9 @@ const buildSceneSubjectNameCandidates = (rawName) => {
 
 const extractSceneSubjectRefs = (scene) => {
     const refs = [
-        ...splitSceneSubjectNames(scene?.environment_name).map((name) => ({ type: 'environment', name, sourceField: 'environment_name' })),
-        ...splitSceneSubjectNames(scene?.linked_characters).map((name) => ({ type: 'character', name, sourceField: 'linked_characters' })),
-        ...splitSceneSubjectNames(scene?.key_props).map((name) => ({ type: 'prop', name, sourceField: 'key_props' })),
+        ...extractSceneSubjectRefsFromField(scene?.environment_name, 'environment', 'environment_name'),
+        ...extractSceneSubjectRefsFromField(scene?.linked_characters, 'character', 'linked_characters'),
+        ...extractSceneSubjectRefsFromField(scene?.key_props, 'prop', 'key_props'),
     ];
 
     const deduped = [];

@@ -93,6 +93,8 @@ services:
         value: "600"
       - key: GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS
         value: "1200"
+      - key: SYSTEM_API_CACHE_MAX_ROW_BYTES
+        value: "32768"
       - key: WEBHOOK_REPLAY_MAX_ITEMS
         value: "2000"
       - key: REMOTE_IMAGE_LOCALIZE_MAX_MB

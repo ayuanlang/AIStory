@@ -2375,9 +2375,9 @@ const Settings = () => {
                                                                     className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20"
                                                                 >
                                                                     <div className="md:col-span-8 text-xs">
-                                                                        <div className="text-muted-foreground">{t('模型', 'Model')}</div>
+                                                                        <div className="text-muted-foreground">{t('名称', 'Name')}</div>
                                                                         <div className="font-mono break-all flex flex-wrap items-center gap-2">
-                                                                            <span>{row.model || '-'}</span>
+                                                                            <span>{row.name || '-'}</span>
                                                                             {row.is_active && activeMode && (
                                                                                 <span className="text-[10px] px-1.5 py-0.5 rounded border border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-200">
                                                                                     {t('当前 mode', 'Current mode')}: {activeMode}
