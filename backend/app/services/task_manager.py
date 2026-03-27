@@ -25,6 +25,10 @@ _RESULT_TTL = 600  # 10 minutes
 _RUNNING_TASK_MAX_AGE_SECONDS = max(300, int(os.getenv("ASYNC_TASK_MAX_AGE_SECONDS", "1200")))
 _RESULT_MAX_BYTES = max(16 * 1024, int(os.getenv("ASYNC_TASK_RESULT_MAX_BYTES", str(256 * 1024)) or (256 * 1024)))
 _RESULT_PREVIEW_MAX_CHARS = max(512, int(os.getenv("ASYNC_TASK_RESULT_PREVIEW_MAX_CHARS", "4096") or 4096))
+_ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS = max(
+    60,
+    int(os.getenv("ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS", str(_RUNNING_TASK_MAX_AGE_SECONDS)) or _RUNNING_TASK_MAX_AGE_SECONDS),
+)
 
 # Global task store  {task_id: _TaskRecord}
 _tasks: Dict[str, "_TaskRecord"] = {}
@@ -463,9 +467,16 @@ def submit_async_endpoint(fn, *, user_id: int, kind: str, **fn_kwargs) -> str:
             asyncio.set_event_loop(loop)
             try:
                 result = loop.run_until_complete(
-                    fn(db=db, current_user=user, **fn_kwargs)
+                    asyncio.wait_for(
+                        fn(db=db, current_user=user, **fn_kwargs),
+                        timeout=_ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS,
+                    )
                 )
                 return _serialize_result(result)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"Async endpoint task timed out after {_ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS}s"
+                ) from exc
             finally:
                 loop.close()
         finally:

@@ -9111,6 +9111,7 @@ def export_system_config_sync_bundle_for_manage(
         logger.warning("Skip sync export WeChat pay configs: table wechat_pay_configs not found")
 
     task_default_payload: List[Dict[str, Any]] = []
+    task_default_export_source = "system_task_default_apis"
     if HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis"):
         task_default_rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
         for row in task_default_rows:
@@ -9131,6 +9132,7 @@ def export_system_config_sync_bundle_for_manage(
     else:
         if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
             logger.warning("Skip sync export dedicated task defaults table: table system_task_default_apis not found, fallback to SystemAPISetting.is_active")
+        task_default_export_source = "system_api_settings.is_active_fallback"
         # Legacy fallback: export inferred defaults from active settings.
         active_rows = db.query(SystemAPISetting).filter(
             SystemAPISetting.is_active == True,
@@ -9164,6 +9166,14 @@ def export_system_config_sync_bundle_for_manage(
         "wechat_pay_configs": wechat_payload,
         "task_default_apis": task_default_payload,
     }
+    exported_row_counts = {
+        "system_api_settings": len(system_rows),
+        "system_api_billing_rules": len(billing_rules_payload),
+        "provider_key_pool": len(provider_key_pools_payload),
+        "smtp_system_configs": len(smtp_payload),
+        "wechat_pay_configs": len(wechat_payload),
+        "system_task_default_apis": len(task_default_payload),
+    }
 
     return {
         "version": 1,
@@ -9177,6 +9187,8 @@ def export_system_config_sync_bundle_for_manage(
             "wechat_pay_configs": len(data["wechat_pay_configs"]),
             "task_default_apis": len(data["task_default_apis"]),
             "excluded_deprecated_system_apis": excluded_deprecated_system_apis,
+            "exported_row_counts": exported_row_counts,
+            "task_default_export_source": task_default_export_source,
         },
         "data": data,
     }

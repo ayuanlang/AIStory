@@ -3728,7 +3728,14 @@ const UserAdmin = () => {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            alert('System config sync bundle exported.');
+            const exportedRowCounts = payload?.summary?.exported_row_counts && typeof payload.summary.exported_row_counts === 'object'
+                ? payload.summary.exported_row_counts
+                : {};
+            const exportedCountsSummary = Object.entries(exportedRowCounts)
+                .map(([tableName, count]) => `${tableName}: ${Number(count || 0)}`)
+                .join(', ');
+            const taskDefaultExportSource = String(payload?.summary?.task_default_export_source || '').trim();
+            alert(`System config sync bundle exported.${exportedCountsSummary ? ` Exported Rows: ${exportedCountsSummary}` : ''}${taskDefaultExportSource ? `, task_default_apis source: ${taskDefaultExportSource}` : ''}`);
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || 'Failed to export system config sync bundle');
         } finally {
