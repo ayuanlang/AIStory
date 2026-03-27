@@ -76,6 +76,8 @@ from app.schemas.settings import (
     BillingRuleResetConfigUpdate,
     SoraMentionConfigOut,
     SoraMentionConfigUpdate,
+    AssetImageRatioConfigOut,
+    AssetImageRatioConfigUpdate,
     SystemAIAssistantRequest,
     SystemAIAssistantResponse,
     SystemAIAssistantSuggestion,
@@ -155,6 +157,7 @@ _AGENT_POLICY_PROVIDER = "agent_policy"
 _AGENT_POLICY_MODEL = "tool_acl"
 _BILLING_RESET_CONFIG_KEY = "billing_rule_reset_config"
 _SORA_MENTION_CONFIG_KEY = "sora_mention_config"
+_ASSET_IMAGE_RATIO_CONFIG_KEY = "asset_image_ratio_config"
 _BILLING_RESET_MAX_INCREASE_DEFAULT = 50
 _BILLING_RESET_MIN_MULTIPLIER_DEFAULT = 1.1
 _BILLING_RESET_MAX_MULTIPLIER_DEFAULT = 2.0
@@ -486,6 +489,13 @@ def _default_sora_mention_config() -> Dict[str, Any]:
     }
 
 
+def _default_asset_image_ratio_config() -> Dict[str, Any]:
+    return {
+        "subject_aspect_ratio": "16:9",
+        "cover_aspect_ratio": "3:4",
+    }
+
+
 def _normalize_sora_mention_config(value: Any) -> Dict[str, Any]:
     base = _default_sora_mention_config()
     payload = _safe_json_dict(value)
@@ -501,6 +511,21 @@ def _normalize_sora_mention_config(value: Any) -> Dict[str, Any]:
     # Upload depends on mention mode.
     if not base["auto_use_sora_mention"]:
         base["auto_upload_character"] = False
+
+    return base
+
+
+def _normalize_asset_image_ratio_config(value: Any) -> Dict[str, Any]:
+    base = _default_asset_image_ratio_config()
+    payload = _safe_json_dict(value)
+
+    subject_ratio = str(payload.get("subject_aspect_ratio") or "").strip()
+    if subject_ratio:
+        base["subject_aspect_ratio"] = subject_ratio
+
+    cover_ratio = str(payload.get("cover_aspect_ratio") or "").strip()
+    if cover_ratio:
+        base["cover_aspect_ratio"] = cover_ratio
 
     return base
 
@@ -564,6 +589,16 @@ def _get_sora_mention_config(db: Session) -> Dict[str, Any]:
     cfg = _safe_json_dict(row.config)
     normalized = _normalize_sora_mention_config(cfg.get(_SORA_MENTION_CONFIG_KEY, {}))
     cfg[_SORA_MENTION_CONFIG_KEY] = normalized
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    return normalized
+
+
+def _get_asset_image_ratio_config(db: Session) -> Dict[str, Any]:
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    normalized = _normalize_asset_image_ratio_config(cfg.get(_ASSET_IMAGE_RATIO_CONFIG_KEY, {}))
+    cfg[_ASSET_IMAGE_RATIO_CONFIG_KEY] = normalized
     row.config = cfg
     _persist_agent_policy_row_config(db, row.id, row.config)
     return normalized
@@ -5963,6 +5998,19 @@ def get_sora_mention_config(
     return SoraMentionConfigOut(**cfg)
 
 
+@router.get("/settings/system/manage/asset-image-ratio-config", response_model=AssetImageRatioConfigOut)
+def get_asset_image_ratio_config(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage asset image ratio config")
+
+    cfg = _get_asset_image_ratio_config(db)
+    db.commit()
+    return AssetImageRatioConfigOut(**cfg)
+
+
 @router.put("/settings/system/manage/billing-rules/reset-config", response_model=BillingRuleResetConfigOut)
 def update_billing_rule_reset_config(
     payload: BillingRuleResetConfigUpdate,
@@ -6007,6 +6055,29 @@ def update_sora_mention_config(
 
     normalized = _normalize_sora_mention_config(_safe_json_dict(row.config).get(_SORA_MENTION_CONFIG_KEY, {}))
     return SoraMentionConfigOut(**normalized)
+
+
+@router.put("/settings/system/manage/asset-image-ratio-config", response_model=AssetImageRatioConfigOut)
+def update_asset_image_ratio_config(
+    payload: AssetImageRatioConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage asset image ratio config")
+
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    current_cfg = _normalize_asset_image_ratio_config(cfg.get(_ASSET_IMAGE_RATIO_CONFIG_KEY, {}))
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    merged_cfg = {**current_cfg, **_safe_json_dict(patch)}
+    cfg[_ASSET_IMAGE_RATIO_CONFIG_KEY] = _normalize_asset_image_ratio_config(merged_cfg)
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    db.commit()
+
+    normalized = _normalize_asset_image_ratio_config(_safe_json_dict(row.config).get(_ASSET_IMAGE_RATIO_CONFIG_KEY, {}))
+    return AssetImageRatioConfigOut(**normalized)
 
 
 @router.get("/settings/system/manage/{system_api_id}/billing-rules", response_model=List[SystemAPIBillingRuleOut])
@@ -8529,25 +8600,34 @@ def _rebuild_sync_config_tables_for_replace_all(db: Session) -> Dict[str, bool]:
     use_cascade = dialect_name == "postgresql"
 
     with bind.begin() as conn:
-        inspector = inspect(conn)
-
         for table_name, _model_cls in drop_table_specs:
+            inspector = inspect(conn)
+            if not inspector.has_table(table_name):
+                continue
             try:
-                if inspector.has_table(table_name):
-                    drop_sql = f"DROP TABLE IF EXISTS {table_name} CASCADE" if use_cascade else f"DROP TABLE IF EXISTS {table_name}"
-                    conn.execute(text(drop_sql))
+                drop_sql = f"DROP TABLE IF EXISTS {table_name} CASCADE" if use_cascade else f"DROP TABLE IF EXISTS {table_name}"
+                conn.execute(text(drop_sql))
             except Exception as exc:
-                logger.warning("Failed to rebuild table %s during sync replace_all: %s", table_name, exc)
+                raise RuntimeError(
+                    f"replace_all rebuild failed [phase=drop table={table_name} db_error={type(exc).__name__}]: {exc}"
+                ) from exc
+
+            verify_drop_inspector = inspect(conn)
+            if verify_drop_inspector.has_table(table_name):
+                raise RuntimeError(f"replace_all rebuild failed [phase=verify_drop table={table_name}]: table still exists after DROP")
 
         for table_name, model_cls in create_table_specs:
             try:
                 model_cls.__table__.create(bind=conn, checkfirst=True)
             except Exception as exc:
-                logger.warning("Failed to rebuild table %s during sync replace_all: %s", table_name, exc)
+                raise RuntimeError(
+                    f"replace_all rebuild failed [phase=create table={table_name} db_error={type(exc).__name__}]: {exc}"
+                ) from exc
 
-        inspector = inspect(conn)
         for table_name, _model_cls in create_table_specs:
-            rebuilt[table_name] = bool(inspector.has_table(table_name))
+            rebuilt[table_name] = bool(inspect(conn).has_table(table_name))
+            if not rebuilt[table_name]:
+                raise RuntimeError(f"replace_all rebuild failed [phase=verify_create table={table_name}]: table was not recreated")
 
     db.expire_all()
 
@@ -8667,31 +8747,114 @@ def _clear_non_system_settings_for_replace_all(db: Session) -> None:
     _run_sqlite_lock_retry(db, "replace_all flush non-system settings", db.flush)
 
 
-def _prepare_sync_replace_all_state(db: Session) -> Dict[str, bool]:
-    target_ids = [
+def _clear_sync_config_table_rows_for_replace_all(db: Session) -> Dict[str, int]:
+    cleared = {
+        "system_api_settings": 0,
+        "system_api_billing_rules": 0,
+        "provider_key_pool": 0,
+        "smtp_system_configs": 0,
+        "wechat_pay_configs": 0,
+        "system_task_default_apis": 0,
+    }
+
+    system_ids = [
         int(row_id)
         for row_id, in db.query(SystemAPISetting.id).all()
     ]
 
-    if target_ids:
-        rule_ids: List[int] = []
-        if _db_has_table(db, "system_api_billing_rules"):
-            rule_ids = [
-                int(rule_id)
-                for rule_id, in db.query(SystemAPIBillingRule.id).filter(
-                    SystemAPIBillingRule.system_api_id.in_(target_ids),
-                ).all()
-            ]
+    rule_ids: List[int] = []
+    if system_ids and _db_has_table(db, "system_api_billing_rules"):
+        rule_ids = [
+            int(rule_id)
+            for rule_id, in db.query(SystemAPIBillingRule.id).filter(
+                SystemAPIBillingRule.system_api_id.in_(system_ids),
+            ).all()
+        ]
 
+    if system_ids:
         _safe_clear_transaction_action_rule_links(
             db,
-            clear_system_api_ids=target_ids,
+            clear_system_api_ids=system_ids,
             clear_rule_ids=rule_ids,
         )
 
+    if _db_has_table(db, "system_api_billing_rules"):
+        cleared["system_api_billing_rules"] = int(db.query(SystemAPIBillingRule).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "replace_all clear billing rules table rows",
+            lambda: db.query(SystemAPIBillingRule).delete(synchronize_session=False),
+        )
+
+    if HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis"):
+        cleared["system_task_default_apis"] = int(db.query(TaskDefaultSystemAPI).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "replace_all clear task defaults table rows",
+            lambda: db.query(TaskDefaultSystemAPI).delete(synchronize_session=False),
+        )
+
+    cleared["system_api_settings"] = int(db.query(SystemAPISetting).count() or 0)
+    _run_sqlite_lock_retry(
+        db,
+        "replace_all clear system_api_settings table rows",
+        lambda: db.query(SystemAPISetting).delete(synchronize_session=False),
+    )
+
+    if _db_has_table(db, "provider_key_pool"):
+        cleared["provider_key_pool"] = int(db.query(ProviderKeyPool).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "replace_all clear provider key pool table rows",
+            lambda: db.query(ProviderKeyPool).delete(synchronize_session=False),
+        )
+
+    if _db_has_table(db, "smtp_system_configs"):
+        cleared["smtp_system_configs"] = int(db.query(SMTPSystemConfig).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "replace_all clear smtp configs table rows",
+            lambda: db.query(SMTPSystemConfig).delete(synchronize_session=False),
+        )
+
+    if _db_has_table(db, "wechat_pay_configs"):
+        cleared["wechat_pay_configs"] = int(db.query(WechatPayConfig).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "replace_all clear wechat pay configs table rows",
+            lambda: db.query(WechatPayConfig).delete(synchronize_session=False),
+        )
+
+    _run_sqlite_lock_retry(db, "replace_all flush cleared sync rows", db.flush)
+    return cleared
+
+
+def _prepare_sync_replace_all_state(db: Session) -> Dict[str, Any]:
+    cleared_rows = _clear_sync_config_table_rows_for_replace_all(db)
+
     db.commit()
 
-    return _rebuild_sync_config_tables_for_replace_all(db)
+    return {
+        "cleared_rows": cleared_rows,
+        "rebuilt_tables": _rebuild_sync_config_tables_for_replace_all(db),
+    }
+
+
+def _stringify_sync_import_error(exc: Exception) -> str:
+    parts: List[str] = []
+    current: Optional[BaseException] = exc
+    depth = 0
+    while current is not None and depth < 4:
+        text = str(current or "").strip()
+        if text:
+            parts.append(text)
+        current = current.__cause__
+        depth += 1
+
+    merged = " | caused_by: ".join(parts).strip()
+    if len(merged) > 1200:
+        merged = f"{merged[:1200]}..."
+    return merged
 
 
 def _import_provider_bundle_no_commit(
@@ -9058,9 +9221,15 @@ def import_system_config_sync_bundle_for_manage(
         has_wechat_table = _db_has_table(db, "wechat_pay_configs")
         has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
         rebuilt_tables: Dict[str, bool] = {}
+        cleared_rows: Dict[str, int] = {}
 
         if replace_all:
-            rebuilt_tables = _prepare_sync_replace_all_state(db)
+            replace_state = _prepare_sync_replace_all_state(db)
+            rebuilt_tables = dict(replace_state.get("rebuilt_tables") or {})
+            cleared_rows = {
+                str(key): int(value or 0)
+                for key, value in dict(replace_state.get("cleared_rows") or {}).items()
+            }
             _ensure_builtin_system_settings(db)
             _ensure_settings_system_indexes(db)
             has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
@@ -9273,6 +9442,7 @@ def import_system_config_sync_bundle_for_manage(
             "ok": True,
             "replace_all": replace_all,
             "rebuild_tables": rebuilt_tables,
+            "cleared_rows": cleared_rows,
             "provider_result": provider_result,
             "billing_rules": {
                 "created": billing_created,
@@ -9315,9 +9485,7 @@ def import_system_config_sync_bundle_for_manage(
             db.rollback()
         except Exception:
             pass
-        err_text = str(exc or "").strip()
-        if len(err_text) > 240:
-            err_text = f"{err_text[:240]}..."
+        err_text = _stringify_sync_import_error(exc)
         detail = f"sync bundle import failed: {type(exc).__name__}"
         if err_text:
             detail = f"{detail}: {err_text}"

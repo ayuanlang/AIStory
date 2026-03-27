@@ -348,6 +348,9 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
 }
 
 _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "180")))
+_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(30, int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "180") or 180))
+_ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP = max(2, min(32, int(os.getenv("ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP", "12") or 12)))
+_ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP = max(20000, int(os.getenv("ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP", "120000") or 120000))
 _ANALYZE_SCENE_RECENT_TASKS: Dict[str, Dict[str, Any]] = {}
 _ANALYZE_SCENE_RECENT_TASKS_LOCK = threading.Lock()
 
@@ -4379,7 +4382,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Important: keep continuation prompts small (do NOT send the entire prior output back)
         # to avoid blowing up prompt size / hitting context window.
         # Token cap is controlled by provider/model config; local continuation only keeps a high safety ceiling.
-        max_segments = min(1000, max(1, _to_int(cfg_obj.get("continuation_max_segments")) or 200))
+        requested_max_segments = max(1, _to_int(cfg_obj.get("continuation_max_segments")) or 12)
+        max_segments = min(_ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP, requested_max_segments)
         tail_chars = 1600
         continuation_instruction_tpl = (
             "Continue exactly where you left off, immediately after the following suffix. "
@@ -4402,6 +4406,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         resolved_llm_routing: Dict[str, Any] = {}
         finish_reason = None
         continuation_stopped_by_max_segments = False
+        output_char_cap_reached = False
         continuation_reason_counts: Dict[str, int] = {}
         continuation_by_structure = 0
         provider_limit_hints: List[str] = []
@@ -4437,7 +4442,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         _release_db_connection(db, "analyze_scene_llm_call")
 
         for seg_idx in range(1, max_segments + 1):
-            llm_resp = await llm_service.chat_completion_with_fallback(current_messages, config)
+            try:
+                llm_resp = await asyncio.wait_for(
+                    llm_service.chat_completion_with_fallback(current_messages, config),
+                    timeout=_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"analyze_scene segment timed out after {_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS}s",
+                ) from exc
             current_routing = _extract_llm_routing_metadata(llm_resp)
             if current_routing:
                 resolved_llm_routing = current_routing
@@ -4478,6 +4492,19 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             })
 
             accumulated = "".join(result_parts)
+            if len(accumulated) >= _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP:
+                output_char_cap_reached = True
+                finish_reason = part_finish or finish_reason or "safety_output_cap"
+                logger.warning(
+                    "[analyze_scene] safety_output_cap_reached episode_id=%s provider=%s model=%s chars=%s cap=%s segments=%s",
+                    getattr(request, "episode_id", None),
+                    (config or {}).get("provider"),
+                    (config or {}).get("model"),
+                    len(accumulated),
+                    _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
+                    len(segments_meta or []),
+                )
+                break
             section_meta = _detect_scene_output_sections(accumulated)
             missing_sections = [str(x) for x in (section_meta.get("missing_sections") or []) if str(x)]
             continue_due_to_length = _is_length_finish_reason(part_finish)
@@ -4569,6 +4596,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "usage": usage,
             "segments": segments_meta,
             "max_segments": max_segments,
+            "requested_max_segments": requested_max_segments,
+            "segment_timeout_seconds": _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
+            "output_char_hard_cap": _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
+            "output_char_cap_reached": output_char_cap_reached,
             "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,
             "continuation_reason_counts": continuation_reason_counts,
             "continuation_by_structure": continuation_by_structure,
@@ -4697,6 +4728,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             response_payload["warnings"] = integrity_meta.get("warnings")
         if integrity_meta.get("warning_codes"):
             response_payload["warning_codes"] = integrity_meta.get("warning_codes")
+
+        if output_char_cap_reached:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                f"Analysis output reached safety cap of {_ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP} characters and was stopped early.",
+            ]
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                "ANALYSIS_OUTPUT_CHAR_CAP_REACHED",
+            ]
 
         if sc_warnings:
             response_payload["warnings"] = [
@@ -5524,6 +5565,7 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     global_info: Optional[dict] = None
     aspectRatio: Optional[str] = None
+    cover_image: Optional[str] = None
     share_users: Optional[List[str]] = None
     reviewer_users: Optional[List[str]] = None
 
@@ -6434,6 +6476,12 @@ def _attach_project_flags(project: Project, current_user: User) -> Project:
     return project
 
 def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if project and isinstance(project.global_info, dict):
+        configured_cover = str(project.global_info.get("cover_image") or project.global_info.get("coverImage") or "").strip()
+        if configured_cover:
+            return configured_cover
+
     # 1. Try to find first valid image in Shots
     # Check if project_id is populated in shots first (optimization)
     shot = db.query(Shot).filter(Shot.project_id == project_id, Shot.image_url != None, Shot.image_url != "").first()
@@ -8595,6 +8643,16 @@ def update_project(
     if project_in.description is not None:
         current_info = dict(project.global_info) if project.global_info else {}
         current_info['notes'] = project_in.description
+        project.global_info = current_info
+
+    if project_in.cover_image is not None:
+        current_info = dict(project.global_info) if project.global_info else {}
+        cover_image = str(project_in.cover_image or "").strip()
+        if cover_image:
+            current_info['cover_image'] = cover_image
+        else:
+            current_info.pop('cover_image', None)
+            current_info.pop('coverImage', None)
         project.global_info = current_info
 
     _sync_project_managed_shares(
@@ -20787,13 +20845,47 @@ async def _run_generate_image(
                 return (None, None)
             return (w, h)
 
+        def _get_asset_image_ratio_config_local() -> Dict[str, str]:
+            default_cfg = {
+                "subject_aspect_ratio": "16:9",
+                "cover_aspect_ratio": "3:4",
+            }
+            try:
+                row = db.execute(text("""
+                    SELECT config
+                    FROM system_api_settings
+                    WHERE category = :category
+                      AND provider = :provider
+                      AND model = :model
+                    ORDER BY id DESC
+                    LIMIT 1
+                """), {
+                    "category": "System_Payment",
+                    "provider": "agent_policy",
+                    "model": "tool_acl",
+                }).mappings().first()
+                raw_config = row.get("config") if row else {}
+                top_level = _safe_json_dict(raw_config)
+                ratio_cfg = _safe_json_dict(top_level.get("asset_image_ratio_config", {}))
+                subject_ratio = str(ratio_cfg.get("subject_aspect_ratio") or "").strip()
+                cover_ratio = str(ratio_cfg.get("cover_aspect_ratio") or "").strip()
+                if subject_ratio:
+                    default_cfg["subject_aspect_ratio"] = subject_ratio
+                if cover_ratio:
+                    default_cfg["cover_aspect_ratio"] = cover_ratio
+            except Exception as exc:
+                logger.warning("[GenerateImage] failed to load asset image ratio config: %s", exc)
+            return default_cfg
+
         req_aspect_ratio = str(getattr(req, "aspect_ratio", "") or "").strip() or None
         request_meta = _safe_json_dict(
             getattr(req, "metadata", None)
             or getattr(req, "meta_info", None)
             or getattr(req, "meta", None)
         )
-        is_subject_generation = str(getattr(req, "asset_type", "") or "").strip().lower() == "subject"
+        asset_type = str(getattr(req, "asset_type", "") or "").strip().lower()
+        is_subject_generation = asset_type == "subject"
+        is_cover_generation = asset_type in {"cover", "poster", "project_cover", "cover_image"}
         resolved_subject_type = _normalize_entity_type(
             getattr(req, "subject_type", None)
             or getattr(req, "entity_type", None)
@@ -20807,6 +20899,16 @@ async def _run_generate_image(
         if not image_size:
             image_size = None
         project_global_info: Dict[str, Any] = {}
+        asset_ratio_config = _get_asset_image_ratio_config_local()
+
+        if is_subject_generation:
+            configured_subject_ratio = str(asset_ratio_config.get("subject_aspect_ratio") or "").strip()
+            if configured_subject_ratio:
+                aspect_ratio = configured_subject_ratio
+        elif is_cover_generation:
+            configured_cover_ratio = str(asset_ratio_config.get("cover_aspect_ratio") or "").strip()
+            if configured_cover_ratio:
+                aspect_ratio = configured_cover_ratio
 
         # Only read project-level realtime config for visual params.
         if resolved_project_id:

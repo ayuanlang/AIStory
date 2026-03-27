@@ -19,7 +19,7 @@ import ipaddress
 import mimetypes
 from PIL import Image
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union, Callable
+from typing import List, Dict, Any, Optional, Union, Callable, Set
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -6285,6 +6285,66 @@ class MediaGenerationService:
 
         return None
 
+    def _extract_zlhub_moderation_items(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+
+        items = payload.get("items")
+        if not isinstance(items, list):
+            for key in ("data", "result", "output"):
+                nested = payload.get(key)
+                if isinstance(nested, dict) and isinstance(nested.get("items"), list):
+                    items = nested.get("items")
+                    break
+
+        if not isinstance(items, list):
+            return []
+
+        normalized_items: List[Dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, dict):
+                normalized_items.append(item)
+        return normalized_items
+
+    def _parse_zlhub_moderation_item(self, item: Dict[str, Any], fallback_ref: str = "") -> Dict[str, Any]:
+        approved_ref = self._extract_zlhub_moderation_asset_ref({"items": [item]}) or str(fallback_ref or "").strip()
+        result = {
+            "checked": True,
+            "blocked": False,
+            "status": None,
+            "reason": None,
+            "approved_ref": approved_ref,
+            "raw": item or {},
+        }
+
+        try:
+            submit_status = int(item.get("submit_review_status"))
+            result["blocked"] = submit_status != 1
+            result["status"] = "submitted" if submit_status == 1 else "submission_failed"
+            result["reason"] = "submit_review_status" if submit_status == 1 else "submit_review_status_not_1"
+            return result
+        except Exception:
+            pass
+
+        status = str(
+            item.get("status")
+            or item.get("result")
+            or item.get("verdict")
+            or item.get("decision")
+            or ""
+        ).strip().lower()
+        if status:
+            result["status"] = status
+            result["reason"] = str(item.get("reason") or item.get("message") or status)
+            if status in {"pass", "passed", "approved", "allow", "allowed", "safe", "ok", "success", "compliant"}:
+                result["blocked"] = False
+                return result
+            if status in {"block", "blocked", "reject", "rejected", "fail", "failed", "unsafe", "violation", "violated", "non_compliant"}:
+                result["blocked"] = True
+                return result
+
+        return result
+
     def _parse_zlhub_moderation_decision(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         result = {
             "blocked": False,
@@ -6369,53 +6429,165 @@ class MediaGenerationService:
 
         return result
 
-    async def _maybe_moderate_zlhub_image(self, image_ref: Any, config: Dict[str, Any], role: str) -> Dict[str, Any]:
-        tool_conf = config.get("config", {}) or {}
-        moderation_enabled = bool(tool_conf.get("moderation_enabled", True))
-        if not moderation_enabled:
-            return {"checked": False, "blocked": False, "reason": "disabled"}
+    def _resolve_zlhub_moderation_settings(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        outer = config if isinstance(config, dict) else {}
+        tool_conf = self._safe_json_dict(outer.get("config"))
 
-        moderation_user_id = str(
-            tool_conf.get("moderation_user_id")
-            or tool_conf.get("moderationUserId")
-            or tool_conf.get("user_id")
-            or tool_conf.get("userId")
-            or config.get("moderation_user_id")
-            or config.get("moderationUserId")
-            or config.get("user_id")
-            or config.get("userId")
-            or ""
-        ).strip()
-        moderation_key = str(
-            tool_conf.get("moderation_aes_key")
-            or tool_conf.get("moderationAesKey")
-            or tool_conf.get("moderation_key")
-            or tool_conf.get("moderationKey")
-            or config.get("moderation_aes_key")
-            or config.get("moderationAesKey")
-            or config.get("moderation_key")
-            or config.get("moderationKey")
-            or ""
-        ).strip()
-        moderation_required = bool(tool_conf.get("moderation_required", True))
+        resolved: Dict[str, Any] = {
+            "moderation_enabled": bool(tool_conf.get("moderation_enabled", True)),
+            "moderation_required": bool(tool_conf.get("moderation_required", True)),
+            "moderation_endpoint": str(
+                tool_conf.get("moderation_endpoint")
+                or tool_conf.get("moderationEndpoint")
+                or outer.get("moderation_endpoint")
+                or outer.get("moderationEndpoint")
+                or ""
+            ).strip(),
+            "moderation_user_id": str(
+                tool_conf.get("moderation_user_id")
+                or tool_conf.get("moderationUserId")
+                or tool_conf.get("user_id")
+                or tool_conf.get("userId")
+                or outer.get("moderation_user_id")
+                or outer.get("moderationUserId")
+                or outer.get("user_id")
+                or outer.get("userId")
+                or ""
+            ).strip(),
+            "moderation_aes_key": str(
+                tool_conf.get("moderation_aes_key")
+                or tool_conf.get("moderationAesKey")
+                or tool_conf.get("moderation_key")
+                or tool_conf.get("moderationKey")
+                or outer.get("moderation_aes_key")
+                or outer.get("moderationAesKey")
+                or outer.get("moderation_key")
+                or outer.get("moderationKey")
+                or ""
+            ).strip(),
+            "source": "current_config",
+        }
+
+        def _merge_candidate(candidate_cfg: Dict[str, Any], source: str) -> bool:
+            if not isinstance(candidate_cfg, dict):
+                return False
+            changed = False
+            for key in ("moderation_user_id", "moderation_aes_key", "moderation_endpoint"):
+                if resolved.get(key):
+                    continue
+                raw_value = candidate_cfg.get(key)
+                if raw_value is None and key == "moderation_user_id":
+                    raw_value = candidate_cfg.get("moderationUserId") or candidate_cfg.get("user_id") or candidate_cfg.get("userId")
+                if raw_value is None and key == "moderation_aes_key":
+                    raw_value = candidate_cfg.get("moderationAesKey") or candidate_cfg.get("moderation_key") or candidate_cfg.get("moderationKey")
+                if raw_value is None and key == "moderation_endpoint":
+                    raw_value = candidate_cfg.get("moderationEndpoint")
+                value = str(raw_value or "").strip()
+                if value:
+                    resolved[key] = value
+                    changed = True
+            if changed and source:
+                resolved["source"] = source
+            return changed
+
+        if not resolved.get("moderation_user_id") or not resolved.get("moderation_aes_key"):
+            provider_aliases = ["zlhub", "lzhbu", "zhonglian"]
+            seen_ids: Set[int] = set()
+            for provider_alias in provider_aliases:
+                try:
+                    with SessionLocal() as session:
+                        rows = (
+                            self._system_setting_query(session, provider=provider_alias)
+                            .filter(SystemAPISetting.is_active == True)
+                            .order_by(SystemAPISetting.id.desc())
+                            .all()
+                        )
+                except Exception as exc:
+                    logger.warning("zlhub moderation fallback lookup failed | provider=%s err=%s", provider_alias, exc)
+                    continue
+
+                for row in rows:
+                    row_id = int(getattr(row, "id", 0) or 0)
+                    if row_id > 0 and row_id in seen_ids:
+                        continue
+                    if row_id > 0:
+                        seen_ids.add(row_id)
+                    row_cfg = self._safe_json_dict(getattr(row, "config", None))
+                    if not row_cfg:
+                        continue
+                    if _merge_candidate(row_cfg, f"system_setting:{row_id or provider_alias}"):
+                        if resolved.get("moderation_user_id") and resolved.get("moderation_aes_key"):
+                            break
+                if resolved.get("moderation_user_id") and resolved.get("moderation_aes_key"):
+                    break
+
+        if not resolved.get("moderation_user_id"):
+            resolved["moderation_user_id"] = str(
+                os.getenv("ZLHUB_MODERATION_USER_ID")
+                or os.getenv("LZHBU_MODERATION_USER_ID")
+                or ""
+            ).strip()
+            if resolved.get("moderation_user_id"):
+                resolved["source"] = "env"
+
+        if not resolved.get("moderation_aes_key"):
+            resolved["moderation_aes_key"] = str(
+                os.getenv("ZLHUB_MODERATION_AES_KEY")
+                or os.getenv("LZHBU_MODERATION_AES_KEY")
+                or ""
+            ).strip()
+            if resolved.get("moderation_aes_key"):
+                resolved["source"] = "env"
+
+        if not resolved.get("moderation_endpoint"):
+            resolved["moderation_endpoint"] = str(
+                os.getenv("ZLHUB_MODERATION_ENDPOINT")
+                or os.getenv("LZHBU_MODERATION_ENDPOINT")
+                or ""
+            ).strip()
+
+        return resolved
+
+    async def _maybe_moderate_zlhub_images(self, image_refs: List[Any], config: Dict[str, Any], roles: Optional[List[str]] = None) -> Dict[str, Any]:
+        moderation_cfg = self._resolve_zlhub_moderation_settings(config)
+        moderation_enabled = bool(moderation_cfg.get("moderation_enabled", True))
+        if not moderation_enabled:
+            return {"checked": False, "blocked": False, "reason": "disabled", "items": []}
+
+        normalized_refs = [str(item or "").strip() for item in (image_refs or []) if str(item or "").strip()]
+        if not normalized_refs:
+            return {"checked": False, "blocked": False, "reason": "empty_ref", "items": []}
+
+        normalized_roles = [str(item or "").strip() for item in (roles or [])]
+        if len(normalized_roles) < len(normalized_refs):
+            normalized_roles.extend([""] * (len(normalized_refs) - len(normalized_roles)))
+
+        moderation_user_id = str(moderation_cfg.get("moderation_user_id") or "").strip()
+        moderation_key = str(moderation_cfg.get("moderation_aes_key") or "").strip()
+        moderation_required = bool(moderation_cfg.get("moderation_required", True))
         if not moderation_user_id or not moderation_key:
             if moderation_required:
+                logger.warning(
+                    "zlhub moderation credentials missing | provider=%s model=%s source=%s has_user_id=%s has_aes_key=%s",
+                    config.get("provider"),
+                    config.get("model"),
+                    moderation_cfg.get("source"),
+                    bool(moderation_user_id),
+                    bool(moderation_key),
+                )
                 return {
                     "checked": False,
                     "blocked": True,
                     "error": "zlhub moderation credentials missing",
                     "submit_failed": True,
+                    "items": [],
                 }
-            return {"checked": False, "blocked": False, "reason": "credentials_missing"}
+            return {"checked": False, "blocked": False, "reason": "credentials_missing", "items": []}
 
         moderation_endpoint = self._normalize_zlhub_moderation_endpoint(
-            tool_conf.get("moderation_endpoint") or tool_conf.get("moderationEndpoint")
+            moderation_cfg.get("moderation_endpoint")
         )
-        resolved_ref = str(image_ref or "").strip()
-        if not resolved_ref:
-            return {"checked": False, "blocked": False, "reason": "empty_ref"}
-
-        business_payload: Dict[str, Any] = {"images": [resolved_ref]}
+        business_payload: Dict[str, Any] = {"images": normalized_refs}
 
         encrypted_data = self._encrypt_zlhub_payload(business_payload, moderation_key)
         request_payload = {
@@ -6447,6 +6619,7 @@ class MediaGenerationService:
                 "blocked": moderation_required,
                 "error": f"zlhub moderation request failed: {exc}",
                 "submit_failed": moderation_required,
+                "items": [],
             }
 
         if resp.status_code != 200:
@@ -6456,6 +6629,7 @@ class MediaGenerationService:
                 "error": f"zlhub moderation failed {resp.status_code}",
                 "details": (resp.text or "")[:1000],
                 "submit_failed": moderation_required,
+                "items": [],
             }
 
         try:
@@ -6475,15 +6649,49 @@ class MediaGenerationService:
                 "blocked": moderation_required,
                 "error": f"zlhub moderation decrypt failed: {exc}",
                 "submit_failed": moderation_required,
+                "items": [],
             }
 
-        decision = self._parse_zlhub_moderation_decision(decrypted_payload if isinstance(decrypted_payload, dict) else {})
-        decision.update({
+        payload_dict = decrypted_payload if isinstance(decrypted_payload, dict) else {}
+        raw_items = self._extract_zlhub_moderation_items(payload_dict)
+        parsed_items: List[Dict[str, Any]] = []
+        for idx, raw_ref in enumerate(normalized_refs):
+            item_payload = raw_items[idx] if idx < len(raw_items) and isinstance(raw_items[idx], dict) else {}
+            item_result = self._parse_zlhub_moderation_item(item_payload, raw_ref)
+            item_result.update({
+                "role": normalized_roles[idx] if idx < len(normalized_roles) else "",
+                "input_ref": _strip_query_from_log_url(raw_ref),
+            })
+            parsed_items.append(item_result)
+
+        overall = self._parse_zlhub_moderation_decision(payload_dict)
+        blocked = any(bool(item.get("blocked")) for item in parsed_items) if parsed_items else bool(overall.get("blocked"))
+        return {
             "checked": True,
-            "role": role,
-            "input_ref": _strip_query_from_log_url(resolved_ref),
-        })
-        return decision
+            "blocked": blocked,
+            "status": overall.get("status"),
+            "reason": overall.get("reason"),
+            "raw": payload_dict,
+            "items": parsed_items,
+        }
+
+    async def _maybe_moderate_zlhub_image(self, image_ref: Any, config: Dict[str, Any], role: str) -> Dict[str, Any]:
+        resolved_ref = str(image_ref or "").strip()
+        if not resolved_ref:
+            return {"checked": False, "blocked": False, "reason": "empty_ref"}
+
+        batch_result = await self._maybe_moderate_zlhub_images([resolved_ref], config, [role])
+        items = batch_result.get("items") if isinstance(batch_result.get("items"), list) else []
+        if items:
+            first_item = dict(items[0] or {})
+            if batch_result.get("error") and not first_item.get("error"):
+                first_item["error"] = batch_result.get("error")
+            if batch_result.get("details") is not None and first_item.get("details") is None:
+                first_item["details"] = batch_result.get("details")
+            if batch_result.get("submit_failed") and not first_item.get("submit_failed"):
+                first_item["submit_failed"] = batch_result.get("submit_failed")
+            return first_item
+        return batch_result
 
     async def _handle_zlhub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         if gen_type != "video":
@@ -6503,7 +6711,7 @@ class MediaGenerationService:
         )
         model = str(config.get("model") or "doubao-seedance-2-0").strip()
         model_lower = str(model or "").strip().lower()
-        is_seedance2 = model_lower.startswith("doubao-seedance-2-0")
+        is_seedance2 = model_lower.startswith("doubao-seedance-2")
         zlhub_trace_id = f"zlhub-{uuid.uuid4().hex[:10]}"
         if re.match(r"^https?://", endpoint, flags=re.IGNORECASE):
             if "/proxy/chat/completions" in endpoint.lower():
@@ -6604,31 +6812,38 @@ class MediaGenerationService:
 
         moderated_first_and_refs: List[str] = []
         moderated_last_frame = resolved_last_frame
-        for candidate_ref, role in moderation_candidates:
-            moderation_result = await self._maybe_moderate_zlhub_image(candidate_ref, config, role)
-            moderation_results.append(moderation_result)
-            if moderation_result.get("error") and moderation_result.get("submit_failed"):
+        if moderation_candidates:
+            candidate_refs = [item[0] for item in moderation_candidates]
+            candidate_roles = [item[1] for item in moderation_candidates]
+            batch_result = await self._maybe_moderate_zlhub_images(candidate_refs, config, candidate_roles)
+            if batch_result.get("error") and batch_result.get("submit_failed"):
                 return {
-                    "error": moderation_result.get("error"),
-                    "details": moderation_result.get("details"),
+                    "error": batch_result.get("error"),
+                    "details": batch_result.get("details") or batch_result,
                     "submit_failed": True,
                 }
-            if moderation_result.get("blocked"):
-                return {
-                    "error": f"{provider_name} moderation blocked reference material",
-                    "details": moderation_result,
-                    "submit_failed": True,
-                }
-            approved_ref = str(moderation_result.get("approved_ref") or candidate_ref or "").strip()
-            if role == "last_frame":
-                moderated_last_frame = approved_ref or moderated_last_frame
-            elif approved_ref:
-                moderated_first_and_refs.append(approved_ref)
+
+            moderation_results = list(batch_result.get("items") or [])
+            for idx, moderation_result in enumerate(moderation_results):
+                candidate_ref, role = moderation_candidates[idx] if idx < len(moderation_candidates) else ("", "")
+                if moderation_result.get("blocked"):
+                    return {
+                        "error": f"{provider_name} moderation blocked reference material",
+                        "details": moderation_result,
+                        "submit_failed": True,
+                    }
+                approved_ref = str(moderation_result.get("approved_ref") or candidate_ref or "").strip()
+                if role == "last_frame":
+                    moderated_last_frame = approved_ref or moderated_last_frame
+                elif approved_ref:
+                    moderated_first_and_refs.append(approved_ref)
 
         if moderated_first_and_refs:
             resolved_image_refs = [item for item in dict.fromkeys(moderated_first_and_refs) if item]
         if moderated_last_frame:
             resolved_last_frame = moderated_last_frame
+
+        is_i2v_request = bool(resolved_image_refs or resolved_last_frame)
 
         content_payload: List[Dict[str, Any]] = []
         if prompt_text:
@@ -6682,8 +6897,18 @@ class MediaGenerationService:
             payload["duration"] = 5
 
         for source_key, target_key in (("resolution", "resolution"), ("generate_audio", "generate_audio")):
-            if tool_conf.get(source_key) is not None:
-                payload[target_key] = tool_conf.get(source_key)
+            value = tool_conf.get(source_key)
+            if value is None:
+                continue
+            if source_key == "resolution" and is_seedance2 and is_i2v_request:
+                logger.info(
+                    "[ZLHubSeedance2] dropping unsupported i2v resolution | trace_id=%s model=%s resolution=%s",
+                    zlhub_trace_id,
+                    model,
+                    value,
+                )
+                continue
+            payload[target_key] = value
 
         raw_tools = tool_conf.get("tools")
         if raw_tools is None and tool_conf.get("web_search"):
@@ -7655,7 +7880,7 @@ class MediaGenerationService:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         trace_id = str((extra_metadata or {}).get("trace_id") or f"zlhub-{uuid.uuid4().hex[:10]}")
         payload_model = str(payload.get("model") or "").strip().lower()
-        is_seedance2 = payload_model == "doubao-seedance-2-0"
+        is_seedance2 = payload_model.startswith("doubao-seedance-2")
 
         _debug_log(f"[{log_tag}] Submitting to URL: {submit_url} | Payload: {_strip_base64_from_log(payload)}")
         if is_seedance2:
@@ -7780,6 +8005,7 @@ class MediaGenerationService:
                     or p_data.get("state")
                     or ""
                 ).strip().lower()
+                media_url = None
 
                 if is_seedance2 and (attempt == 1 or attempt % 5 == 0 or status in {"succeeded", "success", "completed", "done", "failed", "error", "canceled", "cancelled", "rejected"}):
                     logger.info(
@@ -7793,7 +8019,6 @@ class MediaGenerationService:
                     )
 
                 content = (container or {}).get("content") if isinstance((container or {}).get("content"), dict) else {}
-                media_url = None
                 if isinstance(content, dict):
                     media_url = content.get("video_url") or content.get("url")
                 if not media_url and isinstance((container or {}).get("result"), dict):

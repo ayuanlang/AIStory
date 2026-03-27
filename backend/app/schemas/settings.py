@@ -677,6 +677,16 @@ class SoraMentionConfigUpdate(BaseModel):
     auto_upload_character: Optional[bool] = None
 
 
+class AssetImageRatioConfigOut(BaseModel):
+    subject_aspect_ratio: str = "16:9"
+    cover_aspect_ratio: str = "3:4"
+
+
+class AssetImageRatioConfigUpdate(BaseModel):
+    subject_aspect_ratio: Optional[str] = None
+    cover_aspect_ratio: Optional[str] = None
+
+
 class SystemAIAssistantModelInput(BaseModel):
     """AI助手模型输入。
 

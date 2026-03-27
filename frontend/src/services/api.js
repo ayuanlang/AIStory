@@ -2898,6 +2898,8 @@ export const getAgentToolPolicy = async () => (await api.get('/settings/system/a
 export const updateAgentToolPolicy = async (payload = {}) => (await api.put('/settings/system/agent/tools-policy', payload || {})).data;
 export const getBillingRuleResetConfigManage = async () => (await api.get('/settings/system/manage/billing-rules/reset-config')).data;
 export const updateBillingRuleResetConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/billing-rules/reset-config', payload || {})).data;
+export const getAssetImageRatioConfigManage = async () => (await api.get('/settings/system/manage/asset-image-ratio-config')).data;
+export const updateAssetImageRatioConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/asset-image-ratio-config', payload || {})).data;
 export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.post('/settings/system/ai-assistant/analyze', payload || {})).data;
 export const getSystemAIAssistantApply = async (payload = {}) => (await api.post('/settings/system/ai-assistant/apply', payload || {})).data;
 export const aiAssistantExchangeRate = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/exchange-rate', payload || {})).data;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -94,6 +94,9 @@ const UserAdmin = () => {
     const [batchResetBinDropMultiplier, setBatchResetBinDropMultiplier] = useState('0.1');
     const [batchResetMaxIncreaseCredits, setBatchResetMaxIncreaseCredits] = useState('50');
     const [isBatchResetConfigSaving, setIsBatchResetConfigSaving] = useState(false);
+    const [subjectAssetAspectRatio, setSubjectAssetAspectRatio] = useState('16:9');
+    const [coverAssetAspectRatio, setCoverAssetAspectRatio] = useState('3:4');
+    const [isAssetImageRatioConfigSaving, setIsAssetImageRatioConfigSaving] = useState(false);
     const [isBillingRuleEditing, setIsBillingRuleEditing] = useState(false);
     const [billingRuleEditToast, setBillingRuleEditToast] = useState('');
     const [selectedBillingRuleId, setSelectedBillingRuleId] = useState('');
@@ -1040,9 +1043,44 @@ const UserAdmin = () => {
         }
     };
 
+    const fetchAssetImageRatioConfig = async () => {
+        try {
+            const cfg = await getAssetImageRatioConfigManage();
+            setSubjectAssetAspectRatio(String(cfg?.subject_aspect_ratio || '16:9').trim() || '16:9');
+            setCoverAssetAspectRatio(String(cfg?.cover_aspect_ratio || '3:4').trim() || '3:4');
+        } catch (e) {
+            console.error('Failed to load asset image ratio config', e);
+        }
+    };
+
+    const saveAssetImageRatioConfig = async (overrides = {}) => {
+        const payload = {
+            subject_aspect_ratio: String(overrides.subject_aspect_ratio ?? subjectAssetAspectRatio ?? '').trim() || '16:9',
+            cover_aspect_ratio: String(overrides.cover_aspect_ratio ?? coverAssetAspectRatio ?? '').trim() || '3:4',
+        };
+
+        setIsAssetImageRatioConfigSaving(true);
+        try {
+            const saved = await updateAssetImageRatioConfigManage(payload);
+            setSubjectAssetAspectRatio(String(saved?.subject_aspect_ratio || payload.subject_aspect_ratio).trim() || '16:9');
+            setCoverAssetAspectRatio(String(saved?.cover_aspect_ratio || payload.cover_aspect_ratio).trim() || '3:4');
+        } catch (e) {
+            console.error('Failed to save asset image ratio config', e);
+            alert(e?.response?.data?.detail || e?.message || t('保存资产画幅设置失败', 'Failed to save asset image ratio config'));
+        } finally {
+            setIsAssetImageRatioConfigSaving(false);
+        }
+    };
+
     useEffect(() => {
         if (activeTab === 'pricing_rules') {
             fetchBillingRuleResetConfig();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab === 'system_api') {
+            fetchAssetImageRatioConfig();
         }
     }, [activeTab]);
 
@@ -1092,11 +1130,21 @@ const UserAdmin = () => {
         ).trim();
     };
 
+    const getSystemApiModerationEndpoint = (row) => {
+        const cfg = getSystemApiConfig(row);
+        return String(
+            cfg?.moderation_endpoint
+            || cfg?.moderationEndpoint
+            || ''
+        ).trim();
+    };
+
     const buildSystemApiConfigPayload = () => {
         const parsed = parseJsonFieldSafe(systemApiForm.config);
         const baseConfig = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ...parsed } : {};
         const retryGroup = String(systemApiForm.retry_group || '').trim();
         const retryPriceGroup = String(systemApiForm.retry_price_group || '').trim();
+        const moderationEndpoint = String(systemApiForm.moderation_endpoint || '').trim();
         const moderationUserId = String(systemApiForm.moderation_user_id || '').trim();
         const moderationAesKey = String(systemApiForm.moderation_aes_key || '').trim();
         if (retryGroup) {
@@ -1109,6 +1157,11 @@ const UserAdmin = () => {
         } else {
             delete baseConfig.retry_price_group;
         }
+        if (moderationEndpoint) {
+            baseConfig.moderation_endpoint = moderationEndpoint;
+        } else {
+            delete baseConfig.moderation_endpoint;
+        }
         if (moderationUserId) {
             baseConfig.moderation_user_id = moderationUserId;
         } else {
@@ -1119,6 +1172,7 @@ const UserAdmin = () => {
         } else {
             delete baseConfig.moderation_aes_key;
         }
+        delete baseConfig.moderationEndpoint;
         delete baseConfig.moderationUserId;
         delete baseConfig.user_id;
         delete baseConfig.userId;
@@ -2118,6 +2172,7 @@ const UserAdmin = () => {
                 base_model: '',
                 retry_group: '',
                 retry_price_group: '',
+                moderation_endpoint: '',
                 moderation_user_id: '',
                 moderation_aes_key: '',
                 config: '{}',
@@ -2173,6 +2228,7 @@ const UserAdmin = () => {
             base_model: row.base_model || '',
             retry_group: getSystemApiRetryGroup(row),
             retry_price_group: getSystemApiRetryPriceGroup(row),
+            moderation_endpoint: getSystemApiModerationEndpoint(row),
             moderation_user_id: getSystemApiModerationUserId(row),
             moderation_aes_key: getSystemApiModerationAesKey(row),
             config: safeJsonStr(row.config) || '{}',
@@ -3713,7 +3769,7 @@ const UserAdmin = () => {
             }
 
             const confirmClearTables = await confirmUiMessage(
-                '将清空并重建以下表数据：system_api_settings（非 System_*）、system_api_billing_rules、provider_key_pool、smtp_system_configs、wechat_pay_configs。是否继续？',
+                '将先删除并重建以下表数据后再导入：system_api_settings、system_api_billing_rules、provider_key_pool、smtp_system_configs、wechat_pay_configs、system_task_default_apis。是否继续？',
                 {
                     title: '确认清空原表数据',
                     confirmText: '确认清空并导入',
@@ -3739,7 +3795,11 @@ const UserAdmin = () => {
                 includeSmtp: true,
                 includeBillingRules: true,
             });
-            alert(`Full sync import finished. Providers: ${result?.provider_result?.providers || 0}, Billing Rules: ${result?.billing_rules?.created || 0}`);
+            const clearedRows = result?.cleared_rows && typeof result.cleared_rows === 'object' ? result.cleared_rows : {};
+            const clearedSummary = Object.entries(clearedRows)
+                .map(([tableName, count]) => `${tableName}: ${Number(count || 0)}`)
+                .join(', ');
+            alert(`Full sync import finished. Providers: ${result?.provider_result?.providers || 0}, Billing Rules: ${result?.billing_rules?.created || 0}${clearedSummary ? `, Cleared Rows: ${clearedSummary}` : ''}`);
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || 'Failed to import system config sync bundle');
         } finally {
@@ -5770,6 +5830,51 @@ const UserAdmin = () => {
                     {/* SYSTEM API TAB */}
                     {activeTab === 'system_api' && (
                         <div className="space-y-4">
+                            <div className="border border-white/10 rounded-xl p-4 bg-white/5 space-y-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-white">{t('系统通用资产画幅', 'System Asset Aspect Ratios')}</h4>
+                                        <p className="text-xs text-gray-400 mt-1">{t('主体资产图与封面图提交到上游图片 API 时，会优先读取这里的默认画幅。', 'Subject asset image and cover image submissions to upstream image APIs will prefer these default aspect ratios.')}</p>
+                                    </div>
+                                    {isAssetImageRatioConfigSaving && <span className="text-[11px] text-gray-400">{t('保存中', 'Saving')}</span>}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('Subjects 资产比例', 'Subjects Asset Ratio')}</label>
+                                        <input
+                                            value={subjectAssetAspectRatio}
+                                            onChange={(e) => setSubjectAssetAspectRatio(e.target.value)}
+                                            onBlur={() => saveAssetImageRatioConfig()}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    saveAssetImageRatioConfig();
+                                                }
+                                            }}
+                                            disabled={isAssetImageRatioConfigSaving}
+                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                            placeholder="16:9"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('封面图比例', 'Cover Image Ratio')}</label>
+                                        <input
+                                            value={coverAssetAspectRatio}
+                                            onChange={(e) => setCoverAssetAspectRatio(e.target.value)}
+                                            onBlur={() => saveAssetImageRatioConfig()}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    saveAssetImageRatioConfig();
+                                                }
+                                            }}
+                                            disabled={isAssetImageRatioConfigSaving}
+                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                            placeholder="3:4"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
                             <div className="flex items-center justify-between gap-2">
                                 <h3 className="text-lg font-bold">{t('系统 API 设置（超级管理员 CRUD）', 'System API Settings (Superuser CRUD)')}</h3>
                                 <div className="flex items-center gap-2">
@@ -7092,6 +7197,15 @@ const UserAdmin = () => {
                                                     <option value="mid">mid</option>
                                                     <option value="high">high</option>
                                                 </select>
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">Moderation Endpoint</label>
+                                                <input
+                                                    value={systemApiForm.moderation_endpoint}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, moderation_endpoint: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                    placeholder={t('保存到 config.moderation_endpoint', 'Saved to config.moderation_endpoint')}
+                                                />
                                             </div>
                                             <div className="md:col-span-2">
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">Moderation User ID</label>
