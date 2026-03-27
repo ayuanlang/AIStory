@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminLlmLogFiles, getAdminLlmLogView, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -286,12 +286,6 @@ const UserAdmin = () => {
     const kieMappingImportInputRef = React.useRef(null);
     const kieValueImportInputRef = React.useRef(null);
     const kieBundleImportInputRef = React.useRef(null);
-    const [llmLogFiles, setLlmLogFiles] = useState([]);
-    const [selectedLlmLogFile, setSelectedLlmLogFile] = useState('llm_calls.log');
-    const [llmLogTailLines, setLlmLogTailLines] = useState(300);
-    const [llmLogContent, setLlmLogContent] = useState('');
-    const [isLlmLogsLoading, setIsLlmLogsLoading] = useState(false);
-    const [llmLogsError, setLlmLogsError] = useState('');
     const [runtimeLogFiles, setRuntimeLogFiles] = useState([]);
     const [selectedRuntimeLogFile, setSelectedRuntimeLogFile] = useState('app_info.log');
     const [runtimeLogTailLines, setRuntimeLogTailLines] = useState(300);
@@ -299,7 +293,6 @@ const UserAdmin = () => {
     const [isRuntimeLogsLoading, setIsRuntimeLogsLoading] = useState(false);
     const [runtimeLogsError, setRuntimeLogsError] = useState('');
     const runtimeLogPreRef = React.useRef(null);
-    const llmLogPreRef = React.useRef(null);
     const [storageUsage, setStorageUsage] = useState(null);
     const [isStorageUsageLoading, setIsStorageUsageLoading] = useState(false);
     const [storageUsageError, setStorageUsageError] = useState('');
@@ -821,12 +814,6 @@ const UserAdmin = () => {
         if (activeTab === 'smtp') {
             fetchSmtpConfig();
             fetchMaintenanceConfig();
-        }
-    }, [activeTab]);
-
-    useEffect(() => {
-        if (activeTab === 'llm_logs') {
-            fetchLlmLogs();
         }
     }, [activeTab]);
 
@@ -3746,39 +3733,6 @@ const UserAdmin = () => {
         return `${(n / (1024 * 1024)).toFixed(1)} MB`;
     };
 
-    const fetchLlmLogs = async (preferredFile = null) => {
-        setIsLlmLogsLoading(true);
-        setLlmLogsError('');
-        try {
-            const files = await getAdminLlmLogFiles();
-            const normalizedFiles = Array.isArray(files) ? files : [];
-            setLlmLogFiles(normalizedFiles);
-
-            if (!normalizedFiles.length) {
-                setLlmLogContent('No llm log files found.');
-                return;
-            }
-
-            let targetFile = preferredFile || selectedLlmLogFile || normalizedFiles[0].name;
-            if (!normalizedFiles.some((f) => f.name === targetFile)) {
-                targetFile = normalizedFiles[0].name;
-            }
-            setSelectedLlmLogFile(targetFile);
-
-            const view = await getAdminLlmLogView({
-                filename: targetFile,
-                tail_lines: Math.max(1, Number(llmLogTailLines) || 300),
-            });
-            setLlmLogContent(view?.content || '');
-        } catch (e) {
-            const detail = e?.response?.data?.detail || e.message || 'Failed to load LLM logs';
-            setLlmLogsError(detail);
-            setLlmLogContent('');
-        } finally {
-            setIsLlmLogsLoading(false);
-        }
-    };
-
     const fetchRuntimeLogs = async (preferredFile = null) => {
         setIsRuntimeLogsLoading(true);
         setRuntimeLogsError('');
@@ -3835,15 +3789,6 @@ const UserAdmin = () => {
             node.scrollTop = node.scrollHeight;
         });
     }, [activeTab, isRuntimeLogsLoading, runtimeLogContent]);
-
-    useEffect(() => {
-        if (activeTab !== 'llm_logs' || isLlmLogsLoading) return;
-        requestAnimationFrame(() => {
-            const node = llmLogPreRef.current;
-            if (!node) return;
-            node.scrollTop = node.scrollHeight;
-        });
-    }, [activeTab, isLlmLogsLoading, llmLogContent]);
 
     const fetchSmtpConfig = async () => {
         setIsSmtpConfigLoading(true);
@@ -4470,7 +4415,6 @@ const UserAdmin = () => {
         { id: 'prompt_skills', label: t('Prompt Skills', 'Prompt Skills'), icon: List },
         { id: 'storage_usage', label: t('磁盘统计', 'Storage Usage'), icon: HardDrive },
         { id: 'runtime_logs', label: t('系统日志', 'Runtime Logs'), icon: List },
-        { id: 'llm_logs', label: t('LLM 日志', 'LLM Logs'), icon: List },
         { id: 'payment', label: t('支付', 'Payment'), icon: CreditCard },
         { id: 'smtp', label: t('邮件 SMTP', 'Email SMTP'), icon: Mail },
     ];
@@ -8436,62 +8380,6 @@ const UserAdmin = () => {
 
                             <pre ref={runtimeLogPreRef} className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
                                 {isRuntimeLogsLoading ? 'Loading runtime logs...' : (runtimeLogContent || 'No content')}
-                            </pre>
-                        </div>
-                    )}
-
-                    {/* LLM LOGS TAB */}
-                    {activeTab === 'llm_logs' && (
-                        <div className="space-y-4">
-                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                                <h3 className="text-lg font-bold">{t('LLM 调用日志', 'LLM Call Logs')}</h3>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <select
-                                        value={selectedLlmLogFile}
-                                        onChange={(e) => {
-                                            const fileName = e.target.value;
-                                            setSelectedLlmLogFile(fileName);
-                                            fetchLlmLogs(fileName);
-                                        }}
-                                        className="bg-black/40 border border-gray-700 rounded p-2 text-sm min-w-[220px]"
-                                    >
-                                        {llmLogFiles.map((f) => (
-                                            <option key={f.name} value={f.name}>
-                                                {f.name} ({formatBytes(f.size_bytes)})
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <input
-                                        type="number"
-                                        min={1}
-                                        max={5000}
-                                        value={llmLogTailLines}
-                                        onChange={(e) => setLlmLogTailLines(e.target.value)}
-                                        className="w-24 bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                        title={t('尾部行数', 'Tail lines')}
-                                    />
-                                    <button
-                                        onClick={() => fetchLlmLogs(selectedLlmLogFile)}
-                                        disabled={isLlmLogsLoading}
-                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
-                                    >
-                                        <RefreshCw size={16} className={isLlmLogsLoading ? 'animate-spin' : ''} /> Refresh
-                                    </button>
-                                </div>
-                            </div>
-
-                            {llmLogsError ? (
-                                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3">
-                                    {llmLogsError}
-                                </div>
-                            ) : null}
-
-                            <div className="text-xs text-gray-500">
-                                Showing last {Math.max(1, Number(llmLogTailLines) || 300)} lines from {selectedLlmLogFile}
-                            </div>
-
-                            <pre ref={llmLogPreRef} className="w-full min-h-[420px] max-h-[620px] overflow-auto bg-black/40 border border-gray-700 rounded p-3 text-xs text-gray-100 whitespace-pre-wrap break-all font-mono">
-                                {isLlmLogsLoading ? 'Loading LLM logs...' : (llmLogContent || 'No content')}
                             </pre>
                         </div>
                     )}

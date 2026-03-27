@@ -15924,20 +15924,6 @@ def get_system_logs(
     return logs
 
 
-class LLMLogFileOut(BaseModel):
-    name: str
-    size_bytes: int
-    modified_at: str
-
-
-class LLMLogViewOut(BaseModel):
-    filename: str
-    tail_lines: int
-    size_bytes: int
-    modified_at: str
-    content: str
-
-
 class RuntimeLogFileOut(BaseModel):
     name: str
     size_bytes: int
@@ -15965,71 +15951,6 @@ class AdminStorageUsageOut(BaseModel):
     total_bytes: int
     total_files: int
     users: List[AdminStorageUsageUserOut]
-
-
-@router.get("/admin/llm-logs/files", response_model=List[LLMLogFileOut])
-def list_llm_log_files(
-    current_user: User = Depends(get_current_user)
-):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Only superuser can view LLM logs")
-
-    log_dir = Path(settings.BASE_DIR) / "logs"
-    if not log_dir.exists() or not log_dir.is_dir():
-        return []
-
-    files: List[LLMLogFileOut] = []
-    for path in sorted(log_dir.glob("llm_calls.log*"), key=lambda p: p.stat().st_mtime, reverse=True):
-        if not path.is_file():
-            continue
-        stat = path.stat()
-        files.append(
-            LLMLogFileOut(
-                name=path.name,
-                size_bytes=int(stat.st_size),
-                modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            )
-        )
-    return files
-
-
-@router.get("/admin/llm-logs/view", response_model=LLMLogViewOut)
-def view_llm_log_file(
-    filename: str = "llm_calls.log",
-    tail_lines: int = 300,
-    current_user: User = Depends(get_current_user)
-):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Only superuser can view LLM logs")
-
-    safe_name = str(filename or "").strip()
-    if not safe_name:
-        raise HTTPException(status_code=400, detail="filename is required")
-    if "/" in safe_name or "\\" in safe_name or not safe_name.startswith("llm_calls.log"):
-        raise HTTPException(status_code=400, detail="invalid filename")
-
-    capped_tail = max(1, min(int(tail_lines or 300), 5000))
-    log_dir = (Path(settings.BASE_DIR) / "logs").resolve()
-    target = (log_dir / safe_name).resolve()
-
-    if target.parent != log_dir:
-        raise HTTPException(status_code=400, detail="invalid path")
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="log file not found")
-
-    line_buffer = deque(maxlen=capped_tail)
-    with target.open("r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line_buffer.append(line)
-
-    stat = target.stat()
-    return LLMLogViewOut(
-        filename=target.name,
-        tail_lines=capped_tail,
-        size_bytes=int(stat.st_size),
-        modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        content="".join(line_buffer),
-    )
 
 
 @router.get("/admin/runtime-logs/files", response_model=List[RuntimeLogFileOut])

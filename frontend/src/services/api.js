@@ -2562,16 +2562,6 @@ export const importSystemConfigSyncBundleManage = async (payload) => {
     return response.data;
 }
 
-export const getAdminLlmLogFiles = async () => {
-    const response = await api.get('/admin/llm-logs/files');
-    return response.data;
-}
-
-export const getAdminLlmLogView = async (params = {}) => {
-    const response = await api.get('/admin/llm-logs/view', { params });
-    return response.data;
-}
-
 export const getAdminRuntimeLogFiles = async () => {
     const response = await api.get('/admin/runtime-logs/files');
     return response.data;

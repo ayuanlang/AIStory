@@ -9,34 +9,11 @@ from typing import Dict, Any, List, Optional, AsyncGenerator, Tuple
 import logging
 import os
 import re
-from pathlib import Path
-from logging.handlers import RotatingFileHandler
 
 from app.core.config import settings
 from app.core.prompts.skills_loader import get_skill_prompt_text
 
 logger = logging.getLogger(__name__)
-
-_llm_call_logger = logging.getLogger("llm_call_audit")
-if not _llm_call_logger.handlers:
-    try:
-        log_dir = Path(settings.BASE_DIR) / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / "llm_calls.log"
-        max_bytes = int(os.getenv("LLM_CALL_LOG_MAX_BYTES", str(20 * 1024 * 1024)))
-        backup_count = int(os.getenv("LLM_CALL_LOG_BACKUP_COUNT", "5"))
-        file_handler = RotatingFileHandler(
-            log_file,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8",
-        )
-        file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
-        _llm_call_logger.addHandler(file_handler)
-        _llm_call_logger.setLevel(logging.INFO)
-        _llm_call_logger.propagate = False
-    except Exception as e:
-        logger.warning(f"Failed to initialize llm_call_audit logger: {e}")
 
 # Some providers (e.g., Ark/Doubao) can take several minutes for large prompts.
 # Default timeout set to 300s, with env override support.
@@ -329,11 +306,8 @@ class LLMService:
         raise AmbiguousLLMTransportError(message)
 
     def _safe_log_json(self, tag: str, payload: Dict[str, Any]) -> None:
-        try:
-            cleaned = _strip_base64_from_log(payload)
-            _llm_call_logger.info("%s %s", tag, json.dumps(cleaned, ensure_ascii=False, default=str))
-        except Exception as e:
-            logger.warning(f"Failed to write llm call audit log ({tag}): {e}")
+        # Disabled by design: stop persisting raw/returned LLM payload logs.
+        return None
 
     def log_audit(self, tag: str, payload: Dict[str, Any]) -> None:
         self._safe_log_json(tag, payload)

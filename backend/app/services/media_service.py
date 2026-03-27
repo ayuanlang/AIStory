@@ -44,6 +44,11 @@ DEFAULT_N1N_IMAGE_READ_TIMEOUT_SECONDS = max(120, int(os.getenv("N1N_IMAGE_READ_
 
 _BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
 _RAW_BASE64_PATTERN = re.compile(r'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{256,}(?:={0,2})(?![A-Za-z0-9+/=])')
+_LOG_STRING_PREVIEW_CHARS = max(128, int(os.getenv("MEDIA_LOG_STRING_PREVIEW_CHARS", "400")))
+_LOG_LIST_PREVIEW_ITEMS = max(4, int(os.getenv("MEDIA_LOG_LIST_PREVIEW_ITEMS", "12")))
+_LOG_DICT_PREVIEW_KEYS = max(8, int(os.getenv("MEDIA_LOG_DICT_PREVIEW_KEYS", "40")))
+_LOG_MAX_DEPTH = max(2, int(os.getenv("MEDIA_LOG_MAX_DEPTH", "4")))
+_LOG_SERIALIZED_MAX_CHARS = max(1024, int(os.getenv("MEDIA_LOG_SERIALIZED_MAX_CHARS", "8000")))
 
 def _strip_base64_from_log(obj):
     """Recursively strip base64 content from data structures before logging."""
@@ -71,6 +76,45 @@ def _strip_query_from_log_url(value: Any) -> Optional[str]:
     except Exception:
         pass
     return raw[:300]
+
+def _sanitize_payload_for_log(obj: Any, depth: int = 0) -> Any:
+    if depth >= _LOG_MAX_DEPTH:
+        return f"<TRUNCATED depth={depth}>"
+
+    if isinstance(obj, str):
+        stripped = _strip_base64_from_log(obj)
+        if len(stripped) > _LOG_STRING_PREVIEW_CHARS:
+            return f"{stripped[:_LOG_STRING_PREVIEW_CHARS]}...<TRUNCATED len={len(stripped)}>"
+        return stripped
+
+    if isinstance(obj, dict):
+        items = list(obj.items())
+        limited = {
+            str(k): _sanitize_payload_for_log(v, depth + 1)
+            for k, v in items[:_LOG_DICT_PREVIEW_KEYS]
+        }
+        if len(items) > _LOG_DICT_PREVIEW_KEYS:
+            limited["__truncated_keys__"] = len(items) - _LOG_DICT_PREVIEW_KEYS
+        return limited
+
+    if isinstance(obj, (list, tuple)):
+        seq = list(obj)
+        limited_items = [_sanitize_payload_for_log(item, depth + 1) for item in seq[:_LOG_LIST_PREVIEW_ITEMS]]
+        if len(seq) > _LOG_LIST_PREVIEW_ITEMS:
+            limited_items.append(f"<TRUNCATED items={len(seq) - _LOG_LIST_PREVIEW_ITEMS}>")
+        return limited_items
+
+    return obj
+
+def _format_payload_for_log(payload: Any) -> str:
+    try:
+        sanitized = _sanitize_payload_for_log(payload)
+        rendered = json.dumps(sanitized, ensure_ascii=False, default=str)
+    except Exception as e:
+        rendered = f"<UNSERIALIZABLE payload error={type(e).__name__}>"
+    if len(rendered) > _LOG_SERIALIZED_MAX_CHARS:
+        return f"{rendered[:_LOG_SERIALIZED_MAX_CHARS]}...<TRUNCATED len={len(rendered)}>"
+    return rendered
 
 def _debug_log(msg, level="info"):
     """Print to console and write to logger."""
@@ -1729,7 +1773,8 @@ class MediaGenerationService:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
 
-        _debug_log(f"[{log_tag}] Submitting to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
+        safe_url = _strip_query_from_log_url(url) or url
+        _debug_log(f"[{log_tag}] Submitting to URL: {safe_url} | Payload: {_format_payload_for_log(payload)}")
 
         def _post(use_proxy=True, connection_close: bool = False, connect_timeout=None):
             request_headers = dict(headers)
@@ -4853,7 +4898,7 @@ class MediaGenerationService:
             result_base = endpoint.split("/v1/")[0] if "/v1/" in endpoint else base_url
             result_url = f"{result_base}/v1/draw/result"
 
-            _debug_log(f"[Grsai] Submitting Payload: {json.dumps(log_payload, ensure_ascii=False)}")
+            _debug_log(f"[Grsai] Submitting Payload: {_format_payload_for_log(log_payload)}")
             payload_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             inline_ref_bytes = sum(self._data_uri_image_size_bytes(item) or 0 for item in (payload.get("urls") or []))
             logger.info(
@@ -5033,7 +5078,7 @@ class MediaGenerationService:
             # Debug log (sanitized)
             debug_p = _strip_base64_from_log(payload)
 
-            _debug_log(f"[Grsai] Video Payload: {json.dumps(debug_p, ensure_ascii=False)}")
+            _debug_log(f"[Grsai] Video Payload: {_format_payload_for_log(debug_p)}")
             if is_veo:
                 _debug_log(f"[Grsai][Veo] Submit Duration={payload.get('duration')} Model={final_model} Aspect={payload.get('aspectRatio')}")
             logger.info(
@@ -5875,7 +5920,7 @@ class MediaGenerationService:
                 "size": payload.get("size"),
             })
 
-            _debug_log(f"[RunningHub] Image Payload: {json.dumps(_strip_base64_from_log(payload), ensure_ascii=False)}")
+            _debug_log(f"[RunningHub] Image Payload: {_format_payload_for_log(payload)}")
             return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHubImage", extra_metadata=base_metadata)
 
         if gen_type == "audio":
@@ -5895,7 +5940,7 @@ class MediaGenerationService:
             if _pick_tool_value("english_normalization") is not None:
                 payload["english_normalization"] = _normalize_bool(_pick_tool_value("english_normalization"), False)
 
-            _debug_log(f"[RunningHub] Audio Payload: {json.dumps(_strip_base64_from_log(payload), ensure_ascii=False)}")
+            _debug_log(f"[RunningHub] Audio Payload: {_format_payload_for_log(payload)}")
             return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHubAudio", extra_metadata=base_metadata)
 
         if gen_type != "video":
@@ -5997,7 +6042,7 @@ class MediaGenerationService:
             "size": payload.get("size"),
         })
 
-        _debug_log(f"[RunningHub] Video Payload: {json.dumps(_strip_base64_from_log(payload), ensure_ascii=False)}")
+        _debug_log(f"[RunningHub] Video Payload: {_format_payload_for_log(payload)}")
         return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHub", extra_metadata=base_metadata)
 
     async def _handle_apiyi_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
