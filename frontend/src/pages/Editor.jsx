@@ -31381,9 +31381,20 @@ const Editor = ({
         const text = String(inputText || '');
         const emptyPayload = { characters: [], props: [], environments: [] };
 
-        const normalizeName = (item) => normalizeSubjectKey(
-            item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || ''
-        );
+        const normalizeName = (item) => {
+            const rawName = String(
+                item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || ''
+            ).trim();
+            if (!rawName) return '';
+
+            const normalized = normalizeEntityToken(
+                rawName
+                    .replace(/^CHAR\s*:\s*/i, '')
+                    .replace(/^PROP\s*:\s*/i, '')
+                    .replace(/^ENV\s*:\s*/i, '')
+            );
+            return String(normalized || '').replace(/[^\p{L}\p{N}\u4e00-\u9fff]/gu, '');
+        };
 
         const hasAny = (payload) =>
             (Array.isArray(payload?.characters) && payload.characters.length > 0)

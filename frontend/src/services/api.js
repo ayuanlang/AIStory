@@ -14,10 +14,20 @@ const shouldRetryWithFallback = (error) => {
     const message = String(error?.message || '').toLowerCase();
     const payload = error?.response?.data;
     const payloadText = typeof payload === 'string' ? payload.toLowerCase() : '';
+    const looksLikeProxyHtml500 = status === 500
+        && (
+            payloadText.includes('<!doctype html')
+            || payloadText.includes('<html')
+            || payloadText.includes('<pre>internal server error</pre>')
+        );
 
     if (code === 'ERR_NETWORK') return true;
     // Only retry on gateway errors (502/504), NOT on 500/503 which are meaningful responses
     if (status === 502 || status === 504) return true;
+
+    // Frontend proxy occasionally returns an HTML 500 page on transient upstream failures.
+    // Treat this as retryable so we can recover via in-place retry/fallback host.
+    if (looksLikeProxyHtml500) return true;
 
     if (status === 404 && payloadText.includes('cannot get /api/')) {
         return true;
