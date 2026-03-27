@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -319,8 +319,11 @@ const UserAdmin = () => {
     const [promptSkills, setPromptSkills] = useState([]);
     const [isPromptSkillsLoading, setIsPromptSkillsLoading] = useState(false);
     const [selectedPromptSkillId, setSelectedPromptSkillId] = useState('');
+    const [selectedPromptSkillPromptRef, setSelectedPromptSkillPromptRef] = useState('');
     const [selectedPromptSkillText, setSelectedPromptSkillText] = useState('');
     const [isPromptSkillTextLoading, setIsPromptSkillTextLoading] = useState(false);
+    const [isPromptSkillSaving, setIsPromptSkillSaving] = useState(false);
+    const [promptSkillSaveMessage, setPromptSkillSaveMessage] = useState('');
 
     const SYSTEM_API_FILTER_HAS_VALUE = '__has_value__';
     const SYSTEM_API_FILTER_EMPTY_VALUE = '__empty__';
@@ -858,47 +861,84 @@ const UserAdmin = () => {
 
             if (items.length > 0) {
                 const firstSkillId = String(items[0]?.id || '').trim();
-                setSelectedPromptSkillId(firstSkillId);
-                if (firstSkillId) {
-                    setIsPromptSkillTextLoading(true);
-                    try {
-                        const promptRes = await fetchPrompt(`skill:${firstSkillId}/system_prompt.txt`);
-                        setSelectedPromptSkillText(String(promptRes?.content || ''));
-                    } catch {
-                        setSelectedPromptSkillText('');
-                    } finally {
-                        setIsPromptSkillTextLoading(false);
-                    }
-                } else {
-                    setSelectedPromptSkillText('');
-                }
+                await handleSelectPromptSkill(firstSkillId, items);
             } else {
                 setSelectedPromptSkillId('');
+                setSelectedPromptSkillPromptRef('');
                 setSelectedPromptSkillText('');
             }
         } catch (err) {
             console.error('Failed to load prompt skills', err);
             setPromptSkills([]);
             setSelectedPromptSkillId('');
+            setSelectedPromptSkillPromptRef('');
             setSelectedPromptSkillText('');
         } finally {
             setIsPromptSkillsLoading(false);
         }
     };
 
-    const handleSelectPromptSkill = async (skillId) => {
-        const id = String(skillId || '').trim();
-        if (!id) return;
-        setSelectedPromptSkillId(id);
+    const getPromptRefsForSkill = (skill) => {
+        const refs = Array.isArray(skill?.prompts) ? skill.prompts : [];
+        return refs.map((item) => String(item || '').trim()).filter(Boolean);
+    };
+
+    const resolveDefaultPromptRefForSkill = (skill) => {
+        const refs = getPromptRefsForSkill(skill);
+        const preferred = ['scene_analysis.txt', 'shot_generator.txt'];
+        for (const candidate of preferred) {
+            if (refs.includes(candidate)) return candidate;
+        }
+        if (refs.length > 0) return refs[0];
+        const skillId = String(skill?.id || '').trim();
+        return skillId ? `skill:${skillId}/system_prompt.txt` : '';
+    };
+
+    const loadPromptSkillPrompt = async (promptRef) => {
+        const stableRef = String(promptRef || '').trim();
+        setSelectedPromptSkillPromptRef(stableRef);
         setIsPromptSkillTextLoading(true);
+        setPromptSkillSaveMessage('');
         try {
-            const promptRes = await fetchPrompt(`skill:${id}/system_prompt.txt`);
+            const promptRes = await fetchPrompt(stableRef);
             setSelectedPromptSkillText(String(promptRes?.content || ''));
         } catch (err) {
             console.error('Failed to load skill prompt text', err);
             setSelectedPromptSkillText('');
         } finally {
             setIsPromptSkillTextLoading(false);
+        }
+    };
+
+    const handleSelectPromptSkill = async (skillId, sourceItems = null) => {
+        const id = String(skillId || '').trim();
+        if (!id) return;
+        setSelectedPromptSkillId(id);
+        const items = Array.isArray(sourceItems) ? sourceItems : promptSkills;
+        const skill = (Array.isArray(items) ? items : []).find((item) => String(item?.id || '').trim() === id);
+        const defaultPromptRef = resolveDefaultPromptRefForSkill(skill || {});
+        if (!defaultPromptRef) {
+            setSelectedPromptSkillPromptRef('');
+            setSelectedPromptSkillText('');
+            return;
+        }
+        await loadPromptSkillPrompt(defaultPromptRef);
+    };
+
+    const handleSavePromptSkill = async () => {
+        const promptRef = String(selectedPromptSkillPromptRef || '').trim();
+        if (!promptRef) return;
+        setIsPromptSkillSaving(true);
+        setPromptSkillSaveMessage('');
+        try {
+            await savePrompt(promptRef, selectedPromptSkillText);
+            setPromptSkillSaveMessage(t('已保存', 'Saved'));
+            setTimeout(() => setPromptSkillSaveMessage(''), 2000);
+        } catch (err) {
+            console.error('Failed to save prompt skill text', err);
+            alert(err?.response?.data?.detail || err?.message || 'Failed to save prompt');
+        } finally {
+            setIsPromptSkillSaving(false);
         }
     };
 
@@ -8660,15 +8700,50 @@ const UserAdmin = () => {
                                     </div>
 
                                     <div className="lg:col-span-2 border border-white/10 rounded-lg bg-black/20 p-3">
-                                        <div className="text-xs text-muted-foreground mb-2">
-                                            {t('system_prompt.txt 预览', 'system_prompt.txt preview')}
+                                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+                                            <div className="flex-1">
+                                                <div className="text-xs text-muted-foreground mb-1">
+                                                    {t('Prompt 文件', 'Prompt File')}
+                                                </div>
+                                                <select
+                                                    value={selectedPromptSkillPromptRef}
+                                                    onChange={(e) => loadPromptSkillPrompt(e.target.value)}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs text-gray-200"
+                                                >
+                                                    {getPromptRefsForSkill(promptSkills.find((item) => String(item?.id || '').trim() === selectedPromptSkillId) || {}).map((promptRef) => (
+                                                        <option key={promptRef} value={promptRef}>{promptRef}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                {promptSkillSaveMessage && <span className="text-xs text-emerald-300">{promptSkillSaveMessage}</span>}
+                                                <button
+                                                    onClick={() => loadPromptSkillPrompt(selectedPromptSkillPromptRef)}
+                                                    disabled={isPromptSkillTextLoading || !selectedPromptSkillPromptRef}
+                                                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-xs disabled:opacity-50"
+                                                >
+                                                    {t('重载', 'Reload')}
+                                                </button>
+                                                <button
+                                                    onClick={handleSavePromptSkill}
+                                                    disabled={isPromptSkillSaving || isPromptSkillTextLoading || !selectedPromptSkillPromptRef}
+                                                    className="bg-primary hover:bg-primary/90 text-white px-3 py-2 rounded text-xs disabled:opacity-50"
+                                                >
+                                                    {isPromptSkillSaving ? t('保存中...', 'Saving...') : t('保存 Prompt', 'Save Prompt')}
+                                                </button>
+                                            </div>
                                         </div>
                                         {isPromptSkillTextLoading ? (
                                             <div className="text-sm text-muted-foreground">{t('加载提示词中...', 'Loading prompt...')}</div>
                                         ) : selectedPromptSkillText ? (
-                                            <pre className="whitespace-pre-wrap break-words text-xs text-gray-200 max-h-[420px] overflow-auto">{selectedPromptSkillText}</pre>
+                                            <textarea
+                                                value={selectedPromptSkillText}
+                                                onChange={(e) => setSelectedPromptSkillText(e.target.value)}
+                                                className="w-full min-h-[420px] bg-gray-900 border border-gray-700 rounded p-3 font-mono text-xs text-gray-200"
+                                                spellCheck={false}
+                                            />
                                         ) : (
-                                            <div className="text-sm text-muted-foreground">{t('该 skill 暂无 system_prompt.txt。', 'No system_prompt.txt for this skill.')}</div>
+                                            <div className="text-sm text-muted-foreground">{t('该 skill 暂无可编辑 Prompt。', 'No editable prompt for this skill.')}</div>
                                         )}
                                     </div>
                                 </div>

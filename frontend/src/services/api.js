@@ -2788,6 +2788,13 @@ export const fetchPrompt = async (filename) => {
     }
 };
 
+export const savePrompt = async (filename, content) => {
+    const response = await api.put(`/prompts/${filename}`, {
+        content: String(content ?? ''),
+    });
+    return response.data;
+};
+
 export const fetchPromptSkills = async () => {
     const response = await api.get('/prompts/skills');
     return response.data;

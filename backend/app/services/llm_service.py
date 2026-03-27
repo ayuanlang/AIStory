@@ -2023,7 +2023,9 @@ class LLMService:
                 "timeout": (c_timeout, read_timeout),
             }
             if bypass_proxy:
-                kwargs["proxies"] = {"http": None, "https": None}
+                with requests.Session() as session:
+                    session.trust_env = False
+                    return session.post(url, **kwargs)
             return requests.post(url, **kwargs)
 
         try:

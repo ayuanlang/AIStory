@@ -9253,9 +9253,43 @@ def export_system_config_sync_bundle_for_manage(
     task_default_export_source = "system_task_default_apis"
     if HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis"):
         task_default_rows = db.query(TaskDefaultSystemAPI).order_by(TaskDefaultSystemAPI.task_category.asc()).all()
+        target_ids = [int(getattr(row, "system_api_id", 0) or 0) for row in task_default_rows if int(getattr(row, "system_api_id", 0) or 0) > 0]
+        system_target_rows = db.query(
+            SystemAPISetting.id,
+            SystemAPISetting.category,
+            SystemAPISetting.provider,
+            SystemAPISetting.model,
+            SystemAPISetting.name,
+            SystemAPISetting.deprecated,
+        ).filter(
+            SystemAPISetting.id.in_(target_ids)
+        ).all() if target_ids else []
+        target_by_id = {int(item.id): item for item in system_target_rows}
+        skipped_task_default_rows = 0
         for row in task_default_rows:
-            api_row = system_map.get(int(getattr(row, "system_api_id", 0) or 0))
+            target_api_id = int(getattr(row, "system_api_id", 0) or 0)
+            api_row = system_map.get(target_api_id)
+            raw_target_row = target_by_id.get(target_api_id)
             if not api_row:
+                skipped_task_default_rows += 1
+                skip_reason = "target_system_api_not_exportable"
+                if raw_target_row is None:
+                    skip_reason = "target_system_api_missing"
+                _append_sync_process_record(
+                    process_records,
+                    direction="export",
+                    table="system_task_default_apis",
+                    operation="skip_row",
+                    status="skipped",
+                    detail="Skipped task default row because target system API could not be exported",
+                    task_category=normalize_task_category(getattr(row, "task_category", None)),
+                    system_api_id=target_api_id,
+                    target_provider=str(getattr(raw_target_row, "provider", "") or "").strip() or None,
+                    target_category=str(getattr(raw_target_row, "category", "") or "").strip() or None,
+                    target_model=str(getattr(raw_target_row, "model", "") or "").strip() or None,
+                    target_deprecated=bool(getattr(raw_target_row, "deprecated", False)) if raw_target_row is not None else None,
+                    skipped_reason=skip_reason,
+                )
                 continue
             task_default_payload.append({
                 "task_category": normalize_task_category(getattr(row, "task_category", None)),
@@ -9275,7 +9309,9 @@ def export_system_config_sync_bundle_for_manage(
             operation="export_rows",
             status="ok",
             detail="Exported dedicated task default rows",
+            scanned_rows=len(task_default_rows),
             exported_rows=len(task_default_payload),
+            skipped_rows=skipped_task_default_rows,
             source="system_task_default_apis",
         )
     else:
@@ -9313,7 +9349,9 @@ def export_system_config_sync_bundle_for_manage(
             operation="export_rows",
             status="ok",
             detail="Exported task defaults from fallback source",
+            scanned_rows=len(task_default_payload),
             exported_rows=len(task_default_payload),
+            skipped_rows=0,
             source="system_api_settings.is_active_fallback",
         )
 

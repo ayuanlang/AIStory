@@ -3314,6 +3314,69 @@ def _resolve_prompt_text(prompt_ref: str) -> str:
     raise FileNotFoundError(f"Prompt '{prompt_ref}' not found")
 
 
+def _resolve_prompt_file_path(prompt_ref: str) -> Path:
+    ref = str(prompt_ref or "").strip()
+    if not ref:
+        raise FileNotFoundError("prompt ref is empty")
+
+    prompt_root = Path(settings.BASE_DIR) / "app" / "core" / "prompts"
+    skill_root = prompt_root / "skills"
+    candidates = [ref]
+    alias = _PROMPT_SKILL_ALIAS.get(ref)
+    if alias:
+        candidates.append(alias)
+
+    prompt_root_resolved = prompt_root.resolve()
+
+    def _ensure_under_prompt_root(candidate: Path) -> Path:
+        resolved = candidate.resolve()
+        if resolved != prompt_root_resolved and prompt_root_resolved not in resolved.parents:
+            raise FileNotFoundError(f"Prompt '{prompt_ref}' resolved outside prompt directory")
+        return resolved
+
+    for item in candidates:
+        item_text = str(item or "").strip()
+        if not item_text:
+            continue
+
+        if item_text.startswith("skill:"):
+            raw = item_text[len("skill:"):]
+            parts = [piece for piece in raw.split("/") if piece]
+            skill_id = parts[0] if parts else ""
+            prompt_name = parts[1] if len(parts) > 1 else "system_prompt.txt"
+            if not skill_id:
+                continue
+
+            direct_skill_file = skill_root / skill_id / prompt_name
+            if direct_skill_file.is_file():
+                return _ensure_under_prompt_root(direct_skill_file)
+
+            meta = get_skill_meta(skill_id)
+            prompt_refs = meta.get("prompts") if isinstance(meta, dict) and isinstance(meta.get("prompts"), list) else []
+            for fallback_ref in prompt_refs:
+                fallback_text = str(fallback_ref or "").strip()
+                if not fallback_text:
+                    continue
+                fallback_path = prompt_root / fallback_text
+                if fallback_path.is_file() and (
+                    fallback_text == prompt_name
+                    or Path(fallback_text).name == prompt_name
+                    or fallback_text == raw
+                ):
+                    return _ensure_under_prompt_root(fallback_path)
+            continue
+
+        prompt_path = prompt_root / item_text
+        if prompt_path.is_file():
+            return _ensure_under_prompt_root(prompt_path)
+
+    raise FileNotFoundError(f"Prompt '{prompt_ref}' not found")
+
+
+class PromptContentUpdateRequest(BaseModel):
+    content: str
+
+
 @router.get("/prompts/{filename:path}")
 async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
     """Retrieve content of a prompt file."""
@@ -3376,6 +3439,34 @@ async def get_prompt_content(filename: str, current_user: User = Depends(get_cur
                 "debug": debug_info,
             },
         )
+
+
+@router.put("/prompts/{filename:path}")
+async def update_prompt_content(
+    filename: str,
+    payload: PromptContentUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not bool(getattr(current_user, "is_superuser", False) or getattr(current_user, "is_system", False)):
+        raise HTTPException(status_code=403, detail="Only system/admin users can update prompt files")
+
+    prompt_path = _resolve_prompt_file_path(filename)
+    content = str(getattr(payload, "content", "") or "")
+    prompt_path.write_text(content, encoding="utf-8")
+    logger.info(
+        "Prompt content updated: filename=%s path=%s user_id=%s content_len=%s",
+        filename,
+        str(prompt_path),
+        getattr(current_user, "id", None),
+        len(content),
+    )
+    return {
+        "ok": True,
+        "prompt": filename,
+        "path": str(prompt_path),
+        "content_len": len(content),
+        "updated_at": now_bj_iso(),
+    }
 
 
 @router.get("/prompts/skills")
