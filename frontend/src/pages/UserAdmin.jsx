@@ -118,6 +118,23 @@ const UserAdmin = () => {
     const [isKiePricingLoading, setIsKiePricingLoading] = useState(false);
     const [isKiePricingConfirmed, setIsKiePricingConfirmed] = useState(false);
     const [kiePricingResult, setKiePricingResult] = useState(null);
+
+    const formatSyncProcessRecords = (records) => {
+        if (!Array.isArray(records) || !records.length) return '';
+        return records
+            .map((record) => {
+                const tableName = String(record?.table || '').trim() || 'unknown';
+                const operation = String(record?.operation || '').trim() || 'unknown';
+                const status = String(record?.status || '').trim() || 'info';
+                const detail = String(record?.detail || '').trim();
+                const extras = Object.entries(record || {})
+                    .filter(([key, value]) => !['ts', 'direction', 'table', 'operation', 'status', 'detail'].includes(key) && value !== null && value !== undefined && value !== '')
+                    .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : String(value)}`)
+                    .join(', ');
+                return `- [${status}] ${tableName}.${operation}${detail ? `: ${detail}` : ''}${extras ? ` (${extras})` : ''}`;
+            })
+            .join('\n');
+    };
     const [supplierFeatureProvider, setSupplierFeatureProvider] = useState('');
     const [supplierFeatureUrlsText, setSupplierFeatureUrlsText] = useState('');
     const [supplierFeatureKeywords, setSupplierFeatureKeywords] = useState('');
@@ -3735,7 +3752,8 @@ const UserAdmin = () => {
                 .map(([tableName, count]) => `${tableName}: ${Number(count || 0)}`)
                 .join(', ');
             const taskDefaultExportSource = String(payload?.summary?.task_default_export_source || '').trim();
-            alert(`System config sync bundle exported.${exportedCountsSummary ? ` Exported Rows: ${exportedCountsSummary}` : ''}${taskDefaultExportSource ? `, task_default_apis source: ${taskDefaultExportSource}` : ''}`);
+            const processText = formatSyncProcessRecords(payload?.process_records);
+            alert(`System config sync bundle exported.${exportedCountsSummary ? ` Exported Rows: ${exportedCountsSummary}` : ''}${taskDefaultExportSource ? `, task_default_apis source: ${taskDefaultExportSource}` : ''}${processText ? `\n\nProcess Records:\n${processText}` : ''}`);
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || 'Failed to export system config sync bundle');
         } finally {
@@ -3806,7 +3824,8 @@ const UserAdmin = () => {
             const clearedSummary = Object.entries(clearedRows)
                 .map(([tableName, count]) => `${tableName}: ${Number(count || 0)}`)
                 .join(', ');
-            alert(`Full sync import finished. Providers: ${result?.provider_result?.providers || 0}, Billing Rules: ${result?.billing_rules?.created || 0}${clearedSummary ? `, Cleared Rows: ${clearedSummary}` : ''}`);
+            const processText = formatSyncProcessRecords(result?.process_records);
+            alert(`Full sync import finished. Providers: ${result?.provider_result?.providers || 0}, Billing Rules: ${result?.billing_rules?.created || 0}${clearedSummary ? `, Cleared Rows: ${clearedSummary}` : ''}${processText ? `\n\nProcess Records:\n${processText}` : ''}`);
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || 'Failed to import system config sync bundle');
         } finally {

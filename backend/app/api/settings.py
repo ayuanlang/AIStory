@@ -8840,6 +8840,53 @@ def _prepare_sync_replace_all_state(db: Session) -> Dict[str, Any]:
     }
 
 
+def _build_sync_process_record(
+    *,
+    direction: str,
+    table: str,
+    operation: str,
+    status: str,
+    detail: str,
+    **extra: Any,
+) -> Dict[str, Any]:
+    record = {
+        "ts": now_bj_iso(),
+        "direction": str(direction or "").strip() or "sync",
+        "table": str(table or "").strip() or "unknown",
+        "operation": str(operation or "").strip() or "unknown",
+        "status": str(status or "").strip() or "info",
+        "detail": str(detail or "").strip() or None,
+    }
+    for key, value in extra.items():
+        if value is None:
+            continue
+        record[str(key)] = value
+    return record
+
+
+def _append_sync_process_record(records: List[Dict[str, Any]], **kwargs: Any) -> Dict[str, Any]:
+    record = _build_sync_process_record(**kwargs)
+    records.append(record)
+    logger.info(
+        "sync.%s table=%s operation=%s status=%s detail=%s meta=%s",
+        record.get("direction"),
+        record.get("table"),
+        record.get("operation"),
+        record.get("status"),
+        record.get("detail"),
+        json.dumps(
+            {
+                key: value
+                for key, value in record.items()
+                if key not in {"ts", "direction", "table", "operation", "status", "detail"}
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    )
+    return record
+
+
 def _stringify_sync_import_error(exc: Exception) -> str:
     parts: List[str] = []
     current: Optional[BaseException] = exc
@@ -9017,11 +9064,31 @@ def export_system_config_sync_bundle_for_manage(
     if not _can_manage_system_settings(current_user):
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
+    process_records: List[Dict[str, Any]] = []
     system_rows, excluded_deprecated_system_apis = _list_config_sync_exportable_system_rows(db)
+    _append_sync_process_record(
+        process_records,
+        direction="export",
+        table="system_api_settings",
+        operation="scan_rows",
+        status="ok",
+        detail="Scanned exportable system API settings",
+        exported_rows=len(system_rows),
+        excluded_deprecated_rows=int(excluded_deprecated_system_apis or 0),
+    )
     provider_bundle = {
         "providers": _build_provider_bundle_export_payload(db, system_rows),
     }
     system_map = {int(row.id): row for row in system_rows}
+    _append_sync_process_record(
+        process_records,
+        direction="export",
+        table="system_api_settings",
+        operation="build_provider_bundle",
+        status="ok",
+        detail="Built provider bundle from system API settings",
+        provider_count=len(provider_bundle.get("providers", [])),
+    )
 
     billing_rules_payload: List[Dict[str, Any]] = []
     if _db_has_table(db, "system_api_billing_rules"):
@@ -9045,8 +9112,26 @@ def export_system_config_sync_bundle_for_manage(
             for field_name in _SYNC_BILLING_RULE_FIELDS:
                 entry[field_name] = getattr(rule, field_name)
             billing_rules_payload.append(entry)
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="system_api_billing_rules",
+            operation="export_rows",
+            status="ok",
+            detail="Exported billing rules rows",
+            exported_rows=len(billing_rules_payload),
+        )
     else:
         logger.warning("Skip sync export billing rules: table system_api_billing_rules not found")
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="system_api_billing_rules",
+            operation="export_rows",
+            status="skipped",
+            detail="Skipped export because table is missing",
+            skipped_reason="missing table system_api_billing_rules",
+        )
 
     provider_key_pools_payload = []
     if _db_has_table(db, "provider_key_pool"):
@@ -9064,8 +9149,26 @@ def export_system_config_sync_bundle_for_manage(
             }
             for row in provider_key_pool_rows
         ]
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="provider_key_pool",
+            operation="export_rows",
+            status="ok",
+            detail="Exported provider key pool rows",
+            exported_rows=len(provider_key_pools_payload),
+        )
     else:
         logger.warning("Skip sync export provider key pools: table provider_key_pool not found")
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="provider_key_pool",
+            operation="export_rows",
+            status="skipped",
+            detail="Skipped export because table is missing",
+            skipped_reason="missing table provider_key_pool",
+        )
 
     smtp_payload = []
     if _db_has_table(db, "smtp_system_configs"):
@@ -9086,8 +9189,26 @@ def export_system_config_sync_bundle_for_manage(
             }
             for row in smtp_rows
         ]
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="smtp_system_configs",
+            operation="export_rows",
+            status="ok",
+            detail="Exported SMTP config rows",
+            exported_rows=len(smtp_payload),
+        )
     else:
         logger.warning("Skip sync export SMTP configs: table smtp_system_configs not found")
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="smtp_system_configs",
+            operation="export_rows",
+            status="skipped",
+            detail="Skipped export because table is missing",
+            skipped_reason="missing table smtp_system_configs",
+        )
 
     wechat_payload = []
     if _db_has_table(db, "wechat_pay_configs"):
@@ -9107,8 +9228,26 @@ def export_system_config_sync_bundle_for_manage(
             }
             for row in wechat_rows
         ]
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="wechat_pay_configs",
+            operation="export_rows",
+            status="ok",
+            detail="Exported WeChat pay config rows",
+            exported_rows=len(wechat_payload),
+        )
     else:
         logger.warning("Skip sync export WeChat pay configs: table wechat_pay_configs not found")
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="wechat_pay_configs",
+            operation="export_rows",
+            status="skipped",
+            detail="Skipped export because table is missing",
+            skipped_reason="missing table wechat_pay_configs",
+        )
 
     task_default_payload: List[Dict[str, Any]] = []
     task_default_export_source = "system_task_default_apis"
@@ -9129,6 +9268,16 @@ def export_system_config_sync_bundle_for_manage(
                 "created_at": getattr(row, "created_at", None),
                 "updated_at": getattr(row, "updated_at", None),
             })
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="system_task_default_apis",
+            operation="export_rows",
+            status="ok",
+            detail="Exported dedicated task default rows",
+            exported_rows=len(task_default_payload),
+            source="system_task_default_apis",
+        )
     else:
         if HAS_TASK_DEFAULT_SYSTEM_API_MODEL:
             logger.warning("Skip sync export dedicated task defaults table: table system_task_default_apis not found, fallback to SystemAPISetting.is_active")
@@ -9157,6 +9306,16 @@ def export_system_config_sync_bundle_for_manage(
                 "created_at": None,
                 "updated_at": None,
             })
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="system_task_default_apis",
+            operation="export_rows",
+            status="ok",
+            detail="Exported task defaults from fallback source",
+            exported_rows=len(task_default_payload),
+            source="system_api_settings.is_active_fallback",
+        )
 
     data = {
         "providers": provider_bundle.get("providers", []),
@@ -9174,6 +9333,15 @@ def export_system_config_sync_bundle_for_manage(
         "wechat_pay_configs": len(wechat_payload),
         "system_task_default_apis": len(task_default_payload),
     }
+    _append_sync_process_record(
+        process_records,
+        direction="export",
+        table="sync_bundle",
+        operation="finalize_bundle",
+        status="ok",
+        detail="Completed sync bundle export",
+        exported_row_counts=exported_row_counts,
+    )
 
     return {
         "version": 1,
@@ -9190,6 +9358,7 @@ def export_system_config_sync_bundle_for_manage(
             "exported_row_counts": exported_row_counts,
             "task_default_export_source": task_default_export_source,
         },
+        "process_records": process_records,
         "data": data,
     }
 
@@ -9221,6 +9390,7 @@ def import_system_config_sync_bundle_for_manage(
         )
 
     try:
+        process_records: List[Dict[str, Any]] = []
         def _safe_int(raw_value: Any, default_value: int) -> int:
             try:
                 return int(float(raw_value))
@@ -9242,6 +9412,26 @@ def import_system_config_sync_bundle_for_manage(
                 str(key): int(value or 0)
                 for key, value in dict(replace_state.get("cleared_rows") or {}).items()
             }
+            for table_name, cleared_count in cleared_rows.items():
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table=str(table_name),
+                    operation="clear_rows",
+                    status="ok",
+                    detail="Cleared existing rows before import",
+                    cleared_rows=int(cleared_count or 0),
+                )
+            for table_name, rebuilt in rebuilt_tables.items():
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table=str(table_name),
+                    operation="rebuild_table",
+                    status="ok" if rebuilt else "failed",
+                    detail="Rebuilt table for replace_all import" if rebuilt else "Table rebuild did not complete",
+                    rebuilt=bool(rebuilt),
+                )
             _ensure_builtin_system_settings(db)
             _ensure_settings_system_indexes(db)
             has_billing_rules_table = _db_has_table(db, "system_api_billing_rules")
@@ -9275,6 +9465,18 @@ def import_system_config_sync_bundle_for_manage(
                 )
             except Exception:
                 raise
+            _append_sync_process_record(
+                process_records,
+                direction="import",
+                table="system_api_settings",
+                operation="import_provider_bundle",
+                status="ok",
+                detail="Imported provider bundle into system API settings",
+                providers=int((provider_result or {}).get("providers") or 0),
+                created=int((provider_result or {}).get("created") or 0),
+                updated=int((provider_result or {}).get("updated") or 0),
+                skipped_models=int((provider_result or {}).get("skipped_models") or 0),
+            )
 
             system_index: Dict[Tuple[str, str, str], int] = {}
             system_rows = db.execute(text("""
@@ -9321,10 +9523,32 @@ def import_system_config_sync_bundle_for_manage(
                     new_rule.updated_at = str(raw_rule.get("updated_at") or now_iso)
                     db.add(new_rule)
                     billing_created += 1
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="system_api_billing_rules",
+                    operation="import_rows",
+                    status="ok",
+                    detail="Imported billing rule rows",
+                    input_rows=len(billing_rules),
+                    created=billing_created,
+                    skipped=billing_skipped,
+                )
             else:
                 billing_skipped += len(billing_rules)
                 if billing_rules:
                     logger.warning("Skip billing rules import: table system_api_billing_rules not found")
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="system_api_billing_rules",
+                    operation="import_rows",
+                    status="skipped",
+                    detail="Skipped billing rules import because table is missing",
+                    input_rows=len(billing_rules),
+                    skipped=billing_skipped,
+                    skipped_reason="missing table system_api_billing_rules",
+                )
 
             # KIE standard data is intentionally excluded from sync bundle import.
             # Use CLI loader instead (backend/apply_kie_system_data_standard_seed.py).
@@ -9365,6 +9589,30 @@ def import_system_config_sync_bundle_for_manage(
                         provider_pool_created += 1
             if not has_provider_key_pool_table and provider_key_pools:
                 logger.warning("provider_key_pool table not found during sync import; applied primary api_key fallback to system_api_settings only")
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="provider_key_pool",
+                    operation="import_rows",
+                    status="skipped",
+                    detail="Skipped provider key pool table import and applied fallback to system_api_settings only",
+                    input_rows=len(provider_key_pools),
+                    created=provider_pool_created,
+                    updated=provider_pool_updated,
+                    skipped_reason="missing table provider_key_pool; fallback applied to system_api_settings",
+                )
+            else:
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="provider_key_pool",
+                    operation="import_rows",
+                    status="ok",
+                    detail="Imported provider key pool rows",
+                    input_rows=len(provider_key_pools),
+                    created=provider_pool_created,
+                    updated=provider_pool_updated,
+                )
 
             smtp_created = 0
             if has_smtp_table:
@@ -9387,8 +9635,39 @@ def import_system_config_sync_bundle_for_manage(
                     )
                     db.add(row)
                     smtp_created += 1
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="smtp_system_configs",
+                    operation="import_rows",
+                    status="ok",
+                    detail="Imported SMTP config rows",
+                    input_rows=len(smtp_configs),
+                    created=smtp_created,
+                )
             elif smtp_configs:
                 logger.warning("Skip SMTP import: table smtp_system_configs not found")
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="smtp_system_configs",
+                    operation="import_rows",
+                    status="skipped",
+                    detail="Skipped SMTP import because table is missing",
+                    input_rows=len(smtp_configs),
+                    skipped_reason="missing table smtp_system_configs",
+                )
+            else:
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="smtp_system_configs",
+                    operation="import_rows",
+                    status="ok",
+                    detail="No SMTP rows provided for import",
+                    input_rows=0,
+                    created=0,
+                )
 
             wechat_created = 0
             if has_wechat_table:
@@ -9410,8 +9689,39 @@ def import_system_config_sync_bundle_for_manage(
                     )
                     db.add(row)
                     wechat_created += 1
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="wechat_pay_configs",
+                    operation="import_rows",
+                    status="ok",
+                    detail="Imported WeChat pay config rows",
+                    input_rows=len(wechat_pay_configs),
+                    created=wechat_created,
+                )
             elif wechat_pay_configs:
                 logger.warning("Skip WeChat pay import: table wechat_pay_configs not found")
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="wechat_pay_configs",
+                    operation="import_rows",
+                    status="skipped",
+                    detail="Skipped WeChat pay import because table is missing",
+                    input_rows=len(wechat_pay_configs),
+                    skipped_reason="missing table wechat_pay_configs",
+                )
+            else:
+                _append_sync_process_record(
+                    process_records,
+                    direction="import",
+                    table="wechat_pay_configs",
+                    operation="import_rows",
+                    status="ok",
+                    detail="No WeChat pay rows provided for import",
+                    input_rows=0,
+                    created=0,
+                )
 
             resolved_task_default_targets: Dict[str, int] = {}
             for raw_default in task_default_apis:
@@ -9445,16 +9755,49 @@ def import_system_config_sync_bundle_for_manage(
             for task_category, target_api_id in resolved_task_default_targets.items():
                 upsert_task_default_system_setting(db, task_category, int(target_api_id))
                 default_created += 1
+            _append_sync_process_record(
+                process_records,
+                direction="import",
+                table="system_task_default_apis",
+                operation="import_rows",
+                status="ok",
+                detail="Imported task default API mappings",
+                input_rows=len(task_default_apis),
+                created_or_updated=default_created,
+                skipped=default_skipped,
+                storage="system_task_default_apis" if has_task_default_table else "system_api_settings.is_active",
+            )
+
+            _append_sync_process_record(
+                process_records,
+                direction="import",
+                table="kie_standard_data",
+                operation="ignore_payload",
+                status="skipped",
+                detail="Ignored KIE standard data in sync bundle import",
+                ignored_values=int(kie_standard_values_ignored or 0),
+                ignored_mappings=int(kie_standard_mappings_ignored or 0),
+            )
 
         # Ensure changes are durably committed for this request scope.
         db.commit()
         _invalidate_system_api_runtime_cache(refresh=True)
         _invalidate_provider_pool_cache()
+        _append_sync_process_record(
+            process_records,
+            direction="import",
+            table="sync_bundle",
+            operation="finalize_import",
+            status="ok",
+            detail="Completed sync bundle import",
+            replace_all=replace_all,
+        )
         return {
             "ok": True,
             "replace_all": replace_all,
             "rebuild_tables": rebuilt_tables,
             "cleared_rows": cleared_rows,
+            "process_records": process_records,
             "provider_result": provider_result,
             "billing_rules": {
                 "created": billing_created,
