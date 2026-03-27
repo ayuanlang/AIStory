@@ -4,9 +4,9 @@ from fastapi.responses import StreamingResponse
 import logging
 import smtplib
 from email.message import EmailMessage
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
-from sqlalchemy import or_, and_, text, inspect
+from sqlalchemy import or_, and_, text, inspect, cast, String, func
 from app.db.session import get_db, SessionLocal
 from app.models import all_models as models
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
@@ -1029,6 +1029,8 @@ def _read_image_job_file(job_id: str) -> Optional[Dict[str, Any]]:
         db_state = get_generation_job_state(kind="image", job_id=job_id)
         if isinstance(db_state, dict):
             db_state["job_id"] = db_state.get("job_id") or str(job_id)
+            if "result" in db_state:
+                db_state["result"] = _compact_job_result(db_state.get("result"))
             return db_state
     except Exception as e:
         logger.warning("failed to read image job state from db job_id=%s err=%s", job_id, e)
@@ -1040,6 +1042,8 @@ def _read_image_job_file(job_id: str) -> Optional[Dict[str, Any]]:
             data = json.load(f)
         if isinstance(data, dict):
             data["job_id"] = data.get("job_id") or str(job_id)
+            if "result" in data:
+                data["result"] = _compact_job_result(data.get("result"))
             return data
     except Exception as e:
         logger.warning("failed to read image job file job_id=%s err=%s", job_id, e)
@@ -1360,7 +1364,7 @@ def _resolve_precise_asset_library_url(
     shot_id: Optional[int] = None,
     asset_type_aliases: Optional[set] = None,
     media_type: Optional[str] = None,
-    limit: int = 4000,
+    limit: int = 256,
 ) -> Optional[str]:
     raw_legacy_url = str(legacy_url or "").strip()
     if not _is_ephemeral_provider_media_url(raw_legacy_url):
@@ -1376,6 +1380,18 @@ def _resolve_precise_asset_library_url(
     query = db.query(Asset).filter(Asset.user_id.in_(owner_ids))
     if media_type:
         query = query.filter(Asset.type == str(media_type).strip().lower())
+
+    meta_text = cast(Asset.meta_info, String)
+    query = query.filter(meta_text.contains(raw_legacy_url))
+    query = query.filter(meta_text.contains(str(project_id)))
+    if entity_id is not None:
+        query = query.filter(meta_text.contains(str(entity_id)))
+    if shot_id is not None:
+        query = query.filter(meta_text.contains(str(shot_id)))
+    if asset_type_aliases:
+        alias_filters = [meta_text.contains(alias) for alias in sorted(asset_type_aliases) if str(alias or "").strip()]
+        if alias_filters:
+            query = query.filter(or_(*alias_filters))
 
     matched_urls: List[str] = []
     candidates = query.order_by(Asset.id.desc()).limit(max(int(limit or 0), 1)).all()
@@ -1610,6 +1626,8 @@ def _read_video_job_file(job_id: str) -> Optional[Dict[str, Any]]:
         db_state = get_generation_job_state(kind="video", job_id=job_id)
         if isinstance(db_state, dict):
             db_state["job_id"] = db_state.get("job_id") or str(job_id)
+            if "result" in db_state:
+                db_state["result"] = _compact_job_result(db_state.get("result"))
             return db_state
     except Exception as e:
         logger.warning("failed to read video job state from db job_id=%s err=%s", job_id, e)
@@ -1621,6 +1639,8 @@ def _read_video_job_file(job_id: str) -> Optional[Dict[str, Any]]:
             data = json.load(f)
         if isinstance(data, dict):
             data["job_id"] = data.get("job_id") or str(job_id)
+            if "result" in data:
+                data["result"] = _compact_job_result(data.get("result"))
             return data
     except Exception as e:
         logger.warning("failed to read video job file job_id=%s err=%s", job_id, e)
@@ -11968,9 +11988,113 @@ class ShotOut(BaseModel):
     video_url: Optional[str]
     prompt: Optional[str]
     technical_notes: Optional[str]
+    end_frame_url: Optional[str] = None
+    prompt_preview_cn: Optional[str] = None
+    prompt_preview_en: Optional[str] = None
+    is_compact: Optional[bool] = None
     
     class Config:
         from_attributes = True
+
+
+_SHOT_LIST_TEXT_LIMIT = max(120, min(int(os.getenv("SHOT_LIST_TEXT_LIMIT", "280")), 1200))
+_SHOT_LIST_COMPACT_TECH_KEYS = (
+    "end_frame_url",
+    "video_prompt_cn",
+    "prompt_cn",
+    "start_frame_cn",
+    "end_frame_cn",
+    "keyframes",
+    "keyframes_cn",
+    "voiceover_url",
+)
+
+
+def _truncate_shot_list_text(value: Any, limit: int = _SHOT_LIST_TEXT_LIMIT) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) <= limit:
+        return text
+    return text[: max(1, limit - 1)].rstrip() + "..."
+
+
+def _compact_shot_list_technical_notes(raw_notes: Any) -> Tuple[Optional[str], str, str]:
+    notes = _asset_meta_to_dict(raw_notes)
+    if not notes:
+        return None, "", ""
+
+    compact_notes: Dict[str, Any] = {}
+    end_frame_url = str(notes.get("end_frame_url") or "").strip()
+    prompt_preview_cn = ""
+
+    for key in _SHOT_LIST_COMPACT_TECH_KEYS:
+        if key not in notes:
+            continue
+        value = notes.get(key)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                continue
+            if key in {"video_prompt_cn", "prompt_cn", "start_frame_cn", "end_frame_cn"} and not prompt_preview_cn:
+                prompt_preview_cn = normalized
+            compact_notes[key] = _truncate_shot_list_text(normalized, 320)
+            continue
+        if isinstance(value, list):
+            normalized_list = [str(item or "").strip() for item in value if str(item or "").strip()]
+            if normalized_list:
+                compact_notes[key] = normalized_list[:4]
+            continue
+        if value is not None:
+            compact_notes[key] = value
+
+    if end_frame_url and "end_frame_url" not in compact_notes:
+        compact_notes["end_frame_url"] = end_frame_url
+
+    compact_payload = json.dumps(compact_notes, ensure_ascii=False) if compact_notes else None
+    return compact_payload, end_frame_url, prompt_preview_cn
+
+
+def _build_compact_shot_payload(row: Any) -> Dict[str, Any]:
+    compact_notes, end_frame_url, prompt_preview_cn = _compact_shot_list_technical_notes(getattr(row, "technical_notes", None))
+    prompt_preview_en = ""
+    for candidate in (
+        getattr(row, "video_content", None),
+        getattr(row, "prompt", None),
+        getattr(row, "start_frame", None),
+        getattr(row, "end_frame", None),
+        prompt_preview_cn,
+        getattr(row, "shot_logic_cn", None),
+    ):
+        normalized = str(candidate or "").strip()
+        if normalized:
+            prompt_preview_en = normalized
+            break
+
+    return {
+        "id": getattr(row, "id", None),
+        "scene_id": getattr(row, "scene_id", None),
+        "project_id": getattr(row, "project_id", None),
+        "episode_id": getattr(row, "episode_id", None),
+        "shot_id": getattr(row, "shot_id", None),
+        "shot_name": getattr(row, "shot_name", None),
+        "start_frame": getattr(row, "start_frame", None),
+        "end_frame": getattr(row, "end_frame", None),
+        "video_content": getattr(row, "video_content", None),
+        "duration": getattr(row, "duration", None),
+        "associated_entities": getattr(row, "associated_entities", None),
+        "shot_logic_cn": getattr(row, "shot_logic_cn", None),
+        "keyframes": getattr(row, "keyframes", None),
+        "scene_code": getattr(row, "scene_code", None),
+        "image_url": getattr(row, "image_url", None),
+        "video_url": getattr(row, "video_url", None),
+        "prompt": getattr(row, "prompt", None),
+        "technical_notes": compact_notes,
+        "end_frame_url": end_frame_url or None,
+        "prompt_preview_cn": _truncate_shot_list_text(prompt_preview_cn, 320),
+        "prompt_preview_en": _truncate_shot_list_text(prompt_preview_en, 320),
+        "is_compact": True,
+    }
 
 @router.get("/episodes/{episode_id}/shots", response_model=List[ShotOut])
 def read_episode_shots(
@@ -11978,6 +12102,7 @@ def read_episode_shots(
     scene_code: Optional[str] = None,
     shot_id: Optional[str] = None,
     keyword: Optional[str] = None,
+    compact: bool = Query(False),
     skip: int = 0,
     limit: int = 300,
     db: Session = Depends(get_db),
@@ -12021,8 +12146,48 @@ def read_episode_shots(
 
     safe_skip = max(int(skip or 0), 0)
     safe_limit = max(1, min(int(limit or 300), 500))
+
+    if compact:
+        compact_query = query.with_entities(
+            Shot.id.label("id"),
+            Shot.scene_id.label("scene_id"),
+            Shot.project_id.label("project_id"),
+            Shot.episode_id.label("episode_id"),
+            Shot.shot_id.label("shot_id"),
+            Shot.shot_name.label("shot_name"),
+            func.substr(Shot.start_frame, 1, _SHOT_LIST_TEXT_LIMIT).label("start_frame"),
+            func.substr(Shot.end_frame, 1, _SHOT_LIST_TEXT_LIMIT).label("end_frame"),
+            func.substr(Shot.video_content, 1, _SHOT_LIST_TEXT_LIMIT).label("video_content"),
+            Shot.duration.label("duration"),
+            func.substr(Shot.associated_entities, 1, _SHOT_LIST_TEXT_LIMIT).label("associated_entities"),
+            func.substr(Shot.shot_logic_cn, 1, _SHOT_LIST_TEXT_LIMIT).label("shot_logic_cn"),
+            func.substr(Shot.keyframes, 1, _SHOT_LIST_TEXT_LIMIT).label("keyframes"),
+            Shot.scene_code.label("scene_code"),
+            Shot.image_url.label("image_url"),
+            Shot.video_url.label("video_url"),
+            func.substr(Shot.prompt, 1, _SHOT_LIST_TEXT_LIMIT).label("prompt"),
+            Shot.technical_notes.label("technical_notes"),
+        )
+        rows = compact_query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
+        return [_build_compact_shot_payload(row) for row in rows]
+
     shots = query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
     return _repair_shots_media_urls_from_assets(db, current_user, project, shots)
+
+
+@router.get("/shots/{shot_id}", response_model=ShotOut)
+def read_shot_detail(
+    shot_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    shot = db.query(Shot).filter(Shot.id == shot_id).first()
+    if not shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+
+    project = _require_project_access(db, shot.project_id, current_user)
+    _repair_shot_media_urls_from_assets(db, current_user, project, shot)
+    return shot
 
 class AIShotGenRequest(BaseModel):
     user_prompt: Optional[str] = None
@@ -16046,9 +16211,14 @@ def get_system_logs(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get system logs. Requires superuser or 'system' username.
+    Get system logs. Requires superuser, system-designated account, or legacy admin usernames.
     """
-    is_admin = current_user.is_superuser or current_user.username == "system" or current_user.username == "admin"
+    username = str(getattr(current_user, "username", "") or "").strip().lower()
+    is_admin = bool(
+        getattr(current_user, "is_superuser", False)
+        or getattr(current_user, "is_system", False)
+        or username in {"system", "admin"}
+    )
     if not is_admin:
         raise HTTPException(status_code=403, detail="Not authorized to view system logs")
     
@@ -21824,6 +21994,7 @@ def get_generate_image_job_status(
         file_job = _read_image_job_file(job_id)
         if file_job:
             with IMAGE_JOB_LOCK:
+                _prune_image_jobs_locked()
                 IMAGE_JOB_STORE[job_id] = dict(file_job)
             job = dict(file_job)
             logger.info(
@@ -21836,9 +22007,16 @@ def get_generate_image_job_status(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    if "result" in job:
+        compact_result = _compact_job_result(job.get("result"))
+        if compact_result != job.get("result"):
+            _set_image_job(job_id, result=compact_result)
+            job["result"] = compact_result
+
     job = _maybe_finalize_image_job_from_grsai_callback(job_id, job)
     owner_id = job.get("user_id")
     owner_username = str(job.get("username") or "").strip()
+    owner_username_norm = owner_username.lower()
 
     image_status = str(job.get("status") or "").strip().lower()
     if image_status in {"queued", "running"}:
@@ -21859,10 +22037,11 @@ def get_generate_image_job_status(
 
     current_user_id = current_claims.get("user_id")
     current_username = str(current_claims.get("username") or "").strip()
+    current_username_norm = current_username.lower()
     is_superuser = bool(current_claims.get("is_superuser"))
     is_owner = (
         (current_user_id is not None and owner_id == current_user_id)
-        or (owner_username and owner_username == current_username)
+        or (owner_username_norm and owner_username_norm == current_username_norm)
     )
     if not is_superuser and not is_owner:
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -24171,6 +24350,7 @@ def get_generate_video_job_status(
         file_job = _read_video_job_file(job_id)
         if file_job:
             with VIDEO_JOB_LOCK:
+                _prune_video_jobs_locked()
                 VIDEO_JOB_STORE[job_id] = dict(file_job)
             job = dict(file_job)
             logger.info(
@@ -24183,9 +24363,16 @@ def get_generate_video_job_status(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    if "result" in job:
+        compact_result = _compact_job_result(job.get("result"))
+        if compact_result != job.get("result"):
+            _set_video_job(job_id, result=compact_result)
+            job["result"] = compact_result
+
     job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
     owner_id = job.get("user_id")
     owner_username = str(job.get("username") or "").strip()
+    owner_username_norm = owner_username.lower()
 
     video_status = str(job.get("status") or "").strip().lower()
     if video_status in {"queued", "running"}:
@@ -24206,10 +24393,11 @@ def get_generate_video_job_status(
 
     current_user_id = current_claims.get("user_id")
     current_username = str(current_claims.get("username") or "").strip()
+    current_username_norm = current_username.lower()
     is_superuser = bool(current_claims.get("is_superuser"))
     is_owner = (
         (current_user_id is not None and owner_id == current_user_id)
-        or (owner_username and owner_username == current_username)
+        or (owner_username_norm and owner_username_norm == current_username_norm)
     )
     if not is_superuser and not is_owner:
         raise HTTPException(status_code=403, detail="Not authorized")

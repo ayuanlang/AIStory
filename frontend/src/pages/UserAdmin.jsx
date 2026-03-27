@@ -1081,11 +1081,23 @@ const UserAdmin = () => {
         ).trim();
     };
 
+    const getSystemApiModerationUserId = (row) => {
+        const cfg = getSystemApiConfig(row);
+        return String(
+            cfg?.moderation_user_id
+            || cfg?.moderationUserId
+            || cfg?.user_id
+            || cfg?.userId
+            || ''
+        ).trim();
+    };
+
     const buildSystemApiConfigPayload = () => {
         const parsed = parseJsonFieldSafe(systemApiForm.config);
         const baseConfig = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ...parsed } : {};
         const retryGroup = String(systemApiForm.retry_group || '').trim();
         const retryPriceGroup = String(systemApiForm.retry_price_group || '').trim();
+        const moderationUserId = String(systemApiForm.moderation_user_id || '').trim();
         const moderationAesKey = String(systemApiForm.moderation_aes_key || '').trim();
         if (retryGroup) {
             baseConfig.retry_group = retryGroup;
@@ -1097,11 +1109,19 @@ const UserAdmin = () => {
         } else {
             delete baseConfig.retry_price_group;
         }
+        if (moderationUserId) {
+            baseConfig.moderation_user_id = moderationUserId;
+        } else {
+            delete baseConfig.moderation_user_id;
+        }
         if (moderationAesKey) {
             baseConfig.moderation_aes_key = moderationAesKey;
         } else {
             delete baseConfig.moderation_aes_key;
         }
+        delete baseConfig.moderationUserId;
+        delete baseConfig.user_id;
+        delete baseConfig.userId;
         delete baseConfig.moderationAesKey;
         delete baseConfig.moderation_key;
         delete baseConfig.moderationKey;
@@ -2098,6 +2118,7 @@ const UserAdmin = () => {
                 base_model: '',
                 retry_group: '',
                 retry_price_group: '',
+                moderation_user_id: '',
                 moderation_aes_key: '',
                 config: '{}',
                 is_active: false,
@@ -2152,6 +2173,7 @@ const UserAdmin = () => {
             base_model: row.base_model || '',
             retry_group: getSystemApiRetryGroup(row),
             retry_price_group: getSystemApiRetryPriceGroup(row),
+            moderation_user_id: getSystemApiModerationUserId(row),
             moderation_aes_key: getSystemApiModerationAesKey(row),
             config: safeJsonStr(row.config) || '{}',
             is_active: !!row.is_active,
@@ -7070,6 +7092,15 @@ const UserAdmin = () => {
                                                     <option value="mid">mid</option>
                                                     <option value="high">high</option>
                                                 </select>
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">Moderation User ID</label>
+                                                <input
+                                                    value={systemApiForm.moderation_user_id}
+                                                    onChange={(e) => setSystemApiForm((prev) => ({ ...prev, moderation_user_id: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono"
+                                                    placeholder={t('保存到 config.moderation_user_id', 'Saved to config.moderation_user_id')}
+                                                />
                                             </div>
                                             <div className="md:col-span-2">
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">API Key</label>

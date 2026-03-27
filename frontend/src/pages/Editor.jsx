@@ -1483,6 +1483,7 @@ import {
     stopAsyncTask,
     fetchPrompt,
     fetchMe,
+    fetchShot,
     analyzeEntityImage,
     applySceneAIResult,
     updateSceneLatestAIResult,
@@ -9206,7 +9207,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
         const probeShotVideoUrl = async (shotId) => {
             try {
-                const rows = await fetchEpisodeShots(activeEpisode.id);
+                const rows = await fetchEpisodeShots(activeEpisode.id, { compact: true });
                 const matched = Array.isArray(rows)
                     ? rows.find((row) => String(row?.id) === String(shotId))
                     : null;
@@ -11166,7 +11167,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
     useEffect(() => {
          // Load shots if needed
          if (filterScope === 'shot' && episodeId && availableShots.length === 0) {
-             fetchEpisodeShots(episodeId).then(data => {
+               fetchEpisodeShots(episodeId, { compact: true }).then(data => {
                  setAvailableShots(data.sort((a,b) => {
                       // simple sort by shot_id alphanumeric
                       return a.shot_id.localeCompare(b.shot_id, undefined, { numeric: true });
@@ -12437,7 +12438,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
             return;
         }
         try {
-            const rows = await fetchEpisodeShots(activeEpisode.id);
+            const rows = await fetchEpisodeShots(activeEpisode.id, { compact: true });
             const nextCounts = {};
             (Array.isArray(rows) ? rows : []).forEach((shot) => {
                 const sceneId = Number(shot?.scene_id || 0);
@@ -20949,6 +20950,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     const getShotCardPromptPreview = useCallback((shot) => {
         if (!shot || typeof shot !== 'object') return '';
 
+        const compactCnPreview = String(shot?.prompt_preview_cn || '').trim();
+        const compactEnPreview = String(shot?.prompt_preview_en || '').trim();
+
         let tech = {};
         try {
             tech = JSON.parse(shot.technical_notes || '{}');
@@ -20958,6 +20962,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
         }
 
         const cnCandidates = [
+            compactCnPreview,
             shot.shot_logic_cn,
             tech.video_prompt_cn,
             shot.prompt_cn,
@@ -20968,6 +20973,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             shot.end_frame,
         ];
         const enCandidates = [
+            compactEnPreview,
             shot.video_content,
             shot.prompt,
             shot.start_frame,
@@ -21489,6 +21495,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     }, []);
 
     const getShotEndFrameUrl = useCallback((shot) => {
+        const direct = String(shot?.end_frame_url || '').trim();
+        if (direct) return direct;
         try {
             const tech = JSON.parse(shot?.technical_notes || '{}');
             return String(tech?.end_frame_url || '');
@@ -21627,6 +21635,34 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
     useEffect(() => {
         editingShotRef.current = editingShot || null;
     }, [editingShot]);
+
+    useEffect(() => {
+        if (!editingShot?.id || !editingShot?.is_compact) {
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        const hydrateEditingShot = async () => {
+            try {
+                const fullShot = await fetchShot(editingShot.id);
+                if (cancelled || !fullShot?.id) return;
+                setEditingShot((prev) => {
+                    if (!prev || String(prev?.id || '') !== String(fullShot.id)) {
+                        return prev;
+                    }
+                    return { ...prev, ...fullShot, is_compact: false };
+                });
+            } catch (e) {
+                console.error('Failed to hydrate shot detail', e);
+            }
+        };
+
+        hydrateEditingShot();
+        return () => {
+            cancelled = true;
+        };
+    }, [editingShot?.id, editingShot?.is_compact, setEditingShot]);
 
     useEffect(() => {
         selectedSceneIdRef.current = String(selectedSceneId || 'all');
@@ -24024,6 +24060,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             // This satisfies the requirement to select based on Project/Episode, and associate via Scene ID locally.
             // Also fixes issues where unlinked shots or imports were hidden.
             const allShots = await fetchEpisodeShots(activeEpisode.id, {
+                compact: true,
                 scene_code: normalizedSceneCode || undefined,
                 shot_id: normalizedShotId || undefined,
             });

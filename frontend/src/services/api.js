@@ -999,6 +999,11 @@ export const fetchEpisodeShots = async (episodeId, params = {}) => {
     return response.data;
 }
 
+export const fetchShot = async (shotId) => {
+    const response = await api.get(`/shots/${shotId}`);
+    return response.data;
+}
+
 export const fetchShots = async (sceneId) => {
     const response = await api.get(`/scenes/${sceneId}/shots`);
     return response.data;

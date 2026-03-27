@@ -6248,13 +6248,78 @@ class MediaGenerationService:
                     return candidate
         return None
 
+    def _extract_zlhub_moderation_asset_ref(self, payload: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+
+        items = payload.get("items")
+        if not isinstance(items, list):
+            for key in ("data", "result", "output"):
+                nested = payload.get(key)
+                if isinstance(nested, dict) and isinstance(nested.get("items"), list):
+                    items = nested.get("items")
+                    break
+
+        if not isinstance(items, list) or not items:
+            return None
+
+        first_item = items[0] if isinstance(items[0], dict) else None
+        if not isinstance(first_item, dict):
+            return None
+
+        asset_url = str(first_item.get("asset_url") or first_item.get("assetUrl") or "").strip()
+        if asset_url:
+            if re.match(r"^asset://", asset_url, flags=re.IGNORECASE):
+                return asset_url
+            if re.match(r"^https?://", asset_url, flags=re.IGNORECASE):
+                return asset_url
+
+        downstream_asset_id = str(first_item.get("downstream_asset_id") or first_item.get("downstreamAssetId") or "").strip()
+        if downstream_asset_id:
+            return f"asset://{downstream_asset_id}"
+
+        for key in ("tos_url", "tosUrl", "downstream_final_url", "downstreamFinalUrl", "source_url", "sourceUrl"):
+            candidate = str(first_item.get(key) or "").strip()
+            if re.match(r"^https?://", candidate, flags=re.IGNORECASE):
+                return candidate
+
+        return None
+
     def _parse_zlhub_moderation_decision(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         result = {
             "blocked": False,
             "status": None,
             "reason": None,
             "raw": payload or {},
+            "approved_ref": self._extract_zlhub_moderation_asset_ref(payload),
         }
+
+        items = None
+        if isinstance(payload, dict):
+            raw_items = payload.get("items")
+            if isinstance(raw_items, list):
+                items = raw_items
+            else:
+                for key in ("data", "result", "output"):
+                    nested = payload.get(key)
+                    if isinstance(nested, dict) and isinstance(nested.get("items"), list):
+                        items = nested.get("items")
+                        break
+        if isinstance(items, list) and items:
+            statuses: List[int] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    statuses.append(int(item.get("submit_review_status")))
+                except Exception:
+                    continue
+            if statuses:
+                all_submitted = all(status == 1 for status in statuses)
+                result["blocked"] = not all_submitted
+                result["status"] = "submitted" if all_submitted else "submission_failed"
+                result["reason"] = "submit_review_status" if all_submitted else "submit_review_status_not_1"
+                return result
 
         containers: List[Any] = [payload]
         if isinstance(payload, dict):
@@ -6314,6 +6379,11 @@ class MediaGenerationService:
             tool_conf.get("moderation_user_id")
             or tool_conf.get("moderationUserId")
             or tool_conf.get("user_id")
+            or tool_conf.get("userId")
+            or config.get("moderation_user_id")
+            or config.get("moderationUserId")
+            or config.get("user_id")
+            or config.get("userId")
             or ""
         ).strip()
         moderation_key = str(
@@ -6321,6 +6391,10 @@ class MediaGenerationService:
             or tool_conf.get("moderationAesKey")
             or tool_conf.get("moderation_key")
             or tool_conf.get("moderationKey")
+            or config.get("moderation_aes_key")
+            or config.get("moderationAesKey")
+            or config.get("moderation_key")
+            or config.get("moderationKey")
             or ""
         ).strip()
         moderation_required = bool(tool_conf.get("moderation_required", True))
@@ -6341,11 +6415,7 @@ class MediaGenerationService:
         if not resolved_ref:
             return {"checked": False, "blocked": False, "reason": "empty_ref"}
 
-        business_payload: Dict[str, Any]
-        if resolved_ref.startswith("data:image/") and "," in resolved_ref:
-            business_payload = {"image_base64": resolved_ref.split(",", 1)[1]}
-        else:
-            business_payload = {"image_url": resolved_ref}
+        business_payload: Dict[str, Any] = {"images": [resolved_ref]}
 
         encrypted_data = self._encrypt_zlhub_payload(business_payload, moderation_key)
         request_payload = {
@@ -6427,24 +6497,41 @@ class MediaGenerationService:
         provider_name = self._vendor_label(config.get("provider") or tool_conf.get("provider") or "zlhub")
         base_url = str(config.get("base_url") or "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1").strip().rstrip("/")
         raw_endpoint = str(tool_conf.get("endpoint") or "").strip()
-        endpoint = raw_endpoint or "/proxy/chat/completions"
+        endpoint = raw_endpoint or "/proxy/ark/contents/generations/tasks"
         raw_query_endpoint = self._normalize_zlhub_task_query_endpoint(
             tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint")
         )
         model = str(config.get("model") or "doubao-seedance-2-0").strip()
-        is_seedance2 = str(model or "").strip().lower() == "doubao-seedance-2-0"
+        model_lower = str(model or "").strip().lower()
+        is_seedance2 = model_lower.startswith("doubao-seedance-2-0")
         zlhub_trace_id = f"zlhub-{uuid.uuid4().hex[:10]}"
         if re.match(r"^https?://", endpoint, flags=re.IGNORECASE):
-            submit_url = endpoint
-        elif not raw_endpoint and "/proxy/chat/completions" in base_url.lower():
-            submit_url = base_url
+            if "/proxy/chat/completions" in endpoint.lower():
+                submit_url = re.sub(r"/proxy/chat/completions/?$", "/proxy/ark/contents/generations/tasks", endpoint, flags=re.IGNORECASE)
+            elif "/api/v3" in endpoint.lower() or endpoint.lower().endswith("/contents/generations/tasks"):
+                submit_url = self._normalize_doubao_video_tasks_endpoint(endpoint)
+            else:
+                submit_url = endpoint.rstrip("/")
+        elif raw_endpoint:
+            normalized_relative_endpoint = endpoint
+            if "/proxy/chat/completions" in normalized_relative_endpoint.lower():
+                normalized_relative_endpoint = re.sub(r"/proxy/chat/completions/?$", "/proxy/ark/contents/generations/tasks", normalized_relative_endpoint, flags=re.IGNORECASE)
+            submit_url = f"{base_url}{normalized_relative_endpoint if normalized_relative_endpoint.startswith('/') else '/' + normalized_relative_endpoint}"
+        elif "/api/v3" in base_url.lower() or base_url.lower().endswith("/contents/generations/tasks"):
+            submit_url = self._normalize_doubao_video_tasks_endpoint(base_url)
         else:
-            submit_url = f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
+            submit_url = self._normalize_zlhub_task_query_endpoint(base_url)
 
+        explicit_query_endpoint = str(tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint") or "").strip()
         if re.match(r"^https?://", raw_query_endpoint, flags=re.IGNORECASE):
-            query_endpoint = raw_query_endpoint
-        elif "/proxy/chat/completions" in submit_url.lower() and not str(tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint") or "").strip():
-            query_endpoint = re.sub(r"/proxy/chat/completions/?$", "/proxy/ark/contents/generations/tasks", submit_url, flags=re.IGNORECASE)
+            if "/api/v3" in raw_query_endpoint.lower() or raw_query_endpoint.lower().endswith("/contents/generations/tasks"):
+                query_endpoint = self._normalize_doubao_video_tasks_endpoint(raw_query_endpoint)
+            else:
+                query_endpoint = raw_query_endpoint.rstrip("/")
+        elif not explicit_query_endpoint:
+            query_endpoint = submit_url
+        elif "/api/v3" in base_url.lower() or base_url.lower().endswith("/contents/generations/tasks"):
+            query_endpoint = self._normalize_doubao_video_tasks_endpoint(f"{base_url}/{raw_query_endpoint.lstrip('/')}" if not raw_query_endpoint.startswith("http") else raw_query_endpoint)
         else:
             query_endpoint = f"{base_url}{raw_query_endpoint if raw_query_endpoint.startswith('/') else '/' + raw_query_endpoint}"
 
@@ -6515,6 +6602,8 @@ class MediaGenerationService:
         if resolved_last_frame:
             moderation_candidates.append((resolved_last_frame, "last_frame"))
 
+        moderated_first_and_refs: List[str] = []
+        moderated_last_frame = resolved_last_frame
         for candidate_ref, role in moderation_candidates:
             moderation_result = await self._maybe_moderate_zlhub_image(candidate_ref, config, role)
             moderation_results.append(moderation_result)
@@ -6530,6 +6619,16 @@ class MediaGenerationService:
                     "details": moderation_result,
                     "submit_failed": True,
                 }
+            approved_ref = str(moderation_result.get("approved_ref") or candidate_ref or "").strip()
+            if role == "last_frame":
+                moderated_last_frame = approved_ref or moderated_last_frame
+            elif approved_ref:
+                moderated_first_and_refs.append(approved_ref)
+
+        if moderated_first_and_refs:
+            resolved_image_refs = [item for item in dict.fromkeys(moderated_first_and_refs) if item]
+        if moderated_last_frame:
+            resolved_last_frame = moderated_last_frame
 
         content_payload: List[Dict[str, Any]] = []
         if prompt_text:
@@ -6570,11 +6669,7 @@ class MediaGenerationService:
 
         payload: Dict[str, Any] = {
             "model": model,
-            "stream": False,
-            "messages": [{
-                "role": "user",
-                "content": content_payload,
-            }],
+            "content": content_payload,
         }
 
         normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
@@ -8544,32 +8639,29 @@ class MediaGenerationService:
                 else:
                     payload_input.pop("image_size", None)
         elif gen_type == "video":
-            if is_seedance_video_model:
-                payload_input["duration"] = "-1" if duration_string_required_model else -1
-            else:
+            duration_value = 5
+            try:
+                duration_value = int(float(duration if duration is not None else 5))
+            except Exception:
                 duration_value = 5
-                try:
-                    duration_value = int(float(duration if duration is not None else 5))
-                except Exception:
-                    duration_value = 5
-                allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-                if isinstance(allowed_durations, list) and allowed_durations:
-                    mapped_duration = self._map_duration_nearest(
-                        duration_value,
-                        allowed_durations,
-                        prefer_higher_on_tie=is_seedance_video_model,
-                    )
-                    if mapped_duration is not None:
-                        duration_value = int(mapped_duration)
+            allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+            if isinstance(allowed_durations, list) and allowed_durations:
+                mapped_duration = self._map_duration_nearest(
+                    duration_value,
+                    allowed_durations,
+                    prefer_higher_on_tie=is_seedance_video_model,
+                )
+                if mapped_duration is not None:
+                    duration_value = int(mapped_duration)
 
-                max_duration = runtime_enum_catalog.get("max_duration")
-                try:
-                    if max_duration is not None:
-                        duration_value = min(int(duration_value), int(max_duration))
-                except Exception:
-                    pass
-                duration_normalized = int(max(1, duration_value))
-                payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
+            max_duration = runtime_enum_catalog.get("max_duration")
+            try:
+                if max_duration is not None:
+                    duration_value = min(int(duration_value), int(max_duration))
+            except Exception:
+                pass
+            duration_normalized = int(max(1, duration_value))
+            payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
 
             # Propagate project/request-level sound setting to all video models.
             # Previously only kling 2.6 explicitly consumed this flag.
@@ -9461,27 +9553,24 @@ class MediaGenerationService:
 
             current_duration_text = str(payload_input_obj.get("duration") or "").strip()
             if current_duration_text:
-                if is_seedance_video_model:
-                    payload_input_obj["duration"] = "-1" if duration_string_required_model else -1
-                else:
-                    try:
-                        current_duration_int = int(float(current_duration_text))
-                        allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-                        if isinstance(allowed_durations, list) and allowed_durations:
-                            mapped_duration = self._map_duration_nearest(
-                                current_duration_int,
-                                allowed_durations,
-                                prefer_higher_on_tie=is_seedance_video_model,
-                            )
-                            if mapped_duration is not None:
-                                current_duration_int = int(mapped_duration)
-                        max_duration = runtime_enum_catalog.get("max_duration")
-                        if max_duration is not None:
-                            current_duration_int = min(int(current_duration_int), int(max_duration))
-                        normalized_duration_int = int(max(1, int(current_duration_int)))
-                        payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
-                    except Exception:
-                        pass
+                try:
+                    current_duration_int = int(float(current_duration_text))
+                    allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                    if isinstance(allowed_durations, list) and allowed_durations:
+                        mapped_duration = self._map_duration_nearest(
+                            current_duration_int,
+                            allowed_durations,
+                            prefer_higher_on_tie=is_seedance_video_model,
+                        )
+                        if mapped_duration is not None:
+                            current_duration_int = int(mapped_duration)
+                    max_duration = runtime_enum_catalog.get("max_duration")
+                    if max_duration is not None:
+                        current_duration_int = min(int(current_duration_int), int(max_duration))
+                    normalized_duration_int = int(max(1, int(current_duration_int)))
+                    payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
+                except Exception:
+                    pass
 
             sound_supported = runtime_enum_catalog.get("sound_supported")
             if sound_supported is False and "sound" in payload_input_obj:
