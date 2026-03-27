@@ -69,6 +69,20 @@ services:
         value: "0"
       - key: GUNICORN_MAX_REQUESTS_JITTER
         value: "0"
+      - key: IMAGE_JOB_MAX_ITEMS
+        value: "200"
+      - key: VIDEO_JOB_MAX_ITEMS
+        value: "200"
+      - key: GENERATION_CALLBACK_MAX_ITEMS
+        value: "300"
+      - key: GENERATION_CALLBACK_MAX_BYTES
+        value: "16384"
+      - key: GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS
+        value: "600"
+      - key: GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS
+        value: "1200"
+      - key: WEBHOOK_REPLAY_MAX_ITEMS
+        value: "2000"
       - key: DB_POOL_SIZE
         value: "5"
       - key: DB_MAX_OVERFLOW

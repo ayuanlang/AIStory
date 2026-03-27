@@ -439,16 +439,20 @@ VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SE
 GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
 GENERATION_CALLBACK_LOCK = threading.Lock()
 GENERATION_CALLBACK_TTL_SECONDS = max(300, int(os.getenv("GENERATION_CALLBACK_TTL_SECONDS", "1800")))
+GENERATION_CALLBACK_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_MAX_ITEMS", "1500")))
 GENERATION_CALLBACK_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_generation_callbacks")
 GENERATION_CALLBACK_MAX_BYTES = max(4096, int(os.getenv("GENERATION_CALLBACK_MAX_BYTES", "65536")))
 GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS = max(5, int(os.getenv("GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS", "30")))
+GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS", "2000")))
 GENERATION_CALLBACK_NO_MATCH_LOG_CACHE: Dict[str, float] = {}
 GENERATION_CALLBACK_NO_MATCH_LOG_LOCK = threading.Lock()
 GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, int(os.getenv("GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY", "4") or 4))
 GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
 GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
+GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
 GENERATION_CALLBACK_ASYNC_INFLIGHT: Dict[str, float] = {}
 GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK = threading.Lock()
+WEBHOOK_REPLAY_MAX_ITEMS = max(500, int(os.getenv("WEBHOOK_REPLAY_MAX_ITEMS", "6000")))
 WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
 WEBHOOK_REPLAY_LOCK = threading.Lock()
 _UNSIGNED_WEBHOOK_WARNING_EMITTED = False
@@ -687,6 +691,15 @@ def _prune_generation_callback_locked() -> None:
     for ticket in stale_keys:
         GENERATION_CALLBACK_STORE.pop(ticket, None)
 
+    if len(GENERATION_CALLBACK_STORE) > GENERATION_CALLBACK_MAX_ITEMS:
+        ordered = sorted(
+            GENERATION_CALLBACK_STORE.items(),
+            key=lambda item: float((item[1] or {}).get("received_ts") or 0.0),
+        )
+        overflow = len(GENERATION_CALLBACK_STORE) - GENERATION_CALLBACK_MAX_ITEMS
+        for ticket, _ in ordered[:overflow]:
+            GENERATION_CALLBACK_STORE.pop(ticket, None)
+
 
 def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> None:
     stable_ticket = str(ticket or "").strip()
@@ -809,6 +822,15 @@ def _should_log_callback_no_match(kind: str, callback_ticket: str) -> bool:
         for key in stale_keys:
             GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.pop(key, None)
 
+        if len(GENERATION_CALLBACK_NO_MATCH_LOG_CACHE) > GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS:
+            ordered = sorted(
+                GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.items(),
+                key=lambda item: float(item[1] or 0.0),
+            )
+            overflow = len(GENERATION_CALLBACK_NO_MATCH_LOG_CACHE) - GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS
+            for key, _ in ordered[:overflow]:
+                GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.pop(key, None)
+
         previous_seen = float(GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.get(stable_key) or 0.0)
         if previous_seen and (now_ts - previous_seen) < GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS:
             return False
@@ -873,6 +895,15 @@ def _prune_webhook_replay_locked() -> None:
 
     for replay_key in stale_keys:
         WEBHOOK_REPLAY_STORE.pop(replay_key, None)
+
+    if len(WEBHOOK_REPLAY_STORE) > WEBHOOK_REPLAY_MAX_ITEMS:
+        ordered = sorted(
+            WEBHOOK_REPLAY_STORE.items(),
+            key=lambda item: float(item[1] or 0.0),
+        )
+        overflow = len(WEBHOOK_REPLAY_STORE) - WEBHOOK_REPLAY_MAX_ITEMS
+        for replay_key, _ in ordered[:overflow]:
+            WEBHOOK_REPLAY_STORE.pop(replay_key, None)
 
 
 def _compute_webhook_signature(task_id: str, timestamp_seconds: int, secret: str) -> str:
@@ -1838,11 +1869,29 @@ def _compact_job_result(result: Any) -> Any:
 
 
 def _extract_job_result_url(result: Any) -> str:
+    def _normalize_candidate_url(raw_value: Any) -> str:
+        value = str(raw_value or "").strip()
+        if not value:
+            return ""
+        if value.lower().startswith("data:"):
+            return ""
+        if len(value) > 4096:
+            return ""
+        try:
+            parsed = urllib.parse.urlparse(value)
+            if parsed.scheme.lower() not in {"http", "https"}:
+                return ""
+            if not parsed.netloc:
+                return ""
+        except Exception:
+            return ""
+        return value
+
     if not isinstance(result, dict):
         return ""
 
     for key in ("url", "image_url", "imageUrl", "video_url", "videoUrl", "generated_url"):
-        value = str(result.get(key) or "").strip()
+        value = _normalize_candidate_url(result.get(key))
         if value:
             return value
 
@@ -1854,8 +1903,8 @@ def _extract_job_result_url(result: Any) -> str:
                 if nested_url:
                     return nested_url
             else:
-                value = str(item or "").strip()
-                if value.startswith("http://") or value.startswith("https://"):
+                value = _normalize_candidate_url(item)
+                if value:
                     return value
 
     nested_data = result.get("data")
@@ -2357,6 +2406,14 @@ def _mark_generation_callback_inflight(ticket: str) -> bool:
         ]
         for key in stale:
             GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(key, None)
+        if len(GENERATION_CALLBACK_ASYNC_INFLIGHT) > GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS:
+            ordered = sorted(
+                GENERATION_CALLBACK_ASYNC_INFLIGHT.items(),
+                key=lambda item: float(item[1] or 0.0),
+            )
+            overflow = len(GENERATION_CALLBACK_ASYNC_INFLIGHT) - GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS
+            for key, _ in ordered[:overflow]:
+                GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(key, None)
         if stable_ticket in GENERATION_CALLBACK_ASYNC_INFLIGHT:
             return False
         GENERATION_CALLBACK_ASYNC_INFLIGHT[stable_ticket] = now_ts
