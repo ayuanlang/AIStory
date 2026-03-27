@@ -8840,6 +8840,75 @@ def _prepare_sync_replace_all_state(db: Session) -> Dict[str, Any]:
     }
 
 
+def _enforce_sync_replace_all_current_tx(
+    db: Session,
+    *,
+    has_billing_rules_table: bool,
+    has_provider_key_pool_table: bool,
+    has_smtp_table: bool,
+    has_wechat_table: bool,
+    has_task_default_table: bool,
+) -> Dict[str, int]:
+    """Re-clear sync-managed rows inside the active import transaction.
+
+    This is a final safety pass for replace_all imports. It guarantees the
+    current transaction cannot degrade into merge/update mode even if a prior
+    clear/rebuild step partially succeeded on a different connection.
+    """
+    cleared = {
+        "system_api_billing_rules": 0,
+        "provider_key_pool": 0,
+        "smtp_system_configs": 0,
+        "wechat_pay_configs": 0,
+        "system_task_default_apis": 0,
+    }
+
+    _clear_non_system_settings_for_replace_all(db)
+
+    if has_billing_rules_table:
+        cleared["system_api_billing_rules"] = int(db.query(SystemAPIBillingRule).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "sync replace_all re-clear billing rules table rows",
+            lambda: db.query(SystemAPIBillingRule).delete(synchronize_session=False),
+        )
+
+    if has_task_default_table:
+        cleared["system_task_default_apis"] = int(db.query(TaskDefaultSystemAPI).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "sync replace_all re-clear task defaults table rows",
+            lambda: db.query(TaskDefaultSystemAPI).delete(synchronize_session=False),
+        )
+
+    if has_provider_key_pool_table:
+        cleared["provider_key_pool"] = int(db.query(ProviderKeyPool).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "sync replace_all re-clear provider key pool table rows",
+            lambda: db.query(ProviderKeyPool).delete(synchronize_session=False),
+        )
+
+    if has_smtp_table:
+        cleared["smtp_system_configs"] = int(db.query(SMTPSystemConfig).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "sync replace_all re-clear smtp configs table rows",
+            lambda: db.query(SMTPSystemConfig).delete(synchronize_session=False),
+        )
+
+    if has_wechat_table:
+        cleared["wechat_pay_configs"] = int(db.query(WechatPayConfig).count() or 0)
+        _run_sqlite_lock_retry(
+            db,
+            "sync replace_all re-clear wechat pay configs table rows",
+            lambda: db.query(WechatPayConfig).delete(synchronize_session=False),
+        )
+
+    _run_sqlite_lock_retry(db, "sync replace_all flush in-tx cleared rows", db.flush)
+    return cleared
+
+
 def _build_sync_process_record(
     *,
     direction: str,
@@ -9480,6 +9549,26 @@ def import_system_config_sync_bundle_for_manage(
 
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
+            enforced_tx_cleared_rows: Dict[str, int] = {}
+            if replace_all:
+                enforced_tx_cleared_rows = _enforce_sync_replace_all_current_tx(
+                    db,
+                    has_billing_rules_table=has_billing_rules_table,
+                    has_provider_key_pool_table=has_provider_key_pool_table,
+                    has_smtp_table=has_smtp_table,
+                    has_wechat_table=has_wechat_table,
+                    has_task_default_table=has_task_default_table,
+                )
+                for table_name, cleared_count in enforced_tx_cleared_rows.items():
+                    _append_sync_process_record(
+                        process_records,
+                        direction="import",
+                        table=str(table_name),
+                        operation="clear_rows_in_tx",
+                        status="ok",
+                        detail="Re-cleared existing rows inside import transaction before writing bundle",
+                        cleared_rows=int(cleared_count or 0),
+                    )
 
             provider_items = []
             for raw in providers:

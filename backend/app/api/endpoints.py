@@ -3764,6 +3764,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if text.startswith("[") and text.endswith("]"):
                 text = text[1:-1].strip()
             text = text.lstrip("@").strip()
+            text = re.sub(
+                r"[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)+",
+                lambda match: re.sub(r"[_-]+", " ", match.group(0)),
+                text,
+            )
             text = re.sub(r"\s+", " ", text)
             return text
 
@@ -3773,7 +3778,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 return ""
             # Insert spaces for camelCase/PascalCase boundaries before compact compare.
             stable = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", stable)
-            stable = stable.lower()
+            stable = normalize_entity_token(stable)
             # Treat spaces/underscores/hyphens as equivalent for EN names.
             stable = re.sub(r"[\s_\-]+", "", stable)
             # Remove remaining punctuation/noise while keeping CJK/letters/digits.
@@ -3794,7 +3799,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             for pattern in patterns:
                 for m in pattern.finditer(raw):
                     normalized = _normalize_subject_name(m.group(1))
-                    key = normalized.lower()
+                    key = _normalize_subject_compare_key(normalized)
                     if normalized and key not in seen:
                         seen.add(key)
                         found.append(normalized)
@@ -4295,7 +4300,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 return ""
 
             def _format_subject_ref(name: str, normalized_type: str) -> str:
-                clean_name = str(name or "").strip()
+                clean_name = _normalize_subject_name(name)
                 if not clean_name:
                     return ""
                 if normalized_type == "character":

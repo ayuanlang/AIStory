@@ -1,8 +1,15 @@
+const normalizeAsciiWordSeparators = (value) => {
+    return String(value || '').replace(/[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)+/g, (matched) => {
+        return matched.replace(/[_-]+/g, ' ');
+    });
+};
+
 export const normalizeEntityToken = (value) => {
     let text = String(value || '')
         .replace(/[（【〔［]/g, '(')
         .replace(/[）】〕］]/g, ')')
         .replace(/[“”"'‘’`]/g, '')
+        .replace(/[\u2010-\u2015]/g, '-')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -16,6 +23,10 @@ export const normalizeEntityToken = (value) => {
         if (next === text) break;
         text = next;
     }
+
+    text = normalizeAsciiWordSeparators(text)
+        .replace(/\s+/g, ' ')
+        .trim();
 
     return text.toLowerCase();
 };

@@ -2,6 +2,14 @@ import re
 from typing import Any
 
 
+def _normalize_ascii_word_separators(value: str) -> str:
+    return re.sub(
+        r"[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)+",
+        lambda match: re.sub(r"[_-]+", " ", match.group(0)),
+        value,
+    )
+
+
 def normalize_entity_token(value: Any) -> str:
     text = str(value or "")
     text = (
@@ -9,6 +17,10 @@ def normalize_entity_token(value: Any) -> str:
         .replace("）", ")")
         .replace("【", "[")
         .replace("】", "]")
+        .replace("〔", "[")
+        .replace("〕", "]")
+        .replace("［", "[")
+        .replace("］", "]")
         .replace("‘", "")
         .replace("’", "")
         .replace("“", "")
@@ -17,6 +29,7 @@ def normalize_entity_token(value: Any) -> str:
         .replace("'", "")
         .replace("`", "")
     )
+    text = re.sub(r"[\u2010-\u2015]", "-", text)
     text = re.sub(r"\s+", " ", text).strip()
 
     text = re.sub(r"^(CHAR|ENV|PROP)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
@@ -27,5 +40,7 @@ def normalize_entity_token(value: Any) -> str:
         if next_text == text:
             break
         text = next_text
+
+    text = re.sub(r"\s+", " ", _normalize_ascii_word_separators(text)).strip()
 
     return text.lower()

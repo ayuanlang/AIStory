@@ -5971,7 +5971,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 else if (typeToken.includes('environment') || typeToken.includes('场景') || typeToken.includes('环境') || typeToken.includes('env')) type = 'environment';
                 if (!type) continue;
 
-                const dedupKey = `${type}:${subjectName.toLowerCase()}`;
+                const dedupKey = `${type}:${normalizeEntityToken(subjectName)}`;
                 if (seen.has(dedupKey)) continue;
                 seen.add(dedupKey);
 
@@ -5990,9 +5990,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             return null;
         };
 
-        const normalizeName = (item) => String(
+        const normalizeName = (item) => normalizeEntityToken(
             item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || ''
-        ).trim().toLowerCase();
+        );
 
         const mergePayload = (base, patch, onlyMissingTypes = false) => {
             const out = {
@@ -6144,7 +6144,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const pushValue = (val) => {
             const text = String(val || '').trim();
             if (!text) return;
-            const normalized = text.toLowerCase();
+            const normalized = normalizeEntityToken(text);
             if (normalized === 'none' || normalized === 'null' || normalized === '[]' || normalized === 'n/a') return;
             candidates.push(text);
         };
@@ -6159,7 +6159,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         const dedup = [];
         const seen = new Set();
         for (const dep of candidates) {
-            const key = dep.toLowerCase();
+            const key = normalizeEntityToken(dep) || dep.toLowerCase();
             if (seen.has(key)) continue;
             seen.add(key);
             dedup.push(dep);
@@ -6225,19 +6225,36 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return null;
     };
 
+    const normalizeAsciiSubjectSeparators = (value) => {
+        return String(value || '').replace(/[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)+/g, (matched) => {
+            return matched.replace(/[_-]+/g, ' ');
+        });
+    };
+
     const normalizeSubjectName = (value) => {
         let text = String(value || '').trim();
         if (!text) return '';
+        text = text
+            .replace(/[（【〔［]/g, '(')
+            .replace(/[）】〕］]/g, ')')
+            .replace(/[“”'"‘’`]/g, '')
+            .replace(/[\u2010-\u2015]/g, '-');
         text = text.replace(/^CHAR:\s*/i, '');
+        text = text.replace(/^PROP:\s*/i, '');
+        text = text.replace(/^ENV:\s*/i, '');
         text = text.replace(/^\[/, '').replace(/\]$/, '');
         text = text.replace(/^@/, '').trim();
+        text = normalizeAsciiSubjectSeparators(text)
+            .replace(/\s+/g, ' ')
+            .trim();
         return text;
     };
 
     const normalizeSubjectKey = (value) => {
-        return normalizeSubjectName(value)
-            .toLowerCase()
-            .replace(/[\s_\-./()[\]{}:,@'"`]/g, '');
+        const stable = normalizeSubjectName(value);
+        if (!stable) return '';
+        return normalizeEntityToken(stable)
+            .replace(/[^\p{L}\p{N}\u4e00-\u9fff]/gu, '');
     };
 
     const extractSubjectsFromMarkdownTable = (markdownText) => {
@@ -6351,6 +6368,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     item?.subject_name_exact,
                     item?.name,
                     item?.name_en,
+                    item?.subject_name,
                     item?.id,
                 ];
                 for (const variant of variants) {
@@ -6394,7 +6412,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             return String(markdownSource || '').trim();
         }
 
-        const norm = (value) => String(value || '').toLowerCase().replace(/[\s_\-./()]/g, '');
+        const norm = (value) => normalizeSubjectKey(value);
         const findCol = (patterns) => {
             const idx = parsed.headers.findIndex((h) => patterns.some(p => norm(h).includes(p)));
             return idx >= 0 ? idx : -1;
@@ -6415,6 +6433,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 const envMatch = raw.match(/^ENV:\s*\[([^\]]+)\]$/i);
                 const plainName = normalizeSubjectName(charMatch?.[1] || propMatch?.[1] || envMatch?.[1] || raw);
                 const escaped = escapeRegExp(plainName);
+                const comparableKey = normalizeSubjectKey(plainName);
+                const normalizedRowText = normalizeSubjectKey(rowText);
                 const patterns = [
                     new RegExp(`CHAR:\\s*\\[@${escaped}\\]`, 'i'),
                     new RegExp(`CHAR:\\s*\\[${escaped}\\]`, 'i'),
@@ -6423,7 +6443,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                     new RegExp(`\\[@${escaped}\\]`, 'i'),
                     new RegExp(`@${escaped}\\b`, 'i'),
                 ];
-                return patterns.some(re => re.test(rowText));
+                return patterns.some(re => re.test(rowText)) || Boolean(comparableKey && normalizedRowText && normalizedRowText.includes(comparableKey));
             });
             if (!matched) continue;
 
@@ -6620,9 +6640,9 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         };
 
         return {
-            characters: mergeBy(base.characters, patch.characters, (item) => normalizeSubjectName(item?.name || item?.subject_name_exact || item?.name_en || '').toLowerCase()),
-            props: mergeBy(base.props, patch.props, (item) => String(item?.name || item?.subject_name_exact || item?.name_en || '').trim().toLowerCase()),
-            environments: mergeBy(base.environments, patch.environments, (item) => String(item?.name || item?.subject_name_exact || item?.name_en || '').trim().toLowerCase()),
+            characters: mergeBy(base.characters, patch.characters, (item) => normalizeSubjectKey(item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || '')),
+            props: mergeBy(base.props, patch.props, (item) => normalizeSubjectKey(item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || '')),
+            environments: mergeBy(base.environments, patch.environments, (item) => normalizeSubjectKey(item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || '')),
         };
     };
 
@@ -7451,15 +7471,72 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             message: t('场景与 subjects 导入完成，正在逐个场景检查实体缺失...', 'Scenes and subjects imported. Checking each scene for missing entities...'),
         });
 
-        const latestEntities = await fetchEntities(projectId).catch(() => []);
-        const missingSceneReports = importedSceneRows
-            .map((scene) => ({
-                scene,
-                missing: findMissingSceneSubjectRefs(scene, latestEntities),
-            }))
-            .filter((item) => Array.isArray(item.missing) && item.missing.length > 0);
+        let latestEntities = await fetchEntities(projectId).catch(() => []);
+        const missingSceneReports = [];
+        const supplementReport = {
+            createdItems: [],
+            skippedItems: [],
+            failedItems: [],
+            sceneReports: [],
+            countsByType: { character: 0, prop: 0, environment: 0 },
+        };
 
-        const missingItemCount = missingSceneReports.reduce((sum, item) => sum + Number(item.missing.length || 0), 0);
+        for (const scene of importedSceneRows) {
+            const currentMissing = findMissingSceneSubjectRefs(scene, latestEntities);
+            if (!Array.isArray(currentMissing) || currentMissing.length === 0) continue;
+
+            const sceneNo = String(scene?.scene_no || '').trim();
+            const sceneName = String(scene?.scene_name || '').trim();
+            const sceneLabel = sceneNo || sceneName || `#${scene?.id || 'unknown'}`;
+            const normalizedSceneReport = {
+                sceneId: Number(scene?.id || 0) || null,
+                sceneNo,
+                sceneName,
+                missing: currentMissing,
+            };
+            missingSceneReports.push({
+                scene,
+                missing: currentMissing,
+                normalized: normalizedSceneReport,
+            });
+
+            const details = currentMissing.map((ref) => {
+                const conflicts = findCrossTypeEntityMatches(latestEntities, ref?.name, ref?.type);
+                const conflictLabel = conflicts.length > 0
+                    ? ` | cross_type_matches=${conflicts.map((c) => `${c?.type || 'unknown'}:${c?.name || c?.name_en || c?.id || 'unknown'}`).join(';')}`
+                    : '';
+                return `${ref.type}:${ref.name} [field=${ref.sourceField || '-'}]${conflictLabel}`;
+            });
+            onLog?.(`[SceneSubjectGap] scene=${sceneLabel} -> ${details.join(' || ')}`, 'warning');
+
+            setAnalysisFlowStatus({
+                phase: 'supplementing_scene_subjects',
+                message: t(
+                    `场景 ${sceneLabel} 存在 ${currentMissing.length} 个缺失实体，正在复用场景补实体流程逐个补充...`,
+                    `Scene ${sceneLabel} has ${currentMissing.length} missing entities. Reusing the scene supplement flow now...`
+                ),
+            });
+
+            const sceneSupplementReport = await handleSupplementSceneSubjects(
+                scene,
+                { missing: currentMissing },
+                { silent: true }
+            );
+
+            if (sceneSupplementReport) {
+                supplementReport.createdItems.push(...(Array.isArray(sceneSupplementReport.createdItems) ? sceneSupplementReport.createdItems : []));
+                supplementReport.skippedItems.push(...(Array.isArray(sceneSupplementReport.skippedItems) ? sceneSupplementReport.skippedItems : []));
+                supplementReport.failedItems.push(...(Array.isArray(sceneSupplementReport.failedItems) ? sceneSupplementReport.failedItems : []));
+                supplementReport.sceneReports.push(...(Array.isArray(sceneSupplementReport.sceneReports) ? sceneSupplementReport.sceneReports : []));
+                supplementReport.countsByType.character += Number(sceneSupplementReport?.countsByType?.character || 0);
+                supplementReport.countsByType.prop += Number(sceneSupplementReport?.countsByType?.prop || 0);
+                supplementReport.countsByType.environment += Number(sceneSupplementReport?.countsByType?.environment || 0);
+            }
+
+            latestEntities = await fetchEntities(projectId).catch(() => latestEntities);
+        }
+
+        const missingItemCount = missingSceneReports.reduce((sum, item) => sum + Number(item?.missing?.length || 0), 0);
         if (missingSceneReports.length === 0) {
             onLog?.('Post-import scene entity check passed: no missing scene subjects detected. Supplement step skipped.', 'success');
             return {
@@ -7472,41 +7549,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             `Post-import scene entity check found missing subjects in ${missingSceneReports.length} scene(s), total missing items=${missingItemCount}.`,
             'warning'
         );
-
-        const formattedMissingLogs = missingSceneReports
-            .map((item) => {
-                const sceneNo = String(item?.scene?.scene_no || '').trim();
-                const sceneName = String(item?.scene?.scene_name || '').trim();
-                const sceneLabel = sceneNo || sceneName || `#${item?.scene?.id || 'unknown'}`;
-                const details = (item.missing || []).map((ref) => {
-                    const conflicts = findCrossTypeEntityMatches(latestEntities, ref?.name, ref?.type);
-                    const conflictLabel = conflicts.length > 0
-                        ? ` | cross_type_matches=${conflicts.map((c) => `${c?.type || 'unknown'}:${c?.name || c?.name_en || c?.id || 'unknown'}`).join(';')}`
-                        : '';
-                    return `${ref.type}:${ref.name} [field=${ref.sourceField || '-'}]${conflictLabel}`;
-                });
-                return `scene=${sceneLabel} -> ${details.join(' || ')}`;
-            })
-            .filter(Boolean);
-
-        formattedMissingLogs.forEach((line) => {
-            onLog?.(`[SceneSubjectGap] ${line}`, 'warning');
-        });
-
-        setAnalysisFlowStatus({
-            phase: 'supplementing_scene_subjects',
-            message: t(
-                `场景缺失实体检查完成：发现 ${missingItemCount} 项缺失。正在逐个场景补充缺失实体...`,
-                `Scene entity gap check completed: ${missingItemCount} missing items found. Supplementing missing entities scene by scene...`
-            ),
-        });
-
-        const supplementReport = await createMissingSceneSubjectPlaceholders({
-            projectId,
-            sceneRows: missingSceneReports.map((item) => item.scene),
-            existingEntities: latestEntities,
-            onLog,
-        });
 
         const createdCount = Number(supplementReport?.createdItems?.length || 0);
         const skippedCount = Number(supplementReport?.skippedItems?.length || 0);
@@ -7521,16 +7563,11 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             checkedSceneCount: importedSceneRows.length,
             missingSceneCount: missingSceneReports.length,
             missingItemCount,
-            missingSceneReports: missingSceneReports.map((item) => ({
-                sceneId: Number(item?.scene?.id || 0) || null,
-                sceneNo: String(item?.scene?.scene_no || '').trim(),
-                sceneName: String(item?.scene?.scene_name || '').trim(),
-                missing: item.missing,
-            })),
+            missingSceneReports: missingSceneReports.map((item) => item.normalized),
             supplementReport: supplementReport || emptyReport.supplementReport,
             pendingUserConfirmation: false,
         };
-    }, [onLog, projectId, t]);
+    }, [handleSupplementSceneSubjects, onLog, projectId, t]);
 
     const parseMarkdownTable = (text) => {
         if (!text || typeof text !== 'string') return null;
@@ -14728,7 +14765,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
                 .map((v) => String(v || '').trim())
                 .filter(Boolean);
             names.forEach((name) => {
-                const key = `${type}:${name.toLowerCase()}`;
+                const key = `${type}:${normalizeSubjectKey(name)}`;
                 if (seen.has(key)) return;
                 seen.add(key);
                 bucket[type].push(name);
@@ -31084,7 +31121,7 @@ const Editor = ({
                         const subjectName = String(cells[nameIdx] || '').trim();
                         if (!type || !subjectName) continue;
 
-                        const dedupKey = `${type}:${subjectName.toLowerCase()}`;
+                        const dedupKey = `${type}:${normalizeSubjectKey(subjectName)}`;
                         if (seen.has(dedupKey)) continue;
                         seen.add(dedupKey);
 
@@ -31125,7 +31162,7 @@ const Editor = ({
             else if (typeToken.includes('environment') || typeToken.includes('场景') || typeToken.includes('环境') || typeToken.includes('env')) type = 'environment';
             if (!type) continue;
 
-            const dedupKey = `${type}:${subjectName.toLowerCase()}`;
+            const dedupKey = `${type}:${normalizeSubjectKey(subjectName)}`;
             if (seen.has(dedupKey)) continue;
             seen.add(dedupKey);
 
@@ -31244,9 +31281,9 @@ const Editor = ({
         const text = String(inputText || '');
         const emptyPayload = { characters: [], props: [], environments: [] };
 
-        const normalizeName = (item) => String(
+        const normalizeName = (item) => normalizeSubjectKey(
             item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || ''
-        ).trim().toLowerCase();
+        );
 
         const hasAny = (payload) =>
             (Array.isArray(payload?.characters) && payload.characters.length > 0)
@@ -31484,7 +31521,7 @@ const Editor = ({
             ? await fetchEntities(id).catch(() => [])
             : []);
         let knownEntities = Array.isArray(existingEntities) ? [...existingEntities] : [];
-        const normalizeEntityKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${String(name || '').trim().toLowerCase()}`;
+        const normalizeEntityKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${normalizeSubjectKey(name)}`;
         const existingEntityMap = new Map();
         for (const e of (existingEntities || [])) {
             const t = String(e?.type || '').trim().toLowerCase();

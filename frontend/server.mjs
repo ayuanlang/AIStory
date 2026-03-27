@@ -11,14 +11,18 @@ const port = Number(process.env.PORT || 10000);
 const distDir = path.join(__dirname, 'dist');
 const indexPath = path.join(distDir, 'index.html');
 const backendTarget = String(process.env.BACKEND_PROXY_TARGET || 'https://aistory-backend-xggg.onrender.com').trim();
+const backendProxyTimeoutMsRaw = Number(process.env.BACKEND_PROXY_TIMEOUT_MS || 610000);
+const backendProxyTimeoutMs = Number.isFinite(backendProxyTimeoutMsRaw)
+  ? Math.max(30000, Math.min(1800000, Math.floor(backendProxyTimeoutMsRaw)))
+  : 610000;
 
 const createScopedProxy = (scopePath) => createProxyMiddleware({
   target: `${backendTarget}${scopePath}`,
   changeOrigin: true,
   xfwd: true,
   secure: true,
-  proxyTimeout: 65000,
-  timeout: 65000,
+  proxyTimeout: backendProxyTimeoutMs,
+  timeout: backendProxyTimeoutMs,
   onProxyReq(proxyReq) {
     proxyReq.setHeader('X-Forwarded-Host', 'aistory-frontend.onrender.com');
   },
@@ -50,5 +54,5 @@ app.get('*', (_req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`[frontend] listening on ${port}, proxying api to ${backendTarget}`);
+  console.log(`[frontend] listening on ${port}, proxying api to ${backendTarget}, timeout=${backendProxyTimeoutMs}ms`);
 });

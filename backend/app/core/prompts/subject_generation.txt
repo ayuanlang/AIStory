@@ -21,6 +21,7 @@
 5. 语言一致：自然语言默认跟随剧本原始语言；若 `Project Context` 明确给出 `Language`，则项目目标语言优先。仅固定结构键名、约定标签可保持既定格式，其余描述禁止中英混杂漂移；每个实体必须同时输出 generation_prompt_cn 与 generation_prompt_en 且语义一致，anchor_description 必须英文短语。
 - 固定双语输出字段契约（Mandatory）：`generation_prompt_cn`、`appearance_cn`、`description_cn` 等带 `_cn` 的字段，始终必须输出中文；`generation_prompt_en`、`negative_prompt_en`、`name_en` 等带 `_en` 的字段，始终必须输出英文；`anchor_description` 始终必须输出英文短语。以上字段语言契约不受项目语言影响。
 - `name_en` 命名格式硬规则（Mandatory）：`name_en` 必须使用自然英文分词并以空格分隔，优先采用 Title Case，例如 `Demon Slayer Captain`、`Harbor Office Front Mid Night`、`Police ID Badge Lanyard`。禁止驼峰、下划线、连字符或无分词拼接形式，如 `DemonSlayerCaptain`、`Demon_Slayer_Captain`、`demon-slayer-captain`、`HarborOffice_Front_Mid_Night`。若名称里包含方向、景别、昼夜或状态语义，也必须继续写成自然英文词组，不得回退成工程式 token 拼接。
+- `name_en` 历史兼容边界（Mandatory）：若上游旧数据、输入示例、`subject_name_exact`、`visual_dependencies` 或引用 token 中出现任何带下划线、连字符、驼峰拼接或其他工程式分隔的历史名字包装，必须先在理解阶段将其归一为空格分词的人类可读名称，再继续分析与回写。最终新输出里，`name_en`、`subject_name_exact`、`visual_dependencies`、引用 token 负载名都必须统一使用空格分词形式；禁止继续产出任何带下划线、连字符或无分词拼接的名字包装。
 - 字段语言与画面内语言区分（Mandatory）：`Project Context.Language` 影响的是设计语境、命名语境与画面中实际会被看见/听见的语言内容，不改变字段本身的中英文职责。即使项目语言为英文，`generation_prompt_cn` 仍必须用中文描述该英文项目；即使项目语言为中文，`generation_prompt_en` 仍必须用英文描述该中文项目。
 6. 文字载荷语言规则（Mandatory）：在 environment / character / prop 的图片提示词中，凡需要写出实际可见文字内容（如招牌、屏幕 UI、按钮文案、手机消息、海报标语、门牌、纸面文字），必须使用“项目目标语言；若未指定则使用剧本原始语言”来填写。禁止为了维持 `generation_prompt_en` 的英文叙述外壳，而把这些实际画面文字生硬改成英文占位。
 7. 项目语言驱动的视觉设计语境（Mandatory）：`Project Context.Language` 不仅约束文字输出语言，也约束角色 / 道具 / 环境的默认视觉设计语境。若剧本未明确给出人物族裔/地域、道具产地/品牌体系、建筑地域/城市语境、标识系统或生活方式线索，则必须优先按项目语言对应的常识性现实语境补全设计基线，而不是套用示例中的人种、服装、道具、建筑或空间风格。
@@ -67,7 +68,7 @@
 - 换装抽取示例（Mandatory）：
   - 不合规：仅一个 `CHAR:[@Lin]`，在后文用文字改成“脱掉风衣后的林月”或“穿上制服的林月”。
   - 不合规：同一个角色条目里写“日间简约复古裙装，夜间棉质睡衣”，试图用一个角色覆盖两个服装版本。
-  - 合规：`CHAR:[@Lin_Trench]` 作为基准角色，`CHAR:[@Lin_Uniform]` / `CHAR:[@Lin_NoCoat]` 作为独立角色实体；后者通过 `visual_dependencies` 与 `dependency_strategy` 继承前者稳定锚点，并在逻辑中写清仅改变服装/配件状态。
+  - 合规：`CHAR:[@Lin Trench]` 作为基准角色，`CHAR:[@Lin Uniform]` / `CHAR:[@Lin No Coat]` 作为独立角色实体；后者通过 `visual_dependencies` 与 `dependency_strategy` 继承前者稳定锚点，并在逻辑中写清仅改变服装/配件状态。
 - 实体落点硬规则：每个被抽取实体必须至少在以下之一显式落点：Layout FG/MG/BG、Environment Context、Linked Characters、Key Props、Beats 动作关系；缺一判无效。
 - 环境并入实体（非角色/非道具）必须在中文描述 + generation_prompt_en 双通道显式锚点出现，不得只在其一出现。
 - 推荐格式：CHAR:[@A] -> Beat2/FG-left，PROP:[B] -> Key Props + Beat3 interaction，ENV:[C] -> Layout BG anchor + Environment prompt anchor。
@@ -91,7 +92,7 @@
 - 非人实体归类校验（Mandatory）：跨 Scene 重复且具叙事作用者必须进入 props；其余非人实体不得误入 props，必须并入对应 environment 描述与提示词锚点。
 - 非人实体最小覆盖（Mandatory）：桌子、杯子、电脑等具体可见物体即使不满足跨 Scene 复用，也必须被抽取为 Scene 实体；可归为 environment 组成项，但不得漏抽。
 - 身份形态拆分强制：分身/易容/年龄态/特殊形态必须拆成独立 characters 条目。
-  - 示例：CHAR:[@Lin_Adult] 与 CHAR:[@Lin_Teen]；CHAR:[@AgentK_Normal] 与 CHAR:[@AgentK_Disguised]。
+  - 示例：CHAR:[@Lin Adult] 与 CHAR:[@Lin Teen]；CHAR:[@Agent K Normal] 与 CHAR:[@Agent K Disguised]。
 - 换装拆分并列强制（Mandatory）：明确换装、脱去关键外层、穿上职业制服/防护装备、增加或移除显著配饰后，只要角色可见轮廓或身份阅读发生变化，也必须像年龄态/易容一样拆成独立 characters 条目，不得视作同一角色的轻微连续状态。
 - Key Props 抽取标准：剧情意义明确 + 持续影响 + 重复出现/被引用。
 - 一次性且无叙事作用的小物可不进 props，但若在当前 Scene 可见且参与构图/动作，仍必须作为 Scene 实体被抽取并落点到 environment。
@@ -246,9 +247,9 @@
 - 角色分期依赖合规示例（Mandatory）：
   - 不合规：仅一个 CHAR:[@Lin]，同时描述青年+中年+换装+雨淋状态。
   - 合规：
-    - CHAR:[@Lin_Young] -> Original, visual_dependencies=[]；
-    - CHAR:[@Lin_Adult_Formal] -> Type A, visual_dependencies=["CHAR:[@Lin_Young]"]；
-    - CHAR:[@Lin_Adult_RainSoaked] -> Type B, visual_dependencies=["CHAR:[@Lin_Adult_Formal]"]；
+    - CHAR:[@Lin Young] -> Original, visual_dependencies=[]；
+    - CHAR:[@Lin Adult Formal] -> Type A, visual_dependencies=["CHAR:[@Lin Young]"]；
+    - CHAR:[@Lin Adult Rain Soaked] -> Type B, visual_dependencies=["CHAR:[@Lin Adult Formal]"]；
     - dependency_strategy.logic 写清：继承脸型/体态/稳定锚点，仅改变年龄态、服装与非图形化状态表现。
 - 风格驱动映射强制：
   - 真人剧：35-85mm、真实皮肤微纹理、自然高光，禁塑料/CGI感。
