@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import time
+import atexit
 from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy import text
@@ -21,6 +22,67 @@ _QUEUE_STOP_EVENT = threading.Event()
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "3600") or 3600.0))
 _QUEUE_WORKER_THREADS = max(1, min(4, int(os.getenv("GENERATION_QUEUE_WORKER_THREADS", "1") or 1)))
+_QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
+_QUEUE_LEADER_CONN = None
+
+
+def _release_queue_leader_lock() -> None:
+    global _QUEUE_LEADER_CONN
+    conn = _QUEUE_LEADER_CONN
+    _QUEUE_LEADER_CONN = None
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+atexit.register(_release_queue_leader_lock)
+
+
+def _is_postgres_engine() -> bool:
+    try:
+        return str(engine.url.get_backend_name() or "").strip().lower().startswith("postgres")
+    except Exception:
+        return False
+
+
+def _try_acquire_queue_leader_lock() -> bool:
+    global _QUEUE_LEADER_CONN
+    if not _is_postgres_engine():
+        return True
+    if _QUEUE_LEADER_CONN is not None:
+        return True
+
+    conn = None
+    acquired = False
+    try:
+        conn = engine.raw_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT pg_try_advisory_lock(%s)", (_QUEUE_ADVISORY_LOCK_ID,))
+            row = cursor.fetchone()
+            acquired = bool(row and row[0])
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if acquired:
+            _QUEUE_LEADER_CONN = conn
+            conn = None
+            return True
+        return False
+    except Exception as exc:
+        logger.warning("generation queue leader lock probe failed; starting without cross-process guard | err=%s", exc)
+        return True
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _ensure_job_state_table_ready() -> None:
@@ -401,6 +463,12 @@ def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, A
         return
     with _QUEUE_START_LOCK:
         if _QUEUE_STARTED:
+            return
+        if not _try_acquire_queue_leader_lock():
+            logger.info(
+                "generation queue worker startup skipped in this process; advisory lock %s is held by another process",
+                _QUEUE_ADVISORY_LOCK_ID,
+            )
             return
         _ensure_queue_table_ready()
         for index in range(_QUEUE_WORKER_THREADS):

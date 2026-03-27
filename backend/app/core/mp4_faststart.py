@@ -3,6 +3,20 @@ import struct
 import tempfile
 
 
+_DEFAULT_FASTSTART_MAX_MB = 64
+
+
+def _get_faststart_max_bytes() -> int:
+    raw = str(os.getenv("MP4_FASTSTART_MAX_MB", str(_DEFAULT_FASTSTART_MAX_MB)) or "").strip()
+    try:
+        max_mb = int(raw)
+    except Exception:
+        max_mb = _DEFAULT_FASTSTART_MAX_MB
+    if max_mb <= 0:
+        return 0
+    return max_mb * 1024 * 1024
+
+
 _CONTAINER_BOX_TYPES = {
     "moov",
     "trak",
@@ -28,6 +42,15 @@ def optimize_mp4_faststart(file_path: str) -> bool:
         return False
     if not os.path.exists(file_path):
         return False
+
+    max_bytes = _get_faststart_max_bytes()
+    if max_bytes > 0:
+        try:
+            file_size = os.path.getsize(file_path)
+        except Exception:
+            file_size = 0
+        if file_size > max_bytes:
+            return False
 
     with open(file_path, "rb") as handle:
         data = handle.read()

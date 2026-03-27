@@ -348,11 +348,27 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
 }
 
 _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "180")))
-_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(30, int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "180") or 180))
+_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(30, int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "300") or 300))
 _ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP = max(2, min(32, int(os.getenv("ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP", "12") or 12)))
 _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP = max(20000, int(os.getenv("ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP", "120000") or 120000))
 _ANALYZE_SCENE_RECENT_TASKS: Dict[str, Dict[str, Any]] = {}
 _ANALYZE_SCENE_RECENT_TASKS_LOCK = threading.Lock()
+
+
+async def _await_analyze_scene_segment(messages: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str, Any]:
+    started_at = time.monotonic()
+    llm_task = asyncio.create_task(llm_service.chat_completion_with_fallback(messages, config))
+    try:
+        return await asyncio.wait_for(asyncio.shield(llm_task), timeout=_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[analyze_scene] segment_soft_timeout episode_provider=%s model=%s timeout=%ss elapsed=%.2fs; continuing to wait for provider result",
+            (config or {}).get("provider"),
+            (config or {}).get("model"),
+            _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
+            time.monotonic() - started_at,
+        )
+        return await llm_task
 
 
 def _normalize_analyze_scene_dedup_payload(value: Any) -> Any:
@@ -4533,16 +4549,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         _release_db_connection(db, "analyze_scene_llm_call")
 
         for seg_idx in range(1, max_segments + 1):
-            try:
-                llm_resp = await asyncio.wait_for(
-                    llm_service.chat_completion_with_fallback(current_messages, config),
-                    timeout=_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError as exc:
-                raise HTTPException(
-                    status_code=504,
-                    detail=f"analyze_scene segment timed out after {_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS}s",
-                ) from exc
+            llm_resp = await _await_analyze_scene_segment(current_messages, config)
             current_routing = _extract_llm_routing_metadata(llm_resp)
             if current_routing:
                 resolved_llm_routing = current_routing

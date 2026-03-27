@@ -66,9 +66,15 @@ services:
       - key: GUNICORN_KEEPALIVE
         value: "15"
       - key: GUNICORN_MAX_REQUESTS
-        value: "0"
+        value: "300"
       - key: GUNICORN_MAX_REQUESTS_JITTER
-        value: "0"
+        value: "50"
+      - key: MP4_FASTSTART_MAX_MB
+        value: "64"
+      - key: LLM_TIMEOUT_SECONDS
+        value: "300"
+      - key: ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS
+        value: "300"
       - key: LLM_DEBUG_LOG
         value: "0"
       - key: LLM_DEBUG_LOG_CONTENT
