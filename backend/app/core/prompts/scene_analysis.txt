@@ -658,6 +658,7 @@
 - 封面环境规则承载方式（Mandatory）：海报标题、标题安全区、`4:3` 画幅、移动端 UI 避让要求，必须写进这个特殊环境条目的 `description_cn` 与 `generation_prompt_cn/en` 中，作为环境规则描述的一部分，而不是拆成额外 JSON 字段。也就是说，封面相关信息要“写在环境描述里”，不再单独建 schema。
 - 封面环境大片参考写回规则（Mandatory）：封面环境的 `description_cn` 不得只写“国际大片海报感”这种抽象结论，必须明确说明参考了哪些大片海报的哪些具体视觉元素，例如主角群像压迫式站位、前景道具引导、逆光轮廓、冷暖对冲、城市夜雨反射、标题压顶留白、单点高亮焦区等。可以引用影片名作为风格参照，但必须同步落到可见元素层，不得只列片名不解释。
 - 封面环境提示词硬规则（Mandatory）：该特殊环境条目的 `generation_prompt_cn/en` 必须明确说明：这是整集封面海报环境、采用 `4:3` 横向海报画布、标题使用项目语言、标题位于中上部安全区，并显式避开右侧移动端按钮区与底部字幕/菜单区。封面可体现剧情分格感，但最终必须保持单张国际大片海报式环境主视觉，不得变成拼格海报或多图拼贴。
+- 封面环境全量依赖硬规则（Mandatory）：封面海报环境的 `visual_dependencies` 不能只写单个基础环境。凡实际出现在封面主视觉中的关键角色 `CHAR:[@...]`、关键道具 `PROP:[...]`、核心环境 `ENV:[...]`，都必须全部写入 `visual_dependencies`，按逗号分隔顺序列出并在 JSON 中落为数组；禁止遗漏封面中已经明确出现的任何主 subjects。`dependency_strategy.logic` 也必须同步说明这些人物、道具、环境是如何被整合进同一张封面海报主视觉的。
 - 单语种示例收口规则（Mandatory）：本节保留 1 组普通环境 JSON 权威示例，并额外增加 1 组封面特殊环境示例，用于展示“常规环境”和“封面环境”共用同一 JSON 结构的写法；跨语种覆盖由 Part 2A-2C 整体共同完成，不要求本节同时放中文与英文两组示例。真实输出不得直接复用示例空间。
 - 中文项目语境示例（普通环境 + 封面特殊环境追加示例）：
 ```json
@@ -686,15 +687,15 @@
       "name_en": "Cover Poster",
       "atmosphere": "Premium theatrical tension with dramatic layered poster depth",
       "visual_params": "Poster/Cover/4:3",
-      "description_cn": "整集封面海报专用环境，固定使用 4:3 横向海报画布，基于核心剧情环境重组前景、中景、后景层次，用于承载国际大片海报式主视觉。参考元素需明确落地为《Sicario》式前景压迫性剪影与低位道具引导、《Blade Runner 2049》式冷暖对冲与城市夜雨反射纵深，以及经典商业海报常见的中上部标题压顶留白与单点高亮焦区组织。标题必须使用项目语言，放在画面中上部安全区，避开右侧移动端按钮区与底部字幕/菜单区；标题、安全区与画幅信息全部并入本环境描述与提示词，不单列额外字段。",
-      "generation_prompt_cn": "电影级写实封面海报环境，固定名称为封面海报，整张画面按 4:3 横向海报画布执行。该环境基于核心剧情环境重组为国际大片海报式主视觉：前景用于关键道具或轮廓引导，中景用于主要角色关系承压，后景用于核心环境结构、光区切分与空间纵深，共同压缩体现剧情分格感，但保持为单张完整海报。标题必须使用项目语言，采用自然匀称字形，放置在中上部安全区，建议控制在画面 x=18%-82%、y=10%-26% 区间，并显式避开右侧移动端按钮区与底部字幕菜单区。",
-      "generation_prompt_en": "Premium theatrical cover-poster environment named Cover Poster, rendered on a fixed 4:3 horizontal poster canvas. Recompose the core story environment into a blockbuster-style key-art layout: foreground for prop-led visual guidance, midground for lead-character tension blocking, and background for architectural depth, light-zone separation, and dramatic environmental massing that compresses storyboard-like story segmentation into one cohesive poster image. The title must follow the project language, use balanced natural typography, sit inside the upper-middle safe zone, roughly within x=18%-82% and y=10%-26%, and stay clear of the right-side mobile action rail and the bottom caption/menu area in TikTok-like interfaces.",
+      "description_cn": "整集封面海报专用环境，固定使用 4:3 横向海报画布，基于核心剧情环境重组前景、中景、后景层次，用于承载国际大片海报式主视觉。参考元素需明确落地为《Sicario》式前景压迫性剪影与低位道具引导、《Blade Runner 2049》式冷暖对冲与城市夜雨反射纵深，以及经典商业海报常见的中上部标题压顶留白与单点高亮焦区组织。标题必须使用项目语言，放在画面中上部安全区，避开右侧移动端按钮区与底部字幕/菜单区；标题、安全区与画幅信息全部并入本环境描述与提示词，不单列额外字段。该封面环境必须整合封面中实际出现的全部关键人物、关键道具与核心环境作为依赖源，而不是只依赖单个基础环境。",
+      "generation_prompt_cn": "电影级写实封面海报环境，固定名称为封面海报，整张画面按 4:3 横向海报画布执行。该环境基于全部封面相关 subjects 共同重组为国际大片海报式主视觉：前景用于关键道具或轮廓引导，中景用于主要角色关系承压，后景用于核心环境结构、光区切分与空间纵深，共同压缩体现剧情分格感，但保持为单张完整海报。必须显式继承封面所涉及的全部关键角色、道具与基础环境依赖，不得遗漏任何已进入封面的主要 subjects。标题必须使用项目语言，采用自然匀称字形，放置在中上部安全区，建议控制在画面 x=18%-82%、y=10%-26% 区间，并显式避开右侧移动端按钮区与底部字幕菜单区。",
+      "generation_prompt_en": "Premium theatrical cover-poster environment named Cover Poster, rendered on a fixed 4:3 horizontal poster canvas. Recompose all cover-involved subjects into one blockbuster-style key-art layout: foreground for prop-led visual guidance, midground for lead-character tension blocking, and background for architectural depth, light-zone separation, and dramatic environmental massing that compresses storyboard-like story segmentation into one cohesive poster image. Explicitly inherit every key subject that actually appears on the cover, including all major characters, signature props, and the core environment dependencies, rather than only one base environment. The title must follow the project language, use balanced natural typography, sit inside the upper-middle safe zone, roughly within x=18%-82% and y=10%-26%, and stay clear of the right-side mobile action rail and the bottom caption/menu area in TikTok-like interfaces.",
       "negative_prompt_en": "comic grid, tiled collage, split-screen montage, unreadable title, distorted lettering, title near edge, title inside UI area, cluttered lower frame, cheap poster layout, watermark",
       "anchor_description": "cover poster layout, layered key art depth, upper-middle title safe zone, 4:3 horizontal poster frame",
-      "visual_dependencies": ["ENV:[港口办公室_正向_中景_夜]"],
+      "visual_dependencies": ["CHAR:[@林月]", "CHAR:[@程雾]", "PROP:[证据档案袋]", "ENV:[港口办公室 正向 中景 夜]"],
       "dependency_strategy": {
         "type": "Type A",
-        "logic": "Derived from the core story environment as a special cover-poster environment; preserve primary environmental anchors while recomposing them into a 4:3 theatrical key-art layout with project-language title safe-zone constraints."
+        "logic": "Derived as a special cover-poster environment that consolidates every cover-involved key subject: preserve the core environment anchors, inherit the lead-character identity anchors and the signature prop silhouette, then compress them together into one 4:3 theatrical key-art layout with project-language title safe-zone constraints."
       }
     }
   ]

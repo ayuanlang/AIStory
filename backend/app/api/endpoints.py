@@ -14515,6 +14515,42 @@ class EntityOut(BaseModel):
     class Config:
         from_attributes = True
 
+
+def _coerce_visual_dependencies(value: Any) -> List[str]:
+    candidates: List[Any] = []
+    if isinstance(value, list):
+        candidates = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        if (raw.startswith("[") and raw.endswith("]")) or (raw.startswith("{") and raw.endswith("}")):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    candidates = parsed
+                elif isinstance(parsed, str):
+                    candidates = [parsed]
+            except Exception:
+                candidates = []
+        if not candidates:
+            candidates = re.split(r"[\n,，;；|]", raw)
+    elif value is not None:
+        candidates = [value]
+
+    out: List[str] = []
+    seen = set()
+    for item in candidates:
+        stable = str(item or "").strip()
+        if not stable:
+            continue
+        key = normalize_entity_token(stable)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(stable)
+    return out
+
 @router.get("/projects/{project_id}/entities", response_model=List[EntityOut])
 def read_entities(
     project_id: int,
@@ -14586,7 +14622,7 @@ def create_entity(
             visual_params=entity.visual_params,
             narrative_description=entity.narrative_description,
             
-            visual_dependencies=entity.visual_dependencies,
+            visual_dependencies=_coerce_visual_dependencies(entity.visual_dependencies),
             dependency_strategy=entity.dependency_strategy,
             custom_attributes=entity.custom_attributes or {}
         )
@@ -14884,7 +14920,7 @@ async def clone_entity_with_llm(
         atmosphere=_pick_text(generated.get("atmosphere"), source.atmosphere),
         visual_params=_pick_text(generated.get("visual_params"), source.visual_params),
         narrative_description=_pick_text(generated.get("narrative_description"), source.narrative_description),
-        visual_dependencies=generated.get("visual_dependencies") if isinstance(generated.get("visual_dependencies"), list) else (source.visual_dependencies or []),
+        visual_dependencies=_coerce_visual_dependencies(generated.get("visual_dependencies")) or _coerce_visual_dependencies(source.visual_dependencies),
         dependency_strategy=generated.get("dependency_strategy") if isinstance(generated.get("dependency_strategy"), dict) else (source.dependency_strategy or {}),
         custom_attributes=custom_attrs,
     )
@@ -14939,6 +14975,8 @@ def update_entity(
     _repair_entity_image_url_from_assets(db, current_user, project, entity)
 
     update_data = entity_in.dict(exclude_unset=True)
+    if "visual_dependencies" in update_data:
+        update_data["visual_dependencies"] = _coerce_visual_dependencies(update_data.get("visual_dependencies"))
     if _is_ephemeral_provider_media_url(update_data.get("image_url")):
         resolved_image_url = _resolve_precise_asset_library_url(
             db,

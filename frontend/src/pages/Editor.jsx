@@ -6257,6 +6257,47 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             .replace(/[^\p{L}\p{N}\u4e00-\u9fff]/gu, '');
     };
 
+    const parseVisualDependencies = (value) => {
+        let candidates = [];
+
+        if (Array.isArray(value)) {
+            candidates = value;
+        } else if (typeof value === 'string') {
+            const raw = String(value || '').trim();
+            if (!raw) return [];
+
+            if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed)) {
+                        candidates = parsed;
+                    } else if (typeof parsed === 'string') {
+                        candidates = [parsed];
+                    }
+                } catch (_) {
+                    candidates = [];
+                }
+            }
+
+            if (candidates.length === 0) {
+                candidates = raw.split(/[\n,，;；|]/);
+            }
+        } else if (value != null) {
+            candidates = [value];
+        }
+
+        const out = [];
+        const seen = new Set();
+        for (const item of candidates) {
+            const normalized = normalizeSubjectName(item);
+            const key = normalizeSubjectKey(normalized);
+            if (!normalized || !key || seen.has(key)) continue;
+            seen.add(key);
+            out.push(normalized);
+        }
+        return out;
+    };
+
     const extractSubjectsFromMarkdownTable = (markdownText) => {
         const parsed = parseMarkdownTable(markdownText);
         if (!parsed) return [];
@@ -7567,7 +7608,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             supplementReport: supplementReport || emptyReport.supplementReport,
             pendingUserConfirmation: false,
         };
-    }, [handleSupplementSceneSubjects, onLog, projectId, t]);
+    }, [onLog, projectId, t]);
 
     const parseMarkdownTable = (text) => {
         if (!text || typeof text !== 'string') return null;
@@ -18309,7 +18350,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
         const primaryRefUrl = String(analyzed?.image_url || entity?.image_url || '').trim();
         const depUrls = [];
-        const deps = Array.isArray(analyzed.visual_dependencies) ? analyzed.visual_dependencies : [];
+        const deps = parseVisualDependencies(analyzed.visual_dependencies);
         deps.forEach(dep => {
             const depValue = String(dep).trim();
             const depNormalized = normalizeEntityToken(depValue);
@@ -19001,7 +19042,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             // Resolve Visual Dependencies
             const depUrls = [];
             if (selectedEntity && selectedEntity.visual_dependencies) {
-                 const deps = Array.isArray(selectedEntity.visual_dependencies) ? selectedEntity.visual_dependencies : [];
+                 const deps = parseVisualDependencies(selectedEntity.visual_dependencies);
                  deps.forEach(dep => {
                      // dep can be name or id
                      const startDep = String(dep).trim();
@@ -19274,7 +19315,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         
         // Helper to check if entity is ready (all its deps have images)
         const isReady = (ent) => {
-            const deps = Array.isArray(ent.visual_dependencies) ? ent.visual_dependencies : [];
+            const deps = parseVisualDependencies(ent.visual_dependencies);
             if (deps.length === 0) return true;
             
             return deps.every(depRaw => {
@@ -19335,7 +19376,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 }
 
                 const depUrls = [];
-                const deps = Array.isArray(entity.visual_dependencies) ? entity.visual_dependencies : [];
+                const deps = parseVisualDependencies(entity.visual_dependencies);
                 deps.forEach(dep => {
                     const startDep = String(dep).trim();
                     const startDepNormalized = normalizeEntityToken(startDep);
@@ -20180,12 +20221,12 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                          <p className="text-[10px] text-white/40 mb-1">{t('添加主体名称后，生成该主体时会自动引用其图片。', 'Add entity names to use their images as reference when generating this entity.')}</p>
                                          <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                                              <div className="flex flex-wrap gap-2 mb-2">
-                                                 {(Array.isArray(viewingEntity.visual_dependencies) ? viewingEntity.visual_dependencies : []).map((dep, i) => (
+                                                 {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, i) => (
                                                      <div key={i} className="px-2 py-1 bg-primary/20 text-primary border border-primary/20 rounded text-xs flex items-center gap-2 group">
                                                          <span className="font-bold">{typeof dep === 'string' ? dep : JSON.stringify(dep)}</span>
                                                          <button 
                                                             onClick={() => {
-                                                                 const current = Array.isArray(viewingEntity.visual_dependencies) ? viewingEntity.visual_dependencies : [];
+                                                                 const current = parseVisualDependencies(viewingEntity.visual_dependencies);
                                                                  const newDeps = current.filter(d => d !== dep);
                                                                  handleFieldUpdate('visual_dependencies', newDeps);
                                                             }} 
@@ -20207,7 +20248,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                          if (e.key === 'Enter') {
                                                              const val = e.currentTarget.value.trim();
                                                              if(val) {
-                                                                const current = Array.isArray(viewingEntity.visual_dependencies) ? viewingEntity.visual_dependencies : [];
+                                                                const current = parseVisualDependencies(viewingEntity.visual_dependencies);
                                                                 if(!current.includes(val)) {
                                                                      handleFieldUpdate('visual_dependencies', [...current, val]);
                                                                 }
@@ -20221,7 +20262,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                      if (!input) return;
                                                      const val = input.value.trim();
                                                      if (val) {
-                                                         const current = Array.isArray(viewingEntity.visual_dependencies) ? viewingEntity.visual_dependencies : [];
+                                                         const current = parseVisualDependencies(viewingEntity.visual_dependencies);
                                                          if(!current.includes(val)) {
                                                              handleFieldUpdate('visual_dependencies', [...current, val]);
                                                          }
@@ -20616,11 +20657,11 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                         />
                                         
                                         {/* Auto-detected Visual Dependencies */}
-                                        {selectedEntity?.visual_dependencies && selectedEntity.visual_dependencies.length > 0 && (
+                                        {parseVisualDependencies(selectedEntity?.visual_dependencies).length > 0 && (
                                             <div className="mb-4">
                                                 <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('视觉依赖（自动使用）', 'Visual Dependencies (Auto-Used)')}</label>
                                                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
-                                                    {(Array.isArray(selectedEntity.visual_dependencies) ? selectedEntity.visual_dependencies : []).map((dep, idx) => {
+                                                    {parseVisualDependencies(selectedEntity.visual_dependencies).map((dep, idx) => {
                                                         const startDep = String(dep).trim();
                                                         const startDepNormalized = normalizeEntityToken(startDep);
                                                         
@@ -31660,7 +31701,7 @@ const Editor = ({
                                     appearance_cn: char.appearance_cn,
                                     clothing: char.clothing,
                                     action_characteristics: char.action_characteristics,
-                                    visual_dependencies: char.visual_dependencies || [],
+                                    visual_dependencies: parseVisualDependencies(char.visual_dependencies),
                                     dependency_strategy: char.dependency_strategy || {},
                                     custom_attributes: {
                                         ...(char.custom_attributes || {}),
@@ -31729,7 +31770,7 @@ const Editor = ({
                                     anchor_description: prop.anchor_description || '',
 
                                     name_en: entityNameEn,
-                                    visual_dependencies: prop.visual_dependencies || [],
+                                    visual_dependencies: parseVisualDependencies(prop.visual_dependencies),
                                     dependency_strategy: prop.dependency_strategy || {},
                                     custom_attributes: {
                                         ...(prop.custom_attributes || {}),
@@ -31802,7 +31843,7 @@ const Editor = ({
                                     visual_params: env.visual_params,
                                     narrative_description: env.description_cn,
 
-                                    visual_dependencies: env.visual_dependencies || [],
+                                    visual_dependencies: parseVisualDependencies(env.visual_dependencies),
                                     dependency_strategy: env.dependency_strategy || {},
                                     custom_attributes: {
                                         ...(env.custom_attributes || {}),

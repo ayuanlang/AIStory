@@ -21,6 +21,7 @@ from app.services.llm_service import llm_service
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting, Entity, User, Project, ProjectShare, Scene, Shot, Episode, ProviderKeyPool, SystemAPIBillingRule
 from app.core.config import settings
+from app.core.entity_token import normalize_entity_token
 from app.services.billing_service import billing_service
 from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_service
 from app.services.system_default_api_service import get_task_default_system_setting
@@ -38,6 +39,28 @@ legacy_db = MockLegacyDB()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_visual_dependencies(value: Any) -> List[str]:
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, str):
+        raw_items = re.split(r"[\n,，;；|]", value)
+    else:
+        raw_items = []
+
+    out: List[str] = []
+    seen = set()
+    for item in raw_items:
+        stable = str(item or "").strip()
+        if not stable:
+            continue
+        key = normalize_entity_token(stable)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(stable)
+    return out
 
 
 def _release_db_connection(db: Optional[Session], reason: str = "") -> None:
@@ -4151,14 +4174,24 @@ Output ONLY the JSON object now."""
                              if reference_image_url is None: reference_image_url = []
                              elif isinstance(reference_image_url, str): reference_image_url = [reference_image_url]
                              
-                             deps = entity.visual_dependencies # List of names
+                             deps = _coerce_visual_dependencies(entity.visual_dependencies)
                              if isinstance(deps, list):
                                  for dep_name in deps:
+                                     dep_key = normalize_entity_token(dep_name)
                                      # Try match by name or ID
                                      dep_entity = session.query(Entity).filter(
                                          Entity.project_id == int(project_id), 
                                          Entity.name == str(dep_name)
                                      ).first()
+                                     if not dep_entity:
+                                         dep_entity = next(
+                                             (
+                                                 item for item in session.query(Entity).filter(Entity.project_id == int(project_id)).all()
+                                                 if normalize_entity_token(getattr(item, "name", "")) == dep_key
+                                                 or normalize_entity_token(getattr(item, "name_en", "")) == dep_key
+                                             ),
+                                             None,
+                                         )
                                      if not dep_entity and str(dep_name).isdigit():
                                           dep_entity = session.query(Entity).filter(Entity.id == int(dep_name)).first()
 
