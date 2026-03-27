@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 # How long (seconds) completed/failed results stay in memory before eviction.
 _RESULT_TTL = 600  # 10 minutes
 _RUNNING_TASK_MAX_AGE_SECONDS = max(300, int(os.getenv("ASYNC_TASK_MAX_AGE_SECONDS", "1200")))
+_RESULT_MAX_BYTES = max(16 * 1024, int(os.getenv("ASYNC_TASK_RESULT_MAX_BYTES", str(256 * 1024)) or (256 * 1024)))
+_RESULT_PREVIEW_MAX_CHARS = max(512, int(os.getenv("ASYNC_TASK_RESULT_PREVIEW_MAX_CHARS", "4096") or 4096))
 
 # Global task store  {task_id: _TaskRecord}
 _tasks: Dict[str, "_TaskRecord"] = {}
@@ -68,6 +70,32 @@ def _serialize_for_db(value: Any) -> Optional[str]:
         return json.dumps(value, ensure_ascii=False, default=str)
     except Exception:
         return json.dumps(str(value), ensure_ascii=False)
+
+
+def _compact_task_result(value: Any) -> Any:
+    if value is None:
+        return None
+
+    serialized = _serialize_for_db(value)
+    if not serialized:
+        return None
+
+    payload_size = len(serialized.encode("utf-8", errors="ignore"))
+    if payload_size <= _RESULT_MAX_BYTES:
+        return value
+
+    compact: Dict[str, Any] = {
+        "result_truncated": True,
+        "result_size_bytes": payload_size,
+    }
+
+    if isinstance(value, dict):
+        for key in ("status", "kind", "task_id", "job_id", "provider", "model", "url", "error", "detail", "message"):
+            if key in value and value.get(key) not in (None, "", []):
+                compact[key] = value.get(key)
+
+    compact["result_preview"] = serialized[:_RESULT_PREVIEW_MAX_CHARS]
+    return compact
 
 
 def _save_task_to_db(rec: "_TaskRecord") -> None:
@@ -221,7 +249,7 @@ def set_task_status(
 
     stable_status = str(status or "pending").strip().lower() or "pending"
     rec.status = stable_status
-    rec.result = result if stable_status == "completed" else None
+    rec.result = _compact_task_result(result) if stable_status == "completed" else None
     rec.error = str(error) if error else None
     rec.error_code = error_code
     if stable_status in {"completed", "failed", "canceled"}:
@@ -286,7 +314,7 @@ def submit(fn: Callable[[], Any], *, user_id: Optional[int] = None, kind: str = 
                 rec.error = rec.cancel_reason or "Task canceled by user"
                 rec.error_code = 499
                 return
-            rec.result = fn()
+            rec.result = _compact_task_result(fn())
             if rec.cancel_requested:
                 rec.status = "canceled"
                 rec.error = rec.cancel_reason or "Task canceled by user"

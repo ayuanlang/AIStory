@@ -31,6 +31,10 @@ you must output ONLY the shot rows that need to change.
 11. Keep the current scene continuity, entity descriptions, environment anchor, and cinematic logic consistent with the current staged shot markdown unless the user explicitly asks to change them.
 12. If the user asks for more detail, refine or expand only the necessary shots. Do not rewrite the whole scene.
 13. If an existing shot is overloaded with more than 3 core subjects or loses key beat coverage after revision, prefer inserting a follow-up shot rather than overstuffing one row.
+14. If the revised scene segment is an opener (or opener-serving segment), front-load a 3-5 second high-impact hook and preserve a clear bridge back to the main timeline instead of a hard discontinuity.
+15. Keep dialogue revisions high-density and emotionally effective: remove filler pauses in multi-character exchanges unless a pause is narratively required for suspense payoff.
+16. Preserve or strengthen explicit conflict/reversal beats in revised rows; do not flatten reversal-bearing shots into neutral coverage.
+17. If the revised rows touch ending/handoff shots, keep an unresolved suspense hook in the final visible state.
 
 ## Required Columns
 Your markdown table must include these columns exactly:

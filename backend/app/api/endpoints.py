@@ -452,6 +452,8 @@ GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATI
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
 GENERATION_CALLBACK_ASYNC_INFLIGHT: Dict[str, float] = {}
 GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK = threading.Lock()
+GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES = max(200, int(os.getenv("GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES", "2000") or 2000))
+GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS = max(1, int(os.getenv("GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS", "8") or 8))
 WEBHOOK_REPLAY_MAX_ITEMS = max(500, int(os.getenv("WEBHOOK_REPLAY_MAX_ITEMS", "6000")))
 WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
 WEBHOOK_REPLAY_LOCK = threading.Lock()
@@ -2025,11 +2027,21 @@ def _build_result_from_provider_callback(payload: Dict[str, Any]) -> Optional[Di
             result[key] = payload.get(key)
 
     callback_task_id = _extract_callback_task_id(payload)
+    callback_payload_size = 0
+    try:
+        callback_payload_size = len(json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8", errors="ignore"))
+    except Exception:
+        callback_payload_size = 0
     metadata: Dict[str, Any] = {
         "provider": "grsai",
         "status": _normalize_generation_status(payload.get("status")),
-        "raw_callback": payload,
+        "payload_truncated": bool(payload.get("payload_truncated")),
     }
+    if callback_payload_size > 0:
+        metadata["callback_payload_size_bytes"] = callback_payload_size
+    callback_result_url = _extract_job_result_url(payload)
+    if callback_result_url:
+        metadata["callback_result_url"] = callback_result_url
     if callback_task_id:
         metadata["task_id"] = callback_task_id
         metadata["taskId"] = callback_task_id
@@ -2172,6 +2184,8 @@ def _find_image_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
             continue
         matches.append((job_id, job))
         seen_job_ids.add(job_id)
+        if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
+            return matches
 
     try:
         from app.services.generation_task_queue import find_generation_job_states_by_callback_ticket
@@ -2187,14 +2201,26 @@ def _find_image_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
                 IMAGE_JOB_STORE[job_id] = dict(db_job)
             matches.append((job_id, dict(db_job)))
             seen_job_ids.add(job_id)
+            if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
+                return matches
     except Exception as exc:
         logger.warning("[ImageJob] failed to scan db callback ticket matches | callback_ticket=%s error=%s", stable_ticket, exc)
 
     try:
         if os.path.isdir(IMAGE_JOB_FILE_DIR):
+            scanned_files = 0
             for entry in os.listdir(IMAGE_JOB_FILE_DIR):
                 if not entry.endswith(".json"):
                     continue
+                scanned_files += 1
+                if scanned_files > GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES:
+                    logger.info(
+                        "[ImageJob] callback ticket file scan reached cap | callback_ticket=%s scanned=%s cap=%s",
+                        stable_ticket,
+                        scanned_files,
+                        GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES,
+                    )
+                    break
                 job_id = entry[:-5].strip()
                 if not job_id or job_id in seen_job_ids:
                     continue
@@ -2207,6 +2233,8 @@ def _find_image_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
                     IMAGE_JOB_STORE[job_id] = dict(file_job)
                 matches.append((job_id, dict(file_job)))
                 seen_job_ids.add(job_id)
+                if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
+                    break
     except Exception as exc:
         logger.warning("[ImageJob] failed to scan callback ticket matches | callback_ticket=%s error=%s", stable_ticket, exc)
 
@@ -2350,6 +2378,8 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
             continue
         matches.append((job_id, job))
         seen_job_ids.add(job_id)
+        if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
+            return matches
 
     try:
         from app.services.generation_task_queue import find_generation_job_states_by_callback_ticket
@@ -2365,14 +2395,26 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
                 VIDEO_JOB_STORE[job_id] = dict(db_job)
             matches.append((job_id, dict(db_job)))
             seen_job_ids.add(job_id)
+            if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
+                return matches
     except Exception as exc:
         logger.warning("[VideoJob] failed to scan db callback ticket matches | callback_ticket=%s error=%s", stable_ticket, exc)
 
     try:
         if os.path.isdir(VIDEO_JOB_FILE_DIR):
+            scanned_files = 0
             for entry in os.listdir(VIDEO_JOB_FILE_DIR):
                 if not entry.endswith(".json"):
                     continue
+                scanned_files += 1
+                if scanned_files > GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES:
+                    logger.info(
+                        "[VideoJob] callback ticket file scan reached cap | callback_ticket=%s scanned=%s cap=%s",
+                        stable_ticket,
+                        scanned_files,
+                        GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES,
+                    )
+                    break
                 job_id = entry[:-5].strip()
                 if not job_id or job_id in seen_job_ids:
                     continue
@@ -2385,6 +2427,8 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
                     VIDEO_JOB_STORE[job_id] = dict(file_job)
                 matches.append((job_id, dict(file_job)))
                 seen_job_ids.add(job_id)
+                if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
+                    break
     except Exception as exc:
         logger.warning("[VideoJob] failed to scan callback ticket matches | callback_ticket=%s error=%s", stable_ticket, exc)
 

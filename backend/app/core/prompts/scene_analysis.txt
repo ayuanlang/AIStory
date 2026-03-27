@@ -40,6 +40,20 @@
 17. 中文及其他项目语言设计对齐（Mandatory）：当项目语言为中文或其他明确语言时，同样必须让角色外观基线、服装组织方式、道具系统、环境构造、招牌/文字与日常生活细节优先匹配该语言对应的现实语境；除非剧本已明确指定跨文化/跨地域设定，否则不得混入无依据的异语种生活系统。
 18. 项目类型与定位驱动全局风格（Mandatory）：当 `Project Context` 中给出 `Type` 与/或 `Base Positioning` 时，必须把它们作为 `Global Style` 的核心约束显式吸收。`Global Style` 不能只写空泛的“cinematic / stylish / dramatic”，必须明确说明本项目究竟属于**真人写实（live-action / photoreal）**、**动漫/二次元（anime / cel-shaded / illustrated）**、**风格化三维（stylized 3D）**或其他明确视觉体系，并进一步给出整体风格基线。
 19. 项目类型-主体一致性硬规则（Mandatory）：所有 subjects（`characters / props / environments`）的 `generation_prompt_cn/generation_prompt_en` 都必须与 `Project Context.Type`、`Project Context.Base Positioning` 以及最终 `Global Style` 同体系一致。若项目被判定为真人写实，subjects 提示词不得写成动漫线稿、赛璐璐上色、Q版比例或插画化材质；若项目被判定为动漫/风格化作品，subjects 提示词也不得无依据改写成摄影棚级真人电影写实系统。
+19.1 场景与道具项目类型正向注入规则（Mandatory）：Environment 与 Prop 的 `generation_prompt_cn/generation_prompt_en` 必须像 Character 一样，把项目类型对应的正向视觉要求显式写入主提示词正文。
+  - 实拍 / 真人 / Live Action：正向强调真实材质微纹理、可信尺度关系、自然光学层次、电影级布光与可复现结构细节。
+  - 动漫 / Anime / 二次元：正向强调清晰线稿轮廓、稳定形体与结构关系、统一配色与明暗组织、可复现的风格化材质表达。
+  - 风格化 3D / Stylized 3D：正向强调体块与轮廓可读、材质分层清楚、受控高光/边缘光、结构比例稳定与可复用资产感。
+  - 未命中类型时：按 `Project Context.Base Positioning` 与 `project_visual_backfill.Global_Style` 注入正向风格词，不得留空。
+19.2 场景与道具正向措辞硬规则（Mandatory）：Environment 与 Prop 主提示词必须以正向、可执行描述为主，不得用“不要/禁止/not/no/without/avoid/非xx”这类否定式堆叠来主导风格表达。
+30. 开场留存生死线规则（Mandatory）：每一集开场必须把前 3-5 秒视为最高优先级留存段。若当前 Episode 的首场承担开场职责，必须先给出“高冲击高悬念高情绪”的冷开镜头，再通过明确桥接回到正片主时间线（常用桥接：视线、道具特写、声音桥、动作余势、构图呼应）。
+31. 开场第一秒抓取规则（Mandatory）：开场第 1 秒必须尽可能同时满足以下元素中的多数：劲爆、强戏剧冲突、非常 drama、高悬念、反转或出人意料、情绪爆点、强注意力抓取。若与剧本事实冲突，以剧本事实优先，并在事实边界内最大化抓取力。
+32. 单集情节密度规则（Mandatory）：
+  - 节奏：优先快节奏推进，多人物对话默认减少无效停顿。
+  - 台词：必须精炼且高信息密度，优先能拉高情绪与冲突张力的关键句，避免废话。
+  - 反转：单集必须至少包含 3 个明确冲突/反转节点；若集中在不同场景，需在分场与 beats 中保留其可追溯落点。
+  - 钩子：集末必须保留未决悬念钩子（风险、问题、反转后果或迫近威胁）。
+33. 分场承载规则（Mandatory）：在 Scene 拆分与 `Split Reason` 中，必须显式标注本场承担的是“开场高光段 / 主线推进段 / 反转段 / 钩子段”中的哪一类，并确保整集层面的 3 次以上冲突/反转可被逐场追溯。
 20. 禁止模板抄袭式设计（Hard Rule）：示例、模板、规则中的职业、人种、年龄、服装、道具、环境名、空间结构、镜头话术都只能作为**格式参考**，不能直接作为真实输出的设计内容。每次生成都必须基于当前剧本重新设计实体形象、材质、空间与细节；若输出仍残留示例里的默认角色类型、默认空间、默认道具或默认视觉组合，判为无效并必须重写。
 21. 基准环境统一：同一地理场地的变体依托同一 Base Reference；变体仅写 Delta，`REUSE` 必写 `None/No visual delta`。
 22. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
@@ -317,6 +331,12 @@
 - 变体写作必须 Delta-only；可追溯 Base；Delta 顺序必须合法。
 - 缩写映射：`CPD/AS/BG/LD/FR/DP`。
 - `generation_prompt_en` 必须写清 FG/MG/BG 三层构图，并明确 `Primary Subject`（画面主体）与 `Secondary Subject`（支撑主体）。
+- **项目类型正向注入规则（Mandatory）**：Environment 的 `generation_prompt_cn/generation_prompt_en` 必须显式写入项目类型对应的正向视觉要求。
+  - **实拍 / 真人 / Live Action**：正向强调真实材质微纹理、可信空间尺度、自然光学层次、电影化光照组织。
+  - **动漫 / Anime / 二次元**：正向强调线稿轮廓清晰、体块关系稳定、配色与明暗组织统一、风格化背景语言一致。
+  - **风格化 3D / Stylized 3D**：正向强调体块结构、材质分层、边缘光控制、空间读图清晰与资产复用友好。
+  - **未命中类型时**：按 `Project Context.Base Positioning` 与 `project_visual_backfill.Global_Style` 注入正向风格词。
+- **正向措辞硬规则（Mandatory）**：Environment 主提示词优先使用正向画面要求描述，不使用否定式堆叠主导风格写作。
 - 未给定风格时默认注入高审美回退语义。
 - 必须显式说明空间可达与调度可行性。
 - 极简主义硬规则（Mandatory）：Environment 提示词必须优先采用“叙事必要最小集”（Narrative Minimal Set）原则；凡对剧情推进、角色调度、镜头动线不必要的物件，默认不进入 `FG/MG` 的故事发展区域。
@@ -394,6 +414,12 @@
 - 模板已合并到本文件（Merged In-File, Authoritative）。
 - 道具模板与规则在本文件内统一维护，避免外部模板漂移。- **道具四宫格版式绝对强制（SUPREME / 最高准则）**：所有道具的 `generation_prompt_cn` 和 `generation_prompt_en` 必须严格采用**四宫格/四视图道具设定图**版式，固定为"微距特写（Close-up）+ 正面（Front）+ 侧面（Side）+ 反面（Back）"四格，缺任何一格即整条提示词无效并必须重写。`generation_prompt_cn` 必须明确写出"视角顺序严格为微距特写、正面、侧面、反面"，`generation_prompt_en` 必须明确写出 `keeping the panels in the strict order Close-up, Front, Side, Back`。绝对禁止以任何理由（道具数量多、token 紧张、道具次要、道具简单、体积太小/太大、状态单一等）将四宫格简化为单张物体图、双格或三格变体、概念图或任何非四宫格版式。**单格即废稿**。- 字段回写硬规则（Mandatory）：Prop 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`type`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic`。禁止只写“四视图道具图 + 材质”，却遗漏道具类型（held/static）、状态、结构特征、功能身份与依赖来源。
 - 字段语言与项目语言沿用总则（Mandatory）：Prop 字段语言职责沿用第 12 条；道具体系语境沿用第 15-17 条，此处不再重复展开。
+- **项目类型正向注入规则（Mandatory）**：Prop 的 `generation_prompt_cn/generation_prompt_en` 必须显式写入项目类型对应的正向视觉要求。
+  - **实拍 / 真人 / Live Action**：正向强调真实材质微纹理、可信磨损与工艺细节、真实光学反射与尺度关系。
+  - **动漫 / Anime / 二次元**：正向强调结构轮廓清晰、风格化材质表达统一、线稿与明暗组织稳定。
+  - **风格化 3D / Stylized 3D**：正向强调几何体块可读、材质层次清楚、受控高光与边缘光、可复用资产一致性。
+  - **未命中类型时**：按 `Project Context.Base Positioning` 与 `project_visual_backfill.Global_Style` 注入正向风格词。
+- **正向措辞硬规则（Mandatory）**：Prop 主提示词优先使用正向、可执行的物体描述，不使用否定式堆叠主导风格表达。
 - 道具身份落点规则（Mandatory）：Prop prompt 必须明确该物体是什么、属于手持还是静置、当前处于何种单一状态、有哪些不可丢失的识别结构。若 `description_cn` 中有磨损、氧化、裂痕、液位、开合状态、雕刻、标签等信息，必须回写进 prompt 主体段落。
 - 道具纯物体隔离规则（Mandatory）：Prop 的 `generation_prompt_cn/generation_prompt_en` 必须把道具当作纯物体资产生成，不得混入任何剧情进行中的环节或人物介入语义。禁止出现角色正在持握、穿戴、触碰、使用、递交、挥舞、佩戴、挎着、踩着、咬着、端着等动作语义；也禁止出现手、手指、手臂、肩膀、腿、脚、脸、嘴唇、头部、躯干、人物倒影、人物影子或任何身体部位/人物残留。道具图只允许物体本身与中性支撑结构入镜。
 - 依赖关系回写规则（Mandatory）：当 prop 不是 `Original` 时，prompt 必须写清“继承哪一版道具的哪些稳定锚点，以及当前只改变哪些状态项”，不得只在 JSON 的 `dependency_strategy` 中声明而提示词完全失语。

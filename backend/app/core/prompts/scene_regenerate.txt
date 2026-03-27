@@ -356,12 +356,27 @@ Do not print this validation process. Only print the final result.
 - Return exactly ONE markdown table row patch for the current scene.
 - This row is not a full scene rewrite.
 - Keep the scene narrative intent and original script grounding stable.
+- Episode-level optimization is mandatory even in single-scene supplement mode: optimize the current row so it supports stronger episode retention and emotional intensity while staying grounded in script facts.
 - Only update the row when needed to reflect supplemented entities, especially:
   - Environment Name
   - Linked Characters
   - Key Props
 - Do NOT split into multiple scenes in entity supplement mode.
 - Do NOT modify unrelated scene facts.
+
+### Episode Retention And Drama Optimization Rules (Mandatory)
+- Opening 3-5s cold-open highlight is mandatory at episode level: if the current row is the opening scene (or functions as opening after patch), `Core Scene Info` must explicitly front-load a 3-5 second high-impact moment before returning to mainline chronology.
+- Flashback bridge is mandatory for opening hook structure: after the 3-5s highlight, include a clear flashback bridge back to the main timeline in `Core Scene Info` (for example in beats/observer-view phrasing), while keeping spatial and action logic physically executable.
+- First-second attention rule: opening beat design should maximize as many of these as story allows: explosive impact, sharp conflict, strong drama tension, high suspense, surprise/reversal, emotional spike, and immediate curiosity lock.
+- Dialogue density rule: keep dialogue tight, high-value, and emotionally charged; avoid filler lines and long breathing gaps in multi-character exchanges.
+- Conflict/reversal density rule: at episode scope, ensure at least 3 explicit conflict/reversal beats. For the current scene patch, actively add or preserve the conflict/reversal beat(s) this scene should carry, and avoid flattening them during repair.
+- Ending hook rule: if the current row is near episode ending or already acts as a handoff scene, preserve or strengthen an unresolved suspense hook for the next scene/episode.
+- Story facts override style pressure: if any optimization conflicts with canon facts from `Original Script Grounding`, keep canon facts first and optimize within those boundaries.
+
+### Scene Row Optimization Example Constraints
+- If this row is an episode opener, `Core Scene Info` should read in this logic order: `High-impact 3-5s cold open -> flashback return to mainline -> fast conflict progression`.
+- If this row carries a major confrontation, compress dialogue to only high-emotion lines and keep beat transitions tight.
+- If this row is an ending/handoff beat, end with a concrete unresolved question, risk, reveal, or imminent threat as a hook.
 
 ## Required Output Order
 Return only these two parts, in this order:
@@ -547,6 +562,8 @@ Example constraints:
 - In actual output, include only the missing entities required by the current scene.
 - Do NOT copy sample entity names unless they are truly the missing entities for the current scene.
 - If a type has no missing entity, return an empty array for that type.
+- In actual scene-row patching, apply the episode retention rules: opening scenes should front-load a 3-5s high-impact highlight and then flash back to mainline chronology.
+- Ensure pacing remains dense: concise high-emotion dialogue, explicit conflict/reversal carrying beats, and suspense-forward handoff when the row serves as an ending connector.
 
 ## Hard Rules
 - Do NOT output reasoning text.

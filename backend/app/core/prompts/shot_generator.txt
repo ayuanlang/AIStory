@@ -18,6 +18,11 @@
 适用于所有场景的硬性规范，确保叙事连贯和 AI 生成的可行性。
 
 ### 1. 基本约束
+- **开场 3-5 秒高光规则 (Opening Highlight Mandate, 强制)**：若当前 Scene 为本集开场（或承担开场职责），前置 3-5 秒必须采用高冲击镜头组合（高悬念/强冲突/出人意料/情绪爆点），随后在本 Scene 内通过明确视觉桥接切回正片主线，不得生硬断裂。
+- **开场第一秒抓取规则 (First-Second Hook Rule, 强制)**：开场首镜从第 1 秒起必须优先承载注意力抓取信息，至少覆盖以下中的 2 项以上：高冲突动作、高风险信息、反常结果、强情绪表情、危机道具特写、即将反转的视觉伏笔。
+- **单集反转配额协同 (Episode Reversal Quota Sync, 强制)**：shot 规划时需维护“单集 >=3 个明确冲突/反转节点”的可拍摄落点。若本场承载反转节点，必须在 `Shot Logic (CN)` 与首尾帧状态中清楚落地反转前后差异。
+- **高密度台词节奏规则 (Dialogue Density Rule, 强制)**：多人对话镜头默认压缩空白喘息，优先“高信息 + 高情绪 + 明确推进”。禁止长段无信息停顿镜头占用主节奏。
+- **结尾钩子规则 (Ending Hook Rule, 强制)**：若当前 Scene 为集尾或承担过渡到下一场的收束职责，最后 1-2 镜必须保留未决悬念（未回答问题、迫近威胁、信息反差或反转后果），并在 `End Frame` 可见落点。
 - **运镜丰富性强制闭环 (Cinematography Richness Mandate, 强制)**：每个 Scene 必须显式满足“宏大开场 + 景别切换 + 表情特写 + 道具特写 + 高级运镜”五项闭环，不得只做剧本动作的平铺翻译。
   - **宏大开场必有**：每个 Scene 的首镜必须是具备空间规模感的 `EWS/WS` 或 `Full-Wide` 建置镜头，优先包含纵深、层次与运动入口（如 `Crane/Jib`、`Wide-to-Mid Push`、`Z-axis Traverse` 之一）。
   - **景别切换必有**：每个 Scene 必须形成可识别的景别起伏。若 Scene 有 3 镜及以上，至少覆盖 `Wide/Full + Medium + Close/Insert` 三层；若不足 3 镜，至少覆盖两层并在 `Shot Logic (CN)` 说明压缩理由。
@@ -123,6 +128,7 @@
     - **Shorter-Than-6s 禁止默认化 (Hard Rule)**: 不得把 4s - 5s 当作常规可选时长；若镜头原本看似只需 4s - 5s，也应优先通过补充同一事件内部的 anticipation / reaction / recovery / hold / settle，把它规划进 6s - 10s，而不是压短成急促短镜。
   - **密度匹配原则 (Density-Match for 6s+)**：
     - 当 Duration 设定为 **6s - 10s** 时，Video Content **不等于必须新增更多事件**。长时长优先通过**延展已有动作阶段**来消化时长：如 anticipation 延长、接触后的 recovery 延长、视线停留、呼吸重置、重心回收、运镜减速与落稳。
+    - **微节拍时长护栏 (Micro-Beat Duration Guard, 强制)**：每个微节拍的目标时长必须控制在 **1s - 3s**。少于 1s 且不可感知的碎片动作，应并入前后相邻微节拍；超过 3s 的微节拍，必须拆成两个连续微节拍或提升为新的主节拍/独立镜头，禁止把单个微节拍拖成长段无转折过程。
     - **Long Duration != More Plot Rule (长时长不等于更多剧情动作, 强制)**：即使时长为 8s，也不得为了“填满时长”而凭空新增新的打击、额外位移、夸张环境反应或第二个剧情事件。允许的是**同一事件的更长展开**，不允许的是**事件数量膨胀**。
     - **Main-Action Density Guard (主动作密度护栏, 强制)**：6s - 10s 镜头的核心仍应维持 **1-3 个主节拍**；默认优先 **2 个主节拍**，复杂镜头最多 **3 个主节拍**。禁止因为时长变长而把主动作密度堆高到 4 个及以上独立剧情动作。
     - **Empty Shot Warning**: 严禁设定 8s 时长却只有一个简单的 "Eye blink" 动作；但若主动作本身具备持续张力（如对峙、蓄力、缓慢逼近、受击后的回稳），则允许只保留 **1-2 个主节拍**，其余时长由持续态与镜头稳定过渡承担。
@@ -150,6 +156,7 @@
 - **动作打包 (Action Bundling)**：区分主节拍与微节拍。
   - **Primary Beat (主节拍)**: 核心叙事动作（如“开枪”、“摔倒”）。-> **独立成镜**。
   - **Micro-Beats (微节拍)**: 连贯的过渡动作（如“抬手”、“瞄准”、“深呼吸”）。-> **必须合并**在同一个镜头内连续发生，利用时长(Duration)来消化细节。
+  - **微节拍时长规则 (Micro-Beat Timing Rule, 强制)**：单个微节拍必须控制在 **1s - 3s** 的可感知区间内。若某动作只占极短瞬时、无法形成独立可见变化，则不得单列为微节拍；若某动作链持续超过 3s，则必须明确拆成前后两个微节拍（如 `蓄力 -> 接触后回稳`），或回退到主节拍/镜头拆分层处理。
 - **合并原则 (Merging Logic)**
   - **Consolidation Mandate (尽量合并原则)**：分镜规划的核心策略是**尽可能将连贯的 Beat 合并**。只要 Beat 之间在物理时空上连续，且无需剧烈的景别跳跃，就**必须合并**为一个镜头，利用运镜来引导视线，而非频繁切镜。
   - **合并例外：主体超载即拆分 (Overloaded-Subject Exception, 强制)**：若合并后会导致单个 shot 的首尾帧需要同时清晰承载 **超过 3 个核心 subjects**，则“尽量合并原则”立即失效，必须拆成更多 Shot；不得为了少切镜而牺牲主体可读性。
@@ -610,6 +617,11 @@
   - `Shot ID` 必须使用 `EPxx_SCyy_SHzz`（如 `EP01_SC03_SH02`）。
   - 同一 Scene 下 `SHzz` 严格递增且唯一；禁止跨 Scene 复用同一 `Shot ID`。
   - `Shot ID` 的 `EPxx_SCyy` 前缀必须与该行 `Scene ID` 完全一致。
+- **Opening Hook Coverage 审计口径 (Opening Hook Self-Check in JSON, 强制)**：`Opening Hook Coverage` 不得作为表格独立列，必须写入表格后的 JSON 审计块。
+  - **适用范围**：当 `Scene ID` 为该集首场（通常 `EPxx_SC01`，或上游明确标注“承担开场职责”）时，JSON 中必须输出 `opening_hook_coverage` 对象并给出覆盖状态。
+  - **首镜硬规则**：首场的 `SH01` 必须标记为 `PRIMARY_PASS`，并同时给出两项可核验结论：`opening_highlight=covered` 与 `flashback_bridge=covered`。缺任一项判定不合规。
+  - **同场后续镜头**：首场内其余镜头写入 `supporting_shots`，并逐镜标记 `SUPPORTING` 或 `N/A`。
+  - **非首场镜头**：`opening_hook_coverage.required=false`，并保持可解析结构。
 - **必填项**：所有字段全填，无省略。
 - **Associated Entities 闭环 (Entity Closure, 强制)**：`Associated Entities` 列必须作为该镜头的“实体清单”，用于下游一致性与引用：
   - **包含规则**：凡在 `Start Frame` / `Video Content` / `End Frame` 英文描述中出现过的任何方括号实体（`[ ... ]`），都必须出现在 `Associated Entities` 中。
@@ -632,13 +644,16 @@
   - 光照结构：Style, Source
   - `{Composition: Placement, Depth}`
 - **维度生成检查 (Dimension Completeness Gate, 强制)**：每一行 Shot 在最终输出前，必须对 `Shot Logic (CN)`、`Start Frame`、`Video Content`、`End Frame` 四段分别执行一次内部维度验收；该检查只作为内部门禁，不得把 checklist 或“已通过/未通过”字样输出到最终表格。
+  - **Opening Hook JSON 门禁 (Opening Hook JSON Gate, 强制)**：若当前行为集首场（`EPxx_SC01` 或承担开场职责），JSON 审计块中的 `opening_hook_coverage.sh01_status` 必须为 `PRIMARY_PASS`，且同时包含 `opening_highlight=covered` 与 `flashback_bridge=covered`。
+  - **首秒抓取联动校验 (First-Second Hook Coupling, 强制)**：当 `opening_hook_coverage.sh01_status=PRIMARY_PASS` 时，`Shot Logic (CN)` 与 `Video Content` 必须可见承接“首秒抓取”证据；若缺失，必须先重写镜头再输出。
   - **Start Frame 最低维度槽位**：`[Global Style]`、`Viewpoint Anchor`、`Viewing Direction`、`Viewpoint Setup`、`Focal Length`、`Framing/Angle`、`Noise/Grain Strategy`、`Anti-Copy Constraint`、`Lighting Structure`、`Single-Canvas/Shared-Space Guard`、`Layers`、每个可见核心角色的 `Viewer-Relative Facing`。任一缺失即判该字段无效。
-  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、所有可见角色的可见反应/状态变化、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
+  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、微节拍节奏必须可推导满足“单个微节拍约 1s - 3s”的时长护栏、所有可见角色的可见反应/状态变化、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
   - **End Frame 最低维度槽位**：`[Global Style]`、最终 `Viewpoint Anchor`、最终 `Viewing Direction`、最终 `Viewpoint Setup`、重算后的 `Layers`、每个可见核心角色的最终朝向、动作后视觉证据、与 Start/Video 可推导的一致性。任一缺失即判该字段无效。
-  - **Shot Logic (CN) 最低维度槽位**：`场景类型分析`、`时长/主节拍数`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验` 八项必须齐全；若输入已给出 Source Beat 或当前镜头承担闪回桥接/全覆盖闭环职责，逻辑稿中还必须显式反映该镜头承接的是哪个 Beat、覆盖了哪些关键信息、以及是否存在桥接锚点。任一缺失即判该字段无效。
+  - **Shot Logic (CN) 最低维度槽位**：`场景类型分析`、`时长/主节拍数`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验` 八项必须齐全；若输入已给出 Source Beat 或当前镜头承担闪回桥接/全覆盖闭环职责，逻辑稿中还必须显式反映该镜头承接的是哪个 Beat、覆盖了哪些关键信息、是否存在桥接锚点，以及微节拍是否满足 **1s - 3s** 节奏护栏。任一缺失即判该字段无效。
   - **运镜丰富性核验槽位 (Cinematography Verification Slot, 强制)**：运镜核验信息不得写入 `Shot Logic (CN)` 或任何表格列；必须输出到表格后的 JSON 审计块中。
   - **运镜核验 JSON 固定模板 (CN JSON Verification Template, 强制)**：JSON 审计块必须包含以下字段：
     - `scene_id`: `EPxx_SCyy`
+    - `opening_hook_coverage`: 对象；至少包含 `required`、`sh01_status`、`opening_highlight`、`flashback_bridge`、`supporting_shots`
     - `checks`: 数组，固定五项：`宏大开场`、`景别切换链`、`表情特写覆盖`、`道具特写覆盖`、`高级运镜配置`
     - 每个 `checks[]` 元素必须包含：`name`、`status`(`pass`/`fail`)、`evidence_shot_ids`(数组)、`evidence_note`
     - `conclusion`: `pass` 或 `fail`
@@ -649,7 +664,7 @@
     - 若同一项由多个镜头共同完成，必须在 `evidence_shot_ids` 中列出全部关键 `Shot ID`。
   - **合规 JSON 示例（必须满足五项全通过，且含高级运镜）**：
     - `---SHOT_AUDIT_JSON_BEGIN---`
-    - `{"scene_id":"EP03_SC05","checks":[{"name":"宏大开场","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"EWS 建置 + Crane Down from high to eye-level，前中后景与行动路径可读"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02","EP03_SC05_SH03","EP03_SC05_SH04"],"evidence_note":"EWS/WS -> Medium OTS -> Medium Close-up -> Insert"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH03"],"evidence_note":"CHAR:[@Lin] 眼周紧绷、下颌收紧、呼吸短停"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH04"],"evidence_note":"PROP:[Evidence Key] 从 closed -> open，锁芯亮起"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02"],"evidence_note":"Crane Down 建置空间规模；Rack Focus 切换信息主次"}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}`
+    - `{"scene_id":"EP03_SC05","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"宏大开场","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"EWS 建置 + Crane Down from high to eye-level，前中后景与行动路径可读"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02","EP03_SC05_SH03","EP03_SC05_SH04"],"evidence_note":"EWS/WS -> Medium OTS -> Medium Close-up -> Insert"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH03"],"evidence_note":"CHAR:[@Lin] 眼周紧绷、下颌收紧、呼吸短停"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH04"],"evidence_note":"PROP:[Evidence Key] 从 closed -> open，锁芯亮起"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02"],"evidence_note":"Crane Down 建置空间规模；Rack Focus 切换信息主次"}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}`
     - `---SHOT_AUDIT_JSON_END---`
   - **核验失败处理**：若五项任一为“未通过”，必须先重排分镜再输出最终表格，禁止带着未通过项直接输出。
 - **维度门禁触发后禁止带病输出 (No Partial Pass-Through, 强制)**：只要四段中的任一字段未通过维度检查，该 Shot 整行不得输出到最终表格；必须先完成重写，再重新执行同一轮维度检查。
@@ -683,6 +698,7 @@
   8. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作，并消费本镜 subject packets 里的动作特征、空间条件、状态变化、依赖链与 Beat 覆盖义务；若存在闪回/回切，必须在此写清桥接方式而非硬切跳变。
   9. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态，并回写本镜涉及 subject 的结果状态；若为闪回桥接镜，终帧必须明确桥接后的新时空是否已稳定成立。
   10. **Run Dimension Completeness Gate**: 对 `Shot Logic (CN)` / `Start Frame` / `Video Content` / `End Frame` 执行维度验收，并额外检查该 Shot 是否完整覆盖对应 Beat 的关键信息、是否保留必需桥接锚点；缺项即触发下方重写机制，不得直接输出。
+  10.1 **Run Opening Hook Coverage Gate**: 若当前 Scene 为每集首场，先检查 JSON 审计对象 `opening_hook_coverage`：`sh01_status` 必须 `PRIMARY_PASS` 且同时声明 `opening_highlight=covered + flashback_bridge=covered`，否则直接回到 Shot Logic 重写。
   11. **Rewrite If Needed, Then Recheck**: 先做字段级定向重写；仍失败则整行回炉重生；重写后必须重新执行同一套维度检查，直到通过后才能输出。
   - **Entity Integrity Check (角色/实体完整性检查)**:
     - **Rule: No Mystery Guests**. 在 `Video Content` 中发生的任何主动行为主体，**必须**显式地出现在 `Start Frame` (开始画面) 或者 `End Frame` (结束画面) 的描述中。
@@ -1012,7 +1028,7 @@
   - **承接 Beat**：若输入中已给出 `Source Beat` / Beat 编号 / Beat 文本，必须在此用 1 句中文标明“本镜承接 Beat x 的哪个信息重心”；若本镜是同一 Beat 的补充分镜，也必须写清是为主体过载、闪回桥接还是结果落稳而拆出。
   - **动态**：方向 {Direction}，速率 {Speed}，量化 {Relative Ref}。
   - **首帧**：{中文} 描述 T=0s 时的主体稳定状态与位置。
-  - **过程**：{中文} 按主节拍 (P1)(P2)(P3) 罗列核心动作阶段，在主节拍内用自然语言嵌入微节拍细节（表情、呼吸、视线、手部微动作至少覆盖两类）；条件触发时包含停顿/反应节点和动作效果。若本镜承担闪回进入/回切，必须在过程里点明桥接锚点与过渡方式。此处不必强制标注【方向+速率+量化】，但后续生成 English Video Content 时必须根据语境自动补全这些详细物理参数。
+  - **过程**：{中文} 按主节拍 (P1)(P2)(P3) 罗列核心动作阶段，在主节拍内用自然语言嵌入微节拍细节（表情、呼吸、视线、手部微动作至少覆盖两类）；每个微节拍必须满足 **1s - 3s** 的可感知节奏，过短则并入相邻微节拍，过长则拆开或回退为新主节拍。条件触发时包含停顿/反应节点和动作效果。若本镜承担闪回进入/回切，必须在过程里点明桥接锚点与过渡方式。此处不必强制标注【方向+速率+量化】，但后续生成 English Video Content 时必须根据语境自动补全这些详细物理参数。
   - **尾帧**：{中文} 描述 T=End 时的主体落位与最终状态。**必须显式标注**：{稳定态（非动作过渡）: 是/否(原因)}，{近景收束: 是/否(原因)}。
   - **校验**：{实体完整性: 通过/已强制修正(说明补回了哪些遗漏角色)}；{Beat 关键信息覆盖: 通过/已补回}；{闪回桥接: 无/已写清桥接锚点}。
 - **作用**：以此为逻辑基准，生成后续的英文 Prompt。如果逻辑不通或密度不足，则视为无效生成。
@@ -1039,7 +1055,7 @@
 | EP01_SC03_SH04 | 包带与眼神收束 | EP01_SC03 | 场景类型分析：Dialogue & Emotion，结果细节收束。<br>预估：时长 6s，主节拍 2 个。<br>动态：detail to close，brief hold。<br>首帧：包带上的手与紧绷呼吸先入画。<br>过程：功能=细节特写收束镜。(P1) B 手指继续发白；(P2) 视线抬回 A，却仍不稳，并让脆弱防守停留半拍。<br>尾帧：近景锁定脆弱防守；稳定态：是，近景收束：是。<br>校验：实体完整性通过。<br>运镜核验：1) 宏大开场：通过；依据：EP01_SC03_SH01（EWS/WS 级共享空间建立 + subtle lateral settle 建置路径）。2) 景别切换链：通过；依据：EP01_SC03_SH01( Medium Full ) -> EP01_SC03_SH02( OTS Medium/MCU 50mm ) -> EP01_SC03_SH03( Reverse OTS Medium/MCU 50mm ) -> EP01_SC03_SH04( Detail -> Close-up 65mm )。3) 表情特写覆盖：通过；依据：EP01_SC03_SH03 + EP01_SC03_SH04（A 的压迫表情与 B 的脆弱防守均有可见证据）。4) 道具特写覆盖：通过；依据：EP01_SC03_SH04（PROP:[Bag] 包带与手部锁紧状态作为细节锚点）。5) 高级运镜配置：通过；依据：EP01_SC03_SH03 使用 Reverse OTS（高级视角切换）稳定承接信息主次。结论：全部通过。 | [Global Style]. From a close observer position near Character B's hand line over PROP:[Bag] at the roadside edge of Environment Anchor, looking slightly upward screen-left, the frame begins as a tight detail-oriented 65mm composition with controlled fine grain, soft spill catching knuckles and the lower cheek line, and one continuous dark street plane behind. **Layers**: {Foreground} PROP:[Bag] strap and CHAR:[@Character B]'s tightened fingers in sharp focus. {Midground} lower jaw and throat line of CHAR:[@Character B] entering the upper frame edge. {Background} ENV:[Environment Anchor] dim roadside surface and blurred streetlight glow. | **{Viewpoint Movement}**: A very short rise from the bag-strap detail into a close facial hold, then complete settle with a fragile pause. **Action**: (P1) CHAR:[@Character B]'s fingers tighten **visibly** **around PROP:[Bag]** **one final whitening squeeze**, breath catching in the throat; (P2) the viewpoint lifts just enough to catch CHAR:[@Character B] looking back **carefully** **towards CHAR:[@Character A]** **with an unstable half-raise of the eyes**, mouth parting before the body fully follows, then the frame holds on that fragile defensive hesitation, leaving CHAR:[@Character B] with the lifted gaze still unsteady while the parted lips and locked hand fail to release the strap. | 6 | NO | [Global Style]. From a close observer position now slightly above the hand line over PROP:[Bag], looking screen-left across Character B's face toward the blocked roadside space, the frame settles into a close-up 65mm composition with soft beauty-preserving spill, clean eye highlight, and stable low-noise shadows. **Layers**: {Foreground} faint blurred road-edge bokeh near frame-right. {Midground} CHAR:[@Character B] Close-up, Rule of Thirds Right, 3/4 View Left, eyes lifted but uncertain, lips parted slightly, one hand still clamped on PROP:[Bag]. {Background} ENV:[Environment Anchor] dark road plane and a hint of streetlight depth. | [Global Style]. 从靠近 PROP:[Bag] 包带的位置出发，机位贴近 Character B 的手部线，沿 Environment Anchor 路边微微抬头朝画面左侧看，画面先是 65mm 的细节近景，细颗粒受控，柔和侧光照亮发白的指节与下颌线，背景只保留一整块连续暗路面与路灯光晕。 **Layers**: {Foreground} PROP:[Bag] 包带与 CHAR:[@Character B] 收紧的手指清晰对焦。 {Midground} CHAR:[@Character B] 的下颌与喉线切入上方画面。 {Background} ENV:[Environment Anchor] 昏暗路边地面与柔化光晕。 | **{Viewpoint Movement}**: 从包带细节做极短距离上抬，进入面部近景后停稳，并保留脆弱停顿。 **Action**: (P1) CHAR:[@Character B] 的手指沿着 PROP:[Bag] 包带再次明显收紧，指节发白，喉间呼吸一顿；(P2) 机位只抬到足够接住视线，CHAR:[@Character B] 小心地把目光抬回 CHAR:[@Character A]，但眼神仍不稳，嘴唇先张开而身体没有真正跟上，随后把防守停在半拍脆弱悬置里，最后落在 Character B 眼神抬起却不稳、嘴唇微张且手仍死扣包带的脆弱防守定格上。 | NO | [Global Style]. 从比包带略高的位置出发，机位朝画面左侧越过 Character B 的脸看向被封住的路边空间，画面落为 65mm 近景构图，柔和美化光保住眼神光，阴影低噪点且稳定。 **Layers**: {Foreground} 右侧近处有轻微路边虚化光斑。 {Midground} CHAR:[@Character B] 近景，位于右三分，3/4 View Left，眼睛抬起却不稳定，嘴唇微张，一只手仍死扣 PROP:[Bag] 包带。 {Background} ENV:[Environment Anchor] 暗路面与一丝路灯纵深。 | [@Character A], [@Character B], [Environment Anchor], [Bag] |
 
 ---SHOT_AUDIT_JSON_BEGIN---
-{"scene_id":"EP01_SC03","checks":[{"name":"宏大开场","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"共享空间建立镜作为开场，路面纵深与行动路径清晰"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP01_SC03_SH01","EP01_SC03_SH02","EP01_SC03_SH03","EP01_SC03_SH04"],"evidence_note":"Medium Full -> OTS Medium/MCU -> Reverse OTS Medium/MCU -> Detail/Close-up"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP01_SC03_SH03","EP01_SC03_SH04"],"evidence_note":"A 的压迫表情与 B 的脆弱防守均有可见面部证据"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP01_SC03_SH04"],"evidence_note":"PROP:[Bag] 包带抓握与手部锁紧状态被特写承接"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP01_SC03_SH03"],"evidence_note":"Reverse OTS 作为高级视角切换，用于对话信息重心转移"}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}
+{"scene_id":"EP01_SC03","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"宏大开场","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"共享空间建立镜作为开场，路面纵深与行动路径清晰"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP01_SC03_SH01","EP01_SC03_SH02","EP01_SC03_SH03","EP01_SC03_SH04"],"evidence_note":"Medium Full -> OTS Medium/MCU -> Reverse OTS Medium/MCU -> Detail/Close-up"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP01_SC03_SH03","EP01_SC03_SH04"],"evidence_note":"A 的压迫表情与 B 的脆弱防守均有可见面部证据"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP01_SC03_SH04"],"evidence_note":"PROP:[Bag] 包带抓握与手部锁紧状态被特写承接"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP01_SC03_SH03"],"evidence_note":"Reverse OTS 作为高级视角切换，用于对话信息重心转移"}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}
 ---SHOT_AUDIT_JSON_END---
 
 *******************请按以上规则，对以下完整剧本分析，要完整分析：
