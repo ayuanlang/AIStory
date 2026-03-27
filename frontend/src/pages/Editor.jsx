@@ -9562,7 +9562,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('已提交 LLM，正在等待返回。提交阶段超时约 120s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 120s and total wait can take up to about 600s.'),
+                message: t('已提交 LLM，正在等待返回。提交阶段超时约 300s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
@@ -9922,7 +9922,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('已提交 LLM，正在等待返回。提交阶段超时约 120s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 120s and total wait can take up to about 600s.'),
+                message: t('已提交 LLM，正在等待返回。提交阶段超时约 300s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
@@ -10300,7 +10300,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                         <div className="mb-2 text-[11px] text-amber-200/90">
                             {t('仍在等待后端响应...', 'Still waiting for backend response...')} ({formatDurationMs(analysisHeartbeatElapsedMs)})
                             <span className="ml-2 text-amber-100/80">
-                                {t('提交阶段超时约 120s，整体等待最长约 600s；复杂剧本通常需要更久。', 'Submit timeout is about 120s and total wait can take up to about 600s; complex scripts usually take longer.')}
+                                {t('提交阶段超时约 300s，整体等待最长约 600s；复杂剧本通常需要更久。', 'Submit timeout is about 300s and total wait can take up to about 600s; complex scripts usually take longer.')}
                             </span>
                         </div>
                     )}
@@ -30520,7 +30520,7 @@ const Editor = ({
     };
 
     // Helper to repair common JSON syntax errors like unquoted strings
-    const repairJSON = (jsonStr) => {
+    function repairJSON(jsonStr) {
         try {
             return JSON.parse(jsonStr);
         } catch (e) {
@@ -30558,7 +30558,7 @@ const Editor = ({
                 return null;
             }
         }
-    };
+    }
 
     // Helper to extract multiple JSON blocks from mixed text
     const extractJSONBlocks = (text) => {

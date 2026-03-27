@@ -6376,6 +6376,8 @@ class MediaGenerationService:
             tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint")
         )
         model = str(config.get("model") or "doubao-seedance-2-0").strip()
+        is_seedance2 = str(model or "").strip().lower() == "doubao-seedance-2-0"
+        zlhub_trace_id = f"zlhub-{uuid.uuid4().hex[:10]}"
         if re.match(r"^https?://", endpoint, flags=re.IGNORECASE):
             submit_url = endpoint
         elif not raw_endpoint and "/proxy/chat/completions" in base_url.lower():
@@ -6391,6 +6393,19 @@ class MediaGenerationService:
             query_endpoint = f"{base_url}{raw_query_endpoint if raw_query_endpoint.startswith('/') else '/' + raw_query_endpoint}"
 
         prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+
+        if is_seedance2:
+            logger.info(
+                "[ZLHubSeedance2] request_init | trace_id=%s gen_type=%s provider=%s model=%s submit_url=%s query_endpoint=%s duration_in=%s aspect_ratio_in=%s",
+                zlhub_trace_id,
+                gen_type,
+                provider_name,
+                model,
+                submit_url,
+                query_endpoint,
+                duration,
+                aspect_ratio,
+            )
 
         raw_image_refs = ref_image if isinstance(ref_image, list) else [ref_image]
         resolved_image_refs: List[str] = []
@@ -6422,6 +6437,16 @@ class MediaGenerationService:
         reference_audio_urls = self._resolve_public_media_urls(
             tool_conf.get("reference_audio_urls") or tool_conf.get("ref_audio_urls") or []
         )
+
+        if is_seedance2:
+            logger.info(
+                "[ZLHubSeedance2] refs_resolved | trace_id=%s image_refs=%s has_last_frame=%s ref_videos=%s ref_audios=%s",
+                zlhub_trace_id,
+                len(resolved_image_refs),
+                bool(resolved_last_frame),
+                len(reference_video_urls),
+                len(reference_audio_urls),
+            )
 
         moderation_results: List[Dict[str, Any]] = []
         moderation_candidates: List[tuple[str, str]] = []
@@ -6531,6 +6556,7 @@ class MediaGenerationService:
             "provider_label": provider_name,
             "model": model,
             "prompt": prompt,
+            "trace_id": zlhub_trace_id,
             "submit_url": submit_url,
             "query_endpoint": query_endpoint,
             "requested_duration": payload.get("duration"),
@@ -6540,6 +6566,15 @@ class MediaGenerationService:
             "resolved_reference_audio_count": len(reference_audio_urls),
             "moderation": moderation_results,
         }
+        if is_seedance2:
+            logger.info(
+                "[ZLHubSeedance2] submit_ready | trace_id=%s payload_duration=%s payload_ratio=%s tools=%s content_items=%s",
+                zlhub_trace_id,
+                payload.get("duration"),
+                payload.get("ratio"),
+                len(payload.get("tools") or []) if isinstance(payload.get("tools"), list) else 0,
+                len(content_payload),
+            )
         return await self._submit_and_poll_zlhub_video(
             submit_url,
             query_endpoint,
@@ -7467,8 +7502,20 @@ class MediaGenerationService:
 
     async def _submit_and_poll_zlhub_video(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        trace_id = str((extra_metadata or {}).get("trace_id") or f"zlhub-{uuid.uuid4().hex[:10]}")
+        payload_model = str(payload.get("model") or "").strip().lower()
+        is_seedance2 = payload_model == "doubao-seedance-2-0"
 
         _debug_log(f"[{log_tag}] Submitting to URL: {submit_url} | Payload: {_strip_base64_from_log(payload)}")
+        if is_seedance2:
+            logger.info(
+                "[ZLHubSeedance2] submit_start | trace_id=%s submit_url=%s query_url=%s duration=%s ratio=%s",
+                trace_id,
+                submit_url,
+                query_url,
+                payload.get("duration"),
+                payload.get("ratio"),
+            )
 
         def _submit(use_proxy: bool = True, connection_close: bool = False):
             request_headers = dict(headers)
@@ -7501,25 +7548,72 @@ class MediaGenerationService:
                 except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
                     resp = await asyncio.to_thread(_submit, False, True)
 
+            if is_seedance2:
+                logger.info(
+                    "[ZLHubSeedance2] submit_response | trace_id=%s status=%s bytes=%s",
+                    trace_id,
+                    getattr(resp, "status_code", None),
+                    len(getattr(resp, "content", b"") or b""),
+                )
+
             if resp.status_code not in [200, 201]:
+                if is_seedance2:
+                    logger.error(
+                        "[ZLHubSeedance2] submit_failed | trace_id=%s status=%s body=%s",
+                        trace_id,
+                        resp.status_code,
+                        _strip_base64_from_log((resp.text or "")[:1000]),
+                    )
                 return {"error": f"Submission Failed {resp.status_code}", "details": (resp.text or "")[:1000], "submit_failed": True}
 
             data = resp.json() if resp.content else {}
             task_id = self._extract_zlhub_task_id(data)
             if not task_id:
+                if is_seedance2:
+                    logger.error(
+                        "[ZLHubSeedance2] task_id_missing | trace_id=%s submit_raw=%s",
+                        trace_id,
+                        _strip_base64_from_log(data),
+                    )
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
 
+            if is_seedance2:
+                logger.info(
+                    "[ZLHubSeedance2] task_id_acquired | trace_id=%s task_id=%s timeout_s=%s interval_s=%s",
+                    trace_id,
+                    task_id,
+                    poll_timeout_seconds,
+                    poll_interval_seconds,
+                )
+
             max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
-            for _ in range(max_attempts):
+            for attempt in range(1, max_attempts + 1):
                 await asyncio.sleep(poll_interval_seconds)
                 try:
                     p_resp = await asyncio.to_thread(_poll, task_id, True)
                 except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
                     p_resp = await asyncio.to_thread(_poll, task_id, False)
                 except requests.exceptions.Timeout:
+                    if is_seedance2 and (attempt == 1 or attempt % 5 == 0):
+                        logger.warning(
+                            "[ZLHubSeedance2] poll_timeout | trace_id=%s task_id=%s attempt=%s/%s",
+                            trace_id,
+                            task_id,
+                            attempt,
+                            max_attempts,
+                        )
                     continue
 
                 if p_resp.status_code != 200:
+                    if is_seedance2 and (attempt == 1 or attempt % 5 == 0):
+                        logger.warning(
+                            "[ZLHubSeedance2] poll_http_non200 | trace_id=%s task_id=%s attempt=%s/%s status=%s",
+                            trace_id,
+                            task_id,
+                            attempt,
+                            max_attempts,
+                            p_resp.status_code,
+                        )
                     continue
 
                 try:
@@ -7536,6 +7630,17 @@ class MediaGenerationService:
                     or ""
                 ).strip().lower()
 
+                if is_seedance2 and (attempt == 1 or attempt % 5 == 0 or status in {"succeeded", "success", "completed", "done", "failed", "error", "canceled", "cancelled", "rejected"}):
+                    logger.info(
+                        "[ZLHubSeedance2] poll_status | trace_id=%s task_id=%s attempt=%s/%s status=%s has_url=%s",
+                        trace_id,
+                        task_id,
+                        attempt,
+                        max_attempts,
+                        status or "<empty>",
+                        bool(media_url),
+                    )
+
                 content = (container or {}).get("content") if isinstance((container or {}).get("content"), dict) else {}
                 media_url = None
                 if isinstance(content, dict):
@@ -7547,6 +7652,13 @@ class MediaGenerationService:
 
                 if status in {"succeeded", "success", "completed", "done"} or (not status and media_url):
                     if not media_url:
+                        if is_seedance2:
+                            logger.error(
+                                "[ZLHubSeedance2] completed_without_url | trace_id=%s task_id=%s status=%s",
+                                trace_id,
+                                task_id,
+                                status or "<empty>",
+                            )
                         return {
                             "error": "Generation completed without video URL",
                             "details": p_data,
@@ -7555,15 +7667,49 @@ class MediaGenerationService:
                     metadata = {"raw": p_data, "submit_raw": data, "task_id": task_id}
                     if extra_metadata:
                         metadata.update(extra_metadata)
+                    if is_seedance2:
+                        logger.info(
+                            "[ZLHubSeedance2] success | trace_id=%s task_id=%s media_url=%s",
+                            trace_id,
+                            task_id,
+                            _strip_query_from_log_url(media_url),
+                        )
                     return {"url": media_url, "metadata": metadata}
 
                 if status in {"failed", "error", "canceled", "cancelled", "rejected"}:
+                    if is_seedance2:
+                        logger.error(
+                            "[ZLHubSeedance2] failed | trace_id=%s task_id=%s status=%s raw=%s",
+                            trace_id,
+                            task_id,
+                            status,
+                            _strip_base64_from_log(p_data),
+                        )
                     return {"error": "Generation Failed", "details": p_data}
 
+            if is_seedance2:
+                logger.error(
+                    "[ZLHubSeedance2] timeout | trace_id=%s task_id=%s timeout_s=%s",
+                    trace_id,
+                    task_id,
+                    poll_timeout_seconds,
+                )
             return {"error": f"Timeout after {poll_timeout_seconds}s"}
         except requests.exceptions.RequestException as exc:
+            if is_seedance2:
+                logger.error(
+                    "[ZLHubSeedance2] request_exception | trace_id=%s err=%s",
+                    trace_id,
+                    exc,
+                )
             return {"error": "Upstream request failed", "details": str(exc), "submit_failed": True}
         except Exception as exc:
+            if is_seedance2:
+                logger.exception(
+                    "[ZLHubSeedance2] unhandled_exception | trace_id=%s err=%s",
+                    trace_id,
+                    exc,
+                )
             return {"error": str(exc), "submit_failed": True}
 
     async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None, task_id_callback: Optional[Callable[[str], Any]] = None):

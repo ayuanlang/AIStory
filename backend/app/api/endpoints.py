@@ -1,4 +1,4 @@
-
+﻿
 from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query, Response
 from fastapi.responses import StreamingResponse
 import logging
@@ -4488,7 +4488,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
             if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
                 actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
-            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+            billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), actual_details)
         else:
             details = {"item": "scene_analysis"}
             if usage:
@@ -4647,7 +4647,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         try:
             reservation_tx = locals().get("reservation_tx")
             if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, prefixed_detail)
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), prefixed_detail)
         except:
             pass
         try:
@@ -4664,7 +4664,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         try:
             reservation_tx = locals().get("reservation_tx")
             if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, prefixed_detail)
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), prefixed_detail)
         except:
             pass
         # Log failure
@@ -4838,7 +4838,7 @@ async def translate_text(
                 "total_tokens": total_tokens,
             }
             _apply_llm_routing_to_billing_details(actual_details, llm_resp)
-            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+            billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), actual_details)
         else:
             deduct_details = {
                 "item": "translate",
@@ -4882,7 +4882,7 @@ async def translate_text(
     except HTTPException as e:
         if reservation_tx:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e.detail))
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e.detail))
             except Exception:
                 pass
         billing_service.log_failed_transaction(
@@ -4915,7 +4915,7 @@ async def translate_text(
     except Exception as e:
         if reservation_tx:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
             except Exception:
                 pass
         billing_service.log_failed_transaction(
@@ -7711,7 +7711,7 @@ async def generate_project_story_dna_global(
         )
     except Exception as e:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
 
     generated_md = str((generated_payload or {}).get("content") or "").strip()
@@ -7746,7 +7746,7 @@ async def generate_project_story_dna_global(
     _apply_llm_routing_to_billing_details(settle_details, generated_payload)
 
     if reservation_tx:
-        billing_service.settle_reservation(db, reservation_tx.id, settle_details)
+        billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), settle_details)
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, settle_details)
 
@@ -8210,13 +8210,13 @@ async def analyze_project_novel_to_story_generator_fields(
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
 
     raw = (resp.get("content") or "").strip()
     if not raw:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, "LLM returned empty content")
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "LLM returned empty content")
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
     usage = resp.get("usage") or {}
@@ -8247,7 +8247,7 @@ async def analyze_project_novel_to_story_generator_fields(
     _apply_llm_routing_to_billing_details(billing_details, resp)
 
     if reservation_tx:
-        billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+        billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
@@ -9003,13 +9003,13 @@ async def generate_project_character_profile(
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
 
     description_md = (resp.get("content") or "").strip()
     if not description_md:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, "LLM returned empty content")
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "LLM returned empty content")
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
     usage = resp.get("usage") or {}
@@ -9039,7 +9039,7 @@ async def generate_project_character_profile(
     details["output_tokens"] = details["completion_tokens"]
     _apply_llm_routing_to_billing_details(details, resp)
     if reservation_tx:
-        billing_service.settle_reservation(db, reservation_tx.id, details)
+        billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), details)
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
 
@@ -9410,13 +9410,13 @@ async def generate_episode_character_profile(
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
 
     description_md = (resp.get("content") or "").strip()
     if not description_md:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, "LLM returned empty content")
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "LLM returned empty content")
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
     usage = resp.get("usage") or {}
@@ -9446,7 +9446,7 @@ async def generate_episode_character_profile(
     details["output_tokens"] = details["completion_tokens"]
     _apply_llm_routing_to_billing_details(details, resp)
     if reservation_tx:
-        billing_service.settle_reservation(db, reservation_tx.id, details)
+        billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), details)
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
 
@@ -9620,7 +9620,7 @@ async def generate_episode_story_dna(
         )
     except Exception as e:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
 
     generated_md = str((generated_payload or {}).get("content") or "").strip()
@@ -9655,7 +9655,7 @@ async def generate_episode_story_dna(
     _apply_llm_routing_to_billing_details(billing_details, generated_payload)
 
     if reservation_tx:
-        billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+        billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
@@ -9837,13 +9837,13 @@ async def generate_episode_scenes_from_story(
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         raise
 
     raw = (resp.get("content") or "").strip()
     if not raw:
         if reservation_tx:
-            billing_service.cancel_reservation(db, reservation_tx.id, "LLM returned empty content")
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "LLM returned empty content")
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
     usage = resp.get("usage") or {}
@@ -9873,7 +9873,7 @@ async def generate_episode_scenes_from_story(
     billing_details["output_tokens"] = billing_details["completion_tokens"]
     _apply_llm_routing_to_billing_details(billing_details, resp)
     if reservation_tx:
-        billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+        billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
@@ -10594,7 +10594,7 @@ async def generate_project_episode_scripts_from_global_framework(
             _apply_llm_routing_to_billing_details(billing_details, generated_payload)
 
             if reservation_tx:
-                billing_service.settle_reservation(db, reservation_tx.id, billing_details)
+                billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
             else:
                 billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
@@ -10643,11 +10643,11 @@ async def generate_project_episode_scripts_from_global_framework(
             _persist_run_status(run_status)
         except HTTPException:
             if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, "episode generation HTTPException")
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "episode generation HTTPException")
             raise
         except Exception as e:
             if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
             logger.exception(f"[generate_episode_scripts] FAILED episode_number={idx} episode_id={ep.id} error={e}")
             _safe_log_episode("GENERATE_EPISODE_SCRIPT_FAILED", {
                 "project_id": project_id,
@@ -14720,7 +14720,7 @@ async def generate_sora_character(
                 actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
             if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
                 actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
-            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+            billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), actual_details)
         else:
             deduct_details = dict(usage or {})
             deduct_details["item"] = "sora_create_character"
@@ -14750,7 +14750,7 @@ async def generate_sora_character(
         logger.error(f"Sora Gen Failed: {e}")
         try:
             if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
         except:
             pass
         billing_service.log_failed_transaction(db, current_user.id, "video_gen", llm_config.get("provider"), llm_config.get("model"), str(e))
@@ -19968,6 +19968,44 @@ def _build_standard_billing_details(
     return details
 
 
+def _reservation_tx_id(reservation_tx: Any) -> Optional[int]:
+    if reservation_tx is None:
+        return None
+    try:
+        if isinstance(reservation_tx, int):
+            parsed = int(reservation_tx)
+            return parsed if parsed > 0 else None
+    except Exception:
+        pass
+
+    try:
+        raw_dict = getattr(reservation_tx, "__dict__", None)
+        if isinstance(raw_dict, dict):
+            raw_id = raw_dict.get("id")
+            if raw_id is not None:
+                parsed = int(raw_id or 0)
+                if parsed > 0:
+                    return parsed
+    except Exception:
+        pass
+
+    try:
+        state = inspect(reservation_tx)
+        identity = getattr(state, "identity", None)
+        if identity and len(identity) > 0:
+            parsed = int(identity[0] or 0)
+            if parsed > 0:
+                return parsed
+    except Exception:
+        pass
+
+    try:
+        parsed = int(getattr(reservation_tx, "id", 0) or 0)
+        return parsed if parsed > 0 else None
+    except Exception:
+        return None
+
+
 def _finalize_model_invocation_billing(
     *,
     db: Session,
@@ -19976,6 +20014,7 @@ def _finalize_model_invocation_billing(
     provider: Optional[str],
     model: Optional[str],
     reservation_tx: Any,
+    reservation_tx_id: Optional[int] = None,
     item: str,
     usage_payload: Optional[Dict[str, Any]] = None,
     extra_details: Optional[Dict[str, Any]] = None,
@@ -19990,11 +20029,21 @@ def _finalize_model_invocation_billing(
         routing_payload=routing_payload,
     )
 
-    if reservation_tx:
+    tx_id: Optional[int] = None
+    if reservation_tx_id is not None:
+        try:
+            parsed = int(reservation_tx_id)
+            tx_id = parsed if parsed > 0 else None
+        except Exception:
+            tx_id = None
+    if tx_id is None:
+        tx_id = _reservation_tx_id(reservation_tx)
+
+    if tx_id is not None:
         if cancel_if_missing_usage and not isinstance(usage_payload, dict):
-            billing_service.cancel_reservation(db, reservation_tx.id, missing_usage_reason)
+            billing_service.cancel_reservation(db, tx_id, missing_usage_reason)
             return details
-        billing_service.settle_reservation(db, reservation_tx.id, details)
+        billing_service.settle_reservation(db, tx_id, details)
         return details
 
     billing_service.deduct_credits(
@@ -20009,10 +20058,23 @@ def _finalize_model_invocation_billing(
 
 
 def _cancel_reservation_quietly(db: Session, reservation_tx: Any, reason: str) -> None:
-    if not reservation_tx:
+    if reservation_tx is None:
         return
+
+    tx_id = None
     try:
-        billing_service.cancel_reservation(db, reservation_tx.id, str(reason or "cancelled"))
+        if isinstance(reservation_tx, int):
+            tx_id = int(reservation_tx)
+        else:
+            tx_id = int(getattr(reservation_tx, "id", 0) or 0)
+    except Exception:
+        tx_id = None
+
+    if tx_id is None or tx_id <= 0:
+        return
+
+    try:
+        billing_service.cancel_reservation(db, tx_id, str(reason or "cancelled"))
     except Exception:
         pass
 
@@ -22432,7 +22494,7 @@ async def generate_voice_endpoint(
             detail = _format_generation_failure_detail(result, "Voice generation failed")
             if reservation_tx:
                 try:
-                    billing_service.cancel_reservation(db, reservation_tx.id, detail)
+                    billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), detail)
                     reservation_tx = None
                 except Exception:
                     pass
@@ -22442,7 +22504,7 @@ async def generate_voice_endpoint(
         if not voice_url:
             if reservation_tx:
                 try:
-                    billing_service.cancel_reservation(db, reservation_tx.id, "Voice generation returned empty URL")
+                    billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "Voice generation returned empty URL")
                     reservation_tx = None
                 except Exception:
                     pass
@@ -22509,7 +22571,7 @@ async def generate_voice_endpoint(
 
             billing_service.settle_reservation(
                 db,
-                reservation_tx.id,
+                _reservation_tx_id(reservation_tx),
                 settle_details,
             )
             reservation_tx = None
@@ -22565,14 +22627,14 @@ async def generate_voice_endpoint(
     except HTTPException:
         if reservation_tx:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, "voice generation http exception")
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "voice generation http exception")
             except Exception:
                 pass
         raise
     except Exception as e:
         if reservation_tx:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
             except Exception:
                 pass
         try:
@@ -27450,21 +27512,29 @@ async def analyze_entity_image(
     
     if not api_setting:
          raise HTTPException(status_code=400, detail="Vision Tool or LLM not configured.")
+
+    api_provider = str(getattr(api_setting, "provider", "") or "").strip() or None
+    api_model = str(getattr(api_setting, "model", "") or "").strip() or None
+    api_api_key = str(getattr(api_setting, "api_key", "") or "").strip() or None
+    api_base_url = str(getattr(api_setting, "base_url", "") or "").strip() or None
+    raw_api_config = getattr(api_setting, "config", None)
+    api_config = dict(raw_api_config) if isinstance(raw_api_config, dict) else {}
     
     reservation_tx = None
+    reservation_tx_id: Optional[int] = None
     # Billing Check (token rules will reserve later once we have messages)
-    if not billing_service.is_token_pricing(db, "analysis_character", api_setting.provider, api_setting.model):
-        cost = billing_service.estimate_cost(db, "analysis_character", api_setting.provider, api_setting.model)
+    if not billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
+        cost = billing_service.estimate_cost(db, "analysis_character", api_provider, api_model)
         billing_service.check_can_proceed(current_user, cost)
 
     llm_config = {
-        "provider": api_setting.provider,
-        "api_key": api_setting.api_key,
-        "base_url": api_setting.base_url,
-        "model": api_setting.model,
-        "config": api_setting.config or {}
+        "provider": api_provider,
+        "api_key": api_api_key,
+        "base_url": api_base_url,
+        "model": api_model,
+        "config": api_config,
     }
-    logger.info(f"Using Model: {api_setting.model}")
+    logger.info(f"Using Model: {api_model}")
 
     def _build_entity_analysis_error_detail(
         code: str,
@@ -27480,8 +27550,8 @@ async def analyze_entity_image(
             "message": message,
             "stage": stage,
             "entity_id": entity_id,
-            "provider": str(api_setting.provider or "").strip() or None,
-            "model": str(api_setting.model or "").strip() or None,
+            "provider": api_provider,
+            "model": api_model,
         }
         if preview:
             payload["preview"] = str(preview or "")[:160]
@@ -27700,7 +27770,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 
         _release_db_connection(db, "analyze_entity_image_llm_call")
 
-        if billing_service.is_token_pricing(db, "analysis_character", api_setting.provider, api_setting.model):
+        if billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
             est = billing_service.estimate_input_output_tokens_from_messages(messages, output_ratio=1.5)
             estimated_image_tokens = 1000
             est_input = int(est.get("input_tokens", 0) or 0) + estimated_image_tokens
@@ -27718,10 +27788,14 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 db,
                 current_user.id,
                 "analysis_character",
-                api_setting.provider,
-                api_setting.model,
+                api_provider,
+                api_model,
                 reserve_details,
             )
+            try:
+                reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
+            except Exception:
+                reservation_tx_id = None
 
         llm_response = await llm_service.chat_completion_with_fallback(messages, llm_config)
         
@@ -27788,8 +27862,8 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
             logger.warning(
                 "Entity analysis JSON parse first-pass failed | entity_id=%s provider=%s model=%s finish_reason=%s content_preview=%s",
                 entity_id,
-                api_setting.provider,
-                api_setting.model,
+                api_provider,
+                api_model,
                 (llm_response or {}).get("finish_reason"),
                 preview,
             )
@@ -27834,8 +27908,8 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                     logger.error(
                         "Entity analysis JSON parse failed after repair retry | entity_id=%s provider=%s model=%s initial_finish_reason=%s repair_finish_reason=%s content_preview=%s repair_preview=%s",
                         entity_id,
-                        api_setting.provider,
-                        api_setting.model,
+                        api_provider,
+                        api_model,
                         (llm_response or {}).get("finish_reason"),
                         (repair_response or {}).get("finish_reason"),
                         preview,
@@ -27858,8 +27932,8 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 logger.error(
                     "Entity analysis JSON repair retry failed | entity_id=%s provider=%s model=%s err=%s content_preview=%s",
                     entity_id,
-                    api_setting.provider,
-                    api_setting.model,
+                    api_provider,
+                    api_model,
                     str(repair_err),
                     preview,
                 )
@@ -27971,9 +28045,10 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 db=db,
                 current_user=current_user,
                 task_type="analysis_character",
-                provider=api_setting.provider,
-                model=api_setting.model,
+                provider=api_provider,
+                model=api_model,
                 reservation_tx=reservation_tx,
+                reservation_tx_id=reservation_tx_id,
                 item="entity_image_analysis",
                 usage_payload=usage if isinstance(usage, dict) else None,
                 extra_details=billing_details,
@@ -27984,9 +28059,10 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 db=db,
                 current_user=current_user,
                 task_type="analysis_character",
-                provider=api_setting.provider,
-                model=api_setting.model,
+                provider=api_provider,
+                model=api_model,
                 reservation_tx=None,
+                reservation_tx_id=reservation_tx_id,
                 item="entity_image_analysis",
                 usage_payload=usage if isinstance(usage, dict) else None,
                 extra_details=billing_details,
@@ -28001,11 +28077,11 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 
     except HTTPException as e:
         logger.error(f"Entity Analysis failed with HTTPException: {str(e.detail)}", exc_info=True)
-        _cancel_reservation_quietly(db, reservation_tx, str(e.detail))
+        _cancel_reservation_quietly(db, reservation_tx_id or reservation_tx, str(e.detail))
         raise
     except Exception as e:
         logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
-        _cancel_reservation_quietly(db, reservation_tx, str(e))
+        _cancel_reservation_quietly(db, reservation_tx_id or reservation_tx, str(e))
         raise HTTPException(status_code=502, detail=f"Analysis failed: {str(e)}")
 
 @router.get("/entities/{entity_id}/latest_analysis")
