@@ -1138,6 +1138,8 @@ def _persist_remote_image_result(
     if hostname in {"localhost", "127.0.0.1"}:
         return media_url, metadata
 
+    max_remote_image_bytes = max(1, int(os.getenv("REMOTE_IMAGE_LOCALIZE_MAX_MB", "25"))) * 1024 * 1024
+
     try:
         response = requests.get(
             raw,
@@ -1170,10 +1172,6 @@ def _persist_remote_image_result(
         )
         return media_url, metadata
 
-    binary = response.content
-    if not binary:
-        return media_url, metadata
-
     extension_map = {
         "image/png": ".png",
         "image/jpeg": ".jpg",
@@ -1199,12 +1197,45 @@ def _persist_remote_image_result(
 
     filename = f"provider_result_{uuid.uuid4().hex[:16]}{file_ext}"
     save_path = os.path.join(user_dir, filename)
-    with open(save_path, "wb") as f:
-        f.write(binary)
+    bytes_written = 0
+    try:
+        with open(save_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 256):
+                if not chunk:
+                    continue
+                bytes_written += len(chunk)
+                if bytes_written > max_remote_image_bytes:
+                    raise ValueError(f"remote image too large: {bytes_written} > {max_remote_image_bytes}")
+                f.write(chunk)
+    except Exception as exc:
+        try:
+            if os.path.exists(save_path):
+                os.remove(save_path)
+        except Exception:
+            pass
+        logger.warning(
+            "[ImageResultNormalize] remote image persistence failed | user_id=%s url=%s err=%s",
+            getattr(current_user, "id", None),
+            raw,
+            exc,
+        )
+        updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        updated_metadata["remote_localization_failed"] = True
+        updated_metadata["remote_localization_error"] = str(exc)
+        updated_metadata["remote_localization_source_url"] = raw
+        return media_url, updated_metadata
+    finally:
+        try:
+            response.close()
+        except Exception:
+            pass
+
+    if bytes_written <= 0:
+        return media_url, metadata
 
     updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
     updated_metadata["stored_from_remote_url"] = raw
-    updated_metadata["stored_from_remote_url_bytes"] = len(binary)
+    updated_metadata["stored_from_remote_url_bytes"] = bytes_written
     if content_type:
         updated_metadata["stored_from_remote_url_content_type"] = content_type
 
@@ -1224,7 +1255,7 @@ def _persist_remote_image_result(
         getattr(current_user, "id", None),
         raw,
         normalized_url,
-        len(binary),
+        bytes_written,
     )
     return normalized_url, updated_metadata
 
@@ -16375,12 +16406,12 @@ def get_assets(
     shot_id: Optional[str] = None,
     scene_id: Optional[str] = None,
     skip: int = 0,
-    limit: int = 300,
+    limit: int = 120,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     safe_skip = max(int(skip or 0), 0)
-    safe_limit = max(1, min(int(limit or 300), 500))
+    safe_limit = max(1, min(int(limit or 120), 200))
     accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
     accessible_project_owner_ids = [
         owner_id
@@ -16451,10 +16482,12 @@ def get_assets(
 
     filtered_assets: List[Asset] = []
     scan_offset = 0
+    scanned_rows = 0
     matched_skipped = 0
-    batch_size = min(1000, max(200, safe_limit * 3))
+    batch_size = min(400, max(120, safe_limit * 2))
+    max_scan_rows = max(1000, int(os.getenv("ASSETS_LIST_MAX_SCAN_ROWS", "5000") or 5000))
 
-    while len(filtered_assets) < safe_limit:
+    while len(filtered_assets) < safe_limit and scanned_rows < max_scan_rows:
         batch = ordered_query.offset(scan_offset).limit(batch_size).all()
         if not batch:
             break
@@ -16475,6 +16508,7 @@ def get_assets(
                 break
 
         scan_offset += len(batch)
+        scanned_rows += len(batch)
 
     # Enrichment Logic for Grouping
     project_ids = set()
@@ -16562,9 +16596,8 @@ def get_assets(
         })
 
 
-    # Debug log for asset response consistency
     if results:
-        logger.info(f"Asset response sample (1/{len(results)}): Meta={results[0]['meta_info']}")
+        logger.info("Asset response count=%s", len(results))
 
     return results
 
@@ -19776,13 +19809,26 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
 
             if is_image and ("width" not in meta or "height" not in meta):
                 try:
-                    resp = requests.get(url, timeout=10)
-                    if resp.ok and resp.content:
-                        from io import BytesIO
-                        with Image.open(BytesIO(resp.content)) as img:
-                            _set_resolution(img.width, img.height)
-                            if img.format and "format" not in meta:
-                                meta["format"] = str(img.format)
+                    max_probe_bytes = max(128 * 1024, int(os.getenv("ASSET_REMOTE_META_PROBE_MAX_BYTES", str(2 * 1024 * 1024)) or (2 * 1024 * 1024)))
+                    resp = requests.get(url, timeout=10, stream=True)
+                    content_len = int(resp.headers.get("Content-Length") or 0)
+                    if content_len and content_len > max_probe_bytes:
+                        resp.close()
+                    elif resp.ok:
+                        probe = bytearray()
+                        for chunk in resp.iter_content(chunk_size=64 * 1024):
+                            if not chunk:
+                                continue
+                            probe.extend(chunk)
+                            if len(probe) > max_probe_bytes:
+                                break
+                        resp.close()
+                        if probe:
+                            from io import BytesIO
+                            with Image.open(BytesIO(bytes(probe))) as img:
+                                _set_resolution(img.width, img.height)
+                                if img.format and "format" not in meta:
+                                    meta["format"] = str(img.format)
                 except Exception:
                     pass
 

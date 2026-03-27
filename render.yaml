@@ -89,6 +89,12 @@ services:
         value: "1200"
       - key: WEBHOOK_REPLAY_MAX_ITEMS
         value: "2000"
+      - key: REMOTE_IMAGE_LOCALIZE_MAX_MB
+        value: "20"
+      - key: ASSET_REMOTE_META_PROBE_MAX_BYTES
+        value: "1048576"
+      - key: ASSETS_LIST_MAX_SCAN_ROWS
+        value: "3000"
       - key: DB_POOL_SIZE
         value: "5"
       - key: DB_MAX_OVERFLOW
