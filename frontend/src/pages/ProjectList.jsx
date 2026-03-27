@@ -63,7 +63,8 @@ import {
     Loader2,
     ChevronsLeft,
     ChevronsRight,
-    Info
+    Info,
+    ChevronDown
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -402,6 +403,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newAspectRatio, setNewAspectRatio] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
     const [newImageSize, setNewImageSize] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
     const [newVideoSoundEnabled, setNewVideoSoundEnabled] = useState(true);
+    const [isCreateCollaboratorsCollapsed, setIsCreateCollaboratorsCollapsed] = useState(true);
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
@@ -691,6 +693,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         setNewAspectRatio(pickPreferredOrFirst(projectCreateOptions.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
         setNewImageSize(pickPreferredOrFirst(projectCreateOptions.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
         setNewVideoSoundEnabled(true);
+        setIsCreateCollaboratorsCollapsed(true);
     };
 
     const handleCreate = async () => {
@@ -1759,12 +1762,17 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                     <motion.div 
                                         initial={{ opacity: 0, y: -20 }}
                                         animate={{ opacity: 1, y: 0 }}
-                                        className="mb-8 p-6 border bg-card rounded-2xl shadow-sm"
+                                        className="mb-8 p-6 border border-white/15 bg-gradient-to-br from-card to-card/90 rounded-2xl shadow-xl shadow-black/15"
                                     >
-                                        <label className="block text-sm font-medium mb-2">{t('项目标题', 'Project Title')}</label>
+                                        <div className="mb-4 pb-3 border-b border-white/10">
+                                            <h3 className="text-lg sm:text-xl font-bold tracking-wide text-white">{t('新建项目', 'Create Project')}</h3>
+                                            <p className="text-xs sm:text-sm text-muted-foreground mt-1">{t('先填写核心字段，协作设置可按需展开。', 'Fill core fields first, and expand collaboration settings when needed.')}</p>
+                                        </div>
+
+                                        <label className="block text-sm font-semibold tracking-wide text-primary mb-2">{t('项目标题', 'Project Title')}</label>
                                         <div className="flex gap-3 mb-4">
                                             <input 
-                                                className="flex-1 px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none" 
+                                                className="flex-1 px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" 
                                                 value={newTitle} 
                                                 onChange={e => setNewTitle(e.target.value)} 
                                                 placeholder={t('例如：最后的地平线 - 场景1', 'e.g., The Last Horizon - Scene 1')}
@@ -1779,31 +1787,31 @@ const ProjectList = ({ initialTab = 'projects' }) => {
 
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
                                             <div>
-                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('类型', 'Type')}</label>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('类型', 'Type')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newType} onChange={(e) => setNewType(e.target.value)}>
                                                     {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('语言', 'Language')}</label>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('语言', 'Language')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)}>
                                                     {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('基础定位', 'Base Positioning')}</label>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('基础定位', 'Base Positioning')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newBasePositioning} onChange={(e) => setNewBasePositioning(e.target.value)}>
                                                     {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('画幅比例', 'Aspect Ratio')}</label>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('画幅比例', 'Aspect Ratio')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newAspectRatio} onChange={(e) => setNewAspectRatio(e.target.value)}>
                                                     {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-medium mb-1 text-muted-foreground">{t('图像尺寸', 'Image Size')}</label>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
                                                     {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                                                 </select>
@@ -1820,39 +1828,59 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             <span>{t('视频生成默认开启声音', 'Enable sound by default for video generation')}</span>
                                         </label>
 
-                                        <label className="block text-sm font-medium mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
+                                        <label className="block text-sm font-semibold tracking-wide text-primary mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
                                         <textarea
-                                            className="w-full px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none resize-y min-h-[84px]"
+                                            className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[84px]"
                                             value={newDescription}
                                             onChange={e => setNewDescription(e.target.value)}
                                             placeholder={t('可留空。用于记录项目背景、目标或备注', 'Can be left empty. Add context, goals, or notes for this project')}
                                         />
 
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                                            <div>
-                                                <label className="block text-sm font-medium mb-2">{t('分享人（可选，可多个）', 'Share Users (Optional, Multiple)')}</label>
-                                                <textarea
-                                                    className="w-full px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none resize-y min-h-[96px]"
-                                                    value={newShareUsers}
-                                                    onChange={(e) => setNewShareUsers(e.target.value)}
-                                                    placeholder={t('输入用户名或邮箱，支持逗号、分号或换行分隔', 'Enter usernames or emails, separated by commas, semicolons, or new lines')}
-                                                />
-                                                <div className="mt-2 text-xs text-muted-foreground">
-                                                    {formatParsedUserHint(newShareUsers, t)}
+                                        <div className="mt-5 rounded-xl border border-white/10 bg-black/15">
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsCreateCollaboratorsCollapsed((prev) => !prev)}
+                                                className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
+                                            >
+                                                <div>
+                                                    <div className="text-sm font-semibold tracking-wide text-primary">
+                                                        {t('共享与审核（可选）', 'Share & Review (Optional)')}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground mt-0.5">
+                                                        {t('默认收起，不影响项目创建。', 'Collapsed by default and does not affect project creation.')}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                            <div>
-                                                <label className="block text-sm font-medium mb-2">{t('审核人（可选，可多个）', 'Reviewer Users (Optional, Multiple)')}</label>
-                                                <textarea
-                                                    className="w-full px-4 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/20 outline-none resize-y min-h-[96px]"
-                                                    value={newReviewerUsers}
-                                                    onChange={(e) => setNewReviewerUsers(e.target.value)}
-                                                    placeholder={t('输入用户名或邮箱，保存时校验是否存在', 'Enter usernames or emails. Existence will be validated on save')}
-                                                />
-                                                <div className="mt-2 text-xs text-muted-foreground">
-                                                    {formatParsedUserHint(newReviewerUsers, t)}
+                                                <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isCreateCollaboratorsCollapsed ? '' : 'rotate-180'}`} />
+                                            </button>
+
+                                            {!isCreateCollaboratorsCollapsed && (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 px-4 pb-4">
+                                                    <div>
+                                                        <label className="block text-xs font-semibold tracking-wide mb-2 text-primary/95">{t('分享人（可选，可多个）', 'Share Users (Optional, Multiple)')}</label>
+                                                        <textarea
+                                                            className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[96px]"
+                                                            value={newShareUsers}
+                                                            onChange={(e) => setNewShareUsers(e.target.value)}
+                                                            placeholder={t('输入用户名或邮箱，支持逗号、分号或换行分隔', 'Enter usernames or emails, separated by commas, semicolons, or new lines')}
+                                                        />
+                                                        <div className="mt-2 text-xs text-muted-foreground">
+                                                            {formatParsedUserHint(newShareUsers, t)}
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-semibold tracking-wide mb-2 text-primary/95">{t('审核人（可选，可多个）', 'Reviewer Users (Optional, Multiple)')}</label>
+                                                        <textarea
+                                                            className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[96px]"
+                                                            value={newReviewerUsers}
+                                                            onChange={(e) => setNewReviewerUsers(e.target.value)}
+                                                            placeholder={t('输入用户名或邮箱，保存时校验是否存在', 'Enter usernames or emails. Existence will be validated on save')}
+                                                        />
+                                                        <div className="mt-2 text-xs text-muted-foreground">
+                                                            {formatParsedUserHint(newReviewerUsers, t)}
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                            </div>
+                                            )}
                                         </div>
                                     </motion.div>
                                 )}

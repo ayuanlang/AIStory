@@ -5,6 +5,9 @@ from datetime import datetime
 import os
 import json
 import asyncio
+import threading
+import tracemalloc
+from itertools import islice
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -203,6 +206,256 @@ def _bootstrap_db_post_init() -> None:
 
 _RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
 _RUN_GENERATION_QUEUE_WORKER_ON_START = os.getenv("RUN_GENERATION_QUEUE_WORKER_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
+_RUNTIME_DIAG_LOG_ENABLED = os.getenv("RUNTIME_DIAG_LOG_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+_RUNTIME_DIAG_LOG_INTERVAL_SECONDS = max(15, int(os.getenv("RUNTIME_DIAG_LOG_INTERVAL_SECONDS", "60") or 60))
+_RUNTIME_DIAG_HIGH_WATERMARK_MB = max(256, int(os.getenv("RUNTIME_DIAG_HIGH_WATERMARK_MB", "1400") or 1400))
+_RUNTIME_DIAG_HIGH_WATERMARK_COOLDOWN_SECONDS = max(30, int(os.getenv("RUNTIME_DIAG_HIGH_WATERMARK_COOLDOWN_SECONDS", "180") or 180))
+_RUNTIME_DIAG_STORE_SAMPLE_ITEMS = max(8, int(os.getenv("RUNTIME_DIAG_STORE_SAMPLE_ITEMS", "24") or 24))
+_RUNTIME_DIAG_TRACEMALLOC_ENABLED = os.getenv("RUNTIME_DIAG_TRACEMALLOC_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+_RUNTIME_DIAG_TRACEMALLOC_FRAMES = max(5, int(os.getenv("RUNTIME_DIAG_TRACEMALLOC_FRAMES", "15") or 15))
+_RUNTIME_DIAG_TRACEMALLOC_TOP = max(3, int(os.getenv("RUNTIME_DIAG_TRACEMALLOC_TOP", "8") or 8))
+
+
+def _log_runtime_startup_profile() -> None:
+    logger.info(
+        "Runtime startup profile | pid=%s web_concurrency=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s generation_queue_worker_threads=%s",
+        os.getpid(),
+        os.getenv("WEB_CONCURRENCY", ""),
+        os.getenv("GUNICORN_TIMEOUT", ""),
+        os.getenv("GUNICORN_GRACEFUL_TIMEOUT", ""),
+        os.getenv("GUNICORN_KEEPALIVE", ""),
+        os.getenv("GUNICORN_MAX_REQUESTS", ""),
+        os.getenv("GUNICORN_MAX_REQUESTS_JITTER", ""),
+        _RUN_DB_BOOTSTRAP_ON_START,
+        _RUN_GENERATION_QUEUE_WORKER_ON_START,
+        os.getenv("GENERATION_QUEUE_WORKER_THREADS", ""),
+    )
+
+
+def _read_linux_proc_status_metrics() -> Dict[str, Any]:
+    metrics: Dict[str, Any] = {}
+    status_path = "/proc/self/status"
+    if not os.path.exists(status_path):
+        return metrics
+    try:
+        with open(status_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw in f:
+                line = raw.strip()
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    metrics["vmrss_kb"] = int(parts[1]) if len(parts) >= 2 else None
+                elif line.startswith("VmSize:"):
+                    parts = line.split()
+                    metrics["vmsize_kb"] = int(parts[1]) if len(parts) >= 2 else None
+                elif line.startswith("Threads:"):
+                    parts = line.split()
+                    metrics["proc_threads"] = int(parts[1]) if len(parts) >= 2 else None
+        return metrics
+    except Exception:
+        return metrics
+
+
+def _read_open_fd_count() -> int | None:
+    fd_dir = "/proc/self/fd"
+    if not os.path.isdir(fd_dir):
+        return None
+    try:
+        return len(os.listdir(fd_dir))
+    except Exception:
+        return None
+
+
+def _read_generation_queue_snapshot() -> Dict[str, Any]:
+    snapshot: Dict[str, Any] = {
+        "queued": 0,
+        "running": 0,
+        "failed": 0,
+        "completed": 0,
+        "canceled": 0,
+        "oldest_queued_age_seconds": None,
+    }
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT status, COUNT(*) AS cnt
+                FROM generation_task_queue
+                GROUP BY status
+                """
+            )
+        ).mappings().all()
+        for row in rows:
+            status = str(row.get("status") or "").strip().lower()
+            count = int(row.get("cnt") or 0)
+            if status in snapshot:
+                snapshot[status] = count
+
+        oldest_queued_created_at = db.execute(
+            text(
+                """
+                SELECT MIN(created_at) AS min_created_at
+                FROM generation_task_queue
+                WHERE status = 'queued'
+                """
+            )
+        ).scalar()
+        if oldest_queued_created_at is not None:
+            snapshot["oldest_queued_age_seconds"] = max(
+                0,
+                int(time.time() - float(oldest_queued_created_at)),
+            )
+    except Exception:
+        # Keep diagnostic logger non-intrusive if queue table is unavailable.
+        pass
+    finally:
+        db.close()
+    return snapshot
+
+
+def _estimate_json_bytes(value: Any) -> int:
+    try:
+        payload = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        payload = str(value)
+    return len(payload.encode("utf-8", errors="ignore"))
+
+
+def _snapshot_dict_footprint(name: str, store: Any, lock: Any = None) -> Dict[str, Any]:
+    info: Dict[str, Any] = {
+        "name": str(name),
+        "items": 0,
+        "sample_items": 0,
+        "sample_bytes": 0,
+        "approx_total_bytes": 0,
+    }
+
+    try:
+        if lock is not None:
+            with lock:
+                items = int(len(store)) if hasattr(store, "__len__") else 0
+                sample_values = list(islice(getattr(store, "values")(), _RUNTIME_DIAG_STORE_SAMPLE_ITEMS)) if hasattr(store, "values") else []
+        else:
+            items = int(len(store)) if hasattr(store, "__len__") else 0
+            sample_values = list(islice(getattr(store, "values")(), _RUNTIME_DIAG_STORE_SAMPLE_ITEMS)) if hasattr(store, "values") else []
+    except Exception:
+        return info
+
+    sample_bytes = 0
+    for value in sample_values:
+        sample_bytes += _estimate_json_bytes(value)
+
+    sample_count = len(sample_values)
+    avg_bytes = int(sample_bytes / sample_count) if sample_count > 0 else 0
+    approx_total = int(avg_bytes * items) if avg_bytes > 0 else 0
+    info.update({
+        "items": items,
+        "sample_items": sample_count,
+        "sample_bytes": sample_bytes,
+        "approx_total_bytes": approx_total,
+    })
+    return info
+
+
+def _collect_endpoint_store_footprints() -> List[Dict[str, Any]]:
+    footprints: List[Dict[str, Any]] = []
+    candidates = [
+        ("image_job_store", getattr(endpoints, "IMAGE_JOB_STORE", None), getattr(endpoints, "IMAGE_JOB_LOCK", None)),
+        ("video_job_store", getattr(endpoints, "VIDEO_JOB_STORE", None), getattr(endpoints, "VIDEO_JOB_LOCK", None)),
+        ("generation_callback_store", getattr(endpoints, "GENERATION_CALLBACK_STORE", None), getattr(endpoints, "GENERATION_CALLBACK_LOCK", None)),
+        ("generation_callback_async_inflight", getattr(endpoints, "GENERATION_CALLBACK_ASYNC_INFLIGHT", None), getattr(endpoints, "GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK", None)),
+        ("generation_callback_no_match_cache", getattr(endpoints, "GENERATION_CALLBACK_NO_MATCH_LOG_CACHE", None), getattr(endpoints, "GENERATION_CALLBACK_NO_MATCH_LOG_LOCK", None)),
+        ("webhook_replay_store", getattr(endpoints, "WEBHOOK_REPLAY_STORE", None), getattr(endpoints, "WEBHOOK_REPLAY_LOCK", None)),
+        ("generation_job_pool_cache", getattr(endpoints, "_GENERATION_JOB_POOL_CACHE", None), getattr(endpoints, "_GENERATION_JOB_POOL_CACHE_LOCK", None)),
+        ("analyze_scene_recent_tasks", getattr(endpoints, "_ANALYZE_SCENE_RECENT_TASKS", None), getattr(endpoints, "_ANALYZE_SCENE_RECENT_TASKS_LOCK", None)),
+    ]
+
+    for name, store, lock in candidates:
+        if not isinstance(store, dict):
+            continue
+        footprints.append(_snapshot_dict_footprint(name, store, lock))
+
+    footprints.sort(key=lambda item: int(item.get("approx_total_bytes") or 0), reverse=True)
+    return footprints
+
+
+def _collect_tracemalloc_top() -> List[Dict[str, Any]]:
+    if not tracemalloc.is_tracing():
+        return []
+    try:
+        snapshot = tracemalloc.take_snapshot()
+        stats = snapshot.statistics("lineno")[:_RUNTIME_DIAG_TRACEMALLOC_TOP]
+        out: List[Dict[str, Any]] = []
+        for stat in stats:
+            frame = stat.traceback[0] if stat.traceback else None
+            out.append(
+                {
+                    "location": f"{getattr(frame, 'filename', '')}:{getattr(frame, 'lineno', 0)}" if frame else "",
+                    "size_bytes": int(getattr(stat, "size", 0) or 0),
+                    "count": int(getattr(stat, "count", 0) or 0),
+                }
+            )
+        return out
+    except Exception:
+        return []
+
+
+def _collect_high_memory_report(base_payload: Dict[str, Any]) -> Dict[str, Any]:
+    report = {
+        "pid": base_payload.get("pid"),
+        "render_instance_id": base_payload.get("render_instance_id"),
+        "vmrss_kb": base_payload.get("vmrss_kb"),
+        "vmsize_kb": base_payload.get("vmsize_kb"),
+        "open_fd": base_payload.get("open_fd"),
+        "threads_active": base_payload.get("threads_active"),
+        "queue": base_payload.get("queue") or {},
+        "store_footprints": _collect_endpoint_store_footprints(),
+    }
+    if _RUNTIME_DIAG_TRACEMALLOC_ENABLED:
+        report["tracemalloc_top"] = _collect_tracemalloc_top()
+    return report
+
+
+def _collect_runtime_diag_payload() -> Dict[str, Any]:
+    proc_metrics = _read_linux_proc_status_metrics()
+    fd_count = _read_open_fd_count()
+    queue_snapshot = _read_generation_queue_snapshot()
+    return {
+        "pid": os.getpid(),
+        "render_instance_id": str(os.getenv("RENDER_INSTANCE_ID") or ""),
+        "threads_active": threading.active_count(),
+        "proc_threads": proc_metrics.get("proc_threads"),
+        "vmrss_kb": proc_metrics.get("vmrss_kb"),
+        "vmsize_kb": proc_metrics.get("vmsize_kb"),
+        "open_fd": fd_count,
+        "queue": queue_snapshot,
+    }
+
+
+async def _runtime_diag_log_loop(stop_event: asyncio.Event) -> None:
+    last_high_watermark_log_at = 0.0
+    watermark_kb = max(1, _RUNTIME_DIAG_HIGH_WATERMARK_MB) * 1024
+    while not stop_event.is_set():
+        try:
+            payload = _collect_runtime_diag_payload()
+            logger.info("runtime.diag | %s", json.dumps(payload, ensure_ascii=False, default=str))
+
+            vmrss_kb = int(payload.get("vmrss_kb") or 0)
+            now_ts = time.time()
+            if (
+                vmrss_kb >= watermark_kb
+                and (now_ts - last_high_watermark_log_at) >= _RUNTIME_DIAG_HIGH_WATERMARK_COOLDOWN_SECONDS
+            ):
+                high_report = _collect_high_memory_report(payload)
+                logger.warning("runtime.diag.high | %s", json.dumps(high_report, ensure_ascii=False, default=str))
+                last_high_watermark_log_at = now_ts
+        except Exception as exc:
+            logger.warning("runtime.diag collection failed: %s", exc)
+
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_RUNTIME_DIAG_LOG_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            continue
 
 
 def _warm_runtime_caches() -> None:
@@ -250,6 +503,21 @@ class SelectiveGZipMiddleware(GZipMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_uvicorn_logging_noise_reduction()
+    if _RUNTIME_DIAG_TRACEMALLOC_ENABLED and not tracemalloc.is_tracing():
+        try:
+            tracemalloc.start(_RUNTIME_DIAG_TRACEMALLOC_FRAMES)
+            logger.info("Runtime diag tracemalloc enabled | frames=%s top=%s", _RUNTIME_DIAG_TRACEMALLOC_FRAMES, _RUNTIME_DIAG_TRACEMALLOC_TOP)
+        except Exception as exc:
+            logger.warning("Runtime diag tracemalloc enable failed: %s", exc)
+    _log_runtime_startup_profile()
+    runtime_diag_stop_event: asyncio.Event | None = None
+    runtime_diag_task: asyncio.Task | None = None
+    if _RUNTIME_DIAG_LOG_ENABLED:
+        runtime_diag_stop_event = asyncio.Event()
+        runtime_diag_task = asyncio.create_task(_runtime_diag_log_loop(runtime_diag_stop_event))
+        logger.info("Runtime diag logger enabled | interval=%ss", _RUNTIME_DIAG_LOG_INTERVAL_SECONDS)
+    else:
+        logger.info("Runtime diag logger disabled")
     if _RUN_DB_BOOTSTRAP_ON_START:
         logger.info("Application startup: critical DB bootstrap enabled")
         schema_ready, should_run_post_init = await asyncio.to_thread(_bootstrap_db_schema)
@@ -266,7 +534,20 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(endpoints.start_generation_queue_worker)
     else:
         logger.info("Application startup: generation queue worker disabled in web process")
-    yield
+    try:
+        yield
+    finally:
+        if runtime_diag_stop_event is not None:
+            runtime_diag_stop_event.set()
+        if runtime_diag_task is not None:
+            try:
+                await asyncio.wait_for(runtime_diag_task, timeout=3)
+            except Exception:
+                runtime_diag_task.cancel()
+                try:
+                    await runtime_diag_task
+                except Exception:
+                    pass
 
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
