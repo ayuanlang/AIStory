@@ -69,6 +69,12 @@ services:
         value: "0"
       - key: GUNICORN_MAX_REQUESTS_JITTER
         value: "0"
+      - key: LLM_DEBUG_LOG
+        value: "0"
+      - key: LLM_DEBUG_LOG_CONTENT
+        value: "0"
+      - key: MEDIA_DEBUG_LOG
+        value: "0"
       - key: IMAGE_JOB_MAX_ITEMS
         value: "200"
       - key: VIDEO_JOB_MAX_ITEMS

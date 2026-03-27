@@ -49,6 +49,8 @@ _LOG_LIST_PREVIEW_ITEMS = max(4, int(os.getenv("MEDIA_LOG_LIST_PREVIEW_ITEMS", "
 _LOG_DICT_PREVIEW_KEYS = max(8, int(os.getenv("MEDIA_LOG_DICT_PREVIEW_KEYS", "40")))
 _LOG_MAX_DEPTH = max(2, int(os.getenv("MEDIA_LOG_MAX_DEPTH", "4")))
 _LOG_SERIALIZED_MAX_CHARS = max(1024, int(os.getenv("MEDIA_LOG_SERIALIZED_MAX_CHARS", "8000")))
+MEDIA_DEBUG_LOG_ENABLED = os.getenv("MEDIA_DEBUG_LOG", "0") == "1"
+MEDIA_DEBUG_LOG_MAX_CHARS = max(512, int(os.getenv("MEDIA_DEBUG_LOG_MAX_CHARS", "1800") or 1800))
 
 def _strip_base64_from_log(obj):
     """Recursively strip base64 content from data structures before logging."""
@@ -117,9 +119,18 @@ def _format_payload_for_log(payload: Any) -> str:
     return rendered
 
 def _debug_log(msg, level="info"):
-    """Print to console and write to logger."""
-    print(msg)
-    getattr(logger, level, logger.info)(msg)
+    """Bounded debug logger for optional verbose traces.
+
+    Info-level debug traces are disabled by default and only enabled with
+    MEDIA_DEBUG_LOG=1. Warning/error logs still flow for diagnostics.
+    """
+    method = getattr(logger, level, logger.info)
+    if level not in {"warning", "error", "critical"} and not MEDIA_DEBUG_LOG_ENABLED:
+        return
+    text = str(msg or "")
+    if len(text) > MEDIA_DEBUG_LOG_MAX_CHARS:
+        text = f"{text[:MEDIA_DEBUG_LOG_MAX_CHARS]}...<TRUNCATED len={len(text)}>"
+    method(text)
 
 class MediaGenerationService:
 # ...

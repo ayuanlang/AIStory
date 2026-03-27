@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
 DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_CONNECT_TIMEOUT_SECONDS", "15"))
 DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS", "10"))
+LLM_DEBUG_LOG_ENABLED = os.getenv("LLM_DEBUG_LOG", "0") == "1"
+LLM_DEBUG_LOG_MAX_CHARS = max(512, int(os.getenv("LLM_DEBUG_LOG_MAX_CHARS", "1800") or 1800))
 
 
 class AmbiguousLLMTransportError(Exception):
@@ -43,9 +45,18 @@ def _strip_base64_from_log(obj):
     return obj
 
 def _debug_log(msg, level="info"):
-    """Print to console and write to logger."""
-    print(msg)
-    getattr(logger, level, logger.info)(msg)
+    """Bounded debug logger for optional verbose traces.
+
+    Info-level debug traces are disabled by default and only enabled with
+    LLM_DEBUG_LOG=1. Warning/error logs still flow for diagnostics.
+    """
+    method = getattr(logger, level, logger.info)
+    if level not in {"warning", "error", "critical"} and not LLM_DEBUG_LOG_ENABLED:
+        return
+    text = str(msg or "")
+    if len(text) > LLM_DEBUG_LOG_MAX_CHARS:
+        text = f"{text[:LLM_DEBUG_LOG_MAX_CHARS]}...<TRUNCATED len={len(text)}>"
+    method(text)
 
 
 def _safe_json_dict(value: Any) -> Dict[str, Any]:
