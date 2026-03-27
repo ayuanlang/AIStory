@@ -31168,6 +31168,18 @@ const Editor = ({
         const raw = String(text || '');
         if (!raw.trim()) return null;
 
+        const normalizeImportSubjectKey = (value) => {
+            const rawValue = String(value || '').trim();
+            if (!rawValue) return '';
+            const normalized = normalizeEntityToken(
+                rawValue
+                    .replace(/^CHAR\s*:\s*/i, '')
+                    .replace(/^PROP\s*:\s*/i, '')
+                    .replace(/^ENV\s*:\s*/i, '')
+            );
+            return String(normalized || '').replace(/[^\p{L}\p{N}\u4e00-\u9fff]/gu, '');
+        };
+
         const sectionMatch = raw.match(/###\s*Subject\s*Index[\s\S]*?(?=\n###\s+|$)/i);
         const section = sectionMatch ? sectionMatch[0] : raw;
         const lines = section
@@ -31221,7 +31233,7 @@ const Editor = ({
                         const subjectName = String(cells[nameIdx] || '').trim();
                         if (!type || !subjectName) continue;
 
-                        const dedupKey = `${type}:${normalizeSubjectKey(subjectName)}`;
+                        const dedupKey = `${type}:${normalizeImportSubjectKey(subjectName)}`;
                         if (seen.has(dedupKey)) continue;
                         seen.add(dedupKey);
 
@@ -31262,7 +31274,7 @@ const Editor = ({
             else if (typeToken.includes('environment') || typeToken.includes('场景') || typeToken.includes('环境') || typeToken.includes('env')) type = 'environment';
             if (!type) continue;
 
-            const dedupKey = `${type}:${normalizeSubjectKey(subjectName)}`;
+            const dedupKey = `${type}:${normalizeImportSubjectKey(subjectName)}`;
             if (seen.has(dedupKey)) continue;
             seen.add(dedupKey);
 
@@ -31632,7 +31644,7 @@ const Editor = ({
             ? await fetchEntities(id).catch(() => [])
             : []);
         let knownEntities = Array.isArray(existingEntities) ? [...existingEntities] : [];
-        const normalizeEntityKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${normalizeSubjectKey(name)}`;
+        const normalizeEntityKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${normalizeImportSubjectKey(name)}`;
         const existingEntityMap = new Map();
         for (const e of (existingEntities || [])) {
             const t = String(e?.type || '').trim().toLowerCase();
