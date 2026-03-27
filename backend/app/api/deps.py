@@ -309,4 +309,6 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is disabled",
         )
-    return user
+    principal_entry = _build_cached_principal(user)
+    _cache_user_entry(principal_entry)
+    return _entry_to_principal(principal_entry)

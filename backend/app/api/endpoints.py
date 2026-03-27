@@ -64,6 +64,7 @@ import hmac
 import base64
 import random
 import copy
+from types import SimpleNamespace
 
 # Import limiter from main app state or create a local reference if needed
 # We will use the request.app.state.limiter in the endpoints
@@ -210,6 +211,24 @@ def _release_db_connection(db: Optional[Session], reason: str = "") -> None:
             logger.debug("[db_release] close skipped | reason=%s error=%s", reason, exc)
         else:
             logger.debug("[db_release] close skipped | error=%s", exc)
+
+
+def _snapshot_user_principal(user: Any) -> SimpleNamespace:
+    """Build a detached-safe user snapshot for long-running/background tasks."""
+    return SimpleNamespace(
+        id=int(getattr(user, "id", 0) or 0),
+        username=str(getattr(user, "username", "") or ""),
+        email=str(getattr(user, "email", "") or "") or None,
+        full_name=str(getattr(user, "full_name", "") or "") or None,
+        avatar_url=str(getattr(user, "avatar_url", "") or "") or None,
+        is_active=int(getattr(user, "is_active", 1) or 1),
+        is_superuser=bool(getattr(user, "is_superuser", False)),
+        is_authorized=bool(getattr(user, "is_authorized", False)),
+        is_system=bool(getattr(user, "is_system", False)),
+        account_status=int(getattr(user, "account_status", 1) or 1),
+        email_verified=bool(getattr(user, "email_verified", False)),
+        credits=int(getattr(user, "credits", 0) or 0),
+    )
 
 _VIDEO_DEDUP_WINDOW_SECONDS = 20
 _VIDEO_DEDUP_MAX_CACHE = 256
@@ -3297,6 +3316,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         logger.info("No Project Metadata received")
 
     try:
+        # Cache user primitives before releasing DB session for long LLM calls.
+        current_user_id = int(getattr(current_user, "id", 0) or 0)
+        current_user_is_superuser = bool(getattr(current_user, "is_superuser", False))
+
         def _is_length_finish_reason(reason: Any) -> bool:
             r = str(reason or "").strip().lower().replace("-", "_")
             return r in {
@@ -4077,7 +4100,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         ]
 
         # Resolve LLM config from user's active setting (api_key/base_url always from system_api_settings).
-        config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+        config = agent_service.get_active_llm_config(current_user_id, category="LLM")
         if not config or not config.get("api_key"):
              raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
         config = _inject_user_advanced_llm_preferences(config, current_user)
@@ -4118,9 +4141,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
             }
-            reservation_tx = billing_service.reserve_credits(db, current_user.id, "analysis", provider, model, reserve_details)
+            reservation_tx = billing_service.reserve_credits(db, current_user_id, "analysis", provider, model, reserve_details)
         else:
-            billing_service.check_balance(db, current_user.id, "analysis", provider, model)
+            billing_service.check_balance(db, current_user_id, "analysis", provider, model)
 
         # Record max token config for diagnostics only.
         cfg_obj = (config or {}).get("config") or {}
@@ -4199,7 +4222,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 debug_meta.get("config_max_tokens_effective"),
             )
 
-        logger.info(f"Analyzing scene for user {current_user.id} with model {config.get('model')}")
+        logger.info(f"Analyzing scene for user {current_user_id} with model {config.get('model')}")
         # Auto-continue if provider truncates (finish_reason=length).
         # Important: keep continuation prompts small (do NOT send the entire prior output back)
         # to avoid blowing up prompt size / hitting context window.
@@ -4430,8 +4453,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         if getattr(request, "episode_id", None):
             episode_id = request.episode_id
             episode = db.query(Episode).filter(Episode.id == episode_id).first()
-            if episode and not getattr(current_user, "is_superuser", False):
-                _require_project_access(db, episode.project_id, current_user)
+            if episode and not current_user_is_superuser:
+                auth_user = db.query(User).filter(User.id == current_user_id).first()
+                if not auth_user:
+                    raise HTTPException(status_code=401, detail="User not found")
+                _require_project_access(db, episode.project_id, auth_user)
             if not episode:
                 raise HTTPException(status_code=404, detail="Episode not found")
             episode.ai_scene_analysis_result = result_content
@@ -4473,7 +4499,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 details["input_tokens"] = details.get("prompt_tokens", 0)
             if "completion_tokens" in details and "output_tokens" not in details:
                 details["output_tokens"] = details.get("completion_tokens", 0)
-            billing_service.deduct_credits(db, current_user.id, "analysis", provider, model, details)
+            billing_service.deduct_credits(db, current_user_id, "analysis", provider, model, details)
 
         # Ensure episode save is committed even if billing is disabled/mocked.
         if saved_to_episode:
@@ -4626,7 +4652,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             pass
         try:
             m_log = conf_log.get("model")
-            billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, prefixed_detail)
+            billing_service.log_failed_transaction(db, current_user_id, "analysis", p_log, m_log, prefixed_detail)
         except:
             pass
         raise HTTPException(status_code=e.status_code, detail=prefixed_detail)
@@ -4644,7 +4670,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Log failure
         try:
              m_log = conf_log.get("model")
-             billing_service.log_failed_transaction(db, current_user.id, "analysis", p_log, m_log, prefixed_detail)
+             billing_service.log_failed_transaction(db, current_user_id, "analysis", p_log, m_log, prefixed_detail)
         except:
              pass # Fail safe
         raise HTTPException(status_code=500, detail=prefixed_detail)
@@ -9178,9 +9204,10 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
         user = db.query(User).filter(User.id == user_id).first()
         if not episode or not user:
             return
+        user_principal = _snapshot_user_principal(user)
 
         job_id = f"episode-scenes:{int(episode_id)}"
-        user_name = str(user.username or f"user_{user_id}")
+        user_name = str(user_principal.username or f"user_{user_id}")
 
         latest = _read_episode_scene_generation_status(episode)
         if bool(latest.get("stop_requested")):
@@ -9210,7 +9237,7 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
                 episode_id=episode_id,
                 req=req,
                 db=db,
-                current_user=user,
+                current_user=user_principal,
             )
         )
 
@@ -12479,12 +12506,13 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int)
         user = item_db.query(User).filter(User.id == user_id).first()
         if not scene or not user:
             raise RuntimeError("Scene or user not found")
+        user_principal = _snapshot_user_principal(user)
 
         scene_label = str(scene.scene_no or scene.scene_name or f"#{scene_id}")
         _release_db_connection(item_db, "scene_ai_shots_batch_item")
         generated = asyncio.run(
             asyncio.wait_for(
-                ai_generate_shots(scene_id=scene_id, req=None, db=item_db, current_user=user),
+                ai_generate_shots(scene_id=scene_id, req=None, db=item_db, current_user=user_principal),
                 timeout=SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC,
             )
         )
@@ -12496,7 +12524,7 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int)
             scene_id=scene_id,
             data=AnalysisContent(content=generated_rows),
             db=item_db,
-            current_user=user,
+            current_user=user_principal,
         )
         return {
             "scene_id": int(scene_id),
@@ -12956,24 +12984,25 @@ async def ai_generate_shots(
         tid = _submit_async(ai_generate_shots, user_id=current_user.id,
                             kind="ai_generate_shots", scene_id=scene_id, req=req, async_mode="0")
         return JSONResponse({"task_id": tid, "async": True})
+    current_user_id = int(getattr(current_user, "id", 0) or 0)
     try:
         req_has_custom_user_prompt = bool(req and (req.user_prompt or "").strip())
         req_has_custom_system_prompt = bool(req and (req.system_prompt or "").strip())
         logger.info(
             "[ai_generate_shots] start "
-            f"scene_id={scene_id} user_id={current_user.id} "
+            f"scene_id={scene_id} user_id={current_user_id} "
             f"custom_user_prompt={req_has_custom_user_prompt} custom_system_prompt={req_has_custom_system_prompt}"
         )
         # 1. Fetch Scene and Context
         scene = db.query(Scene).filter(Scene.id == scene_id).first()
         if not scene:
-            logger.warning(f"[ai_generate_shots] scene_not_found scene_id={scene_id} user_id={current_user.id}")
+            logger.warning(f"[ai_generate_shots] scene_not_found scene_id={scene_id} user_id={current_user_id}")
             raise HTTPException(status_code=404, detail="Scene not found")
             
         episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
         if not episode:
             logger.warning(
-                f"[ai_generate_shots] episode_not_found scene_id={scene_id} episode_id={scene.episode_id} user_id={current_user.id}"
+                f"[ai_generate_shots] episode_not_found scene_id={scene_id} episode_id={scene.episode_id} user_id={current_user_id}"
             )
             raise HTTPException(status_code=404, detail="Episode not found")
 
@@ -12982,7 +13011,7 @@ async def ai_generate_shots(
         except HTTPException:
             logger.warning(
                 f"[ai_generate_shots] unauthorized_or_project_not_found "
-                f"scene_id={scene_id} episode_id={episode.id} project_id={episode.project_id} user_id={current_user.id}"
+                f"scene_id={scene_id} episode_id={episode.id} project_id={episode.project_id} user_id={current_user_id}"
             )
             raise
 
@@ -13001,9 +13030,9 @@ async def ai_generate_shots(
         logger.info(f"[ai_generate_shots] user_input_len={len(user_input)}")
 
         # 4. Call LLM
-        llm_config = agent_service.get_active_llm_config(current_user.id)
+        llm_config = agent_service.get_active_llm_config(current_user_id)
         if not llm_config:
-            logger.error(f"[ai_generate_shots] missing_llm_config scene_id={scene_id} user_id={current_user.id}")
+            logger.error(f"[ai_generate_shots] missing_llm_config scene_id={scene_id} user_id={current_user_id}")
             raise HTTPException(status_code=400, detail="No active LLM config")
         llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
         
@@ -13014,6 +13043,7 @@ async def ai_generate_shots(
             f"[ai_generate_shots] llm_selection provider={provider} model={model} scene_id={scene_id}"
         )
         reservation_tx = None
+        reservation_tx_id: Optional[int] = None
         if billing_service.is_token_pricing(db, "llm_chat", provider, model):
             messages_est = [
                 {"role": "system", "content": system_prompt},
@@ -13030,14 +13060,18 @@ async def ai_generate_shots(
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
             }
-            reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+            reservation_tx = billing_service.reserve_credits(db, current_user_id, "llm_chat", provider, model, reserve_details)
+            try:
+                reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
+            except Exception:
+                reservation_tx_id = None
             logger.info(
-                f"[ai_generate_shots] token_reservation_created reservation_id={reservation_tx.id} "
+                f"[ai_generate_shots] token_reservation_created reservation_id={reservation_tx_id} "
                 f"scene_id={scene_id} est_total_tokens={reserve_details.get('total_tokens', 0)}"
             )
         else:
             # Ensure we have at least a default task type if provider is missing (though check_balance handles None)
-            billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+            billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
         _release_db_connection(db, "ai_generate_shots_llm_call")
         response_dict = await llm_service.generate_content_with_fallback(user_input, system_prompt, llm_config)
@@ -13050,15 +13084,15 @@ async def ai_generate_shots(
         )
 
         if str(response_content_raw).startswith("Error:"):
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(response_content_raw))
+            if reservation_tx_id is not None:
+                billing_service.cancel_reservation(db, reservation_tx_id, str(response_content_raw))
             raise HTTPException(status_code=500, detail=str(response_content_raw))
 
         raw_str = str(response_content_raw or "").strip()
         if not raw_str:
-            logger.warning(f"[ai_generate_shots] empty_llm_response scene_id={scene_id} user_id={current_user.id}")
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, "empty llm response")
+            logger.warning(f"[ai_generate_shots] empty_llm_response scene_id={scene_id} user_id={current_user_id}")
+            if reservation_tx_id is not None:
+                billing_service.cancel_reservation(db, reservation_tx_id, "empty llm response")
             raise HTTPException(status_code=502, detail="LLM returned empty response")
 
         # Keep original model output for read-only auditing in UI.
@@ -13070,10 +13104,10 @@ async def ai_generate_shots(
 
         if _is_provider_moderation_block_response(raw_str, response_content):
             logger.warning(
-                f"[ai_generate_shots] prohibited_content_marker_detected scene_id={scene_id} user_id={current_user.id}"
+                f"[ai_generate_shots] prohibited_content_marker_detected scene_id={scene_id} user_id={current_user_id}"
             )
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, "provider moderation block")
+            if reservation_tx_id is not None:
+                billing_service.cancel_reservation(db, reservation_tx_id, "provider moderation block")
             raise HTTPException(status_code=502, detail="Provider moderation blocked shot generation (PROHIBITED_CONTENT)")
 
         reasoning_prefix_terms = [
@@ -13109,10 +13143,10 @@ async def ai_generate_shots(
 
         if not response_content:
             logger.warning(
-                f"[ai_generate_shots] empty_after_sanitize scene_id={scene_id} user_id={current_user.id} raw_len={len(raw_str)}"
+                f"[ai_generate_shots] empty_after_sanitize scene_id={scene_id} user_id={current_user_id} raw_len={len(raw_str)}"
             )
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, "empty response after sanitize")
+            if reservation_tx_id is not None:
+                billing_service.cancel_reservation(db, reservation_tx_id, "empty response after sanitize")
             raise HTTPException(status_code=502, detail="LLM response became empty after sanitize")
 
         logger.info(
@@ -13120,7 +13154,7 @@ async def ai_generate_shots(
         )
 
         # Billing finalize
-        if reservation_tx:
+        if reservation_tx_id is not None:
             actual_details = {"item": "generate_shots"}
             if usage:
                 actual_details.update(usage)
@@ -13129,9 +13163,9 @@ async def ai_generate_shots(
                 actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
             if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
                 actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
-            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+            billing_service.settle_reservation(db, reservation_tx_id, actual_details)
             logger.info(
-                f"[ai_generate_shots] token_reservation_settled reservation_id={reservation_tx.id} "
+                f"[ai_generate_shots] token_reservation_settled reservation_id={reservation_tx_id} "
                 f"scene_id={scene_id} actual_keys={list(actual_details.keys())}"
             )
         else:
@@ -13143,7 +13177,7 @@ async def ai_generate_shots(
                 details["input_tokens"] = details.get("prompt_tokens", 0)
             if "completion_tokens" in details and "output_tokens" not in details:
                 details["output_tokens"] = details.get("completion_tokens", 0)
-            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+            billing_service.deduct_credits(db, current_user_id, "llm_chat", provider, model, details)
             logger.info(
                 f"[ai_generate_shots] credits_deducted scene_id={scene_id} detail_keys={list(details.keys())}"
             )
@@ -13198,19 +13232,19 @@ async def ai_generate_shots(
 
     except HTTPException as e:
         logger.warning(
-            f"[ai_generate_shots] http_exception scene_id={scene_id} user_id={current_user.id} "
+            f"[ai_generate_shots] http_exception scene_id={scene_id} user_id={current_user_id} "
             f"status_code={e.status_code} detail={e.detail}"
         )
         raise
     except Exception as e:
         import traceback
         traceback.print_exc()
-        logger.exception(f"[ai_generate_shots] unhandled_error scene_id={scene_id} user_id={current_user.id} error={e}")
+        logger.exception(f"[ai_generate_shots] unhandled_error scene_id={scene_id} user_id={current_user_id} error={e}")
         # Log failure
         try:
             p_log = locals().get('provider')
             m_log = locals().get('model')
-            billing_service.log_failed_transaction(db, current_user.id, "llm_chat", p_log, m_log, str(e))
+            billing_service.log_failed_transaction(db, current_user_id, "llm_chat", p_log, m_log, str(e))
         except: pass
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -13233,6 +13267,7 @@ async def ai_regenerate_shots(
             async_mode="0",
         )
         return JSONResponse({"task_id": tid, "async": True})
+    current_user_id = int(getattr(current_user, "id", 0) or 0)
 
     try:
         scene = db.query(Scene).filter(Scene.id == scene_id).first()
@@ -13292,7 +13327,7 @@ async def ai_regenerate_shots(
         except FileNotFoundError:
             raise HTTPException(status_code=500, detail=f"Prompt file '{prompt_filename}' could not be loaded.")
 
-        llm_config = agent_service.get_active_llm_config(current_user.id)
+        llm_config = agent_service.get_active_llm_config(current_user_id)
         if not llm_config:
             raise HTTPException(status_code=400, detail="No active LLM config")
         llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
@@ -13300,6 +13335,7 @@ async def ai_regenerate_shots(
         provider = llm_config.get("provider")
         model = llm_config.get("model")
         reservation_tx = None
+        reservation_tx_id: Optional[int] = None
         if billing_service.is_token_pricing(db, "llm_chat", provider, model):
             messages_est = [
                 {"role": "system", "content": system_prompt},
@@ -13316,9 +13352,13 @@ async def ai_regenerate_shots(
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
             }
-            reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+            reservation_tx = billing_service.reserve_credits(db, current_user_id, "llm_chat", provider, model, reserve_details)
+            try:
+                reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
+            except Exception:
+                reservation_tx_id = None
         else:
-            billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+            billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
         _release_db_connection(db, "ai_regenerate_shots_llm_call")
         response_dict = await llm_service.generate_content_with_fallback(user_input, system_prompt, llm_config)
@@ -13326,30 +13366,30 @@ async def ai_regenerate_shots(
         usage = response_dict.get("usage", {})
 
         if str(response_content_raw).startswith("Error:"):
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(response_content_raw))
+            if reservation_tx_id is not None:
+                billing_service.cancel_reservation(db, reservation_tx_id, str(response_content_raw))
             raise HTTPException(status_code=500, detail=str(response_content_raw))
 
         raw_str = str(response_content_raw or "").strip()
         if not raw_str:
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, "empty llm response")
+            if reservation_tx_id is not None:
+                billing_service.cancel_reservation(db, reservation_tx_id, "empty llm response")
             raise HTTPException(status_code=502, detail="LLM returned empty response")
 
         raw_text_original = str(response_content_raw or "")
 
         response_content = sanitize_llm_markdown_output(response_content_raw)
         if _is_provider_moderation_block_response(raw_str, response_content):
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, "provider moderation block")
+            if reservation_tx_id is not None:
+                billing_service.cancel_reservation(db, reservation_tx_id, "provider moderation block")
             raise HTTPException(status_code=502, detail="Provider moderation blocked shot regeneration (PROHIBITED_CONTENT)")
 
         if not response_content:
-            if reservation_tx:
-                billing_service.cancel_reservation(db, reservation_tx.id, "empty response after sanitize")
+            if reservation_tx_id is not None:
+                billing_service.cancel_reservation(db, reservation_tx_id, "empty response after sanitize")
             raise HTTPException(status_code=502, detail="LLM response became empty after sanitize")
 
-        if reservation_tx:
+        if reservation_tx_id is not None:
             actual_details = {"item": "regenerate_shots"}
             if usage:
                 actual_details.update(usage)
@@ -13358,7 +13398,7 @@ async def ai_regenerate_shots(
                 actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
             if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
                 actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
-            billing_service.settle_reservation(db, reservation_tx.id, actual_details)
+            billing_service.settle_reservation(db, reservation_tx_id, actual_details)
         else:
             details = {"item": "regenerate_shots"}
             if usage:
@@ -13368,7 +13408,7 @@ async def ai_regenerate_shots(
                 details["input_tokens"] = details.get("prompt_tokens", 0)
             if "completion_tokens" in details and "output_tokens" not in details:
                 details["output_tokens"] = details.get("completion_tokens", 0)
-            billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+            billing_service.deduct_credits(db, current_user_id, "llm_chat", provider, model, details)
 
         headers, regenerated_rows, table_line_count = parse_shots_markdown_table(response_content)
         if not regenerated_rows:
@@ -13420,13 +13460,13 @@ async def ai_regenerate_shots(
         logger.exception(
             "[ai_regenerate_shots] unhandled_error scene_id=%s user_id=%s error=%s",
             scene_id,
-            current_user.id,
+            current_user_id,
             e,
         )
         try:
             p_log = locals().get("provider")
             m_log = locals().get("model")
-            billing_service.log_failed_transaction(db, current_user.id, "llm_chat", p_log, m_log, str(e))
+            billing_service.log_failed_transaction(db, current_user_id, "llm_chat", p_log, m_log, str(e))
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=str(e))
@@ -20328,6 +20368,7 @@ async def _run_generate_image(
     provider_callback_url: Optional[str] = None,
 ):
     reservation_tx = None
+    reservation_tx_id: Optional[int] = None
     runtime_target = _resolve_media_runtime_target(
         provider=req.provider,
         model=req.model,
@@ -20383,6 +20424,10 @@ async def _run_generate_image(
         reserve_model,
         reserve_details,
     )
+    try:
+        reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
+    except Exception:
+        reservation_tx_id = None
 
     try:
         resolved_project_id = _normalize_seed_value(getattr(req, "project_id", None))
@@ -20904,10 +20949,11 @@ async def _run_generate_image(
             logger.error(f"[GenerateImage] Failed: {detail}")
             billing_service.log_failed_transaction(db, current_user.id, "image_gen", billing_provider, billing_model, detail)
 
-            if reservation_tx:
+            if reservation_tx_id is not None:
                 try:
-                    billing_service.cancel_reservation(db, reservation_tx.id, detail)
+                    billing_service.cancel_reservation(db, reservation_tx_id, detail)
                     reservation_tx = None
+                    reservation_tx_id = None
                 except Exception:
                     pass
 
@@ -20921,7 +20967,7 @@ async def _run_generate_image(
             media_type="image",
         )
 
-        if reservation_tx:
+        if reservation_tx_id is not None:
             if is_token_billing:
                 raw_resp = (result_meta or {}).get("raw") if isinstance(result_meta, dict) else {}
                 usage = raw_resp.get("usage") if isinstance(raw_resp, dict) else {}
@@ -20979,10 +21025,11 @@ async def _run_generate_image(
 
             billing_service.settle_reservation(
                 db,
-                reservation_tx.id,
+                reservation_tx_id,
                 settle_details,
             )
             reservation_tx = None
+            reservation_tx_id = None
         
         # Register Asset
         if result.get("url"):
@@ -21019,16 +21066,18 @@ async def _run_generate_image(
 
         return result
     except asyncio.CancelledError:
-        if reservation_tx:
+        if reservation_tx_id is not None:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, "image generation cancelled")
+                billing_service.cancel_reservation(db, reservation_tx_id, "image generation cancelled")
+                reservation_tx_id = None
             except Exception:
                 pass
         raise
     except HTTPException:
-        if reservation_tx:
+        if reservation_tx_id is not None:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, "image generation http exception")
+                billing_service.cancel_reservation(db, reservation_tx_id, "image generation http exception")
+                reservation_tx_id = None
             except Exception:
                 pass
         # Keep an auditable failure record for submit-based async jobs.
@@ -21049,9 +21098,10 @@ async def _run_generate_image(
             logger.exception("Failed to log image_gen HTTPException transaction")
         raise
     except Exception as e:
-        if reservation_tx:
+        if reservation_tx_id is not None:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+                billing_service.cancel_reservation(db, reservation_tx_id, str(e))
+                reservation_tx_id = None
             except Exception:
                 pass
         billing_service.log_failed_transaction(db, current_user.id, "image_gen", req.provider, req.model, str(e))
@@ -21287,6 +21337,7 @@ async def _run_generate_image_job(
                 error="User not found",
             )
             return
+        user_principal = _snapshot_user_principal(user)
 
         req_obj = GenerationRequest(**req_payload)
         _set_image_job(job_id, status="running", started_at=now_bj_iso())
@@ -21301,7 +21352,7 @@ async def _run_generate_image_job(
         result = await asyncio.wait_for(
             _run_generate_image(
                 req_obj,
-                user,
+                user_principal,
                 db,
                 job_progress_callback=_on_provider_task_id,
                 provider_callback_ticket=provider_callback_ticket,
@@ -22539,6 +22590,7 @@ async def _run_generate_video(
     provider_callback_url: Optional[str] = None,
 ):
     reservation_tx = None
+    reservation_tx_id: Optional[int] = None
     runtime_target = _resolve_media_runtime_target(
         provider=req.provider,
         model=req.model,
@@ -22966,6 +23018,10 @@ async def _run_generate_video(
             reserve_model_arg,
             reserve_details,
         )
+        try:
+            reservation_tx_id = int(getattr(reservation_tx, "id", 0) or 0) or None
+        except Exception:
+            reservation_tx_id = None
 
         project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
@@ -23414,7 +23470,7 @@ async def _run_generate_video(
             await asyncio.to_thread(_register_asset_helper, db, current_user.id, result["url"], req, result.get("metadata"))
             await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, result.get("url"))
 
-        if reservation_tx:
+        if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}
             final_meta = final_meta if isinstance(final_meta, dict) else {}
             smart_meta = final_meta.get("smart_routing") if isinstance(final_meta.get("smart_routing"), dict) else {}
@@ -23539,32 +23595,36 @@ async def _run_generate_video(
 
             billing_service.settle_reservation(
                 db,
-                reservation_tx.id,
+                reservation_tx_id,
                 settle_details,
             )
             reservation_tx = None
+            reservation_tx_id = None
 
         return result
     except asyncio.CancelledError:
-        if reservation_tx:
+        if reservation_tx_id is not None:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, "video generation cancelled")
+                billing_service.cancel_reservation(db, reservation_tx_id, "video generation cancelled")
+                reservation_tx_id = None
             except Exception:
                 pass
         raise
     except HTTPException as e:
-        if reservation_tx:
+        if reservation_tx_id is not None:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e.detail))
+                billing_service.cancel_reservation(db, reservation_tx_id, str(e.detail))
+                reservation_tx_id = None
             except Exception:
                 pass
         raise
     except Exception as e:
         import traceback
         traceback.print_exc()
-        if reservation_tx:
+        if reservation_tx_id is not None:
             try:
-                billing_service.cancel_reservation(db, reservation_tx.id, str(e))
+                billing_service.cancel_reservation(db, reservation_tx_id, str(e))
+                reservation_tx_id = None
             except Exception:
                 pass
         billing_service.log_failed_transaction(db, current_user.id, "video_gen", req.provider, req.model, str(e))
@@ -23626,6 +23686,7 @@ async def _run_generate_video_job(
                 error="User not found",
             )
             return
+        user_principal = _snapshot_user_principal(user)
 
         req_obj = VideoGenerationRequest(**req_payload)
         _set_video_job(job_id, status="running", started_at=now_bj_iso())
@@ -23641,7 +23702,7 @@ async def _run_generate_video_job(
         result = await asyncio.wait_for(
             _run_generate_video(
                 req_obj,
-                user,
+                user_principal,
                 db,
                 provider_callback_ticket=provider_callback_ticket,
                 provider_callback_url=provider_callback_url,
@@ -25880,6 +25941,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         shot = item_db.query(Shot).filter(Shot.id == shot_id, Shot.episode_id == episode_id).first()
         if not episode or not user or not shot:
             raise Exception("Shot batch item not found")
+        user_principal = _snapshot_user_principal(user)
 
         shot_label = str(shot.shot_id or shot.shot_name or f"#{shot.id}")
         tech = _parse_shot_tech(shot)
@@ -26020,7 +26082,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         )
         _release_db_connection(item_db, "shot_media_batch_video")
         asyncio.run(_run_stage_with_retry(
-            lambda: _run_generate_video(req=video_req, current_user=user, db=item_db),
+            lambda: _run_generate_video(req=video_req, current_user=user_principal, db=item_db),
         ))
 
         return {
@@ -26063,8 +26125,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         user = db.query(User).filter(User.id == user_id).first()
         if not episode or not user:
             return
+        user_principal = _snapshot_user_principal(user)
 
-        user_name = str(user.username or f"user_{user_id}")
+        user_name = str(user_principal.username or f"user_{user_id}")
         project_id = int(episode.project_id)
         job_id = f"shot-media-batch:{int(episode_id)}"
 
@@ -26077,7 +26140,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         overwrite_existing = bool((request_payload or {}).get("overwrite_existing"))
         requested_shot_ids = [int(x) for x in ((request_payload or {}).get("shot_ids") or []) if x]
         batch_max_concurrency = _resolve_user_batch_parallel_limit(
-            getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
+            getattr(user_principal, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
             default=SHOT_MEDIA_BATCH_DEFAULT_CONCURRENCY,
         )
 
@@ -26458,7 +26521,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             )
                             _release_db_connection(db, "shot_media_batch_start_frame")
                             asyncio.run(_run_stage_with_retry(
-                                lambda: _run_generate_image(req=start_req, current_user=user, db=db),
+                                lambda: _run_generate_image(req=start_req, current_user=user_principal, db=db),
                                 "start_frame",
                                 shot_label,
                             ))
@@ -26547,7 +26610,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             )
                             _release_db_connection(db, "shot_media_batch_end_frame")
                             asyncio.run(_run_stage_with_retry(
-                                lambda: _run_generate_image(req=end_req, current_user=user, db=db),
+                                lambda: _run_generate_image(req=end_req, current_user=user_principal, db=db),
                                 "end_frame",
                                 shot_label,
                             ))
@@ -26684,7 +26747,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         )
                         _release_db_connection(db, "shot_media_batch_video")
                         asyncio.run(_run_stage_with_retry(
-                            lambda: _run_generate_video(req=video_req, current_user=user, db=db),
+                            lambda: _run_generate_video(req=video_req, current_user=user_principal, db=db),
                             "video",
                             shot_label,
                         ))
