@@ -8,6 +8,7 @@ import asyncio
 import threading
 import tracemalloc
 from itertools import islice
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -274,6 +275,56 @@ def _read_open_fd_count() -> int | None:
         return None
 
 
+def _read_cgroup_memory_metrics() -> Dict[str, Any]:
+    metrics: Dict[str, Any] = {
+        "cgroup_memory_current_bytes": None,
+        "cgroup_memory_max_bytes": None,
+        "cgroup_memory_events": {},
+    }
+
+    # Prefer cgroup v2 paths used by most modern container runtimes.
+    memory_current_path = "/sys/fs/cgroup/memory.current"
+    memory_max_path = "/sys/fs/cgroup/memory.max"
+    memory_events_path = "/sys/fs/cgroup/memory.events"
+
+    try:
+        if os.path.exists(memory_current_path):
+            raw = str(Path(memory_current_path).read_text(encoding="utf-8", errors="ignore") or "").strip()
+            if raw and raw.isdigit():
+                metrics["cgroup_memory_current_bytes"] = int(raw)
+    except Exception:
+        pass
+
+    try:
+        if os.path.exists(memory_max_path):
+            raw = str(Path(memory_max_path).read_text(encoding="utf-8", errors="ignore") or "").strip()
+            if raw and raw.lower() != "max" and raw.isdigit():
+                metrics["cgroup_memory_max_bytes"] = int(raw)
+            elif raw.lower() == "max":
+                metrics["cgroup_memory_max_bytes"] = None
+    except Exception:
+        pass
+
+    try:
+        if os.path.exists(memory_events_path):
+            events: Dict[str, int] = {}
+            lines = Path(memory_events_path).read_text(encoding="utf-8", errors="ignore").splitlines()
+            for line in lines:
+                parts = str(line or "").strip().split()
+                if len(parts) != 2:
+                    continue
+                key, raw_val = parts[0], parts[1]
+                try:
+                    events[str(key)] = int(raw_val)
+                except Exception:
+                    continue
+            metrics["cgroup_memory_events"] = events
+    except Exception:
+        pass
+
+    return metrics
+
+
 def _read_generation_queue_snapshot() -> Dict[str, Any]:
     snapshot: Dict[str, Any] = {
         "queued": 0,
@@ -419,6 +470,9 @@ def _collect_high_memory_report(base_payload: Dict[str, Any]) -> Dict[str, Any]:
         "vmsize_kb": base_payload.get("vmsize_kb"),
         "open_fd": base_payload.get("open_fd"),
         "threads_active": base_payload.get("threads_active"),
+        "cgroup_memory_current_bytes": base_payload.get("cgroup_memory_current_bytes"),
+        "cgroup_memory_max_bytes": base_payload.get("cgroup_memory_max_bytes"),
+        "cgroup_memory_events": base_payload.get("cgroup_memory_events") or {},
         "queue": base_payload.get("queue") or {},
         "store_footprints": _collect_endpoint_store_footprints(),
     }
@@ -431,6 +485,7 @@ def _collect_runtime_diag_payload() -> Dict[str, Any]:
     proc_metrics = _read_linux_proc_status_metrics()
     fd_count = _read_open_fd_count()
     queue_snapshot = _read_generation_queue_snapshot()
+    cgroup_metrics = _read_cgroup_memory_metrics()
     now_ts = time.time()
     return {
         "pid": os.getpid(),
@@ -442,6 +497,9 @@ def _collect_runtime_diag_payload() -> Dict[str, Any]:
         "vmrss_kb": proc_metrics.get("vmrss_kb"),
         "vmsize_kb": proc_metrics.get("vmsize_kb"),
         "open_fd": fd_count,
+        "cgroup_memory_current_bytes": cgroup_metrics.get("cgroup_memory_current_bytes"),
+        "cgroup_memory_max_bytes": cgroup_metrics.get("cgroup_memory_max_bytes"),
+        "cgroup_memory_events": cgroup_metrics.get("cgroup_memory_events") or {},
         "queue": queue_snapshot,
     }
 
