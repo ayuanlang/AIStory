@@ -65,7 +65,7 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 - Beats must be time-ordered and action-causal.
 - Beats must be spatially activated in scene space (no vacuum performance).
 - Beats must carry observer POV (`镜头位置`, `镜头朝向`, `角色-镜头关系`) and at least one framing parameter (`景别` or `镜高/俯仰`).
-- Beat single-line minimum template (copy-ready): `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在{ }相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`.
+- Beat single-line minimum template (copy-ready): `1. {镜头:机位在{ }旁/朝向{ }/轴线{左侧|右侧}} + {空间:CHAR:[@角色A]在ENV:[场景锚点]内相对{Stage}位于{ }} + {角色-镜头关系:CHAR:[@角色A]处于{前景|中景|后景}偏{左|右}、{正对|侧对|背对}镜头、景别{远景|全景|中景|近景|特写}、镜高/俯仰{平视|俯拍|仰拍}} + {主体关系:CHAR:[@角色A]与CHAR:[@角色B]位置{ }/朝向{ }/视线{ }/接触{ }} + {动作变化:因{触发原因}执行{动作路径与顺序}，对白/字幕/音效:{ }} -> {新状态:{位置|朝向|视线|接触|道具状态}}`.
 - Hard validation: if any required slot in the minimum template is missing, empty, or replaced by abstract summary text, the Beat is invalid and must be rewritten with all slots filled.
 - Beats should use explicit entity references in `[]` where required by prompt rules.
 - Include enhancement constraints when instructed (e.g.,角色高光, 视觉转场).
@@ -90,6 +90,9 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 - Character/subject references use `CHAR:[@Name]` consistently; missing `@` on characters is invalid.
 - Environment/prop references remain `[Name]` without `@`; `[@Env]` / `[@Prop]` are invalid.
 - Entity typing is explicit and consistent: `CHAR:[@Name]`, `ENV:[Name]`, `PROP:[Name]`.
+- Video prompt environment anchor is mandatory: `Start Frame`, `Video Content`, and `End Frame` must explicitly contain `ENV:[Environment Anchor]`; `Video Content` cannot rely on downstream auto-injection.
+- Video Content compliant example: `**{Viewpoint Movement}**: Along ENV:[Environment Anchor] corridor floor line, viewpoint trucks left slowly...`.
+- Video Content non-compliant example: `**{Viewpoint Movement}**: viewpoint trucks left slowly...` (missing `ENV:[Environment Anchor]`).
 - `anchor_description` is English-only for all entity types (Character/Prop/Environment); no Chinese or mixed-language output.
 - Any field suffixed with `_cn` must always be Chinese, and any field suffixed with `_en` must always be English, regardless of project language.
 - `Project Context.Language` controls design context and visible in-frame text/signage/dialogue language, but does not override the fixed language contract of `_cn` / `_en` fields.
