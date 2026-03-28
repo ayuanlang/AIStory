@@ -218,7 +218,7 @@ _RUNTIME_DIAG_TRACEMALLOC_TOP = max(3, int(os.getenv("RUNTIME_DIAG_TRACEMALLOC_T
 
 def _log_runtime_startup_profile() -> None:
     logger.info(
-        "Runtime startup profile | pid=%s web_concurrency=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s generation_queue_worker_threads=%s",
+        "Runtime startup profile | pid=%s web_concurrency=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
         os.getpid(),
         os.getenv("WEB_CONCURRENCY", ""),
         os.getenv("GUNICORN_TIMEOUT", ""),
@@ -229,6 +229,14 @@ def _log_runtime_startup_profile() -> None:
         _RUN_DB_BOOTSTRAP_ON_START,
         _RUN_GENERATION_QUEUE_WORKER_ON_START,
         os.getenv("GENERATION_QUEUE_WORKER_THREADS", ""),
+        _RUNTIME_DIAG_LOG_ENABLED,
+        _RUNTIME_DIAG_LOG_INTERVAL_SECONDS,
+        _RUNTIME_DIAG_HIGH_WATERMARK_MB,
+        _RUNTIME_DIAG_HIGH_WATERMARK_COOLDOWN_SECONDS,
+        _RUNTIME_DIAG_STORE_SAMPLE_ITEMS,
+        _RUNTIME_DIAG_TRACEMALLOC_ENABLED,
+        _RUNTIME_DIAG_TRACEMALLOC_FRAMES,
+        _RUNTIME_DIAG_TRACEMALLOC_TOP,
     )
 
 
