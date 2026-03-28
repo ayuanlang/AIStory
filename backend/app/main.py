@@ -574,6 +574,44 @@ class SelectiveGZipMiddleware(GZipMiddleware):
 
         await super().__call__(scope, receive, send)
 
+
+class UploadCacheControlMiddleware:
+    def __init__(
+        self,
+        app,
+        *,
+        path_prefix: str = "/uploads/",
+        cache_control: str = "",
+    ):
+        self.app = app
+        self.path_prefix = str(path_prefix or "/uploads/")
+        self.cache_control = str(cache_control or "").strip()
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = str(scope.get("method") or "").upper()
+        path = str(scope.get("path") or "")
+        if method not in {"GET", "HEAD"} or not path.startswith(self.path_prefix):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message.get("type") == "http.response.start":
+                headers = list(message.get("headers") or [])
+                has_cache_control = any(k.lower() == b"cache-control" for k, _ in headers)
+                has_accept_ranges = any(k.lower() == b"accept-ranges" for k, _ in headers)
+                if self.cache_control and not has_cache_control:
+                    headers.append((b"cache-control", self.cache_control.encode("latin-1", errors="ignore")))
+                if not has_accept_ranges:
+                    headers.append((b"accept-ranges", b"bytes"))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_uvicorn_logging_noise_reduction()
@@ -633,6 +671,11 @@ app.add_middleware(
     SelectiveGZipMiddleware,
     minimum_size=settings.GZIP_MINIMUM_SIZE,
     excluded_path_prefixes=("/uploads", "/api/v1/agent/command/stream", "/api/v1/agent/system-management/command/stream"),
+)
+app.add_middleware(
+    UploadCacheControlMiddleware,
+    path_prefix="/uploads/",
+    cache_control=settings.UPLOAD_CACHE_CONTROL,
 )
 
 # Ensure upload dir exists

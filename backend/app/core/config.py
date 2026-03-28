@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     WEBHOOK_HMAC_KEY: str = os.getenv("WEBHOOK_HMAC_KEY", "").strip()
     WEBHOOK_HMAC_ALLOW_UNSIGNED: bool = os.getenv("WEBHOOK_HMAC_ALLOW_UNSIGNED", "1") in {"1", "true", "True"}
     WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS: int = int(os.getenv("WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS", "300"))
+    UPLOAD_CACHE_CONTROL: str = os.getenv("UPLOAD_CACHE_CONTROL", "public, max-age=604800").strip()
 
     # Email (Password Reset)
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")

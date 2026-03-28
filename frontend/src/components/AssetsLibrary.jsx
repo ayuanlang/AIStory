@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Image, Video, Upload, Link as LinkIcon, Plus, X, 
@@ -50,6 +50,7 @@ const inferDownloadName = (asset, index = 0) => {
 
 
 const LOCAL_DIR_RESTORE_HINT_KEY = 'assets_local_dir_restore_hint_v1';
+const GRID_MEDIA_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
 const isKnownBrokenLegacyUrl = (url) => {
     const raw = String(url || '').trim();
@@ -364,10 +365,43 @@ const buildGroupingContext = (asset) => {
 
 
 const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelected, onToggleSelect, onReportError, t }) => {
+    const cardRef = useRef(null);
     const videoRef = React.useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [isError, setIsError] = useState(() => isKnownBrokenLegacyUrl(asset?.url));
+    const [isNearViewport, setIsNearViewport] = useState(false);
     const category = getAssetCategory(asset.type);
+
+    useEffect(() => {
+        setIsNearViewport(false);
+    }, [asset?.id, asset?.url]);
+
+    useEffect(() => {
+        const node = cardRef.current;
+        if (!node || isNearViewport || isError) return;
+
+        if (typeof IntersectionObserver === 'undefined') {
+            setIsNearViewport(true);
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting) {
+                        setIsNearViewport(true);
+                    }
+                });
+            },
+            {
+                rootMargin: '320px 0px',
+                threshold: 0.01,
+            }
+        );
+
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [isNearViewport, isError]);
 
     React.useEffect(() => {
         if (isError && onReportError) {
@@ -376,7 +410,7 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
     }, [isError, asset.id, onReportError]);
 
     const handleMouseEnter = async () => {
-        if (!isManageMode && category === 'video' && videoRef.current && !isError) {
+        if (!isManageMode && category === 'video' && videoRef.current && !isError && isNearViewport) {
             try {
                 videoRef.current.currentTime = 0;
                 await videoRef.current.play();
@@ -407,6 +441,7 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
 
     return (
         <div 
+            ref={cardRef}
             onClick={handleClick}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
@@ -419,18 +454,20 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
                 </div>
             ) : category === 'image' ? (
                 <img 
-                    src={getFullUrl(asset.url)} 
+                    src={isNearViewport ? getFullUrl(asset.url) : GRID_MEDIA_PLACEHOLDER_SRC}
                     className="w-full h-full object-cover bg-black/20" 
                     alt="asset" 
+                    loading="lazy"
+                    decoding="async"
                     onError={() => setIsError(true)}
                 />
             ) : (
                 <div className="relative w-full h-full bg-black">
                     <video 
                         ref={videoRef}
-                        src={getFullUrl(asset.url)} 
+                        src={isNearViewport ? getFullUrl(asset.url) : undefined}
                         className={`w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-70'}`}
-                        preload="metadata"
+                        preload={isPlaying ? 'metadata' : 'none'}
                         muted
                         loop
                         playsInline

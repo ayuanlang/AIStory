@@ -128,7 +128,8 @@
     - **Shorter-Than-6s 禁止默认化 (Hard Rule)**: 不得把 4s - 5s 当作常规可选时长；若镜头原本看似只需 4s - 5s，也应优先通过补充同一事件内部的 anticipation / reaction / recovery / hold / settle，把它规划进 6s - 10s，而不是压短成急促短镜。
   - **密度匹配原则 (Density-Match for 6s+)**：
     - 当 Duration 设定为 **6s - 10s** 时，Video Content **不等于必须新增更多事件**。长时长优先通过**延展已有动作阶段**来消化时长：如 anticipation 延长、接触后的 recovery 延长、视线停留、呼吸重置、重心回收、运镜减速与落稳。
-    - **微节拍时长护栏 (Micro-Beat Duration Guard, 强制)**：每个微节拍的目标时长必须控制在 **1s - 3s**。少于 1s 且不可感知的碎片动作，应并入前后相邻微节拍；超过 3s 的微节拍，必须拆成两个连续微节拍或提升为新的主节拍/独立镜头，禁止把单个微节拍拖成长段无转折过程。
+    - **微节拍时长护栏 (Micro-Beat Duration Guard, 强制)**：每个微节拍的目标时长必须控制在 **1s - 3s**，并以 **约 2s/微节拍** 作为默认估算基线。少于 1s 且不可感知的碎片动作，应并入前后相邻微节拍；超过 3s 的微节拍，必须拆成两个连续微节拍或提升为新的主节拍/独立镜头，禁止把单个微节拍拖成长段无转折过程。
+    - **主/微节拍估算联动 (Primary-Micro Estimation Coupling, 强制)**：先按 `微节拍数 ≈ round(Duration / 2s)` 估算总微节拍（允许按叙事语义微调 ±1），再按 `主节拍数 ≈ ceil(微节拍数 / 2)` 估算主节拍容量，并继续受“主节拍 1-3 个”约束。`Shot Logic (CN)` 必须显式给出“时长 + 主节拍数 + 微节拍数”的联动预估。
     - **Long Duration != More Plot Rule (长时长不等于更多剧情动作, 强制)**：即使时长为 8s，也不得为了“填满时长”而凭空新增新的打击、额外位移、夸张环境反应或第二个剧情事件。允许的是**同一事件的更长展开**，不允许的是**事件数量膨胀**。
     - **Main-Action Density Guard (主动作密度护栏, 强制)**：6s - 10s 镜头的核心仍应维持 **1-3 个主节拍**；默认优先 **2 个主节拍**，复杂镜头最多 **3 个主节拍**。禁止因为时长变长而把主动作密度堆高到 4 个及以上独立剧情动作。
     - **Empty Shot Warning**: 严禁设定 8s 时长却只有一个简单的 "Eye blink" 动作；但若主动作本身具备持续张力（如对峙、蓄力、缓慢逼近、受击后的回稳），则允许只保留 **1-2 个主节拍**，其余时长由持续态与镜头稳定过渡承担。
@@ -156,7 +157,7 @@
 - **动作打包 (Action Bundling)**：区分主节拍与微节拍。
   - **Primary Beat (主节拍)**: 核心叙事动作（如“开枪”、“摔倒”）。-> **独立成镜**。
   - **Micro-Beats (微节拍)**: 连贯的过渡动作（如“抬手”、“瞄准”、“深呼吸”）。-> **必须合并**在同一个镜头内连续发生，利用时长(Duration)来消化细节。
-  - **微节拍时长规则 (Micro-Beat Timing Rule, 强制)**：单个微节拍必须控制在 **1s - 3s** 的可感知区间内。若某动作只占极短瞬时、无法形成独立可见变化，则不得单列为微节拍；若某动作链持续超过 3s，则必须明确拆成前后两个微节拍（如 `蓄力 -> 接触后回稳`），或回退到主节拍/镜头拆分层处理。
+  - **微节拍时长规则 (Micro-Beat Timing Rule, 强制)**：单个微节拍必须控制在 **1s - 3s** 的可感知区间内，默认按 **约 2s/微节拍** 进行时长预算。若某动作只占极短瞬时、无法形成独立可见变化，则不得单列为微节拍；若某动作链持续超过 3s，则必须明确拆成前后两个微节拍（如 `蓄力 -> 接触后回稳`），或回退到主节拍/镜头拆分层处理。
 - **合并原则 (Merging Logic)**
   - **Consolidation Mandate (尽量合并原则)**：分镜规划的核心策略是**尽可能将连贯的 Beat 合并**。只要 Beat 之间在物理时空上连续，且无需剧烈的景别跳跃，就**必须合并**为一个镜头，利用运镜来引导视线，而非频繁切镜。
   - **合并例外：主体超载即拆分 (Overloaded-Subject Exception, 强制)**：若合并后会导致单个 shot 的首尾帧需要同时清晰承载 **超过 3 个核心 subjects**，则“尽量合并原则”立即失效，必须拆成更多 Shot；不得为了少切镜而牺牲主体可读性。
@@ -647,9 +648,9 @@
   - **Opening Hook JSON 门禁 (Opening Hook JSON Gate, 强制)**：若当前行为集首场（`EPxx_SC01` 或承担开场职责），JSON 审计块中的 `opening_hook_coverage.sh01_status` 必须为 `PRIMARY_PASS`，且同时包含 `opening_highlight=covered` 与 `flashback_bridge=covered`。
   - **首秒抓取联动校验 (First-Second Hook Coupling, 强制)**：当 `opening_hook_coverage.sh01_status=PRIMARY_PASS` 时，`Shot Logic (CN)` 与 `Video Content` 必须可见承接“首秒抓取”证据；若缺失，必须先重写镜头再输出。
   - **Start Frame 最低维度槽位**：`[Global Style]`、`Viewpoint Anchor`、`Viewing Direction`、`Viewpoint Setup`、`Focal Length`、`Framing/Angle`、`Noise/Grain Strategy`、`Anti-Copy Constraint`、`Lighting Structure`、`Single-Canvas/Shared-Space Guard`、`Layers`、每个可见核心角色的 `Viewer-Relative Facing`。任一缺失即判该字段无效。
-  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、微节拍节奏必须可推导满足“单个微节拍约 1s - 3s”的时长护栏、所有可见角色的可见反应/状态变化、`Lighting Blueprint（光线说明）`（必须写清主光来源/方向、明暗趋势、色温倾向，以及必要时的变化理由）、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
+  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、微节拍节奏必须可推导满足“默认约 2s/微节拍，且单个微节拍落在 1s - 3s”的时长护栏、所有可见角色的可见反应/状态变化、`Lighting Blueprint（光线说明）`（必须写清主光来源/方向、明暗趋势、色温倾向，以及必要时的变化理由）、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
   - **End Frame 最低维度槽位**：`[Global Style]`、最终 `Viewpoint Anchor`、最终 `Viewing Direction`、最终 `Viewpoint Setup`、重算后的 `Layers`、每个可见核心角色的最终朝向、动作后视觉证据、与 Start/Video 可推导的一致性。任一缺失即判该字段无效。
-  - **Shot Logic (CN) 最低维度槽位**：`场景类型分析`、`时长/主节拍数`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验` 八项必须齐全；若输入已给出 Source Beat 或当前镜头承担闪回桥接/全覆盖闭环职责，逻辑稿中还必须显式反映该镜头承接的是哪个 Beat、覆盖了哪些关键信息、是否存在桥接锚点，以及微节拍是否满足 **1s - 3s** 节奏护栏。任一缺失即判该字段无效。
+  - **Shot Logic (CN) 最低维度槽位**：`场景类型分析`、`时长/主节拍数/微节拍数（按 1 微节拍约 2s 估算）`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验` 八项必须齐全；若输入已给出 Source Beat 或当前镜头承担闪回桥接/全覆盖闭环职责，逻辑稿中还必须显式反映该镜头承接的是哪个 Beat、覆盖了哪些关键信息、是否存在桥接锚点，以及微节拍是否满足“默认约 2s/拍且单拍 1s - 3s”的节奏护栏。任一缺失即判该字段无效。
   - **运镜丰富性核验槽位 (Cinematography Verification Slot, 强制)**：运镜核验信息不得写入 `Shot Logic (CN)` 或任何表格列；必须输出到表格后的 JSON 审计块中。
   - **运镜核验 JSON 固定模板 (CN JSON Verification Template, 强制)**：JSON 审计块必须包含以下字段：
     - `scene_id`: `EPxx_SCyy`
@@ -694,7 +695,7 @@
       - 该草稿必须同时完成“运镜丰富性核验预案”：先明确本 Scene 的宏大开场镜头编号、景别切换链、表情特写镜头、道具特写镜头、高级运镜镜头与用途，再进入 Start/Video/End 编写。
   5. **Define Viewpoint Physics**: 明确机位物理关系（内/外，高/低，距离）。
   6. **Generate Start Frame**: 根据 Logic 规划，定义动作的起始状态（必须符合机位物理关系，并承接对应 subject packet 的稳定描述与当前状态；若为闪回桥接镜，起帧必须明确桥接锚点是否仍在场）。
-  7. **Generate Duration**: 确定动作需要的总时长（根据动作密度自然估算）。
+  7. **Generate Duration**: 先按“1 微节拍约 2s”估算微节拍总数，再反推主节拍容量，最后确定总时长（根据动作密度自然估算并受 6s - 10s 约束）。
   8. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作，并消费本镜 subject packets 里的动作特征、空间条件、状态变化、依赖链与 Beat 覆盖义务；若存在闪回/回切，必须在此写清桥接方式而非硬切跳变。
   9. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态，并回写本镜涉及 subject 的结果状态；若为闪回桥接镜，终帧必须明确桥接后的新时空是否已稳定成立。
   10. **Run Dimension Completeness Gate**: 对 `Shot Logic (CN)` / `Start Frame` / `Video Content` / `End Frame` 执行维度验收，并额外检查该 Shot 是否完整覆盖对应 Beat 的关键信息、是否保留必需桥接锚点；缺项即触发下方重写机制，不得直接输出。

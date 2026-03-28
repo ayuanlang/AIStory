@@ -740,7 +740,7 @@ const LazyHoverVideo = ({
     mediaClassName = 'w-full h-full object-cover',
     playOnHover = false,
     resetOnLeave = false,
-    preload = 'metadata',
+    preload = 'none',
     ...videoProps
 }) => {
     const containerRef = useRef(null);
@@ -843,15 +843,12 @@ const InViewVideo = ({
     poster = '',
     className = '',
     preload = 'metadata',
-    rootMargin = '200px 0px',
-    visibleDelayMs = 280,
-    hoverDelayMs = 120,
-    hoverLoad = false,
+    rootMargin = '360px 0px',
+    visibleDelayMs = 120,
     fallback = null,
     ...videoProps
 }) => {
     const containerRef = useRef(null);
-    const hoverTimerRef = useRef(null);
     const visibleTimerRef = useRef(null);
     const [isInView, setIsInView] = useState(false);
     const [shouldLoad, setShouldLoad] = useState(() => isWarmMediaUrl(src));
@@ -912,10 +909,6 @@ const InViewVideo = ({
 
     useEffect(() => {
         return () => {
-            if (hoverTimerRef.current) {
-                clearTimeout(hoverTimerRef.current);
-                hoverTimerRef.current = null;
-            }
             if (visibleTimerRef.current) {
                 clearTimeout(visibleTimerRef.current);
                 visibleTimerRef.current = null;
@@ -927,27 +920,8 @@ const InViewVideo = ({
         return fallback || null;
     }
 
-    const handleMouseEnter = () => {
-        if (!hoverLoad || shouldLoad || !src || videoFailed) return;
-        if (hoverTimerRef.current) {
-            clearTimeout(hoverTimerRef.current);
-            hoverTimerRef.current = null;
-        }
-        const delay = Math.max(0, Number(hoverDelayMs) || 0);
-        hoverTimerRef.current = setTimeout(() => {
-            setShouldLoad(true);
-        }, delay);
-    };
-
-    const handleMouseLeave = () => {
-        if (hoverTimerRef.current) {
-            clearTimeout(hoverTimerRef.current);
-            hoverTimerRef.current = null;
-        }
-    };
-
     return (
-        <div ref={containerRef} className="contents" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+        <div ref={containerRef} className="contents">
             <video
                 src={shouldLoad ? getFullUrl(src) : undefined}
                 poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
@@ -11535,8 +11509,6 @@ const MediaDetailModal = ({ media, onClose }) => {
                             autoPlay
                             className="max-w-full max-h-full shadow-lg rounded"
                             visibleDelayMs={160}
-                            hoverLoad
-                            hoverDelayMs={80}
                             fallback={<Video className="w-8 h-8 opacity-30" />}
                         />
                     ) : (
@@ -11995,8 +11967,6 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                                           controls
                                                           className="max-w-full max-h-full rounded shadow-lg"
                                                            visibleDelayMs={420}
-                                                           hoverLoad
-                                                           hoverDelayMs={80}
                                                           fallback={<Video className="w-8 h-8 opacity-30" />}
                                                      />
                                      ) : (

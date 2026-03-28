@@ -5460,7 +5460,7 @@ def get_kie_standard_value_options(
 
 @router.get("/settings/system/manage/kie-standard-mappings", response_model=List[KIEDataStandardMappingOut])
 def list_kie_standard_mappings_manage(
-    provider: Optional[str] = Query(default="kie"),
+    provider: str = Query(default="kie"),
     standard_dimension: Optional[str] = Query(default=None),
     model_key_inferred: Optional[str] = Query(default=None),
     source_field: Optional[str] = Query(default=None),
@@ -5479,10 +5479,9 @@ def list_kie_standard_mappings_manage(
 
     where = ["1=1"]
     params: Dict[str, Any] = {"limit": int(limit)}
-
-    if provider is not None and str(provider).strip():
-        where.append("lower(coalesce(provider, '')) = lower(:provider)")
-        params["provider"] = str(provider).strip()
+    provider_value = str(provider or "").strip() or "kie"
+    where.append("lower(coalesce(provider, '')) = lower(:provider)")
+    params["provider"] = provider_value
     if standard_dimension:
         where.append("upper(standard_dimension) = upper(:standard_dimension)")
         params["standard_dimension"] = str(standard_dimension).strip()
@@ -5522,7 +5521,7 @@ def list_kie_standard_mappings_manage(
 @router.get("/settings/system/manage/kie-standard-mappings/export", response_model=KIEDataStandardMappingExportResponse)
 @router.get("/kie/data-dictionary/mappings/export", response_model=KIEDataStandardMappingExportResponse)
 def export_kie_standard_mappings_manage(
-    provider: Optional[str] = Query(default="kie"),
+    provider: str = Query(default="kie"),
     standard_dimension: Optional[str] = Query(default=None),
     model_key_inferred: Optional[str] = Query(default=None),
     source_field: Optional[str] = Query(default=None),
@@ -5541,10 +5540,9 @@ def export_kie_standard_mappings_manage(
 
     where = ["1=1"]
     params: Dict[str, Any] = {"limit": int(limit)}
-
-    if provider is not None and str(provider).strip():
-        where.append("lower(coalesce(provider, '')) = lower(:provider)")
-        params["provider"] = str(provider).strip()
+    provider_value = str(provider or "").strip() or "kie"
+    where.append("lower(coalesce(provider, '')) = lower(:provider)")
+    params["provider"] = provider_value
     if standard_dimension:
         where.append("upper(standard_dimension) = upper(:standard_dimension)")
         params["standard_dimension"] = str(standard_dimension).strip()
@@ -5596,7 +5594,7 @@ def export_kie_standard_mappings_manage(
         csv_text = sio.getvalue()
 
     return KIEDataStandardMappingExportResponse(
-        provider=str(provider or "kie").strip() or "kie",
+        provider=provider_value,
         total=len(items),
         items=items,
         csv=csv_text,
