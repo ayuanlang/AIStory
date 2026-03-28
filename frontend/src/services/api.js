@@ -8,6 +8,48 @@ export const api = axios.create({
   timeout: 600000, // 10 minutes timeout for long LLM generation tasks
 });
 
+const isRenderHost = (hostname) => /\.onrender\.com$/i.test(String(hostname || '').trim());
+
+const isSameOriginRenderApiMiss = (error) => {
+    if (typeof window === 'undefined') return false;
+
+    const status = Number(error?.response?.status || 0);
+    if (status !== 404) return false;
+
+    const currentHost = String(window.location?.hostname || '').trim();
+    if (!isRenderHost(currentHost)) return false;
+
+    const configUrl = String(error?.config?.url || '').trim();
+    if (!configUrl.startsWith('/')) return false;
+
+    const configBaseUrl = String(error?.config?.baseURL || '').trim();
+    const responseUrl = String(
+        error?.request?.responseURL
+        || error?.response?.request?.responseURL
+        || ''
+    ).trim();
+
+    if (configBaseUrl && /^https?:\/\//i.test(configBaseUrl)) {
+        try {
+            const requestHost = new URL(configBaseUrl, window.location.origin).hostname;
+            if (requestHost && requestHost !== currentHost) return false;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    if (!responseUrl) {
+        return configBaseUrl.startsWith('/') || !configBaseUrl;
+    }
+
+    try {
+        const parsed = new URL(responseUrl, window.location.origin);
+        return parsed.hostname === currentHost && parsed.pathname.startsWith('/api/');
+    } catch (_) {
+        return false;
+    }
+};
+
 const shouldRetryWithFallback = (error) => {
     const status = Number(error?.response?.status || 0);
     const code = String(error?.code || '');
@@ -30,6 +72,10 @@ const shouldRetryWithFallback = (error) => {
     if (looksLikeProxyHtml500) return true;
 
     if (status === 404 && payloadText.includes('cannot get /api/')) {
+        return true;
+    }
+
+    if (isSameOriginRenderApiMiss(error)) {
         return true;
     }
 

@@ -7686,10 +7686,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return importReport || null;
     };
 
-    const handleSupplementSceneSubjectsRef = useRef(async () => {
-        throw new Error('Scene subject supplement handler is unavailable in this context.');
-    });
-
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, options = {}) => {
         const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
         const emptyReport = {
@@ -7761,12 +7757,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 ),
             });
 
-            const supplementSceneSubjects = handleSupplementSceneSubjectsRef.current;
-            if (typeof supplementSceneSubjects !== 'function') {
-                throw new Error('Scene subject supplement handler is unavailable in this context.');
-            }
-
-            const sceneSupplementReport = await supplementSceneSubjects(
+            const sceneSupplementReport = await handleSupplementSceneSubjects(
                 scene,
                 { missing: currentMissing },
                 { silent: true }
@@ -13965,7 +13956,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         return next;
     }, [entities, scenes]);
 
-    const handleSupplementSceneSubjects = useCallback(async (sceneCandidate, gapReport = null, options = {}) => {
+    async function handleSupplementSceneSubjects(sceneCandidate, gapReport = null, options = {}) {
         const stableScene = sceneCandidate && typeof sceneCandidate === 'object' ? sceneCandidate : null;
         if (!stableScene || !projectId) return null;
 
@@ -14032,9 +14023,7 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
         } finally {
             setSceneSubjectSupplementingMap((prev) => ({ ...prev, [statusKey]: false }));
         }
-    }, [entities, onLog, projectId, t]);
-
-    handleSupplementSceneSubjectsRef.current = handleSupplementSceneSubjects;
+    }
 
     const buildSceneContentMarkdown = (sceneRows = []) => {
         if (!activeEpisode) return '';
