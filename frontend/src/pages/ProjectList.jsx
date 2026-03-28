@@ -74,6 +74,18 @@ import {
     PROJECT_EP_TYPE_OPTIONS,
     PROJECT_EP_LANGUAGE_OPTIONS,
     PROJECT_EP_BASE_POSITIONING_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_REGION_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_WORKFLOW_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_GOAL_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_CHARACTER_EMPHASIS_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_NARRATIVE_DENSITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_COMMERCIAL_CONSTRAINT_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_MODALITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_CONTINUITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_DEFAULTS,
 } from './editor/projectOptionConfig';
 
 const cinematicImages = [
@@ -109,6 +121,25 @@ const PROJECT_CREATE_DEFAULT_OPTIONS = {
     aspect_ratio: [...PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS],
     image_size: [...PROJECT_CREATE_FALLBACK_IMAGE_SIZE_OPTIONS],
 };
+
+const createDefaultProjectSceneAnalysisConfig = () => ({
+    ...PROJECT_SCENE_ANALYSIS_DEFAULTS,
+});
+
+const PROJECT_SCENE_ANALYSIS_CREATE_FIELDS = [
+    { key: 'primary_goal', labelZh: '主要目标', labelEn: 'Primary Goal', options: PROJECT_SCENE_ANALYSIS_GOAL_OPTIONS },
+    { key: 'secondary_goal', labelZh: '次级目标', labelEn: 'Secondary Goal', options: PROJECT_SCENE_ANALYSIS_GOAL_OPTIONS },
+    { key: 'expected_model_family', labelZh: '预期模型族', labelEn: 'Expected Model Family', options: PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS },
+    { key: 'generation_workflow', labelZh: '生成工作流', labelEn: 'Generation Workflow', options: PROJECT_SCENE_ANALYSIS_WORKFLOW_OPTIONS },
+    { key: 'era_setting', labelZh: '时代设定', labelEn: 'Era Setting', options: PROJECT_SCENE_ANALYSIS_ERA_OPTIONS },
+    { key: 'region_culture', labelZh: '地域文化语境', labelEn: 'Region / Culture', options: PROJECT_SCENE_ANALYSIS_REGION_OPTIONS },
+    { key: 'character_emphasis', labelZh: '人物侧重点', labelEn: 'Character Emphasis', options: PROJECT_SCENE_ANALYSIS_CHARACTER_EMPHASIS_OPTIONS },
+    { key: 'narrative_density', labelZh: '叙事密度', labelEn: 'Narrative Density', options: PROJECT_SCENE_ANALYSIS_NARRATIVE_DENSITY_OPTIONS },
+    { key: 'commercial_constraint', labelZh: '商业约束', labelEn: 'Commercial Constraint', options: PROJECT_SCENE_ANALYSIS_COMMERCIAL_CONSTRAINT_OPTIONS },
+    { key: 'modality_focus', labelZh: '模态侧重', labelEn: 'Modality Focus', options: PROJECT_SCENE_ANALYSIS_MODALITY_OPTIONS },
+    { key: 'continuity_priority', labelZh: '连续性优先级', labelEn: 'Continuity Priority', options: PROJECT_SCENE_ANALYSIS_CONTINUITY_OPTIONS },
+    { key: 'safety_broadcast_level', labelZh: '播出安全等级', labelEn: 'Safety / Broadcast Level', options: PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS },
+];
 
 const uniqueNonEmptyStrings = (items) => {
     if (!Array.isArray(items)) return [];
@@ -404,6 +435,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newImageSize, setNewImageSize] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
     const [newVideoSoundEnabled, setNewVideoSoundEnabled] = useState(true);
     const [isCreateCollaboratorsCollapsed, setIsCreateCollaboratorsCollapsed] = useState(true);
+    const [isCreateSceneAnalysisCollapsed, setIsCreateSceneAnalysisCollapsed] = useState(true);
+    const [newSceneAnalysisConfig, setNewSceneAnalysisConfig] = useState(createDefaultProjectSceneAnalysisConfig());
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
@@ -694,6 +727,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         setNewImageSize(pickPreferredOrFirst(projectCreateOptions.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
         setNewVideoSoundEnabled(true);
         setIsCreateCollaboratorsCollapsed(true);
+        setIsCreateSceneAnalysisCollapsed(true);
+        setNewSceneAnalysisConfig(createDefaultProjectSceneAnalysisConfig());
     };
 
     const handleCreate = async () => {
@@ -726,6 +761,9 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 aspect_ratio: String(newAspectRatio || '').trim(),
                 image_size: String(newImageSize || '').trim(),
                 video_sound: Boolean(newVideoSoundEnabled),
+                ...Object.fromEntries(
+                    Object.entries(newSceneAnalysisConfig || {}).map(([key, value]) => [key, String(value || '').trim()])
+                ),
             },
         });
         resetCreateProjectForm();
@@ -1835,6 +1873,45 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             onChange={e => setNewDescription(e.target.value)}
                                             placeholder={t('可留空。用于记录项目背景、目标或备注', 'Can be left empty. Add context, goals, or notes for this project')}
                                         />
+
+                                        <div className="mt-5 rounded-xl border border-white/10 bg-black/15">
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsCreateSceneAnalysisCollapsed((prev) => !prev)}
+                                                className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
+                                            >
+                                                <div>
+                                                    <div className="text-sm font-semibold tracking-wide text-primary">
+                                                        {t('场景分析维度（可选）', 'Scene Analysis Dimensions (Optional)')}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground mt-0.5">
+                                                        {t('用于 Skill 决策引擎路由；默认建议主目标=剧本优化，次目标=人物创作。', 'Used by the skill decision engine for routing; recommended default is primary goal = script optimization and secondary goal = character creation.')}
+                                                    </div>
+                                                </div>
+                                                <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isCreateSceneAnalysisCollapsed ? '' : 'rotate-180'}`} />
+                                            </button>
+
+                                            {!isCreateSceneAnalysisCollapsed && (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 px-4 pb-4">
+                                                    {PROJECT_SCENE_ANALYSIS_CREATE_FIELDS.map((field) => (
+                                                        <div key={`project-create-dimension-${field.key}`}>
+                                                            <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t(field.labelZh, field.labelEn)}</label>
+                                                            <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg"
+                                                                value={String(newSceneAnalysisConfig?.[field.key] || '')}
+                                                                onChange={(e) => setNewSceneAnalysisConfig((prev) => ({
+                                                                    ...(prev || {}),
+                                                                    [field.key]: e.target.value,
+                                                                }))}
+                                                            >
+                                                                <option value="">{t('未指定', 'Unspecified')}</option>
+                                                                {field.options.map((opt) => <option key={`${field.key}-${opt}`} value={opt}>{opt}</option>)}
+                                                            </select>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
 
                                         <div className="mt-5 rounded-xl border border-white/10 bg-black/15">
                                             <button

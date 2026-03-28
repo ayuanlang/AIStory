@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -97,6 +97,8 @@ const UserAdmin = () => {
     const [subjectAssetAspectRatio, setSubjectAssetAspectRatio] = useState('16:9');
     const [coverAssetAspectRatio, setCoverAssetAspectRatio] = useState('3:4');
     const [isAssetImageRatioConfigSaving, setIsAssetImageRatioConfigSaving] = useState(false);
+    const [sceneAnalysisDefaultMode, setSceneAnalysisDefaultMode] = useState('classic');
+    const [isSceneAnalysisConfigSaving, setIsSceneAnalysisConfigSaving] = useState(false);
     const [isBillingRuleEditing, setIsBillingRuleEditing] = useState(false);
     const [billingRuleEditToast, setBillingRuleEditToast] = useState('');
     const [selectedBillingRuleId, setSelectedBillingRuleId] = useState('');
@@ -1110,6 +1112,16 @@ const UserAdmin = () => {
         }
     };
 
+    const fetchSceneAnalysisConfig = async () => {
+        try {
+            const cfg = await getSceneAnalysisConfigManage();
+            const nextMode = String(cfg?.default_mode || 'classic').trim() || 'classic';
+            setSceneAnalysisDefaultMode(nextMode);
+        } catch (e) {
+            console.error('Failed to load scene analysis config', e);
+        }
+    };
+
     const saveAssetImageRatioConfig = async (overrides = {}) => {
         const payload = {
             subject_aspect_ratio: String(overrides.subject_aspect_ratio ?? subjectAssetAspectRatio ?? '').trim() || '16:9',
@@ -1129,6 +1141,23 @@ const UserAdmin = () => {
         }
     };
 
+    const saveSceneAnalysisConfig = async (overrides = {}) => {
+        const payload = {
+            default_mode: String(overrides.default_mode ?? sceneAnalysisDefaultMode ?? 'classic').trim() || 'classic',
+        };
+
+        setIsSceneAnalysisConfigSaving(true);
+        try {
+            const saved = await updateSceneAnalysisConfigManage(payload);
+            setSceneAnalysisDefaultMode(String(saved?.default_mode || payload.default_mode).trim() || 'classic');
+        } catch (e) {
+            console.error('Failed to save scene analysis config', e);
+            alert(e?.response?.data?.detail || e?.message || t('保存场景分析总开关失败', 'Failed to save scene analysis config'));
+        } finally {
+            setIsSceneAnalysisConfigSaving(false);
+        }
+    };
+
     useEffect(() => {
         if (activeTab === 'pricing_rules') {
             fetchBillingRuleResetConfig();
@@ -1138,6 +1167,7 @@ const UserAdmin = () => {
     useEffect(() => {
         if (activeTab === 'system_api') {
             fetchAssetImageRatioConfig();
+            fetchSceneAnalysisConfig();
         }
     }, [activeTab]);
 
@@ -5896,6 +5926,41 @@ const UserAdmin = () => {
                     {/* SYSTEM API TAB */}
                     {activeTab === 'system_api' && (
                         <div className="space-y-4">
+                            <div className="border border-emerald-500/30 rounded-xl p-4 bg-emerald-500/5 space-y-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-white">{t('场景分析总开关', 'Scene Analysis Master Switch')}</h4>
+                                        <p className="text-xs text-gray-400 mt-1">{t('超级管理员在这里设定默认走原始提示词还是 Skill 决策引擎。所有路径输出协议保持一致，只改变提示词组装策略。', 'Superusers set the default path here: original prompt or skill decision engine. All paths keep the same output contract; only prompt assembly strategy changes.')}</p>
+                                    </div>
+                                    {isSceneAnalysisConfigSaving && <span className="text-[11px] text-gray-400">{t('保存中', 'Saving')}</span>}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
+                                    <div>
+                                        <label className="block text-xs uppercase text-gray-400 mb-1">{t('默认分析路径', 'Default Analysis Path')}</label>
+                                        <select
+                                            value={sceneAnalysisDefaultMode}
+                                            onChange={(e) => {
+                                                const value = e.target.value;
+                                                setSceneAnalysisDefaultMode(value);
+                                                saveSceneAnalysisConfig({ default_mode: value });
+                                            }}
+                                            disabled={isSceneAnalysisConfigSaving}
+                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                        >
+                                            <option value="classic">{t('原始提示词', 'Original Prompt')}</option>
+                                            <option value="decision_engine">{t('Skill 决策引擎', 'Skill Decision Engine')}</option>
+                                            <option value="feature_stack">{t('Feature Stack（调试/过渡）', 'Feature Stack (Debug/Transition)')}</option>
+                                        </select>
+                                    </div>
+                                    <div className="text-xs text-gray-400 leading-5">
+                                        {sceneAnalysisDefaultMode === 'classic'
+                                            ? t('当前默认：完全走 scene_analysis.txt 原始路径。', 'Current default: use the original scene_analysis.txt path only.')
+                                            : sceneAnalysisDefaultMode === 'decision_engine'
+                                                ? t('当前默认：走 Skill 决策引擎，结合项目维度组合 skills。', 'Current default: use the skill decision engine and compose skills from project dimensions.')
+                                                : t('当前默认：走 Feature Stack 叠加模式，适合调试和过渡。', 'Current default: use feature-stack additive mode for debugging or transition.')}
+                                    </div>
+                                </div>
+                            </div>
                             <div className="border border-white/10 rounded-xl p-4 bg-white/5 space-y-3">
                                 <div className="flex items-center justify-between gap-3">
                                     <div>

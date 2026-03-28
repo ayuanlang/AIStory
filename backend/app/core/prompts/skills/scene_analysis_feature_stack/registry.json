@@ -1,0 +1,887 @@
+{
+  "version": 1,
+  "default_mode": "classic",
+  "modes": [
+    {
+      "id": "classic",
+      "title": "Classic",
+      "description": "Use the original scene_analysis prompt only.",
+      "inject_feature_skills": false
+    },
+    {
+      "id": "feature_stack",
+      "title": "Feature Stack",
+      "description": "Use the routed base scene-analysis prompt and inject only matched feature skills into the routed slots.",
+      "base_prompt_file": "scene_analysis_routed_base.txt",
+      "inject_feature_skills": true
+    },
+    {
+      "id": "decision_engine",
+      "title": "Decision Engine",
+      "description": "Use the routed base scene-analysis prompt, run dimension analysis from project info plus script text, then route to matched dimension and combo skills.",
+      "base_prompt_file": "scene_analysis_routed_base.txt",
+      "inject_feature_skills": true
+    }
+  ],
+  "base_prompt_file": "scene_analysis_routed_base.txt",
+  "dimensions": [
+    {
+      "key": "project_type",
+      "title": "项目类型",
+      "description": "决定角色、环境与动作是否按真人、二次元、风格化三维等体系分析。",
+      "source_keys": ["type", "project_type", "visual_type"],
+      "values": [
+        {
+          "id": "live_action",
+          "title": "真人写实",
+          "description": "真人、实拍、写实向项目。",
+          "aliases": ["真人", "实拍", "写实", "live action", "live-action", "photoreal", "photorealistic"],
+          "infer_hints": ["演员", "实景", "镜头", "近景", "中景", "电影感摄影"],
+          "prompt": "把场景分析偏向真人拍摄逻辑：强化真实空间尺度、演员可执行走位、微表情与肢体细节、可拍服装版型、真实材质与光照动机。人物与环境设计要更利于真人图像/视频模型稳定落地，避免动漫式夸张比例、过度抽象符号和不符合现实的动作跨度。",
+          "global_prompt": "全局采用真人拍摄逻辑：空间、人物、道具与光照都以真实可拍、可执行、可复现为优先，不使用动漫式夸张比例或脱离现实的动作跨度。",
+          "environment_prompt": "Environment 仅强调真人空间尺度、真实材质、合理光照动机与演员可执行走位；优先给出可拍的结构、通道、观察方向与空间层次，避免抽象装饰化环境语言。",
+          "character_prompt": "Character 仅强调真人角色外观、体态比例、服装版型、微表情承载与演员可执行姿态；避免动画式夸张 silhouette、非现实解剖和过强图形化表情。",
+          "prop_prompt": "Prop 仅强调真人道具的真实材质、制造逻辑、磨损状态与可拍尺度；避免过度符号化、玩具感和不符合现实物理的结构表达。"
+        },
+        {
+          "id": "anime",
+          "title": "动漫二次元",
+          "description": "动漫、赛璐璐、插画式项目。",
+          "aliases": ["动漫", "二次元", "anime", "animation", "cel", "cel-shaded"],
+          "infer_hints": ["分镜稿", "赛璐璐", "角色立绘", "番剧", "漫画"],
+          "prompt": "把场景分析偏向动漫分镜逻辑：强化轮廓清晰度、情绪符号化、角色 silhouette 区分、景别层次、关键道具标识和高识别构图。环境与人物分析允许更强的视觉抽象，但必须保持世界规则统一，避免真人写实细节与二次元表达冲突。"
+        },
+        {
+          "id": "stylized_3d",
+          "title": "风格化三维",
+          "description": "风格化 3D、游戏感、CG 资产复用项目。",
+          "aliases": ["风格化3d", "3d", "stylized 3d", "stylized3d", "cg"],
+          "infer_hints": ["游戏", "资产复用", "场景模块", "三维"],
+          "prompt": "把场景分析偏向风格化三维资产逻辑：强化角色体块、转面、轮廓识别、材质层分组、可复用道具结构和环境模块化。对于动作和场景切换，优先给出利于资产复用和镜头连续的空间锚点，避免只停留在纯平面海报语言。"
+        },
+        {
+          "id": "illustrated",
+          "title": "插画风",
+          "description": "插画、绘本、平面视觉导向项目。",
+          "aliases": ["插画", "绘本", "illustration", "illustrated"],
+          "infer_hints": ["绘本", "插图", "海报主视觉", "关键帧插画"],
+          "prompt": "把场景分析偏向插画与平面叙事逻辑：强调单帧主情绪、构图中心、色彩组织、符号道具和角色关系的平面可读性。重点输出更适合关键帧、封面帧、分镜图的场景信息。"
+        }
+      ]
+    },
+    {
+      "key": "project_language",
+      "title": "项目语言",
+      "description": "决定对白、招牌、文化语境与默认生活系统。",
+      "source_keys": ["language", "project_language"],
+      "values": [
+        {
+          "id": "zh_cn",
+          "title": "中文语境",
+          "description": "中文项目。",
+          "aliases": ["中文", "汉语", "chinese", "zh", "zh-cn", "cn"],
+          "infer_hints": ["她说", "他说", "微信", "门牌", "招牌", "中文对白"],
+          "prompt": "把场景分析偏向中文项目语境：对白、屏幕文字、标识语、社交界面、生活细节与空间默认参照优先使用中文世界观与中文现实语境。剧本优化时优先检查中文短剧/情感戏常见问题，如台词信息密度不足、称谓不稳、情绪爆点不够直给、关系推进缺桥接。",
+          "global_prompt": "全局采用中文项目语境：对白、屏幕文字、标识语、社交界面与生活细节优先服从中文世界观和中文现实语境，不混入无依据的外语生活系统。",
+          "environment_prompt": "Environment 仅强调中文语境下的空间、标识、街区/室内细节与日常生活系统一致性；若剧本未给定具体地域，则保持中文项目内部的中性一致，不硬落外语国家模板。",
+          "character_prompt": "Character 仅强调中文语境下的称谓关系、生活方式、职业气质与人物日常细节一致性；避免把中文项目人物写成无依据的英文语境生活系统。",
+          "prop_prompt": "Prop 仅强调中文语境下的设备、印刷文字、社交界面、证件/包装/道具命名与使用习惯一致性；避免混入无依据的外文品牌系统与界面习惯。"
+        },
+        {
+          "id": "en",
+          "title": "英语语境",
+          "description": "英语项目。",
+          "aliases": ["英文", "英语", "english", "en", "en-us", "en-gb"],
+          "infer_hints": ["hello", "phone screen", "street sign", "english dialogue"],
+          "prompt": "把场景分析偏向英语语境：对白、屏幕文字、标识系统和生活细节默认服从英语场景常识，优先检查英文项目的关系表达、动作自然度和空间文化一致性，避免无依据混入中文生活系统。",
+          "global_prompt": "全局采用英语项目语境：对白、屏幕文字、标识系统和生活细节优先服从英语场景常识，不混入无依据的中文生活系统。",
+          "environment_prompt": "Environment 仅强调英语语境下的空间标识、街道/室内系统与日常生活细节一致性；若地域未明确，则保持英语项目内部的中性一致，不强行混入中文城市模板。",
+          "character_prompt": "Character 仅强调英语语境下的关系表达、动作自然度、职业生活系统与人物气质一致性；避免无依据的中文称谓和中文生活语境漂移。",
+          "prop_prompt": "Prop 仅强调英语语境下的界面语言、印刷文字、证件/包装/标识和日常工具体系一致性；避免混入无依据的中文 UI、中文标签和中文办公生活细节。"
+        },
+        {
+          "id": "multilingual",
+          "title": "多语言项目",
+          "description": "明确存在多语言切换的项目。",
+          "aliases": ["多语言", "双语", "multilingual", "bilingual"],
+          "infer_hints": ["切换成英文", "切换成中文", "双语字幕", "翻译"],
+          "prompt": "把场景分析偏向多语言项目：显式捕捉语言切换事件、口音/语域变化、屏幕文字语言来源与翻译关系。剧本优化时重点保证不同语言事件在场景中有明确可视或可听承载，不要只笼统写“切换语言”。",
+          "global_prompt": "全局采用多语言项目逻辑：显式识别语言切换、口音/语域变化、屏幕文字来源与翻译关系，不把多语言事件压扁成单一语种背景。",
+          "environment_prompt": "Environment 仅强调多语言项目中的标识系统、屏幕文字、公共空间文字层和地域语境的并置关系，保证文字来源与场景生活系统可追溯。",
+          "character_prompt": "Character 仅强调多语言项目中的说话方式、语言切换触发、关系语域差异和身份带来的语言行为特征，避免把多语人物写成单一语域模板。",
+          "prop_prompt": "Prop 仅强调多语言项目中的设备界面、文件/包装/标牌文字来源与翻译关系，保证多语信息在物体层有稳定载体。"
+        }
+      ]
+    },
+    {
+      "key": "base_positioning",
+      "title": "基础定位",
+      "description": "决定剧本优化与人物塑造的主导方向。",
+      "source_keys": ["base_positioning", "genre", "style_positioning"],
+      "values": [
+        {
+          "id": "emotional_drama",
+          "title": "情感片",
+          "description": "情感、家庭、关系戏。",
+          "aliases": ["情感", "情感片", "家庭", "现实情感", "drama", "emotional drama", "family drama"],
+          "infer_hints": ["沉默", "哽咽", "眼眶发红", "拥抱", "误会", "和解"],
+          "prompt": "把场景分析偏向情感戏：强化人物关系链、误解与和解节点、微表情、停顿、视线、触碰阈值、情绪压抑到爆发的节奏。剧本优化时优先找：信息没说透、情绪没递进、关系转折缺触发器、关键道具没有情感记忆值。人物创作要强调可区分的情绪表达方式与生活细节。",
+          "global_prompt": "全局采用情感戏定位：关系链、误解/和解节点、微表情、停顿、视线与触碰阈值都要服务情绪压抑到爆发的递进。",
+          "environment_prompt": "Environment 仅强调情感戏所需的关系承压空间、停顿区、对视通道、私密/疏离距离和能承载情绪记忆的稳定环境锚点，避免只写空泛氛围词。",
+          "character_prompt": "Character 仅强调情感戏中的微表情、视线反应、身体朝向、触碰阈值和可区分的情绪表达方式，让人物设计直接服务关系冲突与和解过程。",
+          "prop_prompt": "Prop 仅强调在情感戏中具有记忆值、关系值或触发值的关键物件，避免把无持续情绪功能的一次性小物写成主道具。"
+        },
+        {
+          "id": "costume_period",
+          "title": "古装",
+          "description": "古装、架空历史、宫廷、江湖。",
+          "aliases": ["古装", "历史", "架空历史", "period", "costume", "historical"],
+          "infer_hints": ["宫殿", "王爷", "将军", "头纱", "朝堂", "江湖"],
+          "prompt": "把场景分析偏向古装/历史戏：强化身份等级、礼仪动作、服饰层级、器物时代感、空间秩序、进退礼数与权力位置。剧本优化时优先检查古装戏常见问题：称谓混乱、时代信息缺失、人物关系只靠对白说明、礼仪动作与身份不匹配。人物创作要更强调发型、衣纹、配饰和身份权力锚点。",
+          "global_prompt": "全局采用古装/历史戏定位：身份等级、礼仪动作、服饰层级、器物时代感、空间秩序与权力位置必须稳定成立。",
+          "environment_prompt": "Environment 仅强调古装/历史戏的空间秩序、礼制结构、权力距离、动线层级与时代器物锚点，避免现代空间逻辑混入。",
+          "character_prompt": "Character 仅强调古装/历史戏中的身份等级、礼仪动作、发型、衣纹、配饰与权力识别锚点，让人物一眼可读其身份位阶与关系位置。",
+          "prop_prompt": "Prop 仅强调古装/历史戏中的制度器物、礼制物件、佩饰与时代感道具，不混入现代物件逻辑或当代材料语言。"
+        },
+        {
+          "id": "romance",
+          "title": "爱情片",
+          "description": "恋爱、暧昧、拉扯型项目。",
+          "aliases": ["爱情", "恋爱", "romance", "romantic"],
+          "infer_hints": ["靠近", "心动", "暧昧", "对视", "牵手", "吻"],
+          "prompt": "把场景分析偏向爱情叙事：强化双方视线、距离变化、暧昧停顿、身体朝向、未说出口的信息和触碰升级节奏。剧本优化时要优先找化学反应不够、拉扯不够、关系推进跳级、甜点/刀点缺镜头承载。",
+          "global_prompt": "全局采用爱情叙事定位：双方视线、距离变化、暧昧停顿、身体朝向与未说出口的信息都要形成可追溯的关系推进节奏。",
+          "environment_prompt": "Environment 仅强调适合爱情叙事的对视距离、靠近/错开路径、私密或公开关系压力场，以及能承接甜点/刀点的空间留白。",
+          "character_prompt": "Character 仅强调爱情叙事中的眼神、距离感、姿态倾向、触碰升级节奏和化学反应锚点，避免人物设计与关系拉扯脱节。",
+          "prop_prompt": "Prop 仅强调在爱情叙事中承担告白、误会、纪念、回赠或关系触发功能的关键物件，避免无关系价值的普通物件抢占主叙事。"
+        },
+        {
+          "id": "suspense_thriller",
+          "title": "悬疑惊悚",
+          "description": "悬疑、惊悚、犯罪向项目。",
+          "aliases": ["悬疑", "惊悚", "犯罪", "thriller", "suspense", "crime"],
+          "infer_hints": ["线索", "监控", "尸体", "脚步声", "门外", "跟踪", "凶手"],
+          "prompt": "把场景分析偏向悬疑惊悚：强化信息遮蔽、危险方向、视线盲区、空间压迫、关键线索道具和节奏断点。剧本优化时优先找线索曝光过早/过晚、威胁方向不清、场景调度无法支撑紧张感的问题。",
+          "global_prompt": "全局采用悬疑惊悚定位：信息遮蔽、危险方向、视线盲区、空间压迫、关键线索与节奏断点都要清楚成立。",
+          "environment_prompt": "Environment 仅强调悬疑惊悚所需的盲区、压迫路径、遮挡关系、危险方向和线索可见性，不把紧张感只写成抽象气氛词。",
+          "character_prompt": "Character 仅强调悬疑惊悚中的防备、试探、压迫、被观察感和威胁来源辨识，让人物设计直接服务危险关系与信息遮蔽。",
+          "prop_prompt": "Prop 仅强调线索物、威胁物、误导物和证据链关键物件，保证每个主道具都能承担清楚的悬疑功能。"
+        },
+        {
+          "id": "comedy",
+          "title": "喜剧",
+          "description": "轻喜、黑色幽默、反差喜剧。",
+          "aliases": ["喜剧", "轻喜", "comedy", "comic"],
+          "infer_hints": ["尴尬", "误会", "爆笑", "反差", "包袱"],
+          "prompt": "把场景分析偏向喜剧：强化 setup-payoff、反差、节奏停顿、误会链和道具笑点。剧本优化时优先检查包袱铺垫不够、动作反应不成组、笑点缺前置镜头信息等问题。",
+          "global_prompt": "全局采用喜剧定位：setup-payoff、反差、节奏停顿、误会链和道具笑点都要有明确前置与回收。",
+          "environment_prompt": "Environment 仅强调适合喜剧误会、反差出入和动作反应的空间关系与调度结构，避免只有风格没有笑点承载面。",
+          "character_prompt": "Character 仅强调喜剧中的反应差、节奏停顿、误会表情、身体反应与人物功能分工，让角色差异能直接产出笑点。",
+          "prop_prompt": "Prop 仅强调喜剧中的 setup-payoff 物件、反差道具与笑点触发物，避免无笑点功能的普通物件被抬成关键 prop。"
+        },
+        {
+          "id": "fantasy_sci_fi",
+          "title": "奇幻科幻",
+          "description": "奇幻、科幻、世界观导向项目。",
+          "aliases": ["奇幻", "科幻", "fantasy", "sci-fi", "science fiction", "scifi"],
+          "infer_hints": ["机甲", "飞船", "法阵", "异能", "实验室", "未来城市"],
+          "prompt": "把场景分析偏向奇幻/科幻世界观：强化规则可视化、设定道具、环境科技/奇观逻辑、视觉层级和世界观信息的镜头承载。剧本优化时要优先找规则说不清、奇观没有戏剧功能、设定只靠旁白说明的问题。",
+          "global_prompt": "全局采用奇幻/科幻世界观定位：规则可视化、设定道具、环境科技或奇观逻辑、视觉层级和世界观信息承载都必须清楚自洽。",
+          "environment_prompt": "Environment 仅强调世界规则、科技/奇观结构、空间机制和层级关系，确保环境本身能稳定承载世界观信息，而不是只靠说明句交代设定。",
+          "character_prompt": "Character 仅强调世界观下的人物身份系统、能力限制、服装/装置逻辑与功能锚点，让人物与世界规则保持同一体系。",
+          "prop_prompt": "Prop 仅强调设定物、科技物、奇观触发物和规则说明物件，确保关键道具能清楚表达世界机制而非只是装饰。"
+        }
+      ]
+    },
+    {
+      "key": "era_setting",
+      "title": "时代设定",
+      "description": "决定服装、器物、语言与空间的年代基线。",
+      "source_keys": ["era_setting", "era", "time_period", "period_setting"],
+      "values": [
+        {
+          "id": "contemporary",
+          "title": "当代",
+          "description": "现代都市或当代现实语境。",
+          "aliases": ["当代", "现代", "现代都市", "contemporary", "modern day", "present day"],
+          "infer_hints": ["手机", "电梯", "微信", "写字楼", "外卖", "直播"],
+          "prompt": "把场景分析偏向当代现实语境：优先保证社交工具、生活方式、城市空间、称谓和人物职业状态符合当代逻辑。剧本优化时重点检查当代题材中信息传递方式是否真实、人物反应是否符合现代生活习惯。",
+          "global_prompt": "全局采用当代现实语境：社交工具、生活方式、城市空间、称谓与职业状态都必须符合当代逻辑。",
+          "environment_prompt": "Environment 仅强调当代生活空间、设备、建筑界面、交通与公共设施逻辑，避免年代错置和过时生活系统混入。",
+          "character_prompt": "Character 仅强调当代人物的职业状态、生活节奏、消费层级与行为习惯，避免用过时时代模板塑造当代角色。",
+          "prop_prompt": "Prop 仅强调当代设备、终端、证件、包装和日用工具逻辑，保证信息传递方式与现代生活一致。"
+        },
+        {
+          "id": "near_future",
+          "title": "近未来",
+          "description": "近未来、科技升级但仍可识别现实延续。",
+          "aliases": ["近未来", "未来", "near future", "near-future"],
+          "infer_hints": ["全息", "智能终端", "未来城市", "无人驾驶", "高科技界面"],
+          "prompt": "把场景分析偏向近未来设定：强化世界规则的轻度未来化表达，让科技变化可见但不脱离现实根系。人物、道具和环境分析要更注意技术设定如何服务戏剧功能，而不是只做炫技堆砌。",
+          "global_prompt": "全局采用近未来设定：科技升级必须可见，但仍要保留现实根系，不把近未来写成完全脱离现实的纯奇观包装。",
+          "environment_prompt": "Environment 仅强调轻度未来化的空间系统、界面层、城市设施与技术痕迹，确保科技变化可见但不压垮现实可信度。",
+          "character_prompt": "Character 仅强调近未来人物与技术的关系、职业功能和装备逻辑，让人物设计体现现实延伸而非纯炫技未来感。",
+          "prop_prompt": "Prop 仅强调近未来设备、终端、工具与交互物件的升级逻辑，保证它们既比当代更先进，又仍有现实可追溯根系。"
+        },
+        {
+          "id": "republic_era",
+          "title": "民国近代",
+          "description": "民国、近代转型期语境。",
+          "aliases": ["民国", "近代", "旧上海", "republic era", "republic-era"],
+          "infer_hints": ["黄包车", "旗袍", "报馆", "巡捕房", "老洋房"],
+          "prompt": "把场景分析偏向民国近代：强化新旧制度并存、服装与器物混杂、城市空间层级与身份差别。剧本优化时重点看时代信息是否只停留在表面道具，而没有进入人物关系和社会秩序。",
+          "global_prompt": "全局采用民国近代语境：新旧制度并存、服装与器物混杂、城市空间层级与身份差别都必须稳定成立。",
+          "environment_prompt": "Environment 仅强调民国近代的建筑界面、街区层级、办公与生活场所细节，让时代感进入空间秩序而不只是表面装饰。",
+          "character_prompt": "Character 仅强调民国近代的人物身份、阶层、礼貌方式、妆发服装与职业痕迹，避免现代人物表达混入。",
+          "prop_prompt": "Prop 仅强调民国近代的报刊、文具、交通物件、证件和生活器物系统，保证时代信息不只停留在抽象说明。"
+        },
+        {
+          "id": "ancient",
+          "title": "古代",
+          "description": "古代现实或写实古装系统。",
+          "aliases": ["古代", "古时", "ancient", "ancient period"],
+          "infer_hints": ["驿站", "马车", "宫门", "侍卫", "案几", "灯笼"],
+          "prompt": "把场景分析偏向古代时代系统：除古装基础定位外，更强调具体生活制度、空间层级、夜间照明、行路工具、器物逻辑与人物礼数，让场景分析的时代承载更扎实。",
+          "global_prompt": "全局采用古代时代系统：生活制度、空间层级、夜间照明、行路工具、器物逻辑与人物礼数都必须自洽。",
+          "environment_prompt": "Environment 仅强调古代场所结构、礼制动线、照明方式与空间等级，不混入现代建筑、现代交通和现代灯光逻辑。",
+          "character_prompt": "Character 仅强调古代人物的礼数、身份系统、发式、服装层级与生活方式，使人物行为和视觉都服从时代制度。",
+          "prop_prompt": "Prop 仅强调古代器物、照明、文书、交通与生活工具逻辑，让道具层也能稳定回写时代系统。"
+        },
+        {
+          "id": "fantasy_period",
+          "title": "架空时代",
+          "description": "架空历史、架空王朝、混合时代世界观。",
+          "aliases": ["架空", "架空时代", "架空历史", "fantasy period", "alt-history"],
+          "infer_hints": ["架空王朝", "异世界王都", "宗门", "帝国纪元"],
+          "prompt": "把场景分析偏向架空时代：强化自洽制度、身份系统、地理规则与服装器物的一致性。剧本优化时重点避免时代元素杂糅失控，确保每个 scene 都能支撑统一的世界观审美。",
+          "global_prompt": "全局采用架空时代定位：制度、身份系统、地理规则与服装器物都必须自洽一致，不让混合时代元素失控漂移。",
+          "environment_prompt": "Environment 仅强调架空时代的制度空间、地理规则、建筑秩序与世界观审美一致性，避免无依据混拼多种时代模板。",
+          "character_prompt": "Character 仅强调架空时代中的身份系统、派系痕迹、服装组织、发式与权力识别锚点，确保人物属于同一世界规则。",
+          "prop_prompt": "Prop 仅强调架空时代的制度器物、符号物、交通/生活工具和权力相关道具，保证每件主道具都服从同一架空系统。"
+        }
+      ]
+    },
+    {
+      "key": "region_culture",
+      "title": "地域文化语境",
+      "description": "决定人物生活系统、空间细节、品牌与环境文化基线。",
+      "source_keys": ["region_culture", "region", "culture_context", "locale"],
+      "values": [
+        {
+          "id": "mainland_cn_urban",
+          "title": "大陆都市语境",
+          "description": "中国大陆城市生活系统。",
+          "aliases": ["大陆都市", "中国大陆", "内地", "mainland china", "mainland_cn_urban"],
+          "infer_hints": ["小区", "外卖柜", "地铁安检", "电动车", "物业"],
+          "prompt": "把场景分析偏向大陆都市生活系统：空间、道具、社交工具、称谓、家庭结构和职场氛围都要更符合大陆城市常识。人物创作上要更注意真实消费层级与社会位置。",
+          "global_prompt": "全局采用大陆都市生活系统：空间、道具、社交工具、称谓、家庭结构与职场氛围都要符合大陆城市常识。",
+          "environment_prompt": "Environment 仅强调大陆都市中的住宅、办公、街区、物业、交通与公共设施细节，避免套用港台、北美或欧洲的默认城市模板。",
+          "character_prompt": "Character 仅强调大陆都市人物的称谓方式、消费层级、职业生活系统与社会位置，让角色属于明确的大陆城市生活语境。",
+          "prop_prompt": "Prop 仅强调大陆都市中的社交工具、快递/外卖/门禁/证件/办公日用品体系，保证道具层也符合大陆城市常识。"
+        },
+        {
+          "id": "greater_china_hk_tw",
+          "title": "港台语境",
+          "description": "港澳台或偏港台都市文化。",
+          "aliases": ["港台", "香港", "台湾", "hk", "tw", "hong kong", "taiwan"],
+          "infer_hints": ["茶餐厅", "叮叮车", "公寓大厦", "骑楼", "港口城市"],
+          "prompt": "把场景分析偏向港台都市文化：更注意街区密度、建筑界面、称谓方式、生活节奏和视觉风味差异，避免把所有中文项目都默认成大陆都市模板。",
+          "global_prompt": "全局采用港台都市文化语境：街区密度、建筑界面、称谓方式、生活节奏和视觉风味要区别于大陆都市默认模板。",
+          "environment_prompt": "Environment 仅强调港台都市中的街区密度、建筑界面、交通与生活空间风味，避免被大陆或北美都市模板覆盖。",
+          "character_prompt": "Character 仅强调港台语境下的人物称谓、生活节奏、职业气质与城市性格，不写成泛化中文都市人物。",
+          "prop_prompt": "Prop 仅强调港台语境中的日常工具、印刷界面、公共设施与生活物件系统，保持地域识别而不过度符号化。"
+        },
+        {
+          "id": "north_america",
+          "title": "北美语境",
+          "description": "北美生活系统。",
+          "aliases": ["北美", "美国", "加拿大", "north america", "north_america", "us"],
+          "infer_hints": ["suburb", "driveway", "prom", "motel", "diner", "high school hallway"],
+          "prompt": "把场景分析偏向北美语境：环境、职业、家庭空间、校园和道路系统要更符合北美常识。剧本优化时要检查关系表达与冲突节奏是否适配英语文化场景。",
+          "global_prompt": "全局采用北美生活系统：环境、职业、家庭空间、校园和道路系统都要符合北美常识。",
+          "environment_prompt": "Environment 仅强调北美住宅、街区、校园、道路和商业空间系统，避免被东亚或欧洲的默认空间逻辑覆盖。",
+          "character_prompt": "Character 仅强调北美语境下的关系表达、职业生活方式、家庭结构与行为节奏，让人物语言与生活系统相互一致。",
+          "prop_prompt": "Prop 仅强调北美语境中的证件、车辆、校园/家庭用品、包装与界面体系，使道具层和空间层保持同一生活系统。"
+        },
+        {
+          "id": "european",
+          "title": "欧洲语境",
+          "description": "欧洲城市或乡镇文化氛围。",
+          "aliases": ["欧洲", "europe", "european"],
+          "infer_hints": ["石板路", "老城广场", "露天咖啡馆", "公寓阁楼"],
+          "prompt": "把场景分析偏向欧洲城市文化：更注意建筑年代感、街道肌理、生活节奏与视觉留白，避免用北美或东亚空间默认解覆盖欧洲语境。",
+          "global_prompt": "全局采用欧洲城市文化语境：建筑年代感、街道肌理、生活节奏与视觉留白都要区别于北美和东亚默认解。",
+          "environment_prompt": "Environment 仅强调欧洲城市或乡镇中的建筑肌理、广场/街巷关系、年代层次与留白感，不套用北美或东亚空间默认模板。",
+          "character_prompt": "Character 仅强调欧洲语境下的生活节奏、职业气质、社交距离与人物风味，让人物与建筑及街区系统属于同一文化场。",
+          "prop_prompt": "Prop 仅强调欧洲语境中的街头设施、生活器物、包装与印刷物件，使道具层能稳定支持欧洲城市文化识别。"
+        },
+        {
+          "id": "southeast_asia",
+          "title": "东南亚语境",
+          "description": "东南亚热带或多语言混合城市语境。",
+          "aliases": ["东南亚", "sea", "southeast asia", "southeast_asia"],
+          "infer_hints": ["热带夜市", "湿热街区", "摩托车流", "多语言招牌"],
+          "prompt": "把场景分析偏向东南亚城市语境：强化气候、街区密度、多语环境和生活设施的地域识别，让环境与人物细节更有本地感。",
+          "global_prompt": "全局采用东南亚城市语境：气候、街区密度、多语环境与生活设施都要有稳定地域识别。",
+          "environment_prompt": "Environment 仅强调东南亚城市中的湿热气候、街区密度、多语招牌和交通/生活设施，让地域感落到可见空间细节。",
+          "character_prompt": "Character 仅强调东南亚语境下的人物生活方式、穿着适应性、语言环境与城市节奏，使人物与街区气候条件一致。",
+          "prop_prompt": "Prop 仅强调东南亚城市中的多语印刷物、交通/摊贩/生活工具与热带环境相关物件，让道具层保持地域一致性。"
+        }
+      ]
+    },
+    {
+      "key": "expected_model_family",
+      "title": "预期模型族",
+      "description": "决定分析结果更偏图像提示还是视频提示。",
+      "source_keys": ["expected_model", "model_family", "target_model", "preferred_model", "primary_model"],
+      "values": [
+        {
+          "id": "midjourney_flux_image",
+          "title": "Midjourney / FLUX 图像系",
+          "description": "偏高审美静帧生成。",
+          "aliases": ["midjourney", "mj", "flux", "midjourney/flux", "flux image"],
+          "infer_hints": ["封面图", "主视觉", "静帧", "海报图"],
+          "prompt": "把场景分析偏向高审美图像模型：优先产出强静帧、强封面、强关键帧信息，明确主体、氛围、构图中心、色彩与材质。对于每个 scene，优先指出最适合做主视觉、封面和分镜关键帧的情绪瞬间。"
+        },
+        {
+          "id": "sdxl_open",
+          "title": "SDXL / 开源图像系",
+          "description": "偏私有化、结构化图像生成。",
+          "aliases": ["sdxl", "sd 1.5", "stable diffusion", "stable-diffusion", "open model"],
+          "infer_hints": ["lora", "controlnet", "多图参考", "角色一致性"],
+          "prompt": "把场景分析偏向开源图像工作流：优先输出稳定角色锚点、清晰道具状态、可复用环境 anchor 和少歧义的视觉拆分，避免把多套状态混进同一角色或同一道具。场景描述要更利于 LoRA、ControlNet、IP-Adapter 和多轮重绘工作流。",
+          "global_prompt": "全局采用开源图像工作流导向：优先减少歧义、保持可继承锚点和明确状态拆分，让输出更适合多轮重绘、LoRA、ControlNet 与参考图链路。",
+          "environment_prompt": "Environment 仅强调可复用 base/delta、清晰 anchor、少歧义构图层次与稳定可追溯的空间版本，避免环境描述过于文学化导致参考链路漂移。",
+          "character_prompt": "Character 仅强调稳定角色锚点、服装版本拆分、发型/配饰不漂移与少歧义外观描述，避免把多套状态混进同一角色资产。",
+          "prop_prompt": "Prop 仅强调单状态、清晰材质、结构锚点与版本拆分，避免把开合/破损/污染等多状态混写进同一道具资产。"
+        },
+        {
+          "id": "dalle_imagen_firefly",
+          "title": "DALL·E / Imagen / Firefly 语义图像系",
+          "description": "偏自然语言理解的闭源图像模型。",
+          "aliases": ["dall-e", "dalle", "imagen", "firefly", "openai image", "google imagen", "adobe firefly"],
+          "infer_hints": ["自然语言生图", "设计图", "商业海报"],
+          "prompt": "把场景分析偏向自然语言图像模型：更强调语义清楚、角色关系清楚、用途清楚和画面目标清楚，减少过度工程化 token 依赖。对于人物、道具和环境的分析，应更利于自然语言 prompt 直接复述。"
+        },
+        {
+          "id": "veo_runway_video",
+          "title": "Veo / Runway 视频系",
+          "description": "偏英文高控制视频模型。",
+          "aliases": ["veo", "runway", "runway gen-3", "gen-3", "video model", "sora"],
+          "infer_hints": ["镜头脚本", "视频生成", "原生音频", "首尾帧"],
+          "prompt": "把场景分析偏向高控制视频模型：强化动作链、起始状态-中间过程-结束状态、镜头衔接、环境声、对白落点和镜头延续性。场景分析中要提前明确哪些 beat 最适合拆成独立视频镜头，哪些镜头必须保留清晰的 start/end frame。"
+        },
+        {
+          "id": "kling_seedance_wan_video",
+          "title": "可灵 / Seedance / Wan 视频系",
+          "description": "偏中文视频与图生视频工作流。",
+          "aliases": ["可灵", "kling", "seedance", "豆包视频", "wan", "通义万相视频", "jimeng video"],
+          "infer_hints": ["图生视频", "动态镜头", "短视频", "中文视频"],
+          "prompt": "把场景分析偏向中文视频模型：优先输出中文自然动作链、较短而清晰的镜头事件、利于图生视频的首帧稳定信息和便于中文 prompt 直接使用的动作描述。对于复杂长场景，优先建议拆镜头而不是把过多动作堆进单个 shot。"
+        }
+      ]
+    },
+    {
+      "key": "generation_workflow",
+      "title": "生成工作流",
+      "description": "决定场景分析更偏一次性生成还是可控多阶段工作流。",
+      "source_keys": ["generation_workflow", "workflow", "production_workflow"],
+      "values": [
+        {
+          "id": "pure_text_to_image",
+          "title": "纯文生图",
+          "description": "主要依赖文本直接生成静帧。",
+          "aliases": ["纯文生图", "文生图", "text to image", "text-to-image", "pure_text_to_image"],
+          "infer_hints": ["直接生图", "文生图"],
+          "prompt": "把场景分析偏向纯文生图工作流：优先产出语义清楚、单帧可读、主体明确的场景信息，让单次 prompt 就能拿到较强结果。"
+        },
+        {
+          "id": "image_to_video",
+          "title": "图生视频",
+          "description": "先生成图像，再转视频。",
+          "aliases": ["图生视频", "image to video", "image-to-video", "i2v"],
+          "infer_hints": ["首帧", "参考图转视频", "图生视频"],
+          "prompt": "把场景分析偏向图生视频工作流：优先明确首帧稳定信息、角色姿态、构图中心、动作起点与小幅运动逻辑，减少不利于 I2V 的大跨步抽象动作。",
+          "global_prompt": "全局采用图生视频工作流：优先给出稳定首帧、明确动作起点与小幅可延展运动逻辑，避免大跨步抽象动作与过载镜头事件。",
+          "environment_prompt": "Environment 仅强调首帧稳定构图、明确空间中心、干净可延续的背景层次和利于后续运动展开的通道结构。",
+          "character_prompt": "Character 仅强调首帧姿态稳定、动作起点清楚、表情变化顺序明确和不易漂移的身体轮廓，避免复杂群像和大幅姿态跳变。",
+          "prop_prompt": "Prop 仅强调首帧可识别状态、运动前后不易漂移的结构与明确交互起点，避免在单物体里混入多个阶段状态。"
+        },
+        {
+          "id": "multi_reference",
+          "title": "多图参考",
+          "description": "依赖角色图、风格图、环境图联合控制。",
+          "aliases": ["多图参考", "多参考图", "multi reference", "multi-reference"],
+          "infer_hints": ["参考图", "风格图", "角色参考", "场景参考"],
+          "prompt": "把场景分析偏向多图参考工作流：更强调角色锚点、环境 anchor、道具状态和可复用细节，让参考图之间的继承关系更清楚。"
+        },
+        {
+          "id": "lora_controlnet_private",
+          "title": "LoRA/ControlNet 私有化",
+          "description": "偏私有化可控生成链路。",
+          "aliases": ["lora", "controlnet", "私有化", "lora/controlnet", "lora_controlnet_private"],
+          "infer_hints": ["LoRA", "ControlNet", "私有化部署", "角色训练"],
+          "prompt": "把场景分析偏向私有化可控工作流：优先保证角色变体拆分、服装版本拆分、环境 base/delta 和道具状态闭环都足够清晰，方便下游训练、参考与控制。"
+        },
+        {
+          "id": "platform_closed_loop",
+          "title": "平台闭环工作流",
+          "description": "偏闭源平台一次性产出。",
+          "aliases": ["平台闭环", "闭源平台", "platform workflow", "platform_closed_loop"],
+          "infer_hints": ["平台出图", "平台出视频", "一站式生成"],
+          "prompt": "把场景分析偏向平台闭环工作流：优先强调语义直给、用途明确、情绪明确和结果导向，让平台模型更容易一次拿到可用结果。"
+        }
+      ]
+    },
+    {
+      "key": "primary_goal",
+      "title": "主要目标",
+      "description": "决定分析更偏剧本、人物、分镜还是营销主视觉。",
+      "source_keys": ["primary_goal", "optimization_goal", "analysis_goal", "project_goal"],
+      "values": [
+        {
+          "id": "script_optimization",
+          "title": "剧本优化",
+          "description": "优先发现节奏、动机、冲突与桥接问题。",
+          "aliases": ["剧本优化", "脚本优化", "script optimization", "script_optimization"],
+          "infer_hints": ["优化剧本", "节奏", "反转", "钩子"],
+          "prompt": "把场景分析偏向剧本优化：除结构化场景拆解外，还要显式识别剧情推进、因果链、情绪爆点、信息密度、反转与钩子是否成立。优先补充会直接提升剧本质量的分析点，例如开场抓取力、桥接动作、冲突递进、关系动机和集末钩子。"
+        },
+        {
+          "id": "character_creation",
+          "title": "人物创作",
+          "description": "优先强化人物区分和可生成性。",
+          "aliases": ["人物创作", "角色创作", "character creation", "character_design"],
+          "infer_hints": ["人物设定", "角色设计", "角色塑造", "人物创作"],
+          "prompt": "把场景分析偏向人物创作：优先识别每个主要角色最值得固定的外形、气质、服装、配饰、动作习惯、关系位置和情绪表达方式。对于人物创作，必须主动找出角色之间的差异化锚点，避免模板化人物。"
+        },
+        {
+          "id": "storyboard_previs",
+          "title": "分镜预演",
+          "description": "优先强化空间、动作和镜头可落地性。",
+          "aliases": ["分镜", "预演", "storyboard", "previs", "storyboard_previs"],
+          "infer_hints": ["分镜", "预演", "镜头脚本", "shot list"],
+          "prompt": "把场景分析偏向分镜预演：优先明确空间轴线、走位、动作次序、道具交接和镜头承接。场景分析中应尽量让每个 beat 都天然利于下游转成 shot。"
+        },
+        {
+          "id": "marketing_cover",
+          "title": "营销封面",
+          "description": "优先强化封面、海报与高识别主视觉。",
+          "aliases": ["封面", "海报", "营销", "cover", "poster", "marketing"],
+          "infer_hints": ["封面", "海报", "投流", "主视觉", "营销"],
+          "prompt": "把场景分析偏向封面与海报主视觉：优先找最能代表剧情冲突、角色关系和情绪强度的单帧时刻，并在场景分析中明确哪些角色、道具和环境最适合进入封面特制 scene。"
+        }
+      ]
+    },
+    {
+      "key": "secondary_goal",
+      "title": "次级目标",
+      "description": "用于表达与主要目标并行的重要目标，支持双目标路由。",
+      "source_keys": ["secondary_goal", "secondary_analysis_goal", "secondary_project_goal", "goal_secondary"],
+      "values": [
+        {
+          "id": "character_creation",
+          "title": "人物创作",
+          "description": "把人物创作作为与主目标并行的关键目标。",
+          "aliases": ["人物创作", "角色创作", "character creation", "character_design"],
+          "infer_hints": ["角色塑造", "人物弧光", "角色设定", "人物设计"],
+          "prompt": "把场景分析偏向双目标中的人物创作副目标：在保持主目标成立的前提下，额外强化人物差异化锚点、关系位置、服装状态和动作习惯，并确保这些角色信息能回扣剧情功能。"
+        },
+        {
+          "id": "script_optimization",
+          "title": "剧本优化",
+          "description": "把剧本优化作为与主目标并行的关键目标。",
+          "aliases": ["剧本优化", "脚本优化", "script optimization", "script_optimization"],
+          "infer_hints": ["剧情优化", "节奏修正", "因果链", "桥接动作"],
+          "prompt": "把场景分析偏向双目标中的剧本优化副目标：在保持主目标成立的前提下，额外检查场景因果、人物动机、情绪升级与桥接动作，让角色信息不会脱离剧情推进。"
+        },
+        {
+          "id": "storyboard_previs",
+          "title": "分镜预演",
+          "description": "把分镜预演作为并行次级目标。",
+          "aliases": ["分镜", "预演", "storyboard", "previs", "storyboard_previs"],
+          "infer_hints": ["镜头脚本", "shot", "转分镜"],
+          "prompt": "把场景分析偏向双目标中的分镜副目标：在不削弱主目标的前提下，补充空间轴线、动作次序和镜头承接信息。"
+        },
+        {
+          "id": "marketing_cover",
+          "title": "营销封面",
+          "description": "把封面主视觉作为并行次级目标。",
+          "aliases": ["封面", "营销", "cover", "poster", "marketing"],
+          "infer_hints": ["主视觉", "封面图", "海报"],
+          "prompt": "把场景分析偏向双目标中的封面副目标：在不削弱主目标的前提下，补出更适合首屏、封面和主视觉的单帧场景节点。"
+        }
+      ]
+    },
+    {
+      "key": "character_emphasis",
+      "title": "人物侧重点",
+      "description": "决定场景分析应优先服务哪类人物识别与关系组织。",
+      "source_keys": ["character_emphasis", "character_focus", "role_focus", "cast_focus"],
+      "values": [
+        {
+          "id": "lead_priority",
+          "title": "主角塑造优先",
+          "description": "优先强化主角识别锚点与成长弧线。",
+          "aliases": ["主角优先", "主角塑造", "lead priority", "lead_priority", "protagonist"],
+          "infer_hints": ["女主", "男主", "主角", "唯一视角", "围绕她展开"],
+          "prompt": "把场景分析偏向主角塑造优先：优先沉淀主角的稳定外观锚点、情绪表达方式、核心欲望、行动路径和关键关系，不要让配角信息稀释主角识别度。"
+        },
+        {
+          "id": "ensemble_priority",
+          "title": "群像关系优先",
+          "description": "优先理清多角色关系网络与彼此差异。",
+          "aliases": ["群像", "群像关系", "ensemble", "ensemble_priority", "多主角"],
+          "infer_hints": ["众人", "所有人", "一群人", "团队", "家族", "群像"],
+          "prompt": "把场景分析偏向群像关系优先：优先拆清不同角色的功能位、站位关系、情绪分工、冲突方向和视觉区分，避免多人 scene 中角色变成同质化背景。"
+        },
+        {
+          "id": "villain_priority",
+          "title": "反派辨识优先",
+          "description": "优先塑造威胁源、压迫感与反派识别。",
+          "aliases": ["反派", "反派优先", "villain", "villain_priority", "antagonist"],
+          "infer_hints": ["反派", "幕后黑手", "威胁者", "对手", "压迫感"],
+          "prompt": "把场景分析偏向反派辨识优先：优先识别威胁源的外观气场、行动模式、控制方式与进入场景时的压迫感，让反派或对抗方在视觉和叙事上都具有清楚区分度。"
+        },
+        {
+          "id": "supporting_priority",
+          "title": "配角功能优先",
+          "description": "优先明确配角在剧情推进中的功能价值。",
+          "aliases": ["配角", "配角优先", "supporting", "supporting_priority", "功能配角"],
+          "infer_hints": ["闺蜜", "助手", "司机", "长辈", "同事", "功能角色"],
+          "prompt": "把场景分析偏向配角功能优先：优先判断配角承担的信息传递、推动冲突、承接情绪或制造节奏的职责，并让其视觉与动作特征足以支撑该功能。"
+        }
+      ]
+    },
+    {
+      "key": "narrative_density",
+      "title": "叙事密度",
+      "description": "决定分析优先关注对白、动作、氛围还是多点混合。",
+      "source_keys": ["narrative_density", "scene_density", "story_density"],
+      "values": [
+        {
+          "id": "dialogue_driven",
+          "title": "对白驱动",
+          "description": "主要靠台词推进。",
+          "aliases": ["对白驱动", "台词驱动", "dialogue driven", "dialogue-driven"],
+          "infer_hints": ["连续对白", "她问", "他说道", "争论", "沉默后开口"],
+          "prompt": "把场景分析偏向对白驱动叙事：优先检查台词信息密度、称谓关系、潜台词、抢白与停顿节奏，并确保对白对应的表情、视线和空间关系足够清楚。"
+        },
+        {
+          "id": "action_driven",
+          "title": "动作驱动",
+          "description": "主要靠可见动作推进。",
+          "aliases": ["动作驱动", "action driven", "action-driven"],
+          "infer_hints": ["冲过去", "追上", "推门", "打斗", "奔跑", "摔倒"],
+          "prompt": "把场景分析偏向动作驱动：优先强化动作路径、空间可执行性、道具交接、起止状态和节奏断点，让 scene 更天然适合做动态 shot。"
+        },
+        {
+          "id": "mood_driven",
+          "title": "氛围驱动",
+          "description": "主要靠情绪、环境和停顿推进。",
+          "aliases": ["氛围驱动", "情绪驱动", "mood driven", "mood-driven"],
+          "infer_hints": ["安静", "停顿", "风声", "空镜", "夜色", "雨声"],
+          "prompt": "把场景分析偏向氛围驱动：优先识别环境情绪、节奏留白、空镜价值、声音桥与单帧情绪峰值，避免把所有 scene 都硬拆成高动作密度。"
+        },
+        {
+          "id": "mixed_dense",
+          "title": "混合高密度",
+          "description": "对白、动作、情绪都较密集。",
+          "aliases": ["混合高密度", "高密度", "mixed dense", "mixed-dense"],
+          "infer_hints": ["一边说一边", "同时", "转身就", "接着又"],
+          "prompt": "把场景分析偏向混合高密度叙事：优先识别信息拥挤处并主动拆清楚，让对白、动作、情绪和道具状态各自有清晰落点，避免 scene 内信息打架。"
+        }
+      ]
+    },
+    {
+      "key": "commercial_constraint",
+      "title": "商业约束",
+      "description": "决定分析应更偏留存、叙事完成度、转化效率还是海外传播适配。",
+      "source_keys": ["commercial_constraint", "distribution_goal", "business_goal", "delivery_constraint"],
+      "values": [
+        {
+          "id": "short_drama_retention",
+          "title": "短剧投流优先",
+          "description": "优先考虑前几秒留存、强冲突和高转折。",
+          "aliases": ["短剧投流", "投流", "留存优先", "short_drama_retention", "short drama"],
+          "infer_hints": ["前三秒", "前五秒", "留存", "投流", "爆点", "反转"],
+          "prompt": "把场景分析偏向短剧投流约束：优先检查 scene 是否足够快进入冲突，是否存在高识别关系和情绪钩子，是否有利于封面/标题/首屏转化，不要让关键爆点埋得过深。"
+        },
+        {
+          "id": "longform_storytelling",
+          "title": "长剧叙事优先",
+          "description": "优先考虑叙事铺垫、人物弧线和段落完整度。",
+          "aliases": ["长剧", "长叙事", "longform", "longform_storytelling", "长剧叙事"],
+          "infer_hints": ["铺垫", "人物弧线", "长线伏笔", "回收", "章节推进"],
+          "prompt": "把场景分析偏向长剧叙事约束：优先保证场景之间的因果承接、角色变化渐进性和信息铺垫回收，不要为短平快刺激牺牲长线叙事成立性。"
+        },
+        {
+          "id": "ad_conversion",
+          "title": "广告转化优先",
+          "description": "优先考虑品牌信息、卖点传达与转化动作。",
+          "aliases": ["广告", "转化", "ad conversion", "ad_conversion", "品牌转化"],
+          "infer_hints": ["品牌", "卖点", "下单", "转化", "广告片", "种草"],
+          "prompt": "把场景分析偏向广告转化约束：优先看产品/品牌露出是否自然、卖点是否有清晰承载动作、人物是否为转化服务，以及关键画面是否利于封面与 CTA 场景设计。"
+        },
+        {
+          "id": "overseas_social",
+          "title": "海外平台优先",
+          "description": "优先考虑跨文化可读性和全球平台传播适配。",
+          "aliases": ["海外平台", "海外社媒", "overseas social", "overseas_social", "global social"],
+          "infer_hints": ["海外", "global", "tiktok", "instagram", "跨文化", "国际版"],
+          "prompt": "把场景分析偏向海外平台传播约束：优先检查动作和情绪是否跨语言直观、文化特定信息是否需要额外可视化承载，以及首屏画面是否足够全球用户快速理解。"
+        }
+      ]
+    },
+    {
+      "key": "modality_focus",
+      "title": "模态侧重",
+      "description": "决定更偏图像静帧、视频动态或混合资产。",
+      "source_keys": ["modality", "output_modality", "generation_modality", "visual_modality"],
+      "values": [
+        {
+          "id": "image_first",
+          "title": "图像优先",
+          "description": "先服务图像和关键帧。",
+          "aliases": ["图像", "图片", "image", "image first", "image-first"],
+          "infer_hints": ["静帧", "关键帧", "单帧"],
+          "prompt": "把场景分析偏向图像优先：每个场景都要更清楚地给出单帧可读性、构图中心、角色分层、封面感和关键静帧候选。"
+        },
+        {
+          "id": "video_first",
+          "title": "视频优先",
+          "description": "先服务镜头和动作连续。",
+          "aliases": ["视频", "video", "video first", "video-first"],
+          "infer_hints": ["镜头", "运动", "转场", "视频"],
+          "prompt": "把场景分析偏向视频优先：每个 scene 和 beat 的重点是动作过程、转场可行性、环境延续性、角色运动方向和声音事件，不要只停留在单帧海报感。"
+        },
+        {
+          "id": "hybrid",
+          "title": "图像视频混合",
+          "description": "同时服务关键帧与视频。",
+          "aliases": ["混合", "hybrid", "image+video", "图像视频"],
+          "infer_hints": ["封面加视频", "图像视频混合"],
+          "prompt": "把场景分析偏向混合资产：既要保证每个 scene 有强静帧，也要保证动作链和空间连续可下放到视频。优先标记哪些 beat 适合作为封面关键帧，哪些 beat 适合做动态镜头。"
+        }
+      ]
+    },
+    {
+      "key": "continuity_priority",
+      "title": "连续性优先级",
+      "description": "决定是否额外强调角色和空间的一致性。",
+      "source_keys": ["continuity_priority", "consistency_priority", "asset_consistency"],
+      "values": [
+        {
+          "id": "high_character_consistency",
+          "title": "高人物一致性",
+          "description": "角色一致性优先。",
+          "aliases": ["高人物一致性", "人物一致性", "character consistency", "high_character_consistency"],
+          "infer_hints": ["角色一致性", "同一角色", "换装", "角色锚点"],
+          "prompt": "把场景分析偏向高人物一致性：优先保证角色锚点稳定、服装状态拆分清楚、发型与配饰不漂移、人物动作习惯可复用。对于有换装、变体、特殊状态的角色，要更严格地拆成可继承的独立实体。",
+          "global_prompt": "全局强调高人物一致性：人物锚点、服装版本、动作习惯与身份识别要保持稳定，避免跨 scene 漂移。",
+          "environment_prompt": "Environment 仅在服务人物一致性时强调稳定的人物登场空间锚点与可重复观察位，不让环境版本漂移反向干扰角色识别。",
+          "character_prompt": "Character 仅强调角色锚点稳定、服装版本拆分清楚、发型与配饰不漂移、动作习惯可复用；有换装、变体或特殊状态时必须拆成可继承独立实体。",
+          "prop_prompt": "Prop 仅强调与人物长期绑定的关键配件、职业物与身份道具保持版本稳定，避免同一角色关联道具在不同 scene 中无依据变形或漂移。"
+        },
+        {
+          "id": "high_space_continuity",
+          "title": "高空间连续性",
+          "description": "环境和轴线连续优先。",
+          "aliases": ["高空间连续性", "空间连续性", "space continuity", "high_space_continuity"],
+          "infer_hints": ["空间连续", "轴线", "反打", "同一场景"],
+          "prompt": "把场景分析偏向高空间连续性：优先保证 environment base/delta、观察方向、可见集合、排除集合、轴线和 entry/exit 闭环写得更清楚。对于转场、反打和界面型空间，必须更强调可复用环境锚点。",
+          "global_prompt": "全局强调高空间连续性：环境 base/delta、观察方向、可见集合、轴线和 entry/exit 闭环必须稳定可追溯。",
+          "environment_prompt": "Environment 仅强调 base/delta、观察方向、Visible/Excluded 集合、轴线与界面两侧结构的连续性，优先保证转场、反打和界面型空间可复用。",
+          "character_prompt": "Character 仅在服务空间连续性时强调角色相对空间锚点、进出位与朝向的稳定回写，不让角色站位变化破坏空间闭环。",
+          "prop_prompt": "Prop 仅在服务空间连续性时强调关键道具的固定落点、交接位置与状态演进，保证空间调度和前后镜承接可追溯。"
+        }
+      ]
+    },
+    {
+      "key": "safety_broadcast_level",
+      "title": "播出安全等级",
+      "description": "决定分析是否需要更严格地压低风险内容与表现方式。",
+      "source_keys": ["safety_broadcast_level", "safety_level", "broadcast_level", "compliance_level"],
+      "values": [
+        {
+          "id": "general_broadcast",
+          "title": "普通可播",
+          "description": "常规平台可播标准。",
+          "aliases": ["普通可播", "常规可播", "general broadcast", "general_broadcast"],
+          "infer_hints": ["平台播出", "可播", "上线"],
+          "prompt": "把场景分析偏向普通可播标准：默认保持冲突、情绪和人物表达清晰，但避免不必要的高风险画面依赖，确保多数平台都可接受。"
+        },
+        {
+          "id": "strict_platform_safe",
+          "title": "严格平台合规",
+          "description": "对暴力、危险、敏感表达更保守。",
+          "aliases": ["严格平台合规", "严格合规", "strict platform safe", "strict_platform_safe"],
+          "infer_hints": ["严格审核", "平台审核", "合规", "规避风险"],
+          "prompt": "把场景分析偏向严格平台合规：优先识别可能引发审核问题的危险动作、过强暴力指向、极端情绪或敏感暗示，并倾向使用更安全的镜头承载和叙事替代表达。"
+        },
+        {
+          "id": "youth_friendly",
+          "title": "青少年向",
+          "description": "更强调积极表达、风险降级与清晰价值导向。",
+          "aliases": ["青少年向", "少儿向", "youth friendly", "youth_friendly", "family friendly"],
+          "infer_hints": ["青少年", "合家欢", "少儿", "校园正向"],
+          "prompt": "把场景分析偏向青少年向标准：优先削弱过强压迫感、危险模仿风险和成人化表达，强化积极动机、关系修复、成长价值与更清晰的情绪边界。"
+        },
+        {
+          "id": "adult_non_explicit",
+          "title": "成人向但非露骨",
+          "description": "允许成熟主题，但不依赖露骨表达。",
+          "aliases": ["成人向", "成熟向", "adult non explicit", "adult_non_explicit", "mature non explicit"],
+          "infer_hints": ["成人向", "成熟题材", "黑暗关系", "压抑欲望"],
+          "prompt": "把场景分析偏向成熟成人题材但非露骨标准：允许更复杂关系、压抑张力和灰度情绪，但应避免把关键成立点建立在过度露骨或高风险可视化上。"
+        }
+      ]
+    }
+  ],
+  "combo_rules": [
+    {
+      "id": "combo.live_action.zh_cn.emotional_drama.video",
+      "title": "真人中文情感视频组合 Skill",
+      "description": "针对真人中文情感戏且主要用于视频生成。",
+      "when": {
+        "project_type": "live_action",
+        "project_language": "zh_cn",
+        "base_positioning": "emotional_drama",
+        "modality_focus": "video_first"
+      },
+      "prompt": "当前项目高度接近中文真人情感视频链路。场景分析时，优先强化可演、可拍、可剪的情绪推进，并优先发现最影响投流和代入感的问题。",
+      "environment_prompt": "当前项目高度接近中文真人情感视频链路。Environment 局部规则必须优先服务对视、逼近、停顿和情绪爆发的可演空间，不把情感视频场景写成只有装饰感的空壳背景。",
+      "character_prompt": "当前项目高度接近中文真人情感视频链路。Character 局部规则必须突出关系对位、情绪升级、可演微表情与中文短剧情绪表达强度，让人物能直接承载留存段爆点。"
+    },
+    {
+      "id": "combo.costume.character.cover",
+      "title": "古装人物封面组合 Skill",
+      "description": "针对古装人物创作与封面主视觉。",
+      "when": {
+        "base_positioning": "costume_period",
+        "primary_goal": "character_creation"
+      },
+      "prompt": "当前项目偏古装人物塑造。场景分析时，除常规 scene 拆解外，要优先识别最适合做人物定妆、角色关系海报与身份权力主视觉的场景节点。",
+      "character_prompt": "当前项目偏古装人物塑造。Character 局部规则必须强化服装层级、身份礼仪、头饰配件与人物权力距离，使人物一眼可读其位阶和关系结构。"
+    },
+    {
+      "id": "combo.open_model.consistency",
+      "title": "开源工作流一致性组合 Skill",
+      "description": "针对 SDXL/开源图像路线和高一致性要求。",
+      "when": {
+        "expected_model_family": "sdxl_open",
+        "continuity_priority": "high_character_consistency"
+      },
+      "prompt": "当前项目偏开源工作流且一致性要求高。场景分析时必须减少模糊、抽象和一次性描述，优先输出可直接服务 LoRA、ControlNet 和多图参考链路的稳定锚点。",
+      "character_goal_alignment_prompt": "当前项目偏开源工作流且角色一致性要求高。Character 局部规则必须更严格区分角色状态、服装版本、关键配件与剧情功能，不把多套造型或多阶段状态压进同一角色。"
+    },
+    {
+      "id": "combo.contemporary.mainland.shortdrama",
+      "title": "当代大陆短剧情绪投流组合 Skill",
+      "description": "针对大陆都市当代短剧和情绪拉动型内容。",
+      "when": {
+        "era_setting": "contemporary",
+        "region_culture": "mainland_cn_urban",
+        "base_positioning": "emotional_drama",
+        "primary_goal": "script_optimization"
+      },
+      "prompt": "当前项目高度接近大陆都市当代短剧。场景分析时，优先从投流与情绪留存角度找问题。",
+      "environment_prompt": "当前项目高度接近大陆都市当代短剧。Environment 局部规则必须优先服务短剧首屏识别、关系冲突落点与大陆都市生活细节，不把关键开场场景写得过慢、过空或缺少现实落点。",
+      "character_prompt": "当前项目高度接近大陆都市当代短剧。Character 局部规则必须让人物关系足够直给、情绪爆点足够清楚、称谓与生活细节贴近大陆都市语境，以服务开场 3-5 秒留存。"
+    },
+    {
+      "id": "combo.i2v.character_motion",
+      "title": "图生视频人物运动组合 Skill",
+      "description": "针对图生视频和人物稳定动态。",
+      "when": {
+        "generation_workflow": "image_to_video",
+        "modality_focus": "video_first",
+        "continuity_priority": "high_character_consistency"
+      },
+      "prompt": "当前项目偏图生视频人物链路。场景分析时，必须更明确首帧构图、人物姿态、动作起点、小幅动作路径和表情变化顺序，避免不利于图生视频稳定性的剧烈跨步、复杂群像和大幅镜头调度。",
+      "character_goal_alignment_prompt": "当前项目偏图生视频人物链路。Character 局部规则必须把人物姿态、动作起点、表情变化顺序与当前剧情功能一一对齐，优先可延展的小幅运动，不写难以稳定续动的大跨步行为。"
+    },
+    {
+      "id": "combo.dialogue.character",
+      "title": "对白驱动人物塑造组合 Skill",
+      "description": "针对对白驱动且强调人物创作的项目。",
+      "when": {
+        "narrative_density": "dialogue_driven",
+        "primary_goal": "character_creation"
+      },
+      "prompt": "当前项目偏对白驱动的人物塑造。场景分析时，优先从说话方式与关系语气中提取人物差异，而不只依赖外观标签。",
+      "character_prompt": "当前项目偏对白驱动的人物塑造。Character 局部规则必须从人物说话方式、停顿、称谓、回避/对视和情绪压抑方式中提取差异化锚点，而不只依赖外观单一标签。"
+    },
+    {
+      "id": "combo.script.character.alignment.primary_secondary",
+      "title": "剧本优化+人物创作双目标组合 Skill",
+      "description": "针对剧本优化为主、人物创作为次，但两者都必须联动成立的项目。",
+      "when": {
+        "primary_goal": "script_optimization",
+        "secondary_goal": "character_creation"
+      },
+      "prompt": "当前项目采用剧本优化 + 人物创作双目标策略。场景分析时，角色设计必须回到剧情功能里检查，不做脱离剧情的独立美术包装。",
+      "character_goal_alignment_prompt": "当前项目采用剧本优化 + 人物创作双目标策略。Character 局部规则必须回答每个主要角色在当前剧情中的目标、阻力、关系位置、情绪阶段和视觉识别锚点；角色外形、服装、动作习惯和表情方式都应服务剧情推进、冲突升级和人物关系变化。"
+    },
+    {
+      "id": "combo.character.script.alignment.primary_secondary",
+      "title": "人物创作+剧本优化双目标组合 Skill",
+      "description": "针对人物创作为主、剧本优化为次，但角色必须与剧情匹配的项目。",
+      "when": {
+        "primary_goal": "character_creation",
+        "secondary_goal": "script_optimization"
+      },
+      "prompt": "当前项目采用人物创作 + 剧本优化双目标策略。场景分析时，不能只产出好看的角色标签，而要校验角色设定是否真正支撑剧情。",
+      "character_goal_alignment_prompt": "当前项目采用人物创作 + 剧本优化双目标策略。Character 局部规则必须校验人物身份、服装状态、行为习惯、对白方式和情绪触发点，确保它们能解释角色在当前 scene 中的选择、冲突和关系变化。"
+    },
+    {
+      "id": "combo.ensemble.dialogue.longform",
+      "title": "群像对白长叙事组合 Skill",
+      "description": "针对群像关系、对白驱动和长线叙事的项目。",
+      "when": {
+        "character_emphasis": "ensemble_priority",
+        "narrative_density": "dialogue_driven",
+        "commercial_constraint": "longform_storytelling"
+      },
+      "prompt": "当前项目偏群像对白长叙事。场景分析时，优先拆清多人对话中的立场差异、关系层级、信息分配和情绪传递链。",
+      "character_prompt": "当前项目偏群像对白长叙事。Character 局部规则必须让多人对话中的功能位、关系层级和情绪分工清楚可读，避免群像人物只剩台词表面的轻微区分。"
+    },
+    {
+      "id": "combo.ad.cover.platform",
+      "title": "广告封面平台闭环组合 Skill",
+      "description": "针对广告转化、营销封面和平台闭环生成。",
+      "when": {
+        "commercial_constraint": "ad_conversion",
+        "primary_goal": "marketing_cover",
+        "generation_workflow": "platform_closed_loop"
+      },
+      "prompt": "当前项目偏广告转化与封面主视觉闭环生产。场景分析时，优先让品牌、产品、人物行为和情绪卖点形成单帧高识别组合。",
+      "environment_prompt": "当前项目偏广告转化与封面主视觉闭环生产。Environment 局部规则必须优先服务产品露出、主视觉识别和 CTA 承接，不让空间信息冲散单帧转化目标。",
+      "character_prompt": "当前项目偏广告转化与封面主视觉闭环生产。Character 局部规则必须让人物行为、视线与情绪卖点直接服务品牌或产品转化，而不是形成与转化目标无关的戏剧枝杈。"
+    },
+    {
+      "id": "combo.safe.youth.lead",
+      "title": "青少年主角安全表达组合 Skill",
+      "description": "针对青少年向、主角优先且要求更安全表达的项目。",
+      "when": {
+        "safety_broadcast_level": "youth_friendly",
+        "character_emphasis": "lead_priority"
+      },
+      "prompt": "当前项目偏青少年向主角叙事。场景分析时，优先强化主角成长、动机清晰和正向关系修复。",
+      "character_prompt": "当前项目偏青少年向主角叙事。Character 局部规则必须让主角成长线、动机与正向关系修复清楚成立，同时主动规避可能造成模仿风险或过强压迫感的行为设计。"
+    },
+    {
+      "id": "combo.strict.villain.suspense",
+      "title": "严格合规悬疑反派组合 Skill",
+      "description": "针对悬疑项目中反派辨识强但需严格平台合规的场景。",
+      "when": {
+        "base_positioning": "suspense_thriller",
+        "character_emphasis": "villain_priority",
+        "safety_broadcast_level": "strict_platform_safe"
+      },
+      "prompt": "当前项目偏悬疑反派压迫链路，但平台合规要求严格。场景分析时，优先通过更安全的威胁承载方式建立压迫感。",
+      "environment_prompt": "当前项目偏悬疑反派压迫链路，但平台合规要求严格。Environment 局部规则必须优先用空间盲区、遮挡、压迫路径和声音来源暗示危险，而不是依赖高风险可视化暴力结果。",
+      "character_prompt": "当前项目偏悬疑反派压迫链路，但平台合规要求严格。Character 局部规则必须让反派或威胁方通过视线、姿态、节制动作和情绪压迫建立危险感，而不是依赖直接高风险暴力可视化。"
+    }
+  ]
+}

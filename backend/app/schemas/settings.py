@@ -687,6 +687,14 @@ class AssetImageRatioConfigUpdate(BaseModel):
     cover_aspect_ratio: Optional[str] = None
 
 
+class SceneAnalysisSystemConfigOut(BaseModel):
+    default_mode: str = "classic"
+
+
+class SceneAnalysisSystemConfigUpdate(BaseModel):
+    default_mode: Optional[str] = None
+
+
 class SystemAIAssistantModelInput(BaseModel):
     """AI助手模型输入。
 

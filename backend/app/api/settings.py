@@ -78,6 +78,8 @@ from app.schemas.settings import (
     SoraMentionConfigUpdate,
     AssetImageRatioConfigOut,
     AssetImageRatioConfigUpdate,
+    SceneAnalysisSystemConfigOut,
+    SceneAnalysisSystemConfigUpdate,
     SystemAIAssistantRequest,
     SystemAIAssistantResponse,
     SystemAIAssistantSuggestion,
@@ -158,6 +160,7 @@ _AGENT_POLICY_MODEL = "tool_acl"
 _BILLING_RESET_CONFIG_KEY = "billing_rule_reset_config"
 _SORA_MENTION_CONFIG_KEY = "sora_mention_config"
 _ASSET_IMAGE_RATIO_CONFIG_KEY = "asset_image_ratio_config"
+_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY = "scene_analysis_system_config"
 _BILLING_RESET_MAX_INCREASE_DEFAULT = 50
 _BILLING_RESET_MIN_MULTIPLIER_DEFAULT = 1.1
 _BILLING_RESET_MAX_MULTIPLIER_DEFAULT = 2.0
@@ -496,6 +499,12 @@ def _default_asset_image_ratio_config() -> Dict[str, Any]:
     }
 
 
+def _default_scene_analysis_system_config() -> Dict[str, Any]:
+    return {
+        "default_mode": "classic",
+    }
+
+
 def _normalize_sora_mention_config(value: Any) -> Dict[str, Any]:
     base = _default_sora_mention_config()
     payload = _safe_json_dict(value)
@@ -527,6 +536,29 @@ def _normalize_asset_image_ratio_config(value: Any) -> Dict[str, Any]:
     if cover_ratio:
         base["cover_aspect_ratio"] = cover_ratio
 
+    return base
+
+
+def _normalize_scene_analysis_system_config(value: Any) -> Dict[str, Any]:
+    base = _default_scene_analysis_system_config()
+    payload = _safe_json_dict(value)
+    raw_mode = str(payload.get("default_mode") or "").strip().lower()
+    aliases = {
+        "original": "classic",
+        "base": "classic",
+        "classic": "classic",
+        "feature_stack": "feature_stack",
+        "feature-stack": "feature_stack",
+        "skills": "decision_engine",
+        "skill_engine": "decision_engine",
+        "skill-engine": "decision_engine",
+        "decision_engine": "decision_engine",
+        "decision-engine": "decision_engine",
+    }
+    normalized_mode = aliases.get(raw_mode, "classic")
+    if normalized_mode not in {"classic", "feature_stack", "decision_engine"}:
+        normalized_mode = "classic"
+    base["default_mode"] = normalized_mode
     return base
 
 
@@ -599,6 +631,16 @@ def _get_asset_image_ratio_config(db: Session) -> Dict[str, Any]:
     cfg = _safe_json_dict(row.config)
     normalized = _normalize_asset_image_ratio_config(cfg.get(_ASSET_IMAGE_RATIO_CONFIG_KEY, {}))
     cfg[_ASSET_IMAGE_RATIO_CONFIG_KEY] = normalized
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    return normalized
+
+
+def get_scene_analysis_system_config(db: Session) -> Dict[str, Any]:
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    normalized = _normalize_scene_analysis_system_config(cfg.get(_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY, {}))
+    cfg[_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY] = normalized
     row.config = cfg
     _persist_agent_policy_row_config(db, row.id, row.config)
     return normalized
@@ -6011,6 +6053,19 @@ def get_asset_image_ratio_config(
     return AssetImageRatioConfigOut(**cfg)
 
 
+@router.get("/settings/system/manage/scene-analysis-config", response_model=SceneAnalysisSystemConfigOut)
+def get_scene_analysis_manage_config(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage scene analysis config")
+
+    cfg = get_scene_analysis_system_config(db)
+    db.commit()
+    return SceneAnalysisSystemConfigOut(**cfg)
+
+
 @router.put("/settings/system/manage/billing-rules/reset-config", response_model=BillingRuleResetConfigOut)
 def update_billing_rule_reset_config(
     payload: BillingRuleResetConfigUpdate,
@@ -6078,6 +6133,29 @@ def update_asset_image_ratio_config(
 
     normalized = _normalize_asset_image_ratio_config(_safe_json_dict(row.config).get(_ASSET_IMAGE_RATIO_CONFIG_KEY, {}))
     return AssetImageRatioConfigOut(**normalized)
+
+
+@router.put("/settings/system/manage/scene-analysis-config", response_model=SceneAnalysisSystemConfigOut)
+def update_scene_analysis_manage_config(
+    payload: SceneAnalysisSystemConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage scene analysis config")
+
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    current_cfg = _normalize_scene_analysis_system_config(cfg.get(_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY, {}))
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    merged_cfg = {**current_cfg, **_safe_json_dict(patch)}
+    cfg[_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY] = _normalize_scene_analysis_system_config(merged_cfg)
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    db.commit()
+
+    normalized = _normalize_scene_analysis_system_config(_safe_json_dict(row.config).get(_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY, {}))
+    return SceneAnalysisSystemConfigOut(**normalized)
 
 
 @router.get("/settings/system/manage/{system_api_id}/billing-rules", response_model=List[SystemAPIBillingRuleOut])

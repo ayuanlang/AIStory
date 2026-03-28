@@ -14,11 +14,22 @@ from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
 from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_service
 from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_registry, get_skill_meta
+from app.core.prompts.scene_analysis_feature_skills import (
+    get_scene_analysis_feature_catalog,
+    render_scene_analysis_routed_prompt,
+    resolve_scene_analysis_feature_bundle,
+)
+from app.core.prompts.shot_generation_feature_skills import (
+    get_shot_generation_feature_catalog,
+    render_shot_generation_routed_prompt,
+    resolve_shot_generation_feature_bundle,
+)
 from app.services.llm_service import llm_service
 from app.services.payment_service import payment_service
 from app.services.task_manager import create_task_record as _create_task_record, submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async, cancel as _cancel_task, set_task_status as _set_task_status
 from app.services.system_default_api_service import get_task_default_system_setting, list_task_default_system_settings
 from app.services.system_api_runtime_cache import resolve_system_api_cached
+from app.api.settings import get_scene_analysis_system_config
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
 import os
@@ -393,6 +404,8 @@ def _build_analyze_scene_dedup_key(user_id: int, request: AnalyzeSceneRequest) -
         "prompt_file": getattr(request, "prompt_file", None),
         "system_prompt": getattr(request, "system_prompt", None),
         "project_metadata": getattr(request, "project_metadata", None),
+        "scene_analysis_mode": getattr(request, "scene_analysis_mode", None),
+        "scene_analysis_features": getattr(request, "scene_analysis_features", None),
         "analysis_attention_notes": getattr(request, "analysis_attention_notes", None),
         "reuse_subject_assets": getattr(request, "reuse_subject_assets", None),
         "include_negative_prompt": getattr(request, "include_negative_prompt", True),
@@ -3512,6 +3525,132 @@ async def get_prompt_skill_detail(skill_id: str, current_user: User = Depends(ge
         raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found.")
     return meta
 
+
+@router.get("/prompts/scene-analysis/features")
+async def get_scene_analysis_feature_options(current_user: User = Depends(get_current_user)):
+    """List feature-stack modes and enum dimensions for scene analysis prompt composition."""
+    return get_scene_analysis_feature_catalog()
+
+
+def _scene_analysis_slot_origin(slot_token: Any) -> str:
+    token = str(slot_token or "").strip()
+    if not token:
+        return "unknown"
+    if token == "[[SCENE_ANALYSIS_COMBO_RULES]]":
+        return "global_combo"
+    if token == "[[SCENE_ANALYSIS_CHARACTER_GOAL_ALIGNMENT_RULES]]":
+        return "local_character_goal_alignment"
+    if token.startswith("[[SCENE_ANALYSIS_ENVIRONMENT_COMBO_") or token == "[[SCENE_ANALYSIS_ENVIRONMENT_COMBO_RULES]]":
+        return "local_environment_combo"
+    if token.startswith("[[SCENE_ANALYSIS_CHARACTER_COMBO_") or token == "[[SCENE_ANALYSIS_CHARACTER_COMBO_RULES]]":
+        return "local_character_combo"
+    if token.startswith("[[SCENE_ANALYSIS_PROP_COMBO_") or token == "[[SCENE_ANALYSIS_PROP_COMBO_RULES]]":
+        return "local_prop_combo"
+    if token.startswith("[[SCENE_ANALYSIS_ENVIRONMENT_"):
+        return "local_environment_dimension"
+    if token.startswith("[[SCENE_ANALYSIS_CHARACTER_"):
+        return "local_character_dimension"
+    if token.startswith("[[SCENE_ANALYSIS_PROP_"):
+        return "local_prop_dimension"
+    if token.startswith("[[SCENE_ANALYSIS_") and token.endswith("_RULES]]"):
+        return "global_dimension"
+    return "unknown"
+
+
+def _build_scene_analysis_slot_blocks_summary(bundle: Dict[str, Any]) -> List[Dict[str, Any]]:
+    slot_blocks = bundle.get("slot_blocks") if isinstance(bundle.get("slot_blocks"), dict) else {}
+    selected_skills = bundle.get("selected_skills") if isinstance(bundle.get("selected_skills"), list) else []
+    known_slot_tokens = bundle.get("known_slot_tokens") if isinstance(bundle.get("known_slot_tokens"), list) else []
+
+    bucketed_skills: Dict[str, List[Dict[str, Any]]] = {}
+    for item in selected_skills:
+        if not isinstance(item, dict):
+            continue
+        slot_token = str(item.get("slot_token") or "").strip()
+        if not slot_token:
+            continue
+        bucketed_skills.setdefault(slot_token, []).append(item)
+
+    summary_tokens: List[str] = []
+    seen_tokens = set()
+    for token in list(slot_blocks.keys()) + list(bucketed_skills.keys()) + list(known_slot_tokens):
+        token_text = str(token or "").strip()
+        if not token_text or token_text in seen_tokens:
+            continue
+        seen_tokens.add(token_text)
+        summary_tokens.append(token_text)
+
+    return [
+        {
+            "slot_token": token,
+            "slot_origin": _scene_analysis_slot_origin(token),
+            "has_block": bool(slot_blocks.get(token)),
+            "skill_count": len(bucketed_skills.get(token) or []),
+            "skill_ids": [item.get("skill_id") for item in (bucketed_skills.get(token) or []) if item.get("skill_id")],
+            "titles": [item.get("title") for item in (bucketed_skills.get(token) or []) if item.get("title")],
+        }
+        for token in summary_tokens
+    ]
+
+
+@router.post("/prompts/scene-analysis/route-preview")
+async def preview_scene_analysis_route(
+    request: AnalyzeSceneRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Preview the decision-engine routing result for scene analysis without calling the LLM."""
+    requested_mode = str(getattr(request, "scene_analysis_mode", "") or "").strip() or None
+    effective_mode = requested_mode
+    if not effective_mode:
+        try:
+            effective_mode = str(get_scene_analysis_system_config(db).get("default_mode") or "").strip() or None
+        except Exception as config_err:
+            logger.warning("[scene-analysis-route-preview] failed to read system default mode: %s", config_err)
+    bundle = resolve_scene_analysis_feature_bundle(
+        project_metadata=request.project_metadata,
+        explicit_features=getattr(request, "scene_analysis_features", None),
+        script_text=getattr(request, "text", None),
+        mode=effective_mode,
+    )
+    return {
+        "requested_mode": requested_mode,
+        "effective_mode": bundle.get("mode"),
+        "mode": bundle.get("mode"),
+        "enabled": bundle.get("enabled"),
+        "base_prompt_file": bundle.get("base_prompt_file"),
+        "slot_blocks": bundle.get("slot_blocks") or {},
+        "slot_blocks_summary": _build_scene_analysis_slot_blocks_summary(bundle),
+        "known_slot_tokens": bundle.get("known_slot_tokens") or [],
+        "normalized_features": bundle.get("normalized_features") or {},
+        "resolved_dimensions": bundle.get("resolved_dimensions") or {},
+        "selected_skills": [
+            {
+                "skill_id": item.get("skill_id"),
+                "dimension": item.get("dimension"),
+                "value": item.get("value"),
+                "title": item.get("title"),
+                "source": item.get("source"),
+                "slot_token": item.get("slot_token"),
+                "slot_origin": _scene_analysis_slot_origin(item.get("slot_token")),
+                "slot_has_block": bool((bundle.get("slot_blocks") or {}).get(str(item.get("slot_token") or ""))),
+            }
+            for item in (bundle.get("selected_skills") or [])
+        ],
+        "combo_matches": [
+            {
+                "skill_id": item.get("skill_id"),
+                "title": item.get("title"),
+                "when": item.get("when") or {},
+                "slot_token": item.get("slot_token"),
+                "slot_origin": _scene_analysis_slot_origin(item.get("slot_token")),
+                "slot_has_block": bool((bundle.get("slot_blocks") or {}).get(str(item.get("slot_token") or ""))),
+            }
+            for item in (bundle.get("combo_matches") or [])
+        ],
+        "diagnostics": bundle.get("diagnostics") or [],
+    }
+
 @router.post("/analyze_scene", response_model=Dict[str, Any])
 async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
     """
@@ -3947,6 +4086,26 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "warnings": warnings,
             }
 
+        requested_scene_analysis_mode = str(getattr(request, "scene_analysis_mode", "") or "").strip() or None
+        effective_scene_analysis_mode = requested_scene_analysis_mode
+        if not effective_scene_analysis_mode:
+            try:
+                effective_scene_analysis_mode = str(get_scene_analysis_system_config(db).get("default_mode") or "").strip() or None
+            except Exception as scene_analysis_cfg_err:
+                logger.warning("[analyze_scene] failed to read system scene analysis mode, fallback to request/default: %s", scene_analysis_cfg_err)
+
+        feature_bundle: Dict[str, Any] = {}
+        try:
+            feature_bundle = resolve_scene_analysis_feature_bundle(
+                project_metadata=request.project_metadata,
+                explicit_features=getattr(request, "scene_analysis_features", None),
+                script_text=getattr(request, "text", None),
+                mode=effective_scene_analysis_mode,
+            )
+        except Exception as feature_bundle_err:
+            logger.warning("[analyze_scene] failed to resolve scene analysis feature stack: %s", feature_bundle_err)
+            feature_bundle = {}
+
         # Load the prompt template or use provided system_prompt
         system_instruction = ""
         template_signature: Dict[str, Any] = {}
@@ -3960,6 +4119,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             }
         else:
             prompt_filename = request.prompt_file or "scene_analysis.txt"
+            if feature_bundle.get("enabled") and not request.prompt_file:
+                prompt_filename = str(feature_bundle.get("base_prompt_file") or "scene_analysis_routed_base.txt")
             try:
                 system_instruction = _resolve_prompt_text(prompt_filename)
             except FileNotFoundError:
@@ -3970,6 +4131,19 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "template_version": "prompt_file@v1",
                 "template_hash_sha256": hashlib.sha256(str(system_instruction or "").encode("utf-8")).hexdigest(),
             }
+
+        if feature_bundle.get("enabled"):
+            system_instruction = render_scene_analysis_routed_prompt(system_instruction, feature_bundle)
+            logger.info(
+                "Rendered routed scene analysis prompt with explicit slots: requested_mode=%s effective_mode=%s base_prompt=%s slots=%s skills=%s features=%s combos=%s",
+                requested_scene_analysis_mode,
+                feature_bundle.get("mode"),
+                feature_bundle.get("base_prompt_file") or request.prompt_file or "scene_analysis.txt",
+                sorted((feature_bundle.get("slot_blocks") or {}).keys()),
+                [item.get("skill_id") for item in (feature_bundle.get("selected_skills") or [])],
+                feature_bundle.get("normalized_features") or {},
+                [item.get("skill_id") for item in (feature_bundle.get("combo_matches") or [])],
+            )
 
         include_negative_prompt = getattr(request, "include_negative_prompt", True)
         if include_negative_prompt:
@@ -12353,41 +12527,92 @@ def read_shot_detail(
 class AIShotGenRequest(BaseModel):
     user_prompt: Optional[str] = None
     system_prompt: Optional[str] = None
+    shot_generation_mode: Optional[str] = None
+    shot_generation_features: Optional[Dict[str, Any]] = None
 
 
 class AIShotRegenerateRequest(BaseModel):
     content: Optional[List[Dict[str, Any]]] = None
     additional_instructions: Optional[str] = None
     prompt_file: Optional[str] = "shot_generator.txt"
+    shot_generation_mode: Optional[str] = None
+    shot_generation_features: Optional[Dict[str, Any]] = None
 
-def _build_shot_prompts(db: Session, scene: Scene, project: Project):
-    # 2. Gather Data
-    # Global Style & Context
-    
-    # Normalize Info Sources
+
+class ShotGenerationRoutePreviewRequest(BaseModel):
+    scene_id: int
+    shot_generation_mode: Optional[str] = None
+    shot_generation_features: Optional[Dict[str, Any]] = None
+
+
+def _map_shared_prompt_mode_to_shot_generation_mode(raw_mode: Any) -> Optional[str]:
+    normalized = str(raw_mode or "").strip().lower().replace("-", "_")
+    aliases = {
+        "original": "classic",
+        "base": "classic",
+        "classic": "classic",
+        "routed": "routed",
+        "feature_stack": "routed",
+        "decision_engine": "routed",
+        "decisionengine": "routed",
+        "skills": "routed",
+        "skill_engine": "routed",
+        "skillengine": "routed",
+    }
+    return aliases.get(normalized)
+
+
+def _resolve_effective_shot_generation_mode(
+    db: Session,
+    *,
+    requested_mode: Optional[str] = None,
+    project_metadata: Optional[Dict[str, Any]] = None,
+    log_context: str = "shot-generation",
+) -> Optional[str]:
+    explicit_mode = _map_shared_prompt_mode_to_shot_generation_mode(requested_mode)
+    if explicit_mode:
+        return explicit_mode
+
+    try:
+        shared_system_mode = _map_shared_prompt_mode_to_shot_generation_mode(
+            get_scene_analysis_system_config(db).get("default_mode")
+        )
+        if shared_system_mode:
+            return shared_system_mode
+    except Exception as config_err:
+        logger.warning("[%s] failed to read shared scene-analysis mode for shot generation: %s", log_context, config_err)
+
+    metadata = project_metadata if isinstance(project_metadata, dict) else {}
+    for key in ("shot_generation_mode", "shot_prompt_mode", "prompt_mode", "default_mode"):
+        candidate = _map_shared_prompt_mode_to_shot_generation_mode(metadata.get(key))
+        if candidate:
+            return candidate
+
+    return None
+
+
+def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     project_info = project.global_info or {}
     if isinstance(project_info, str):
-        try: project_info = json.loads(project_info)
-        except: project_info = {}
+        try:
+            project_info = json.loads(project_info)
+        except Exception:
+            project_info = {}
     if not isinstance(project_info, dict):
         project_info = {}
 
     basic_info_nested = project_info.get("basic_information") if isinstance(project_info.get("basic_information"), dict) else {}
     e_global_info = project_info.get("e_global_info") if isinstance(project_info.get("e_global_info"), dict) else {}
     story_input = project_info.get("story_generator_global_input") if isinstance(project_info.get("story_generator_global_input"), dict) else {}
-        
-    episode_info = {}
+    episode_info: Dict[str, Any] = {}
 
-    # 3. Robust Data Normalization (Handle case/space sensitivity)
     def _norm_key(key: Any) -> str:
         return str(key or "").strip().lower().replace("-", "_").replace(" ", "_")
 
     def normalize_dict_keys(d: Any) -> Dict[str, Any]:
         if not isinstance(d, dict):
             return {}
-        return {
-            _norm_key(k): v for k, v in d.items()
-        }
+        return {_norm_key(k): v for k, v in d.items()}
 
     context_sources = [episode_info, project_info, basic_info_nested, e_global_info, story_input]
     context_sources_norm = [normalize_dict_keys(src) for src in context_sources]
@@ -12449,34 +12674,22 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         return get_context_val(keys)
 
     global_style = get_context_val(["Global_Style", "Global Style", "global_style", "Style"]) or "Cinematic"
-    
-    # Extract additional fields
-    # Mappings: Field Name -> Possible Keys
+
     field_mappings = {
         "Type": ["Type", "Genre", "Category", "Film Type"],
         "Tone": ["Tone", "Color Tone", "Mood", "Atmosphere"],
         "Language": ["Language", "Lang"],
         "Lighting": ["Lighting", "Light Style"],
-        "Quality": ["Quality", "Production Quality"]
+        "Quality": ["Quality", "Production Quality"],
     }
-    
-    additional_context = ""
     context_lines = []
-    
     for field, keys in field_mappings.items():
         val = get_context_val(keys)
         if val:
             context_lines.append(f"{field}: {val}")
-    
-    if context_lines:
-        additional_context = "\n".join(context_lines)
+    additional_context = "\n".join(context_lines) if context_lines else ""
 
     borrowed_films = get_context_list(["borrowed_films", "borrowedFilms", "reference_films", "referenceFilms"])
-    project_context_lines = [
-        "# Project Context",
-        "Treat this project metadata as first-class constraints when generating the shot list.",
-        "[Basic Info]",
-    ]
 
     title = get_context_val(["script_title", "title"])
     episode_label = get_context_val(["series_episode", "episode"])
@@ -12487,7 +12700,18 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     lighting = get_context_val(["lighting", "light_style", "light"])
     character_relationships = get_context_val(["character_relationships"])
     project_notes = get_context_val(["notes"])
+    region_culture = get_context_val(["region_culture", "region", "culture"])
+    era_setting = get_context_val(["era_setting", "era", "period", "time_setting"])
+    expected_model_family = get_context_val(["expected_model_family", "expected_model", "target_model", "model_family"])
+    generation_workflow = get_context_val(["generation_workflow", "workflow", "pipeline"])
+    continuity_priority = get_context_val(["continuity_priority", "continuity", "continuity_mode"])
+    prompt_mode = get_context_val(["shot_generation_mode", "shot_prompt_mode", "prompt_mode"])
 
+    project_context_lines = [
+        "# Project Context",
+        "Treat this project metadata as first-class constraints when generating the shot list.",
+        "[Basic Info]",
+    ]
     if title:
         project_context_lines.append(f"Title: {title}")
     if episode_label:
@@ -12504,6 +12728,10 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         project_context_lines.append(f"Tone: {tone}")
     if lighting:
         project_context_lines.append(f"Lighting: {lighting}")
+    if region_culture:
+        project_context_lines.append(f"Region Culture: {region_culture}")
+    if era_setting:
+        project_context_lines.append(f"Era Setting: {era_setting}")
     if borrowed_films:
         project_context_lines.append(f"Borrowed Films: {', '.join(borrowed_films)}")
     if character_relationships:
@@ -12531,10 +12759,67 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
         project_context_lines.append(f"Frame Rate: {frame_rate}")
     if quality:
         project_context_lines.append(f"Quality: {quality}")
+    if expected_model_family:
+        project_context_lines.append(f"Expected Model Family: {expected_model_family}")
+    if generation_workflow:
+        project_context_lines.append(f"Generation Workflow: {generation_workflow}")
+    if continuity_priority:
+        project_context_lines.append(f"Continuity Priority: {continuity_priority}")
 
     project_context_section = ""
     if len(project_context_lines) > 4:
         project_context_section = "\n".join(project_context_lines)
+
+    shot_generation_metadata = {
+        "title": title,
+        "episode": episode_label,
+        "project_type": project_type,
+        "type": project_type,
+        "base_positioning": base_positioning,
+        "project_language": project_language,
+        "language": project_language,
+        "global_style": global_style,
+        "tone": tone,
+        "lighting": lighting,
+        "region_culture": region_culture,
+        "era_setting": era_setting,
+        "expected_model_family": expected_model_family,
+        "generation_workflow": generation_workflow,
+        "continuity_priority": continuity_priority,
+        "shot_generation_mode": prompt_mode,
+        "shot_prompt_mode": prompt_mode,
+    }
+
+    return {
+        "project_info": project_info,
+        "global_style": global_style,
+        "additional_context": additional_context,
+        "project_context_section": project_context_section,
+        "borrowed_films": borrowed_films,
+        "metadata": shot_generation_metadata,
+    }
+
+def _build_shot_prompts(
+    db: Session,
+    scene: Scene,
+    project: Project,
+    *,
+    mode: Optional[str] = None,
+    explicit_features: Optional[Dict[str, Any]] = None,
+):
+    # 2. Gather Data
+    # Global Style & Context
+    project_context = _build_shot_generation_project_context(project)
+    effective_mode = _resolve_effective_shot_generation_mode(
+        db,
+        requested_mode=mode,
+        project_metadata=project_context.get("metadata"),
+        log_context="_build_shot_prompts",
+    )
+    project_info = project_context.get("project_info") if isinstance(project_context.get("project_info"), dict) else {}
+    global_style = str(project_context.get("global_style") or "Cinematic")
+    additional_context = str(project_context.get("additional_context") or "")
+    project_context_section = str(project_context.get("project_context_section") or "")
 
     # Scene Info
     # Entities - Fetch project entities and match with Linked Characters / Environment
@@ -12744,16 +13029,25 @@ def _build_shot_prompts(db: Session, scene: Scene, project: Project):
     # 3. Prepare System Prompt
     system_prompt = ""
     try:
-        system_prompt = _resolve_prompt_text("shot_generator.txt")
+        core_goal_text = scene.core_scene_info or ''
+        feature_bundle = resolve_shot_generation_feature_bundle(
+            project_metadata=project_context.get("metadata"),
+            explicit_features=explicit_features,
+            script_text=core_goal_text,
+            mode=effective_mode,
+        )
+        base_prompt_file = str(feature_bundle.get("base_prompt_file") or "shot_generator.txt")
+        system_prompt = _resolve_prompt_text(base_prompt_file)
+        if feature_bundle.get("enabled"):
+            system_prompt = render_shot_generation_routed_prompt(system_prompt, feature_bundle)
     except Exception as e:
-        logger.error(f"Failed to load shot_generator.txt: {e}")
-        raise HTTPException(status_code=500, detail="Prompt file 'shot_generator.txt' could not be loaded.")
+        logger.error(f"Failed to load shot generation prompt stack: {e}")
+        raise HTTPException(status_code=500, detail="Shot generation prompt stack could not be loaded.")
 
     global_section = f"# Global Context\nGlobal Style: {global_style}"
     if additional_context:
         global_section += f"\n{additional_context}"
 
-    core_goal_text = scene.core_scene_info or ''
     # Environment Context is now a separate field in the table
 
     user_input = f"""{global_section}
@@ -12801,9 +13095,16 @@ def _build_shot_regenerate_prompts(
     *,
     staged_markdown: str,
     additional_instructions: str,
+    mode: Optional[str],
+    explicit_features: Optional[Dict[str, Any]],
 ) -> Tuple[str, str]:
-    system_prompt = _resolve_prompt_text("shot_generator.txt")
-    _, base_user_prompt = _build_shot_prompts(db, scene, project)
+    system_prompt, base_user_prompt = _build_shot_prompts(
+        db,
+        scene,
+        project,
+        mode=mode,
+        explicit_features=explicit_features,
+    )
 
     safe_markdown = str(staged_markdown or "").strip()
     safe_instructions = str(additional_instructions or "").strip() or "(none)"
@@ -12846,8 +13147,116 @@ def ai_prompt_preview(
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
     project = _require_project_access(db, episode.project_id, current_user)
         
+    project_context = _build_shot_generation_project_context(project)
+    effective_mode = _resolve_effective_shot_generation_mode(
+        db,
+        project_metadata=project_context.get("metadata"),
+        log_context="ai_prompt_preview",
+    )
+    feature_bundle = resolve_shot_generation_feature_bundle(
+        project_metadata=project_context.get("metadata"),
+        script_text=scene.core_scene_info or "",
+        mode=effective_mode,
+    )
     system, user = _build_shot_prompts(db, scene, project)
-    return {"system_prompt": system, "user_prompt": user}
+    return {
+        "system_prompt": system,
+        "user_prompt": user,
+        "shot_generation_mode": feature_bundle.get("mode"),
+        "base_prompt_file": feature_bundle.get("base_prompt_file"),
+        "selected_skills": [
+            {
+                "skill_id": item.get("skill_id"),
+                "dimension": item.get("dimension"),
+                "value": item.get("value"),
+                "title": item.get("title"),
+                "slot_token": item.get("slot_token"),
+            }
+            for item in (feature_bundle.get("selected_skills") or [])
+        ],
+    }
+
+
+@router.get("/prompts/shot-generation/features")
+async def get_shot_generation_feature_options(current_user: User = Depends(get_current_user)):
+    return get_shot_generation_feature_catalog()
+
+
+def _shot_generation_slot_origin(slot_token: Any) -> str:
+    token = str(slot_token or "").strip()
+    if not token:
+        return "unknown"
+    if token == "[[SHOT_GENERATION_COMBO_RULES]]":
+        return "global_combo"
+    if token.startswith("[[SHOT_GENERATION_") and token.endswith("_RULES]]"):
+        return "global_dimension"
+    return "unknown"
+
+
+@router.post("/prompts/shot-generation/route-preview")
+async def preview_shot_generation_route(
+    request: ShotGenerationRoutePreviewRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    scene = db.query(Scene).filter(Scene.id == request.scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    project = _require_project_access(db, episode.project_id, current_user)
+    project_context = _build_shot_generation_project_context(project)
+    effective_mode = _resolve_effective_shot_generation_mode(
+        db,
+        requested_mode=request.shot_generation_mode,
+        project_metadata=project_context.get("metadata"),
+        log_context="shot-generation-route-preview",
+    )
+    bundle = resolve_shot_generation_feature_bundle(
+        project_metadata=project_context.get("metadata"),
+        explicit_features=request.shot_generation_features,
+        script_text=scene.core_scene_info or "",
+        mode=effective_mode,
+    )
+    return {
+        "scene_id": scene.id,
+        "requested_mode": request.shot_generation_mode,
+        "effective_mode": bundle.get("mode"),
+        "enabled": bundle.get("enabled"),
+        "base_prompt_file": bundle.get("base_prompt_file"),
+        "slot_blocks": bundle.get("slot_blocks") or {},
+        "known_slot_tokens": bundle.get("known_slot_tokens") or [],
+        "normalized_features": bundle.get("normalized_features") or {},
+        "resolved_dimensions": bundle.get("resolved_dimensions") or {},
+        "selected_skills": [
+            {
+                "skill_id": item.get("skill_id"),
+                "dimension": item.get("dimension"),
+                "value": item.get("value"),
+                "title": item.get("title"),
+                "source": item.get("source"),
+                "slot_token": item.get("slot_token"),
+                "slot_origin": _shot_generation_slot_origin(item.get("slot_token")),
+                "slot_has_block": bool((bundle.get("slot_blocks") or {}).get(str(item.get("slot_token") or ""))),
+            }
+            for item in (bundle.get("selected_skills") or [])
+        ],
+        "combo_matches": [
+            {
+                "skill_id": item.get("skill_id"),
+                "title": item.get("title"),
+                "when": item.get("when") or {},
+                "slot_token": item.get("slot_token"),
+                "slot_origin": _shot_generation_slot_origin(item.get("slot_token")),
+                "slot_has_block": bool((bundle.get("slot_blocks") or {}).get(str(item.get("slot_token") or ""))),
+            }
+            for item in (bundle.get("combo_matches") or [])
+        ],
+        "diagnostics": bundle.get("diagnostics") or [],
+    }
 
 class AnalysisContent(BaseModel):
     content: Union[Dict[str, Any], List[Any]]
@@ -13482,7 +13891,13 @@ async def ai_generate_shots(
              system_prompt = req.system_prompt or "You are a Storyboard Master."
              logger.info("[ai_generate_shots] Using custom prompt from request")
         else:
-             system_prompt, user_input = _build_shot_prompts(db, scene, project)
+               system_prompt, user_input = _build_shot_prompts(
+                  db,
+                  scene,
+                  project,
+                  mode=(req.shot_generation_mode if req else None),
+                  explicit_features=(req.shot_generation_features if req else None),
+               )
 
         logger.info(f"[ai_generate_shots] system_prompt_len={len(system_prompt)}")
         logger.info(f"[ai_generate_shots] user_input_len={len(user_input)}")
@@ -13781,6 +14196,8 @@ async def ai_regenerate_shots(
                     project,
                     staged_markdown=staged_markdown,
                     additional_instructions=str((req.additional_instructions if req else "") or "").strip(),
+                    mode=(req.shot_generation_mode if req else None),
+                    explicit_features=(req.shot_generation_features if req else None),
                 )
         except FileNotFoundError:
             raise HTTPException(status_code=500, detail=f"Prompt file '{prompt_filename}' could not be loaded.")

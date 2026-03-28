@@ -111,6 +111,99 @@ export const PROJECT_EP_QUALITY_OPTIONS = [
     "草稿 / Draft",
 ];
 
+export const PROJECT_SCENE_ANALYSIS_ERA_OPTIONS = [
+    "当代",
+    "近未来",
+    "民国近代",
+    "古代",
+    "架空时代",
+];
+
+export const PROJECT_SCENE_ANALYSIS_REGION_OPTIONS = [
+    "大陆都市语境",
+    "港台语境",
+    "北美语境",
+    "欧洲语境",
+    "东南亚语境",
+];
+
+export const PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS = [
+    "Midjourney / FLUX 图像系",
+    "SDXL / 开源图像系",
+    "DALL·E / Imagen / Firefly 语义图像系",
+    "Veo / Runway 视频系",
+    "可灵 / Seedance / Wan 视频系",
+];
+
+export const PROJECT_SCENE_ANALYSIS_WORKFLOW_OPTIONS = [
+    "纯文生图",
+    "图生视频",
+    "多图参考",
+    "LoRA/ControlNet 私有化",
+    "平台闭环工作流",
+];
+
+export const PROJECT_SCENE_ANALYSIS_GOAL_OPTIONS = [
+    "剧本优化",
+    "人物创作",
+    "分镜预演",
+    "营销封面",
+];
+
+export const PROJECT_SCENE_ANALYSIS_CHARACTER_EMPHASIS_OPTIONS = [
+    "主角塑造优先",
+    "群像关系优先",
+    "反派辨识优先",
+    "配角功能优先",
+];
+
+export const PROJECT_SCENE_ANALYSIS_NARRATIVE_DENSITY_OPTIONS = [
+    "对白驱动",
+    "动作驱动",
+    "氛围驱动",
+    "混合高密度",
+];
+
+export const PROJECT_SCENE_ANALYSIS_COMMERCIAL_CONSTRAINT_OPTIONS = [
+    "短剧投流优先",
+    "长剧叙事优先",
+    "广告转化优先",
+    "海外平台优先",
+];
+
+export const PROJECT_SCENE_ANALYSIS_MODALITY_OPTIONS = [
+    "图像优先",
+    "视频优先",
+    "图像视频混合",
+];
+
+export const PROJECT_SCENE_ANALYSIS_CONTINUITY_OPTIONS = [
+    "高人物一致性",
+    "高空间连续性",
+];
+
+export const PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS = [
+    "普通可播",
+    "严格平台合规",
+    "青少年向",
+    "成人向但非露骨",
+];
+
+export const PROJECT_SCENE_ANALYSIS_DEFAULTS = {
+    era_setting: "",
+    region_culture: "",
+    expected_model_family: "",
+    generation_workflow: "",
+    primary_goal: "剧本优化",
+    secondary_goal: "人物创作",
+    character_emphasis: "",
+    narrative_density: "",
+    commercial_constraint: "",
+    modality_focus: "",
+    continuity_priority: "",
+    safety_broadcast_level: "",
+};
+
 const PROJECT_EP_TYPE_LEGACY_MAP = {
     "Live Action": "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
     "实拍 / Live Action": "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",

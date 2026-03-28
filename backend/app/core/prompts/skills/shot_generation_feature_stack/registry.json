@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "default_mode": "classic",
+  "modes": [
+    {
+      "id": "classic",
+      "title": "Classic",
+      "description": "Use legacy shot_generator.txt unchanged."
+    },
+    {
+      "id": "routed",
+      "title": "Routed",
+      "description": "Use shot_generator_routed_base.txt plus routed feature skills."
+    }
+  ],
+  "dimensions": [
+    {
+      "key": "project_type",
+      "title": "Project Type",
+      "source_keys": ["type", "genre", "category", "film_type"],
+      "slot_token": "[[SHOT_GENERATION_PROJECT_TYPE_RULES]]",
+      "prompt_template": "Project Type is {value}. Treat this as a first-class routing constraint for shot planning: bias scene-type selection, shot scale rhythm, blocking density, reaction coverage, and lens language toward {value} instead of a generic fallback. Keep the original shot_generator output contract unchanged."
+    },
+    {
+      "key": "base_positioning",
+      "title": "Base Positioning",
+      "source_keys": ["base_positioning"],
+      "slot_token": "[[SHOT_GENERATION_BASE_POSITIONING_RULES]]",
+      "prompt_template": "Base Positioning is {value}. Let this positioning directly shape shot temperament, performance emphasis, glamour level, emotional pressure, spectacle weight, and how aggressively shots move between geography, action, reaction, and detail."
+    },
+    {
+      "key": "project_language",
+      "title": "Project Language",
+      "source_keys": ["language", "project_language", "lang"],
+      "slot_token": "[[SHOT_GENERATION_LANGUAGE_CONTEXT_RULES]]",
+      "prompt_template": "Project Language is {value}. All dialogue payloads, subtitles, on-screen text, signage, message contents, language-switch events, and any other visible or audible language artifacts must follow {value}; if a quoted line or visible text appears in a shot field, it must already be rendered in the target project language rather than translated later."
+    },
+    {
+      "key": "region_culture",
+      "title": "Region Culture",
+      "source_keys": ["region_culture", "region", "culture"],
+      "slot_token": "[[SHOT_GENERATION_REGION_CULTURE_RULES]]",
+      "prompt_template": "Region/Culture context is {value}. Keep shot-visible architecture, dressing logic, blocking etiquette, street furniture, signage habits, object handling, and actor business culturally coherent with {value}; avoid drifting into a different life system or mixed-region visual language."
+    },
+    {
+      "key": "era_setting",
+      "title": "Era Setting",
+      "source_keys": ["era_setting", "era", "period", "time_setting"],
+      "slot_token": "[[SHOT_GENERATION_ERA_SETTING_RULES]]",
+      "prompt_template": "Era setting is {value}. Preserve period-appropriate shot-visible details across wardrobe logic, prop handling, set dressing, lighting motivation, signage systems, and body language. Do not let contemporary defaults leak into {value} unless the story explicitly calls for an anachronistic contrast."
+    },
+    {
+      "key": "expected_model_family",
+      "title": "Expected Model Family",
+      "source_keys": ["expected_model_family", "expected_model", "target_model", "model_family"],
+      "slot_token": "[[SHOT_GENERATION_MODEL_FAMILY_RULES]]",
+      "prompt_template": "Expected model family is {value}. Optimize phrasing, subject counts, motion complexity, and image/video fidelity wording for {value}. Prefer prompt structures that stay robust under this model family while preserving the original field contract and cinematic intent."
+    },
+    {
+      "key": "generation_workflow",
+      "title": "Generation Workflow",
+      "source_keys": ["generation_workflow", "workflow", "pipeline"],
+      "slot_token": "[[SHOT_GENERATION_WORKFLOW_RULES]]",
+      "prompt_template": "Generation workflow is {value}. Bias shot output toward what this workflow needs downstream: stable start/end continuity, clean asset handoff, predictable keyframe escalation, and prompt wording that helps the next production step stay deterministic under a {value} pipeline."
+    },
+    {
+      "key": "continuity_priority",
+      "title": "Continuity Priority",
+      "source_keys": ["continuity_priority", "continuity", "continuity_mode"],
+      "slot_token": "[[SHOT_GENERATION_CONTINUITY_RULES]]",
+      "prompt_template": "Continuity priority is {value}. Weight identity carry-over, environment geography, object persistence, transient accessory continuity, lighting continuity, and start-to-end state closure according to this priority setting, even when a more flamboyant shot alternative is available."
+    }
+  ],
+  "combo_rules": [
+    {
+      "skill_id": "combo.live_action.emotional_drama.zh_cn",
+      "title": "Live Action Emotional Drama / Chinese",
+      "slot_token": "[[SHOT_GENERATION_COMBO_RULES]]",
+      "when": {
+        "project_type": ["live_action", "live action", "真人", "真人剧"],
+        "base_positioning": ["emotional_drama", "情感", "情感戏", "情绪剧"],
+        "project_language": ["zh_cn", "中文", "chinese", "cn", "mandarin"]
+      },
+      "prompt": "When the project is live-action emotional drama in Chinese, favor grounded actor-readable blocking, restrained but expressive lens packages around 35mm-65mm for pressure shots, emotionally legible reaction coverage, and natural Chinese dialogue payloads. Keep glamour and performance detail high, but avoid fantasy-like over-design or needlessly ornamental motion language."
+    },
+    {
+      "skill_id": "combo.live_action.suspense_thriller",
+      "title": "Live Action Suspense Thriller",
+      "slot_token": "[[SHOT_GENERATION_COMBO_RULES]]",
+      "when": {
+        "project_type": ["live_action", "live action", "真人", "真人剧"],
+        "base_positioning": ["suspense_thriller", "悬疑", "惊悚", "悬疑惊悚"]
+      },
+      "prompt": "When the project is live-action suspense/thriller, bias the sequence toward controlled information withholding, pressured negative space, tension-first reaction timing, selective POV or reverse-OTS reveals, and physically coherent threat geography. Keep every escalation readable; suspense should come from controlled disclosure, not random visual distortion."
+    },
+    {
+      "skill_id": "combo.fantasy_sci_fi.stylized",
+      "title": "Fantasy / Sci-Fi Stylized",
+      "slot_token": "[[SHOT_GENERATION_COMBO_RULES]]",
+      "when": {
+        "base_positioning": ["fantasy_sci_fi", "fantasy", "sci_fi", "科幻", "奇幻", "玄幻"],
+        "project_type": ["animation", "animated", "anime", "stylized", "stylised", "动画", "风格化"]
+      },
+      "prompt": "When the project sits in a stylized fantasy or sci-fi lane, let shots retain bold silhouette design, larger motif clarity, and more assertive perspective language, but keep state closure and subject readability strict. Spectacle is allowed; subject count, motion chains, and environment continuity still need to stay production-usable."
+    }
+  ]
+}

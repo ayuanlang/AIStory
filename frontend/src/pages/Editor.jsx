@@ -1601,6 +1601,18 @@ import {
     PROJECT_EP_TONE_OPTIONS,
     PROJECT_EP_LIGHTING_OPTIONS,
     PROJECT_EP_QUALITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_REGION_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_WORKFLOW_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_GOAL_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_CHARACTER_EMPHASIS_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_NARRATIVE_DENSITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_COMMERCIAL_CONSTRAINT_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_MODALITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_CONTINUITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_DEFAULTS,
     normalizeProjectEpisodeType,
     normalizeProjectEpisodeLanguage,
     normalizeProjectEpisodeBasePositioning,
@@ -1619,6 +1631,20 @@ import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 const CANON_TAG_STORAGE_KEY = 'aistory_character_canon_tag_categories_v1';
 const CANON_IDENTITY_STORAGE_KEY = 'aistory_character_canon_identity_categories_v1';
+const PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS = [
+    { key: 'primary_goal', labelZh: '主要目标', labelEn: 'Primary Goal', options: PROJECT_SCENE_ANALYSIS_GOAL_OPTIONS },
+    { key: 'secondary_goal', labelZh: '次级目标', labelEn: 'Secondary Goal', options: PROJECT_SCENE_ANALYSIS_GOAL_OPTIONS },
+    { key: 'expected_model_family', labelZh: '预期模型族', labelEn: 'Expected Model Family', options: PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS },
+    { key: 'generation_workflow', labelZh: '生成工作流', labelEn: 'Generation Workflow', options: PROJECT_SCENE_ANALYSIS_WORKFLOW_OPTIONS },
+    { key: 'era_setting', labelZh: '时代设定', labelEn: 'Era Setting', options: PROJECT_SCENE_ANALYSIS_ERA_OPTIONS },
+    { key: 'region_culture', labelZh: '地域文化语境', labelEn: 'Region / Culture', options: PROJECT_SCENE_ANALYSIS_REGION_OPTIONS },
+    { key: 'character_emphasis', labelZh: '人物侧重点', labelEn: 'Character Emphasis', options: PROJECT_SCENE_ANALYSIS_CHARACTER_EMPHASIS_OPTIONS },
+    { key: 'narrative_density', labelZh: '叙事密度', labelEn: 'Narrative Density', options: PROJECT_SCENE_ANALYSIS_NARRATIVE_DENSITY_OPTIONS },
+    { key: 'commercial_constraint', labelZh: '商业约束', labelEn: 'Commercial Constraint', options: PROJECT_SCENE_ANALYSIS_COMMERCIAL_CONSTRAINT_OPTIONS },
+    { key: 'modality_focus', labelZh: '模态侧重', labelEn: 'Modality Focus', options: PROJECT_SCENE_ANALYSIS_MODALITY_OPTIONS },
+    { key: 'continuity_priority', labelZh: '连续性优先级', labelEn: 'Continuity Priority', options: PROJECT_SCENE_ANALYSIS_CONTINUITY_OPTIONS },
+    { key: 'safety_broadcast_level', labelZh: '播出安全等级', labelEn: 'Safety / Broadcast Level', options: PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS },
+];
 
 const DEFAULT_CANON_TAG_CATEGORIES = [
     {
@@ -1879,7 +1905,9 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
             custom_style_tags: "",
             extra_notes: "",
         },
+        ...PROJECT_SCENE_ANALYSIS_DEFAULTS,
     });
+    const [isSceneAnalysisDimensionsCollapsed, setIsSceneAnalysisDimensionsCollapsed] = useState(true);
 
     const [globalStoryInput, setGlobalStoryInput] = useState({
         episodes_count: 12,
@@ -3719,6 +3747,43 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                         />
                     </div>
 
+                </div>
+                )}
+
+                {mode === 'overview' && (
+                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-4 xl:col-span-2">
+                    <button
+                        type="button"
+                        onClick={() => setIsSceneAnalysisDimensionsCollapsed((prev) => !prev)}
+                        className="w-full flex items-center justify-between gap-3 border-b border-white/10 pb-3 text-left"
+                    >
+                        <div>
+                            <h3 className="text-lg font-semibold text-primary">{t('场景分析维度', 'Scene Analysis Dimensions')}</h3>
+                            <p className="text-xs text-muted-foreground mt-1">{t('用于 Skill 决策引擎组合提示词。建议默认使用“双目标”：剧本优化 + 人物创作。', 'Used by the skill decision engine to compose prompts. Recommended default is dual-goal: script optimization + character creation.')}</p>
+                        </div>
+                        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isSceneAnalysisDimensionsCollapsed ? '' : 'rotate-180'}`} />
+                    </button>
+
+                    {!isSceneAnalysisDimensionsCollapsed && (
+                        <>
+                            <div className="rounded-lg border border-amber-400/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-100/90">
+                                {t('这些字段只影响 Skill 路由和提示词组合，不改变 scene_analysis 的输出结构，也不会影响下游 markdown/json 协议。', 'These fields only affect skill routing and prompt composition. They do not change the scene_analysis output structure or downstream markdown/json contracts.')}
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                                {PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS.map((field) => (
+                                    <InputGroup
+                                        key={`project-scene-analysis-${field.key}`}
+                                        idPrefix={`${prefix}scene-analysis-`}
+                                        label={t(field.labelZh, field.labelEn)}
+                                        value={info?.[field.key] || ''}
+                                        onChange={v => updateField(field.key, v)}
+                                        list={field.options}
+                                        placeholder={t('未指定', 'Unspecified')}
+                                    />
+                                ))}
+                            </div>
+                        </>
+                    )}
                 </div>
                 )}
 
@@ -6946,6 +7011,81 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         alert(alertMessage);
     }, [localizeAnalysisWarningCode, onLog, t]);
 
+    const ensureSubjectsImportedBeforePostChecks = useCallback(async (analysisResult, importReport = null) => {
+        const subjectsJson = (analysisResult?.subjects_json && typeof analysisResult.subjects_json === 'object')
+            ? analysisResult.subjects_json
+            : null;
+        if (!subjectsJson || typeof onImportText !== 'function') {
+            return importReport;
+        }
+
+        const expectedCount =
+            (Array.isArray(subjectsJson.characters) ? subjectsJson.characters.length : 0)
+            + (Array.isArray(subjectsJson.props) ? subjectsJson.props.length : 0)
+            + (Array.isArray(subjectsJson.environments) ? subjectsJson.environments.length : 0);
+        if (expectedCount <= 0) {
+            return importReport;
+        }
+
+        const importedCounts = importReport?.importedSubjectCounts || {};
+        const createdCount =
+            Number(importedCounts.character || 0)
+            + Number(importedCounts.prop || 0)
+            + Number(importedCounts.environment || 0);
+        const skippedCount = Array.isArray(importReport?.skippedSubjectItems)
+            ? importReport.skippedSubjectItems.length
+            : 0;
+        const handledCount = createdCount + skippedCount;
+
+        if (handledCount >= expectedCount) {
+            return importReport;
+        }
+
+        onLog?.(
+            `Subjects import pre-check: expected=${expectedCount}, handled=${handledCount}. Running explicit subjects_json import before consistency/supplement checks.`,
+            'warning'
+        );
+
+        const subjectsImportReport = await onImportText(
+            JSON.stringify(subjectsJson, null, 2),
+            'json',
+            { suppressAlerts: true }
+        );
+
+        const mergedImportedCounts = {
+            character: Math.max(
+                Number(importedCounts.character || 0),
+                Number(subjectsImportReport?.importedSubjectCounts?.character || 0)
+            ),
+            prop: Math.max(
+                Number(importedCounts.prop || 0),
+                Number(subjectsImportReport?.importedSubjectCounts?.prop || 0)
+            ),
+            environment: Math.max(
+                Number(importedCounts.environment || 0),
+                Number(subjectsImportReport?.importedSubjectCounts?.environment || 0)
+            ),
+        };
+
+        return {
+            ...(importReport && typeof importReport === 'object' ? importReport : {}),
+            importedSubjectCounts: mergedImportedCounts,
+            createdSubjectItems: [
+                ...(Array.isArray(importReport?.createdSubjectItems) ? importReport.createdSubjectItems : []),
+                ...(Array.isArray(subjectsImportReport?.createdSubjectItems) ? subjectsImportReport.createdSubjectItems : []),
+            ],
+            skippedSubjectItems: [
+                ...(Array.isArray(importReport?.skippedSubjectItems) ? importReport.skippedSubjectItems : []),
+                ...(Array.isArray(subjectsImportReport?.skippedSubjectItems) ? subjectsImportReport.skippedSubjectItems : []),
+            ],
+            subjectsImportPrecheck: {
+                expectedCount,
+                handledCountBefore: handledCount,
+                reranExplicitImport: true,
+            },
+        };
+    }, [onImportText, onLog]);
+
     const handleImportEntities = async () => {
         const payload = getAnalysisEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
         if (!payload) {
@@ -7546,6 +7686,8 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         return importReport || null;
     };
 
+    const handleSupplementSceneSubjectsRef = useRef(null);
+
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, options = {}) => {
         const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
         const emptyReport = {
@@ -7617,7 +7759,12 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
                 ),
             });
 
-            const sceneSupplementReport = await handleSupplementSceneSubjects(
+            const supplementSceneSubjects = handleSupplementSceneSubjectsRef.current;
+            if (typeof supplementSceneSubjects !== 'function') {
+                throw new Error('Scene subject supplement handler is unavailable in this context.');
+            }
+
+            const sceneSupplementReport = await supplementSceneSubjects(
                 scene,
                 { missing: currentMissing },
                 { silent: true }
@@ -9821,6 +9968,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             } finally {
                 phaseMarks.importFinishedAt = Date.now();
             }
+            importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
             postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport);
@@ -10173,6 +10321,7 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
             } finally {
                 phaseMarks.importFinishedAt = Date.now();
             }
+            importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
             postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport);
@@ -13882,6 +14031,8 @@ const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, 
             setSceneSubjectSupplementingMap((prev) => ({ ...prev, [statusKey]: false }));
         }
     }, [entities, onLog, projectId, t]);
+
+    handleSupplementSceneSubjectsRef.current = handleSupplementSceneSubjects;
 
     const buildSceneContentMarkdown = (sceneRows = []) => {
         if (!activeEpisode) return '';
