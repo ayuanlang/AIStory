@@ -41,6 +41,7 @@ _DB_BOOT_RETRY_DELAY = 2  # seconds
 _DB_BOOT_LOCK_KEY = int(os.getenv("DB_BOOT_LOCK_KEY", "481516234"))
 _DB_BOOT_LOCK_WAIT_TIMEOUT = int(os.getenv("DB_BOOT_LOCK_WAIT_TIMEOUT", "240"))
 _DB_BOOT_LOCK_POLL_DELAY = max(1, int(os.getenv("DB_BOOT_LOCK_POLL_DELAY", "2")))
+_PROCESS_STARTED_UNIX_TS = time.time()
 
 
 def _run_critical_db_bootstrap_steps() -> None:
@@ -412,6 +413,8 @@ def _collect_high_memory_report(base_payload: Dict[str, Any]) -> Dict[str, Any]:
     report = {
         "pid": base_payload.get("pid"),
         "render_instance_id": base_payload.get("render_instance_id"),
+        "process_started_unix_ts": base_payload.get("process_started_unix_ts"),
+        "uptime_seconds": base_payload.get("uptime_seconds"),
         "vmrss_kb": base_payload.get("vmrss_kb"),
         "vmsize_kb": base_payload.get("vmsize_kb"),
         "open_fd": base_payload.get("open_fd"),
@@ -428,9 +431,12 @@ def _collect_runtime_diag_payload() -> Dict[str, Any]:
     proc_metrics = _read_linux_proc_status_metrics()
     fd_count = _read_open_fd_count()
     queue_snapshot = _read_generation_queue_snapshot()
+    now_ts = time.time()
     return {
         "pid": os.getpid(),
         "render_instance_id": str(os.getenv("RENDER_INSTANCE_ID") or ""),
+        "process_started_unix_ts": int(_PROCESS_STARTED_UNIX_TS),
+        "uptime_seconds": max(0, int(now_ts - _PROCESS_STARTED_UNIX_TS)),
         "threads_active": threading.active_count(),
         "proc_threads": proc_metrics.get("proc_threads"),
         "vmrss_kb": proc_metrics.get("vmrss_kb"),

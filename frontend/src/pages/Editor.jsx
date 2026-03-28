@@ -31938,25 +31938,19 @@ const Editor = ({
                                         ...(char.negative_prompt_en ? { negative_prompt_en: char.negative_prompt_en } : {}),
                                     },
                                 };
-                                const existing = existingEntityMap.get(normalizeEntityKey('character', entityName))
-                                    || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('character', entityNameEn)) : null);
-                                if (existing?.id) {
-                                    logSkippedExistingSubject('character', entityName, entityNameEn);
-                                } else {
-                                    const created = await createEntity(id, payload);
-                                    if (created?.id) {
-                                        knownEntities.push(created);
-                                        existingEntityMap.set(normalizeEntityKey('character', entityName), created);
-                                        if (entityNameEn) existingEntityMap.set(normalizeEntityKey('character', entityNameEn), created);
-                                        count++;
-                                        importedSubjectCounts.character += 1;
-                                        createdSubjectItems.push({
-                                            type: 'character',
-                                            name: entityName,
-                                            name_en: entityNameEn || '',
-                                            id: created.id,
-                                        });
-                                    }
+                                const created = await createEntity(id, payload);
+                                if (created?.id) {
+                                    knownEntities.push(created);
+                                    existingEntityMap.set(normalizeEntityKey('character', entityName), created);
+                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('character', entityNameEn), created);
+                                    count++;
+                                    importedSubjectCounts.character += 1;
+                                    createdSubjectItems.push({
+                                        type: 'character',
+                                        name: entityName,
+                                        name_en: entityNameEn || '',
+                                        id: created.id,
+                                    });
                                 }
                             } catch (err) {
                                 addLog(`Character import failed (${entityName}): ${err?.message || err}`, 'warning');
@@ -32007,25 +32001,19 @@ const Editor = ({
                                         ...(prop.negative_prompt_en ? { negative_prompt_en: prop.negative_prompt_en } : {}),
                                     },
                                 };
-                                const existing = existingEntityMap.get(normalizeEntityKey('prop', entityName))
-                                    || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('prop', entityNameEn)) : null);
-                                if (existing?.id) {
-                                    logSkippedExistingSubject('prop', entityName, entityNameEn);
-                                } else {
-                                    const created = await createEntity(id, payload);
-                                    if (created?.id) {
-                                        knownEntities.push(created);
-                                        existingEntityMap.set(normalizeEntityKey('prop', entityName), created);
-                                        if (entityNameEn) existingEntityMap.set(normalizeEntityKey('prop', entityNameEn), created);
-                                        count++;
-                                        importedSubjectCounts.prop += 1;
-                                        createdSubjectItems.push({
-                                            type: 'prop',
-                                            name: entityName,
-                                            name_en: entityNameEn || '',
-                                            id: created.id,
-                                        });
-                                    }
+                                const created = await createEntity(id, payload);
+                                if (created?.id) {
+                                    knownEntities.push(created);
+                                    existingEntityMap.set(normalizeEntityKey('prop', entityName), created);
+                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('prop', entityNameEn), created);
+                                    count++;
+                                    importedSubjectCounts.prop += 1;
+                                    createdSubjectItems.push({
+                                        type: 'prop',
+                                        name: entityName,
+                                        name_en: entityNameEn || '',
+                                        id: created.id,
+                                    });
                                 }
                             } catch (err) {
                                 addLog(`Prop import failed (${entityName}): ${err?.message || err}`, 'warning');
@@ -32080,25 +32068,19 @@ const Editor = ({
                                         ...(env.negative_prompt_en ? { negative_prompt_en: env.negative_prompt_en } : {}),
                                     },
                                 };
-                                const existing = existingEntityMap.get(normalizeEntityKey('environment', entityName))
-                                    || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('environment', entityNameEn)) : null);
-                                if (existing?.id) {
-                                    logSkippedExistingSubject('environment', entityName, entityNameEn);
-                                } else {
-                                    const created = await createEntity(id, payload);
-                                    if (created?.id) {
-                                        knownEntities.push(created);
-                                        existingEntityMap.set(normalizeEntityKey('environment', entityName), created);
-                                        if (entityNameEn) existingEntityMap.set(normalizeEntityKey('environment', entityNameEn), created);
-                                        count++;
-                                        importedSubjectCounts.environment += 1;
-                                        createdSubjectItems.push({
-                                            type: 'environment',
-                                            name: entityName,
-                                            name_en: entityNameEn || '',
-                                            id: created.id,
-                                        });
-                                    }
+                                const created = await createEntity(id, payload);
+                                if (created?.id) {
+                                    knownEntities.push(created);
+                                    existingEntityMap.set(normalizeEntityKey('environment', entityName), created);
+                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('environment', entityNameEn), created);
+                                    count++;
+                                    importedSubjectCounts.environment += 1;
+                                    createdSubjectItems.push({
+                                        type: 'environment',
+                                        name: entityName,
+                                        name_en: entityNameEn || '',
+                                        id: created.id,
+                                    });
                                 }
                             } catch (err) {
                                 addLog(`Environment import failed (${entityName}): ${err?.message || err}`, 'warning');

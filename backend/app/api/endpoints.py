@@ -15003,9 +15003,9 @@ class EntityCreate(BaseModel):
 
 class EntityOut(BaseModel):
     id: int
-    name: str
-    type: str
-    description: str
+    name: Optional[str] = None
+    type: Optional[str] = None
+    description: Optional[str] = None
     image_url: Optional[str]
     generation_prompt_en: Optional[str]
     generation_prompt_cn: Optional[str]
@@ -15093,59 +15093,37 @@ def create_entity(
 
     _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
 
-    incoming_name = str(entity.name or "").strip()
-    incoming_name_en = str(entity.name_en or "").strip()
-
-    # Reuse existing subject instead of overwriting when either canonical name or name_en already exists.
-    existing_query = db.query(Entity).filter(Entity.project_id == project_id)
-    existing_entity = None
-    if incoming_name and incoming_name_en:
-        existing_entity = existing_query.filter(
-            or_(Entity.name == incoming_name, Entity.name_en == incoming_name_en)
-        ).first()
-    elif incoming_name:
-        existing_entity = existing_query.filter(Entity.name == incoming_name).first()
-    elif incoming_name_en:
-        existing_entity = existing_query.filter(Entity.name_en == incoming_name_en).first()
-
-    if existing_entity:
-        # If entity exists, do NOT update or overwrite it during subject import.
-        # Reuse the existing DB row and ignore incoming fields for this duplicate entity.
-        if _repair_entity_image_url_from_assets(db, current_user, project, existing_entity):
-            db.commit()
-        return existing_entity
-    else:
-        # Create new
-        db_entity = Entity(
-            project_id=project_id,
-            name=entity.name,
-            type=entity.type,
-            description=entity.description,
-            image_url=entity.image_url,
-            generation_prompt_en=entity.generation_prompt_en,
-            generation_prompt_cn=entity.generation_prompt_cn,
-            anchor_description=entity.anchor_description,
-            
-            name_en=entity.name_en,
-            gender=entity.gender,
-            role=entity.role,
-            archetype=entity.archetype,
-            appearance_cn=entity.appearance_cn,
-            clothing=entity.clothing,
-            action_characteristics=entity.action_characteristics,
-            
-            atmosphere=entity.atmosphere,
-            visual_params=entity.visual_params,
-            narrative_description=entity.narrative_description,
-            
-            visual_dependencies=_coerce_visual_dependencies(entity.visual_dependencies),
-            dependency_strategy=entity.dependency_strategy,
-            custom_attributes=entity.custom_attributes or {}
-        )
-        db.add(db_entity)
-        db.commit()
-        db.refresh(db_entity)
-        return db_entity
+    # Always create a new subject row; do not deduplicate by name/type.
+    db_entity = Entity(
+        project_id=project_id,
+        name=entity.name,
+        type=entity.type,
+        description=entity.description,
+        image_url=entity.image_url,
+        generation_prompt_en=entity.generation_prompt_en,
+        generation_prompt_cn=entity.generation_prompt_cn,
+        anchor_description=entity.anchor_description,
+        
+        name_en=entity.name_en,
+        gender=entity.gender,
+        role=entity.role,
+        archetype=entity.archetype,
+        appearance_cn=entity.appearance_cn,
+        clothing=entity.clothing,
+        action_characteristics=entity.action_characteristics,
+        
+        atmosphere=entity.atmosphere,
+        visual_params=entity.visual_params,
+        narrative_description=entity.narrative_description,
+        
+        visual_dependencies=_coerce_visual_dependencies(entity.visual_dependencies),
+        dependency_strategy=entity.dependency_strategy,
+        custom_attributes=entity.custom_attributes or {}
+    )
+    db.add(db_entity)
+    db.commit()
+    db.refresh(db_entity)
+    return db_entity
 
 
 class EntityCloneWithLLMRequest(BaseModel):
@@ -29004,12 +28982,16 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         else:
             updated_info = data # Fallback if direct object
             
-        logger.info(f"Parsed Updated Info for Entity {entity.id}: {json.dumps(updated_info, ensure_ascii=False)[:300]}...")
+        logger.info(f"Parsed Updated Info for Entity {entity_id}: {json.dumps(updated_info, ensure_ascii=False)[:300]}...")
 
         if not updated_info:
              logger.warning("updated_info is empty! LLM response might not match expected JSON schema.")
 
-        entity = db.merge(entity)
+        # The original ORM instance may be detached after _release_db_connection;
+        # reload a session-bound instance before applying updates.
+        entity = db.query(Entity).filter(Entity.id == entity_id).first()
+        if not entity:
+            raise HTTPException(status_code=404, detail="Entity not found")
 
         # Update Entity Fields
         if "name_en" in updated_info: entity.name_en = updated_info["name_en"]
@@ -29055,7 +29037,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
             item="entity_image_analysis",
             usage_payload=usage if isinstance(usage, dict) else None,
             extra_details={
-                "entity_id": entity.id,
+                "entity_id": entity_id,
                 "request_scope": "analyze_entity_image",
             },
             routing_payload=effective_llm_response,
