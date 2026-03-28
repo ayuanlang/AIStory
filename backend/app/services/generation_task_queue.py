@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import asyncio
 import threading
 import time
 import atexit
@@ -349,6 +350,44 @@ def cancel_generation_task(job_id: str, *, reason: str = "Task canceled by user"
     return get_generation_task_status(job_id)
 
 
+def cancel_generation_tasks(*, kind: Optional[str] = None, user_id: Optional[int] = None, reason: str = "Task canceled by stop-all") -> int:
+    """Bulk-cancel active generation queue tasks and return affected row count."""
+    _ensure_queue_table_ready()
+    now = time.time()
+
+    clauses = ["status IN ('queued', 'running')"]
+    params: Dict[str, Any] = {
+        "finished_at": now,
+        "error": str(reason or "Task canceled by stop-all"),
+    }
+    if kind:
+        clauses.append("kind = :kind")
+        params["kind"] = str(kind)
+    if user_id is not None:
+        clauses.append("user_id = :user_id")
+        params["user_id"] = int(user_id)
+
+    where_sql = " AND ".join(clauses)
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            text(
+                f"""
+                UPDATE generation_task_queue
+                SET status = 'canceled',
+                    finished_at = :finished_at,
+                    error = :error
+                WHERE {where_sql}
+                """
+            ),
+            params,
+        )
+        db.commit()
+        return int(result.rowcount or 0)
+    finally:
+        db.close()
+
+
 def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
     _ensure_queue_table_ready()
     cutoff = time.time() - _QUEUE_RECLAIM_SECONDS
@@ -411,12 +450,16 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
         db.close()
 
 
-def _finish_task(job_id: str, *, status: str, error: Optional[str] = None) -> None:
+def _finish_task(job_id: str, *, status: str, error: Optional[str] = None, only_if_running: bool = False) -> bool:
     _ensure_queue_table_ready()
     now = time.time()
     db = SessionLocal()
     try:
-        db.execute(
+        where_clause = "WHERE job_id = :job_id"
+        if only_if_running:
+            where_clause += " AND status = 'running'"
+
+        result = db.execute(
             text(
                 """
                 UPDATE generation_task_queue
@@ -424,7 +467,9 @@ def _finish_task(job_id: str, *, status: str, error: Optional[str] = None) -> No
                     finished_at = :finished_at,
                     last_heartbeat = :last_heartbeat,
                     error = :error
-                WHERE job_id = :job_id
+                """
+                + where_clause +
+                """
                 """
             ),
             {
@@ -436,6 +481,7 @@ def _finish_task(job_id: str, *, status: str, error: Optional[str] = None) -> No
             },
         )
         db.commit()
+        return int(result.rowcount or 0) > 0
     finally:
         db.close()
 
@@ -450,11 +496,34 @@ def _worker_loop(worker_name: str, processor: Callable[[str, str, int, Dict[str,
                 _QUEUE_STOP_EVENT.wait(_QUEUE_POLL_SECONDS)
                 continue
             processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
-            _finish_task(task["job_id"], status="completed")
+            finalized = _finish_task(task["job_id"], status="completed", only_if_running=True)
+            if not finalized:
+                latest = get_generation_task_status(str(task.get("job_id") or "")) or {}
+                logger.info(
+                    "generation queue completion skipped; task state changed externally | worker=%s job_id=%s kind=%s current_status=%s",
+                    worker_name,
+                    (task or {}).get("job_id"),
+                    (task or {}).get("kind"),
+                    latest.get("status"),
+                )
         except Exception as exc:
             logger.exception("generation queue task failed | worker=%s job_id=%s kind=%s", worker_name, (task or {}).get("job_id"), (task or {}).get("kind"))
             if task:
-                _finish_task(task["job_id"], status="failed", error=str(exc))
+                job_id = str(task.get("job_id") or "")
+                if isinstance(exc, asyncio.CancelledError):
+                    _finish_task(job_id, status="canceled", error="Task canceled by user", only_if_running=True)
+                    continue
+                latest = get_generation_task_status(job_id) or {}
+                latest_status = str(latest.get("status") or "").strip().lower()
+                if latest_status == "canceled":
+                    logger.info(
+                        "generation queue failure ignored because task already canceled | worker=%s job_id=%s kind=%s",
+                        worker_name,
+                        job_id,
+                        (task or {}).get("kind"),
+                    )
+                    continue
+                _finish_task(job_id, status="failed", error=str(exc), only_if_running=True)
 
 
 def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, Any]], None]) -> None:

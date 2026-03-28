@@ -4620,7 +4620,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 return f"SUBJECT:[{clean_name}]"
 
             normalized_assets = []
-            for item in reuse_subject_assets[:20]:
+            for item in reuse_subject_assets:
                 if not isinstance(item, dict):
                     continue
                 name = str(item.get("name") or "").strip()
@@ -4630,8 +4630,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 normalized_type = _normalize_subject_type(asset_type)
                 description = str(item.get("description") or "").strip()
                 anchor_description = str(item.get("anchor_description") or "").strip()
-                description = description[:600]
-                anchor_description = anchor_description[:300]
                 normalized_assets.append({
                     "name": name,
                     "type": asset_type,
@@ -11551,12 +11549,8 @@ def _build_project_subject_inventory(db: Session, project_id: int, limit_per_typ
             subject_ref = f"ENV:[{canonical_name}]"
 
         anchor_description = str(getattr(ent, "anchor_description", None) or "").strip()
-        if anchor_description:
-            anchor_description = anchor_description[:220]
 
         narrative_hint = str(getattr(ent, "description", None) or "").strip()
-        if narrative_hint:
-            narrative_hint = narrative_hint[:260]
 
         inventory[bucket].append({
             "id": str(getattr(ent, "id", "") or "").strip(),
@@ -12466,7 +12460,6 @@ class ShotOut(BaseModel):
         from_attributes = True
 
 
-_SHOT_LIST_TEXT_LIMIT = max(120, min(int(os.getenv("SHOT_LIST_TEXT_LIMIT", "280")), 1200))
 _SHOT_LIST_COMPACT_TECH_KEYS = (
     "end_frame_url",
     "video_prompt_cn",
@@ -12477,17 +12470,6 @@ _SHOT_LIST_COMPACT_TECH_KEYS = (
     "keyframes_cn",
     "voiceover_url",
 )
-
-
-def _truncate_shot_list_text(value: Any, limit: int = _SHOT_LIST_TEXT_LIMIT) -> Optional[str]:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if len(text) <= limit:
-        return text
-    return text[: max(1, limit - 1)].rstrip() + "..."
-
-
 def _compact_shot_list_technical_notes(raw_notes: Any) -> Tuple[Optional[str], str, str]:
     notes = _asset_meta_to_dict(raw_notes)
     if not notes:
@@ -12507,12 +12489,12 @@ def _compact_shot_list_technical_notes(raw_notes: Any) -> Tuple[Optional[str], s
                 continue
             if key in {"video_prompt_cn", "prompt_cn", "start_frame_cn", "end_frame_cn"} and not prompt_preview_cn:
                 prompt_preview_cn = normalized
-            compact_notes[key] = _truncate_shot_list_text(normalized, 320)
+            compact_notes[key] = normalized
             continue
         if isinstance(value, list):
             normalized_list = [str(item or "").strip() for item in value if str(item or "").strip()]
             if normalized_list:
-                compact_notes[key] = normalized_list[:4]
+                compact_notes[key] = normalized_list
             continue
         if value is not None:
             compact_notes[key] = value
@@ -12560,8 +12542,8 @@ def _build_compact_shot_payload(row: Any) -> Dict[str, Any]:
         "prompt": getattr(row, "prompt", None),
         "technical_notes": compact_notes,
         "end_frame_url": end_frame_url or None,
-        "prompt_preview_cn": _truncate_shot_list_text(prompt_preview_cn, 320),
-        "prompt_preview_en": _truncate_shot_list_text(prompt_preview_en, 320),
+        "prompt_preview_cn": prompt_preview_cn or None,
+        "prompt_preview_en": prompt_preview_en or None,
         "is_compact": True,
     }
 
@@ -12624,17 +12606,17 @@ def read_episode_shots(
             Shot.episode_id.label("episode_id"),
             Shot.shot_id.label("shot_id"),
             Shot.shot_name.label("shot_name"),
-            func.substr(Shot.start_frame, 1, _SHOT_LIST_TEXT_LIMIT).label("start_frame"),
-            func.substr(Shot.end_frame, 1, _SHOT_LIST_TEXT_LIMIT).label("end_frame"),
-            func.substr(Shot.video_content, 1, _SHOT_LIST_TEXT_LIMIT).label("video_content"),
+            Shot.start_frame.label("start_frame"),
+            Shot.end_frame.label("end_frame"),
+            Shot.video_content.label("video_content"),
             Shot.duration.label("duration"),
-            func.substr(Shot.associated_entities, 1, _SHOT_LIST_TEXT_LIMIT).label("associated_entities"),
-            func.substr(Shot.shot_logic_cn, 1, _SHOT_LIST_TEXT_LIMIT).label("shot_logic_cn"),
-            func.substr(Shot.keyframes, 1, _SHOT_LIST_TEXT_LIMIT).label("keyframes"),
+            Shot.associated_entities.label("associated_entities"),
+            Shot.shot_logic_cn.label("shot_logic_cn"),
+            Shot.keyframes.label("keyframes"),
             Shot.scene_code.label("scene_code"),
             Shot.image_url.label("image_url"),
             Shot.video_url.label("video_url"),
-            func.substr(Shot.prompt, 1, _SHOT_LIST_TEXT_LIMIT).label("prompt"),
+            Shot.prompt.label("prompt"),
             Shot.technical_notes.label("technical_notes"),
         )
         rows = compact_query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
@@ -20435,7 +20417,7 @@ def _sanitize_kie_tts_plan(raw_plan: Dict[str, Any], fallback_text: str = "") ->
     planned_dialogue_only = _extract_dialogue_text_for_tts(planned_text_raw)
     text_value = planned_dialogue_only or fallback_dialogue
     if text_value:
-        out["text"] = text_value[:5000]
+        out["text"] = text_value
 
     voice_value = _normalize_kie_voice_name(plan.get("voice") or plan.get("voice_id"))
     out["voice"] = voice_value or _KIE_TTS_DEFAULT_VOICE
@@ -20457,9 +20439,9 @@ def _sanitize_kie_tts_plan(raw_plan: Dict[str, Any], fallback_text: str = "") ->
     previous_text = str(plan.get("previous_text") or "").strip()
     next_text = str(plan.get("next_text") or "").strip()
     if previous_text:
-        out["previous_text"] = previous_text[:5000]
+        out["previous_text"] = previous_text
     if next_text:
-        out["next_text"] = next_text[:5000]
+        out["next_text"] = next_text
 
     return out
 
@@ -26279,6 +26261,53 @@ def stop_all_generation_jobs(
             stopped += 1
             touched.append(f"video:{jid}")
 
+    if safe_kind in {"all", "image", "video"}:
+        try:
+            from app.services.generation_task_queue import cancel_generation_tasks
+
+            queue_total = 0
+            owner_filter = None if current_user.is_superuser else int(current_user.id)
+            if safe_kind == "image":
+                queue_total += int(
+                    cancel_generation_tasks(
+                        kind="image",
+                        user_id=owner_filter,
+                        reason="Cancelled by stop-all",
+                    )
+                    or 0
+                )
+            elif safe_kind == "video":
+                queue_total += int(
+                    cancel_generation_tasks(
+                        kind="video",
+                        user_id=owner_filter,
+                        reason="Cancelled by stop-all",
+                    )
+                    or 0
+                )
+            else:
+                queue_total += int(
+                    cancel_generation_tasks(
+                        kind="image",
+                        user_id=owner_filter,
+                        reason="Cancelled by stop-all",
+                    )
+                    or 0
+                )
+                queue_total += int(
+                    cancel_generation_tasks(
+                        kind="video",
+                        user_id=owner_filter,
+                        reason="Cancelled by stop-all",
+                    )
+                    or 0
+                )
+            if queue_total > 0:
+                stopped += queue_total
+                touched.append(f"queue:{safe_kind}:{queue_total}")
+        except Exception as e:
+            logger.warning("stop-all queue cleanup skipped | kind=%s err=%s", safe_kind, e)
+
     if safe_kind in {"all", "episode-scripts"}:
         projects = db.query(Project).all() if current_user.is_superuser else db.query(Project).filter(Project.owner_id == current_user.id).all()
         for project in projects:
@@ -28566,7 +28595,7 @@ async def analyze_asset_image(
             # Only save short version or full?
             # Save full in a new key
             meta = dict(asset.meta_info)
-            meta["analysis_result"] = result[:500] + "..." if len(result) > 500 else result
+            meta["analysis_result"] = result
             asset.meta_info = meta
             db.commit()
 

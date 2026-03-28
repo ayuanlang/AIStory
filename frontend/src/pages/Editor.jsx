@@ -23714,8 +23714,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             ) {
                 const existingData = {
                     image_url: String(latestShot?.image_url || '').trim(),
-                    start_frame: latestShot?.start_frame || stableShot?.start_frame || '',
-                    end_frame: latestShot?.end_frame || stableShot?.end_frame || '',
                     technical_notes: JSON.stringify(latestTechNotes),
                 };
                 appliedJointDiptychResultsRef.current.set(applyKey, existingData);
@@ -23816,8 +23814,6 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
 
             const nextData = {
                 image_url: startUrl,
-                start_frame: latestShot?.start_frame || stableShot?.start_frame || '',
-                end_frame: latestShot?.end_frame || stableShot?.end_frame || '',
                 technical_notes: JSON.stringify(techNotes),
             };
 

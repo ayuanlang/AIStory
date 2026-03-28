@@ -77,29 +77,7 @@ def _serialize_for_db(value: Any) -> Optional[str]:
 
 
 def _compact_task_result(value: Any) -> Any:
-    if value is None:
-        return None
-
-    serialized = _serialize_for_db(value)
-    if not serialized:
-        return None
-
-    payload_size = len(serialized.encode("utf-8", errors="ignore"))
-    if payload_size <= _RESULT_MAX_BYTES:
-        return value
-
-    compact: Dict[str, Any] = {
-        "result_truncated": True,
-        "result_size_bytes": payload_size,
-    }
-
-    if isinstance(value, dict):
-        for key in ("status", "kind", "task_id", "job_id", "provider", "model", "url", "error", "detail", "message"):
-            if key in value and value.get(key) not in (None, "", []):
-                compact[key] = value.get(key)
-
-    compact["result_preview"] = serialized[:_RESULT_PREVIEW_MAX_CHARS]
-    return compact
+    return value
 
 
 def _save_task_to_db(rec: "_TaskRecord") -> None:

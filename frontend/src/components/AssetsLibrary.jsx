@@ -8,20 +8,27 @@ import {
 } from 'lucide-react';
 import { fetchAssets, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage, fetchUnreferencedAssetIds } from '../services/api';
 import { useLog } from '../context/LogContext';
-import { API_URL, BASE_URL } from '../config';
+import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
 import { confirmUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 
 // Helper to construct full URL if relative
 const getFullUrl = (url) => {
-    if (!url) return '';
-    if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
-    if (url.startsWith('/')) {
-        const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
-        return `${base}${url}`;
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('http') || raw.startsWith('blob:') || raw.startsWith('data:')) return raw;
+    if (raw.startsWith('/')) {
+        const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
+        const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
+        return `${base}${raw}`;
     }
-    return url; 
+    if (raw.startsWith('uploads/')) {
+        const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
+        const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
+        return `${base}/${raw}`;
+    }
+    return raw;
 };
 
 // Helper to normalize asset types
