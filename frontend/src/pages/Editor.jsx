@@ -60,6 +60,7 @@ const normalizeFrameTrimMargins = (draft) => {
 
 const brokenMediaUrls = new Set();
 const brokenSceneImageUrls = new Set();
+const warmMediaUrls = new Set();
 
 const shouldBypassBrokenMediaCache = (url) => {
     const raw = String(url || '').trim();
@@ -83,6 +84,18 @@ const rememberBrokenMediaUrl = (url) => {
 const isBrokenMediaUrl = (url) => {
     if (shouldBypassBrokenMediaCache(url)) return false;
     return brokenMediaUrls.has(String(url || '').trim());
+};
+
+const rememberWarmMediaUrl = (url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized || isBrokenMediaUrl(normalized)) return;
+    warmMediaUrls.add(normalized);
+};
+
+const isWarmMediaUrl = (url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized) return false;
+    return warmMediaUrls.has(normalized);
 };
 
 const getSafeMediaUrl = (url) => {
@@ -162,6 +175,7 @@ const normalizeAsciiSubjectSeparators = normalizeAsciiSubjectSeparatorsForDeps;
 const normalizeSubjectName = normalizeSubjectNameForDeps;
 const normalizeSubjectKey = normalizeSubjectKeyForDeps;
 const normalizeImportSubjectKey = normalizeSubjectKeyForDeps;
+const IMG_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
 const parseVisualDependencies = (value) => {
     let candidates = [];
@@ -206,26 +220,76 @@ const parseVisualDependencies = (value) => {
 
 const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps }) => {
     const rawSrc = String(src || '').trim();
+    const containerRef = useRef(null);
+    const requestedLoading = String(imgProps.loading || '').trim().toLowerCase();
+    const eagerLoad = requestedLoading === 'eager' || requestedLoading === 'auto';
+    const [shouldLoad, setShouldLoad] = useState(() => eagerLoad || isWarmMediaUrl(rawSrc));
     const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
 
     useEffect(() => {
         setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
+        if (isWarmMediaUrl(rawSrc)) {
+            setShouldLoad(true);
+        }
     }, [rawSrc]);
+
+    useEffect(() => {
+        if (eagerLoad) {
+            setShouldLoad(true);
+            return;
+        }
+        const node = containerRef.current;
+        if (!node || shouldLoad || !rawSrc || failed) return;
+
+        if (typeof IntersectionObserver === 'undefined') {
+            setShouldLoad(true);
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting) {
+                        setShouldLoad(true);
+                    }
+                });
+            },
+            {
+                rootMargin: '320px 0px',
+                threshold: 0.01,
+            }
+        );
+
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [eagerLoad, shouldLoad, rawSrc, failed]);
 
     const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
     if (!resolvedSrc) return fallback || null;
 
     return (
-        <img
-            src={resolvedSrc}
-            alt={alt}
-            className={className}
-            onError={() => {
-                rememberBrokenMediaUrl(rawSrc);
-                setFailed(true);
-            }}
-            {...imgProps}
-        />
+        <div ref={containerRef} className="contents">
+            <img
+                src={shouldLoad ? resolvedSrc : IMG_PLACEHOLDER_SRC}
+                alt={alt}
+                className={className}
+                loading={imgProps.loading || 'lazy'}
+                decoding={imgProps.decoding || 'async'}
+                fetchPriority={imgProps.fetchPriority || 'low'}
+                onLoad={() => {
+                    rememberWarmMediaUrl(rawSrc);
+                }}
+                onError={() => {
+                    if (!shouldLoad) {
+                        setShouldLoad(true);
+                        return;
+                    }
+                    rememberBrokenMediaUrl(rawSrc);
+                    setFailed(true);
+                }}
+                {...imgProps}
+            />
+        </div>
     );
 };
 
@@ -681,12 +745,15 @@ const LazyHoverVideo = ({
 }) => {
     const containerRef = useRef(null);
     const videoRef = useRef(null);
-    const [shouldLoad, setShouldLoad] = useState(false);
+    const [shouldLoad, setShouldLoad] = useState(() => isWarmMediaUrl(src));
     const [videoFailed, setVideoFailed] = useState(() => !src || isBrokenMediaUrl(src));
     const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
 
     useEffect(() => {
         setVideoFailed(!src || isBrokenMediaUrl(src));
+        if (isWarmMediaUrl(src)) {
+            setShouldLoad(true);
+        }
     }, [src]);
 
     useEffect(() => {
@@ -753,8 +820,145 @@ const LazyHoverVideo = ({
                 poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
                 preload={shouldLoad ? preload : 'none'}
                 className={mediaClassName}
+                onLoadedData={() => {
+                    rememberWarmMediaUrl(src);
+                    if (poster) rememberWarmMediaUrl(poster);
+                }}
                 onError={() => {
                     if (src) rememberBrokenMediaUrl(src);
+                    setVideoFailed(true);
+                    if (poster) {
+                        rememberBrokenMediaUrl(poster);
+                        setPosterFailed(true);
+                    }
+                }}
+                {...videoProps}
+            />
+        </div>
+    );
+};
+
+const InViewVideo = ({
+    src,
+    poster = '',
+    className = '',
+    preload = 'metadata',
+    rootMargin = '200px 0px',
+    visibleDelayMs = 280,
+    hoverDelayMs = 120,
+    hoverLoad = false,
+    fallback = null,
+    ...videoProps
+}) => {
+    const containerRef = useRef(null);
+    const hoverTimerRef = useRef(null);
+    const visibleTimerRef = useRef(null);
+    const [isInView, setIsInView] = useState(false);
+    const [shouldLoad, setShouldLoad] = useState(() => isWarmMediaUrl(src));
+    const [videoFailed, setVideoFailed] = useState(() => !src || isBrokenMediaUrl(src));
+    const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
+
+    useEffect(() => {
+        setVideoFailed(!src || isBrokenMediaUrl(src));
+        if (isWarmMediaUrl(src)) {
+            setShouldLoad(true);
+        }
+    }, [src]);
+
+    useEffect(() => {
+        setPosterFailed(!poster || isBrokenMediaUrl(poster));
+    }, [poster]);
+
+    useEffect(() => {
+        const node = containerRef.current;
+        if (!node || !src || videoFailed) return undefined;
+
+        if (typeof IntersectionObserver === 'undefined') {
+            setIsInView(true);
+            return undefined;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting) {
+                        setIsInView(true);
+                    }
+                });
+            },
+            {
+                rootMargin,
+                threshold: 0.01,
+            }
+        );
+
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [rootMargin, src, videoFailed]);
+
+    useEffect(() => {
+        if (shouldLoad || !isInView || !src || videoFailed) return undefined;
+        const delay = Math.max(0, Number(visibleDelayMs) || 0);
+        visibleTimerRef.current = setTimeout(() => {
+            setShouldLoad(true);
+        }, delay);
+        return () => {
+            if (visibleTimerRef.current) {
+                clearTimeout(visibleTimerRef.current);
+                visibleTimerRef.current = null;
+            }
+        };
+    }, [isInView, shouldLoad, src, videoFailed, visibleDelayMs]);
+
+    useEffect(() => {
+        return () => {
+            if (hoverTimerRef.current) {
+                clearTimeout(hoverTimerRef.current);
+                hoverTimerRef.current = null;
+            }
+            if (visibleTimerRef.current) {
+                clearTimeout(visibleTimerRef.current);
+                visibleTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    if (!src || videoFailed) {
+        return fallback || null;
+    }
+
+    const handleMouseEnter = () => {
+        if (!hoverLoad || shouldLoad || !src || videoFailed) return;
+        if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+        }
+        const delay = Math.max(0, Number(hoverDelayMs) || 0);
+        hoverTimerRef.current = setTimeout(() => {
+            setShouldLoad(true);
+        }, delay);
+    };
+
+    const handleMouseLeave = () => {
+        if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+        }
+    };
+
+    return (
+        <div ref={containerRef} className="contents" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+            <video
+                src={shouldLoad ? getFullUrl(src) : undefined}
+                poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
+                className={className}
+                preload={shouldLoad ? preload : 'none'}
+                onLoadedData={() => {
+                    rememberWarmMediaUrl(src);
+                    if (poster) rememberWarmMediaUrl(poster);
+                }}
+                onError={() => {
+                    rememberBrokenMediaUrl(src);
                     setVideoFailed(true);
                     if (poster) {
                         rememberBrokenMediaUrl(poster);
@@ -1099,6 +1303,20 @@ function buildShotDiptychLayoutInstruction(diptychPlan, language = 'en') {
     return `The diptych must be arranged ${layoutLabel}.`;
 }
 
+function buildShotDiptychAspectContract(diptychPlan, language = 'en') {
+    const panelAspectRatio = String(diptychPlan?.targetAspectRatio || '16:9').trim();
+    const combinedAspectRatio = String(
+        diptychPlan?.exactCombinedAspectRatio
+        || (diptychPlan?.layout === 'horizontal' ? '32:9' : '9:32')
+    ).trim();
+
+    if (language === 'cn') {
+        return `每一格成片画幅固定为 ${panelAspectRatio}，两格合并总画幅固定为 ${combinedAspectRatio}。两格必须严格等宽等高、50/50 均分，不允许任一格更大或更小。`;
+    }
+
+    return `Each panel must keep the same aspect ratio ${panelAspectRatio}, and the combined two-panel canvas must follow ${combinedAspectRatio}. Both panels must be equal-size with an exact 50/50 split; neither panel can be larger.`;
+}
+
 function getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight) {
     const seamSourceSpan = layout === 'horizontal' ? sourceWidth : sourceHeight;
     if (!Number.isFinite(seamSourceSpan) || seamSourceSpan <= 0) return 2;
@@ -1219,14 +1437,22 @@ function collectSupportedImageSizeOptions(values) {
 }
 
 function selectBestShotDiptychRequestAspectRatio({ diptychPlan, allowedAspectRatios }) {
-    const fallback = normalizeAspectRatioOption(diptychPlan?.targetAspectRatio)
-        || (diptychPlan?.layout === 'vertical' ? '16:9' : '9:16');
+    const fallback = normalizeAspectRatioOption(diptychPlan?.exactCombinedAspectRatio)
+        || (diptychPlan?.layout === 'horizontal' ? '16:9' : '9:16');
     const supported = collectSupportedAspectRatioOptions(allowedAspectRatios);
     if (supported.length === 0) return fallback;
 
     const targetRatio = parseAspectRatioValue(diptychPlan?.targetAspectRatio);
     const preferHorizontalSplit = diptychPlan?.layout === 'horizontal';
-    const exactRatio = parseAspectRatioValue(diptychPlan?.exactCombinedAspectRatio);
+    const exactRatio = parseAspectRatioValue(diptychPlan?.exactCombinedAspectRatio)
+        || (preferHorizontalSplit ? (16 / 9) : (9 / 16));
+
+    const orientationMatched = supported.filter((value) => {
+        const ratio = parseAspectRatioValue(value);
+        if (ratio == null) return false;
+        return preferHorizontalSplit ? ratio >= 1 : ratio <= 1;
+    });
+    const candidatePool = orientationMatched.length > 0 ? orientationMatched : supported;
 
     const scoreAspect = (value) => {
         const overallRatio = parseAspectRatioValue(value);
@@ -1246,7 +1472,7 @@ function selectBestShotDiptychRequestAspectRatio({ diptychPlan, allowedAspectRat
         return orientationPenalty + (panelCloseness * 10) + combinedCloseness;
     };
 
-    return [...supported].sort((left, right) => scoreAspect(left) - scoreAspect(right))[0] || fallback;
+    return [...candidatePool].sort((left, right) => scoreAspect(left) - scoreAspect(right))[0] || fallback;
 }
 
 function selectBestSupportedImageSize(preferredImageSize, allowedImageSizes) {
@@ -11303,9 +11529,18 @@ const MediaDetailModal = ({ media, onClose }) => {
                 {/* Media Area */}
                 <div className="flex-1 bg-black/50 flex items-center justify-center p-3 sm:p-4 relative group/modal min-h-[260px] sm:min-h-[400px]">
                     {media.type === 'video' ? (
-                        <video src={getFullUrl(media.url)} controls autoPlay className="max-w-full max-h-full shadow-lg rounded" />
+                        <InViewVideo
+                            src={media.url}
+                            controls
+                            autoPlay
+                            className="max-w-full max-h-full shadow-lg rounded"
+                            visibleDelayMs={160}
+                            hoverLoad
+                            hoverDelayMs={80}
+                            fallback={<Video className="w-8 h-8 opacity-30" />}
+                        />
                     ) : (
-                        <img src={getFullUrl(media.url)} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
+                        <SafeImage src={media.url} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
                     )}
                     
                     <button 
@@ -11431,6 +11666,47 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
     const [filterValue, setFilterValue] = useState(''); // entity_id or shot_id or entity_type
     
     const [availableShots, setAvailableShots] = useState([]);
+    const assetsViewportRef = useRef(null);
+    const [assetsViewportHeight, setAssetsViewportHeight] = useState(0);
+    const [assetsViewportWidth, setAssetsViewportWidth] = useState(0);
+    const [assetsScrollTop, setAssetsScrollTop] = useState(0);
+
+    const ASSET_GRID_COLUMNS = 4;
+    const ASSET_GRID_GAP = 12;
+    const assetCardWidth = useMemo(() => {
+        if (!assetsViewportWidth) return 160;
+        const usableWidth = Math.max(0, assetsViewportWidth - ASSET_GRID_GAP * (ASSET_GRID_COLUMNS - 1));
+        return Math.max(96, Math.floor(usableWidth / ASSET_GRID_COLUMNS));
+    }, [assetsViewportWidth]);
+    const assetRowHeight = useMemo(() => Math.max(108, assetCardWidth + ASSET_GRID_GAP), [assetCardWidth]);
+    const assetTotalRows = useMemo(() => Math.ceil((assets?.length || 0) / ASSET_GRID_COLUMNS), [assets?.length]);
+    const assetVisibleRows = useMemo(() => {
+        if (!assetsViewportHeight) return 8;
+        return Math.max(1, Math.ceil(assetsViewportHeight / assetRowHeight));
+    }, [assetsViewportHeight, assetRowHeight]);
+    const assetOverscanRows = 3;
+    const assetStartRow = useMemo(() => {
+        if (!assets?.length) return 0;
+        return Math.max(0, Math.floor(assetsScrollTop / assetRowHeight) - assetOverscanRows);
+    }, [assets?.length, assetsScrollTop, assetRowHeight]);
+    const assetEndRow = useMemo(() => {
+        if (!assetTotalRows) return 0;
+        return Math.min(assetTotalRows, assetStartRow + assetVisibleRows + assetOverscanRows * 2);
+    }, [assetTotalRows, assetStartRow, assetVisibleRows]);
+    const assetStartIndex = useMemo(() => assetStartRow * ASSET_GRID_COLUMNS, [assetStartRow]);
+    const assetEndIndex = useMemo(() => {
+        if (!assets?.length) return 0;
+        return Math.min(assets.length, assetEndRow * ASSET_GRID_COLUMNS);
+    }, [assets?.length, assetEndRow]);
+    const visibleAssets = useMemo(() => {
+        if (!assets?.length) return [];
+        return assets.slice(assetStartIndex, assetEndIndex);
+    }, [assets, assetStartIndex, assetEndIndex]);
+    const assetTopSpacerHeight = useMemo(() => assetStartRow * assetRowHeight, [assetStartRow, assetRowHeight]);
+    const assetBottomSpacerHeight = useMemo(() => {
+        const remainingRows = Math.max(0, assetTotalRows - assetEndRow);
+        return remainingRows * assetRowHeight;
+    }, [assetTotalRows, assetEndRow, assetRowHeight]);
 
     useEffect(() => {
         if (isOpen) {
@@ -11466,6 +11742,37 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
             loadAssets();
         }
     }, [isOpen, tab, filterScope, filterType, filterValue]);
+
+    useEffect(() => {
+        if (!isOpen || tab !== 'assets') return;
+        const viewport = assetsViewportRef.current;
+        if (!viewport) return;
+
+        const updateSize = () => {
+            setAssetsViewportHeight(viewport.clientHeight || 0);
+            setAssetsViewportWidth(viewport.clientWidth || 0);
+        };
+
+        updateSize();
+        let observer;
+        if (typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(updateSize);
+            observer.observe(viewport);
+        } else {
+            window.addEventListener('resize', updateSize);
+        }
+
+        return () => {
+            if (observer) observer.disconnect();
+            else window.removeEventListener('resize', updateSize);
+        };
+    }, [isOpen, tab]);
+
+    useEffect(() => {
+        setAssetsScrollTop(0);
+        const viewport = assetsViewportRef.current;
+        if (viewport) viewport.scrollTop = 0;
+    }, [filterScope, filterType, filterValue, tab, isOpen]);
 
     const loadAssets = () => {
         setLoading(true);
@@ -11619,11 +11926,17 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                     </div>
                 )}
 
-                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-[#151515]">
+                <div
+                    ref={assetsViewportRef}
+                    onScroll={(e) => setAssetsScrollTop(e.currentTarget.scrollTop || 0)}
+                    className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-[#151515]"
+                >
                     {tab === 'assets' && (
                         loading ? <div className="flex items-center justify-center h-full"><RefreshCw className="animate-spin text-muted-foreground"/></div> :
-                        <div className="grid grid-cols-4 gap-3">
-                            {assets.map(asset => (
+                        <>
+                            {assetTopSpacerHeight > 0 && <div style={{ height: `${assetTopSpacerHeight}px` }} />}
+                            <div className="grid grid-cols-4 gap-3">
+                            {visibleAssets.map(asset => (
                                 <div 
                                     key={asset.id} 
                                     onClick={() => setSelectedAsset(asset)}
@@ -11635,7 +11948,7 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                             <Video className="text-white/50 group-hover:text-primary transition-colors"/>
                                         </div>
                                     ) : (
-                                        <img src={getFullUrl(asset.url)} alt="asset" className="w-full h-full object-cover" />
+                                        <SafeImage src={asset.url} alt="asset" className="w-full h-full object-cover" />
                                     )}
                                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                     <div className="absolute bottom-0 inset-x-0 p-1 bg-black/60 text-[9px] truncate text-white/70">
@@ -11651,8 +11964,10 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                     </button>
                                 </div>
                             ))}
-                            {assets.length === 0 && <div className="col-span-4 text-center text-muted-foreground py-8">{t('未找到素材', 'No assets found')}</div>}
-                        </div>
+                            </div>
+                            {assetBottomSpacerHeight > 0 && <div style={{ height: `${assetBottomSpacerHeight}px` }} />}
+                            {assets.length === 0 && <div className="text-center text-muted-foreground py-8">{t('未找到素材', 'No assets found')}</div>}
+                        </>
                     )}
                     
                     {/* Asset Detail Overlay */}
@@ -11675,9 +11990,17 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                             <div className="flex-1 overflow-hidden flex">
                                 <div className="flex-1 bg-black/40 flex items-center justify-center p-4">
                                      {selectedAsset.type === 'video' ? (
-                                        <video src={getFullUrl(selectedAsset.url)} controls className="max-w-full max-h-full rounded shadow-lg"/>
+                                                     <InViewVideo
+                                                          src={selectedAsset.url}
+                                                          controls
+                                                          className="max-w-full max-h-full rounded shadow-lg"
+                                                           visibleDelayMs={420}
+                                                           hoverLoad
+                                                           hoverDelayMs={80}
+                                                          fallback={<Video className="w-8 h-8 opacity-30" />}
+                                                     />
                                      ) : (
-                                        <img src={getFullUrl(selectedAsset.url)} className="max-w-full max-h-full object-contain rounded shadow-lg"/>
+                                                     <SafeImage src={selectedAsset.url} className="max-w-full max-h-full object-contain rounded shadow-lg" alt="asset-detail" />
                                      )}
                                 </div>
                                 <div className="w-80 bg-[#151515] border-l border-white/10 p-4 overflow-y-auto space-y-4">
@@ -12132,7 +12455,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                   <div className="bg-[#1a1a1a] border border-white/10 rounded-xl overflow-hidden max-w-5xl w-full max-h-[90vh] flex flex-col lg:flex-row shadow-2xl" onClick={e => e.stopPropagation()}>
                     {/* Image Area */}
                     <div className="flex-1 bg-black/50 flex items-center justify-center p-4 relative group/modal">
-                        <img src={getFullUrl(selectedImage)} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
+                        <SafeImage src={selectedImage} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
                         <button 
                             className="absolute top-4 right-4 bg-black/50 text-white p-2 rounded-full hover:bg-white/20 transition-colors"
                             onClick={() => setSelectedImage(null)}
@@ -12241,7 +12564,7 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                                     resetOnLeave
                                 />
                             ) : (
-                                <img src={getFullUrl(url)} className="w-full h-full object-contain object-center" alt="ref" />
+                                <SafeImage src={url} className="w-full h-full object-contain object-center" alt="ref" />
                             )}
                             {!useSequenceLogic && (
                                 <button 
@@ -19175,6 +19498,158 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         getAssetMeta,
     ]);
 
+    const imageLibraryViewportRef = useRef(null);
+    const imageRefPickerViewportRef = useRef(null);
+    const [imageLibraryViewportSize, setImageLibraryViewportSize] = useState({ width: 0, height: 0 });
+    const [imageRefPickerViewportSize, setImageRefPickerViewportSize] = useState({ width: 0, height: 0 });
+    const [imageLibraryScrollTop, setImageLibraryScrollTop] = useState(0);
+    const [imageRefPickerScrollTop, setImageRefPickerScrollTop] = useState(0);
+
+    const resolveAssetGridColumns = useCallback((width) => {
+        if (width >= 1024) return 4;
+        if (width >= 640) return 3;
+        return 2;
+    }, []);
+
+    const imageLibraryColumns = useMemo(() => resolveAssetGridColumns(imageLibraryViewportSize.width), [resolveAssetGridColumns, imageLibraryViewportSize.width]);
+    const imageRefPickerColumns = useMemo(() => resolveAssetGridColumns(imageRefPickerViewportSize.width), [resolveAssetGridColumns, imageRefPickerViewportSize.width]);
+    const imageLibraryGap = 16;
+    const imageRefPickerGap = 8;
+
+    const imageLibraryRowHeight = useMemo(() => {
+        const width = Number(imageLibraryViewportSize.width || 0);
+        if (!width) return 220;
+        const cardWidth = Math.max(80, (width - imageLibraryGap * (imageLibraryColumns - 1)) / imageLibraryColumns);
+        return cardWidth + imageLibraryGap;
+    }, [imageLibraryViewportSize.width, imageLibraryColumns]);
+
+    const imageRefPickerRowHeight = useMemo(() => {
+        const width = Number(imageRefPickerViewportSize.width || 0);
+        if (!width) return 160;
+        const cardWidth = Math.max(72, (width - imageRefPickerGap * (imageRefPickerColumns - 1)) / imageRefPickerColumns);
+        return cardWidth + imageRefPickerGap;
+    }, [imageRefPickerViewportSize.width, imageRefPickerColumns]);
+
+    const buildVirtualWindow = useCallback((itemsLength, columns, rowHeight, viewportHeight, scrollTop, overscanRows = 3) => {
+        const totalRows = Math.ceil(Math.max(0, itemsLength) / Math.max(1, columns));
+        const visibleRows = Math.max(1, Math.ceil(Math.max(1, viewportHeight) / Math.max(1, rowHeight)));
+        const startRow = Math.max(0, Math.floor(Math.max(0, scrollTop) / Math.max(1, rowHeight)) - overscanRows);
+        const endRow = Math.min(totalRows, startRow + visibleRows + overscanRows * 2);
+        const startIndex = startRow * columns;
+        const endIndex = Math.min(itemsLength, endRow * columns);
+        return {
+            startIndex,
+            endIndex,
+            topSpacerHeight: startRow * rowHeight,
+            bottomSpacerHeight: Math.max(0, totalRows - endRow) * rowHeight,
+        };
+    }, []);
+
+    const imageLibraryWindow = useMemo(() => buildVirtualWindow(
+        filteredAssets.length,
+        imageLibraryColumns,
+        imageLibraryRowHeight,
+        imageLibraryViewportSize.height,
+        imageLibraryScrollTop,
+        3,
+    ), [
+        filteredAssets.length,
+        imageLibraryColumns,
+        imageLibraryRowHeight,
+        imageLibraryViewportSize.height,
+        imageLibraryScrollTop,
+        buildVirtualWindow,
+    ]);
+
+    const imageRefPickerWindow = useMemo(() => buildVirtualWindow(
+        filteredAssets.length,
+        imageRefPickerColumns,
+        imageRefPickerRowHeight,
+        imageRefPickerViewportSize.height,
+        imageRefPickerScrollTop,
+        2,
+    ), [
+        filteredAssets.length,
+        imageRefPickerColumns,
+        imageRefPickerRowHeight,
+        imageRefPickerViewportSize.height,
+        imageRefPickerScrollTop,
+        buildVirtualWindow,
+    ]);
+
+    const imageLibraryVisibleAssets = useMemo(() => {
+        const { startIndex, endIndex } = imageLibraryWindow;
+        return filteredAssets.slice(startIndex, endIndex);
+    }, [filteredAssets, imageLibraryWindow]);
+
+    const imageRefPickerVisibleAssets = useMemo(() => {
+        const { startIndex, endIndex } = imageRefPickerWindow;
+        return filteredAssets.slice(startIndex, endIndex);
+    }, [filteredAssets, imageRefPickerWindow]);
+
+    useEffect(() => {
+        if (!showImageModal || imageModalTab !== 'library') return;
+        const node = imageLibraryViewportRef.current;
+        if (!node) return;
+
+        const updateViewport = () => {
+            setImageLibraryViewportSize({
+                width: node.clientWidth || 0,
+                height: node.clientHeight || 0,
+            });
+        };
+
+        updateViewport();
+        let observer;
+        if (typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(updateViewport);
+            observer.observe(node);
+        } else {
+            window.addEventListener('resize', updateViewport);
+        }
+
+        return () => {
+            if (observer) observer.disconnect();
+            else window.removeEventListener('resize', updateViewport);
+        };
+    }, [showImageModal, imageModalTab]);
+
+    useEffect(() => {
+        if (!showImageModal || refSelectionMode !== 'assets') return;
+        const node = imageRefPickerViewportRef.current;
+        if (!node) return;
+
+        const updateViewport = () => {
+            setImageRefPickerViewportSize({
+                width: node.clientWidth || 0,
+                height: node.clientHeight || 0,
+            });
+        };
+
+        updateViewport();
+        let observer;
+        if (typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(updateViewport);
+            observer.observe(node);
+        } else {
+            window.addEventListener('resize', updateViewport);
+        }
+
+        return () => {
+            if (observer) observer.disconnect();
+            else window.removeEventListener('resize', updateViewport);
+        };
+    }, [showImageModal, refSelectionMode]);
+
+    useEffect(() => {
+        setImageLibraryScrollTop(0);
+        setImageRefPickerScrollTop(0);
+        const libraryNode = imageLibraryViewportRef.current;
+        if (libraryNode) libraryNode.scrollTop = 0;
+        const pickerNode = imageRefPickerViewportRef.current;
+        if (pickerNode) pickerNode.scrollTop = 0;
+    }, [assetKeyword, assetProjectFilter, assetImageTypeFilter, filteredAssets.length]);
+
     // Image Handlers
     const handleSelectAsset = async (asset) => {
         const selectedUrl = String(asset?.url || '').trim();
@@ -20678,7 +21153,11 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 ))}
                             </div>
 
-                            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                            <div
+                                ref={imageLibraryViewportRef}
+                                onScroll={(e) => setImageLibraryScrollTop(e.currentTarget.scrollTop || 0)}
+                                className="flex-1 overflow-y-auto p-4 custom-scrollbar"
+                            >
                                 {imageModalTab === 'library' && (
                                     <div>
                                         <div className="mb-3 grid grid-cols-1 sm:grid-cols-[1fr_180px_180px_auto] gap-2">
@@ -20720,9 +21199,9 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                 {t('重置', 'Reset')}
                                             </button>
                                         </div>
-
+                                        {imageLibraryWindow.topSpacerHeight > 0 && <div style={{ height: `${imageLibraryWindow.topSpacerHeight}px` }} />}
                                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                                        {filteredAssets.map(asset => (
+                                        {imageLibraryVisibleAssets.map(asset => (
                                             <div 
                                                 key={asset.id} 
                                                 onClick={() => {
@@ -20735,21 +21214,22 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                 className={`aspect-square bg-black/40 rounded-lg overflow-hidden border border-white/5 group relative ${selectedEntityImageLocked ? 'cursor-not-allowed opacity-60' : 'hover:border-primary/50 cursor-pointer'}`}
                                             >
                                                 <AssetHoverMetaOverlay asset={asset} t={t} />
-                                                <img src={asset.url} alt="asset" className="w-full h-full object-cover" />
+                                                <SafeImage src={asset.url} alt="asset" className="w-full h-full object-cover" />
                                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                             </div>
                                         ))}
+                                        </div>
+                                        {imageLibraryWindow.bottomSpacerHeight > 0 && <div style={{ height: `${imageLibraryWindow.bottomSpacerHeight}px` }} />}
                                         {assetsLoading ? (
-                                            <div className="col-span-4 py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
+                                            <div className="py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
                                                 <Loader2 className="w-4 h-4 animate-spin" />
                                                 {t('素材加载中...', 'Loading assets...')}
                                             </div>
                                         ) : filteredAssets.length === 0 && (
-                                            <div className="col-span-4 py-12 text-center text-muted-foreground">
+                                            <div className="py-12 text-center text-muted-foreground">
                                                 {t('没有匹配筛选条件的素材', 'No assets matched current filters')}
                                             </div>
                                         )}
-                                        </div>
                                     </div>
                                 )}
 
@@ -20888,7 +21368,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                             <div key={idx} className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group">
                                                                 <div className="aspect-square bg-black rounded overflow-hidden">
                                                                      {depEntity?.image_url ? (
-                                                                         <img src={getFullUrl(depEntity.image_url)} alt={dep} className="w-full h-full object-cover" />
+                                                                         <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" />
                                                                      ) : (
                                                                          <div className="w-full h-full flex items-center justify-center bg-white/5">
                                                                              <Users size={16} className="text-white/20"/>
@@ -20956,7 +21436,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                      // Selected Preview State
                                                      <div className="flex gap-3 bg-black/40 border border-white/10 rounded-lg p-2 items-center relative group">
                                                          <div className="w-10 h-10 bg-black rounded overflow-hidden flex-shrink-0 border border-white/5">
-                                                             <img src={getFullUrl(refImage.url)} alt="ref" className="w-full h-full object-cover" />
+                                                             <SafeImage src={refImage.url} alt="ref" className="w-full h-full object-cover" />
                                                          </div>
                                                          <div className="flex-1 overflow-hidden">
                                                              <div className="text-xs font-bold text-white truncate">{refImage.name || 'Reference Image'}</div>
@@ -21010,9 +21490,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                                  ))}
                                                              </select>
                                                          </div>
-                                                         <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+                                                         <div
+                                                             ref={imageRefPickerViewportRef}
+                                                             onScroll={(e) => setImageRefPickerScrollTop(e.currentTarget.scrollTop || 0)}
+                                                             className="flex-1 overflow-y-auto p-2 custom-scrollbar"
+                                                         >
+                                                             {imageRefPickerWindow.topSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.topSpacerHeight}px` }} />}
                                                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                                                                 {filteredAssets.map(asset => (
+                                                                 {imageRefPickerVisibleAssets.map(asset => (
                                                                      <div 
                                                                          key={asset.id} 
                                                                          onClick={() => {
@@ -21022,19 +21507,20 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                                                          className="aspect-square bg-black/40 rounded border border-white/5 hover:border-primary/50 cursor-pointer overflow-hidden relative group"
                                                                      >
                                                                          <AssetHoverMetaOverlay asset={asset} t={t} />
-                                                                         <img src={getFullUrl(asset.url)} alt={asset.name} className="w-full h-full object-cover" />
+                                                                         <SafeImage src={asset.url} alt={asset.name} className="w-full h-full object-cover" />
                                                                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                                                      </div>
                                                                  ))}
-                                                                 {assetsLoading ? (
-                                                                     <div className="col-span-4 py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                                                                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                                                         {t('素材加载中...', 'Loading assets...')}
-                                                                     </div>
-                                                                 ) : filteredAssets.length === 0 && (
-                                                                     <div className="col-span-4 py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
-                                                                 )}
                                                              </div>
+                                                             {imageRefPickerWindow.bottomSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.bottomSpacerHeight}px` }} />}
+                                                             {assetsLoading ? (
+                                                                 <div className="py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                                                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                     {t('素材加载中...', 'Loading assets...')}
+                                                                 </div>
+                                                             ) : filteredAssets.length === 0 && (
+                                                                 <div className="py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
+                                                             )}
                                                          </div>
                                                      </div>
                                                  )}
@@ -23893,16 +24379,18 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             );
             const layoutInstructionCn = buildShotDiptychLayoutInstruction(diptychPlan, 'cn');
             const layoutInstructionEn = buildShotDiptychLayoutInstruction(diptychPlan, 'en');
+            const aspectContractCn = buildShotDiptychAspectContract(diptychPlan, 'cn');
+            const aspectContractEn = buildShotDiptychAspectContract(diptychPlan, 'en');
 
             const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                 ? [
-                        `生成一张单画布两宫格分镜图，后期会拆分为起始帧和结束帧。最终输出总共只能有两格，不能多于两格，也不能把下面任意一段提示词各自再扩展成两宫格。第一段提示词只负责第一格，第二段提示词只负责第二格。${layoutInstructionCn} 两格要像同一场景连续发生的两个瞬间，保持同一 shot 的人物身份、环境、光照和空间连续性。`,
+                    `生成一张单画布两宫格分镜图，后期会拆分为起始帧和结束帧。最终输出总共只能有两格，不能多于两格，也不能把下面任意一段提示词各自再扩展成两宫格。第一段提示词只负责第一格，第二段提示词只负责第二格。${layoutInstructionCn} ${aspectContractCn} 两格要像同一场景连续发生的两个瞬间，保持同一 shot 的人物身份、环境、光照和空间连续性。`,
                     `两格之间不得出现任何可见分隔设计或拼贴感：不要白线、黑线、边框、留白、间隔条、接缝高光、接缝阴影，也不要让高对比硬边落在中缝附近。人物脸部、手部、关键道具和主要动作不要贴近中缝或外边缘；不要出现第三格、文字、编号、气泡或版式元素。整张图必须像一次完成的电影画面，不像海报拼版或分屏设计。`,
                         `第一格（起始帧专用，仅这一格使用，不得扩展到第二格或再生成额外分格）：${startSubmitPrompt}`,
                         `第二格（结束帧专用，仅这一格使用，不得扩展到第一格或再生成额外分格）：${endSubmitPrompt}`,
                 ].join('\n\n')
                 : [
-                        `Create one single-canvas two-panel storyboard image for later split delivery into the shot start frame and end frame. The final output must contain exactly two panels in total, not two panels per prompt. The first prompt applies only to panel A, and the second prompt applies only to panel B. Do not expand either prompt into its own diptych or generate any extra panel. ${layoutInstructionEn} Both panels must feel like consecutive moments from the same shot, with consistent identity, environment, lighting, and scene geography.`,
+                    `Create one single-canvas two-panel storyboard image for later split delivery into the shot start frame and end frame. The final output must contain exactly two panels in total, not two panels per prompt. The first prompt applies only to panel A, and the second prompt applies only to panel B. Do not expand either prompt into its own diptych or generate any extra panel. ${layoutInstructionEn} ${aspectContractEn} Both panels must feel like consecutive moments from the same shot, with consistent identity, environment, lighting, and scene geography.`,
                     `The boundary between panels must be invisible. Do not add divider lines, borders, gaps, blank strips, seam highlights, seam shadows, collage styling, text, numbering, speech bubbles, or any third panel. Avoid placing faces, hands, hero props, or key motion near the seam or outer edges. The whole image must read as one cinematic composition, not a poster layout or split-screen graphic.`,
                         `Panel A only (Start Frame only; use this prompt for this panel alone, not for panel B and not for another diptych): ${startSubmitPrompt}`,
                         `Panel B only (End Frame only; use this prompt for this panel alone, not for panel A and not for another diptych): ${endSubmitPrompt}`,
@@ -23915,7 +24403,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const finalPrompt = shouldApplyGlobalCtx ? `${combinedPrompt}${globalCtx}` : combinedPrompt;
             const jointNegativePrompt = [
                 buildEntityNegativePrompt(`${rawStartPrompt}\n${rawEndPrompt}`, null, resolvedEntities),
-                'more than two panels, extra frame, uneven split, visible divider line, center divider, separator, seam line, white seam, black seam, bright seam, high-contrast center edge, hard center edge, abrupt center transition, empty gap, blank strip, whitespace strip, spacer band, border, frame, collage seam, contact sheet, text label, numbering, caption, comic bubble',
+                'more than two panels, extra frame, uneven split, unequal panel size, asymmetric panel, panel A larger, panel B larger, visible divider line, center divider, separator, seam line, white seam, black seam, bright seam, high-contrast center edge, hard center edge, abrupt center transition, empty gap, blank strip, whitespace strip, spacer band, border, frame, collage seam, contact sheet, text label, numbering, caption, comic bubble',
             ].filter(Boolean).join(', ');
 
             onLog?.(t('正在联合生成首尾帧两宫格...', 'Generating joint start/end diptych...'), 'info');
@@ -24034,16 +24522,18 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             );
             const layoutInstructionCn = buildShotDiptychLayoutInstruction(diptychPlan, 'cn');
             const layoutInstructionEn = buildShotDiptychLayoutInstruction(diptychPlan, 'en');
+            const aspectContractCn = buildShotDiptychAspectContract(diptychPlan, 'cn');
+            const aspectContractEn = buildShotDiptychAspectContract(diptychPlan, 'en');
 
             const combinedPrompt = resolvedPromptSubmitLang === 'cn'
                 ? [
-                    `生成一张单画布两宫格分镜图，后期会拆分为起始帧和结束帧。最终输出总共只能有两格，不能多于两格，也不能把下面任意一段提示词各自再扩展成两宫格。第一段提示词只负责第一格，第二段提示词只负责第二格。${layoutInstructionCn} 两格要像同一场景连续发生的两个瞬间，保持同一 shot 的人物身份、环境、光照和空间连续性。`,
+                    `生成一张单画布两宫格分镜图，后期会拆分为起始帧和结束帧。最终输出总共只能有两格，不能多于两格，也不能把下面任意一段提示词各自再扩展成两宫格。第一段提示词只负责第一格，第二段提示词只负责第二格。${layoutInstructionCn} ${aspectContractCn} 两格要像同一场景连续发生的两个瞬间，保持同一 shot 的人物身份、环境、光照和空间连续性。`,
                     `两格之间不得出现任何可见分隔设计或拼贴感：不要白线、黑线、边框、留白、间隔条、接缝高光、接缝阴影，也不要让高对比硬边落在中缝附近。人物脸部、手部、关键道具和主要动作不要贴近中缝或外边缘；不要出现第三格、文字、编号、气泡或版式元素。整张图必须像一次完成的电影画面，不像海报拼版或分屏设计。`,
                     `第一格（起始帧专用，仅这一格使用，不得扩展到第二格或再生成额外分格）：${startSubmitPrompt}`,
                     `第二格（结束帧专用，仅这一格使用，不得扩展到第一格或再生成额外分格）：${endSubmitPrompt}`,
                 ].join('\n\n')
                 : [
-                    `Create one single-canvas two-panel storyboard image for later split delivery into the shot start frame and end frame. The final output must contain exactly two panels in total, not two panels per prompt. The first prompt applies only to panel A, and the second prompt applies only to panel B. Do not expand either prompt into its own diptych or generate any extra panel. ${layoutInstructionEn} Both panels must feel like consecutive moments from the same shot, with consistent identity, environment, lighting, and scene geography.`,
+                    `Create one single-canvas two-panel storyboard image for later split delivery into the shot start frame and end frame. The final output must contain exactly two panels in total, not two panels per prompt. The first prompt applies only to panel A, and the second prompt applies only to panel B. Do not expand either prompt into its own diptych or generate any extra panel. ${layoutInstructionEn} ${aspectContractEn} Both panels must feel like consecutive moments from the same shot, with consistent identity, environment, lighting, and scene geography.`,
                     `The boundary between panels must be invisible. Do not add divider lines, borders, gaps, blank strips, seam highlights, seam shadows, collage styling, text, numbering, speech bubbles, or any third panel. Avoid placing faces, hands, hero props, or key motion near the seam or outer edges. The whole image must read as one cinematic composition, not a poster layout or split-screen graphic.`,
                     `Panel A only (Start Frame only; use this prompt for this panel alone, not for panel B and not for another diptych): ${startSubmitPrompt}`,
                     `Panel B only (End Frame only; use this prompt for this panel alone, not for panel A and not for another diptych): ${endSubmitPrompt}`,
@@ -24056,7 +24546,7 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             const finalPrompt = shouldApplyGlobalCtx ? `${combinedPrompt}${globalCtx}` : combinedPrompt;
             const jointNegativePrompt = [
                 buildEntityNegativePrompt(`${rawStartPrompt}\n${rawEndPrompt}`, null, entityList),
-                'more than two panels, extra frame, uneven split, visible divider line, center divider, separator, seam line, white seam, black seam, bright seam, high-contrast center edge, hard center edge, abrupt center transition, empty gap, blank strip, whitespace strip, spacer band, border, frame, collage seam, contact sheet, text label, numbering, caption, comic bubble',
+                'more than two panels, extra frame, uneven split, unequal panel size, asymmetric panel, panel A larger, panel B larger, visible divider line, center divider, separator, seam line, white seam, black seam, bright seam, high-contrast center edge, hard center edge, abrupt center transition, empty gap, blank strip, whitespace strip, spacer band, border, frame, collage seam, contact sheet, text label, numbering, caption, comic bubble',
             ].filter(Boolean).join(', ');
 
             if (!silent) {
@@ -29895,7 +30385,15 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                                                                             <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-black/40 flex items-center justify-center">
                                                                                                 {canPreview ? (
                                                                                                     isVideoItem ? (
-                                                                                                        <video src={getFullUrl(item.resultUrl)} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                                                                                                        <LazyHoverVideo
+                                                                                                            src={item.resultUrl}
+                                                                                                            className="h-full w-full"
+                                                                                                            mediaClassName="h-full w-full object-cover"
+                                                                                                            muted
+                                                                                                            playsInline
+                                                                                                            preload="metadata"
+                                                                                                            playOnHover={false}
+                                                                                                        />
                                                                                                     ) : (
                                                                                                         <SafeImage src={item.resultUrl} className="h-full w-full object-cover" fallback={<ImageIcon className="h-5 w-5 opacity-40" />} />
                                                                                                     )

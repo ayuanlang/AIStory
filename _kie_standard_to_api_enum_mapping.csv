@@ -824,3 +824,13 @@ kie,topaz/video-upscale,topaz/video-upscale,https://docs.kie.ai/market/topaz/vid
 kie,topaz/video-upscale,topaz/video-upscale,https://docs.kie.ai/market/topaz/video-upscale.md,paths.post.input.upscale_factor,UPSCALE_FACTOR,2,2,nearest_lower,1
 kie,topaz/video-upscale,topaz/video-upscale,https://docs.kie.ai/market/topaz/video-upscale.md,paths.post.input.upscale_factor,UPSCALE_FACTOR,4,4,nearest_lower,1
 kie,topaz/video-upscale,topaz/video-upscale,https://docs.kie.ai/market/topaz/video-upscale.md,paths.post.input.upscale_factor,UPSCALE_FACTOR,8,4,nearest_lower,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,16:9,16:9,exact,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,1:1,1:1,exact,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,21:9,21:9,exact,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,2:3,3:4,nearest_ratio,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,3:2,4:3,nearest_ratio,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,3:4,3:4,exact,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,4:3,4:3,exact,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,9:16,9:16,exact,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,9:21,9:16,nearest_ratio,1
+zlhub,doubao-seedance-2-0,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,paths.post.input.aspect_ratio,ASPECT_RATIO,AUTO,1:1,fallback_baseline,1

@@ -153,6 +153,13 @@ _settings_system_indexes_ensured = False
 _api_settings_binding_columns_ensured = False
 _kie_standard_tables_ensured = False
 _kie_standard_tables_ensure_lock = Lock()
+_KIE_STANDARD_DICT_CSV = Path(__file__).resolve().parents[3] / "_kie_system_data_standard_dictionary.csv"
+_KIE_STANDARD_MAP_CSV = Path(__file__).resolve().parents[3] / "_kie_system_to_model_enum_mapping.csv"
+_KIE_STANDARD_MAP_CSV_FALLBACK = Path(__file__).resolve().parents[3] / "_kie_standard_to_api_enum_mapping.csv"
+_kie_dictionary_bootstrap_cache = {
+    "dict_mtime": None,
+    "map_mtime": None,
+}
 
 _AGENT_POLICY_CATEGORY = "System_Payment"
 _AGENT_POLICY_PROVIDER = "agent_policy"
@@ -2350,6 +2357,180 @@ def _ensure_kie_standard_tables_for_admin(db: Session) -> None:
             except Exception:
                 pass
             raise
+
+
+def _bootstrap_kie_data_dictionary_if_empty(db: Session) -> None:
+    _ensure_kie_standard_tables_for_admin(db)
+
+    dict_csv = _KIE_STANDARD_DICT_CSV
+    map_csv = _KIE_STANDARD_MAP_CSV if _KIE_STANDARD_MAP_CSV.exists() else _KIE_STANDARD_MAP_CSV_FALLBACK
+    if not dict_csv.exists() and not map_csv.exists():
+        logger.warning("settings.kie.dictionary bootstrap skipped: seed CSV files missing")
+        return
+
+    value_count = int(db.execute(text("SELECT COUNT(1) AS c FROM kie_system_data_standard_values")).scalar() or 0)
+    mapping_count = int(db.execute(text("SELECT COUNT(1) AS c FROM kie_system_data_standard_mappings")).scalar() or 0)
+
+    dict_mtime = None
+    map_mtime = None
+    try:
+        if dict_csv.exists():
+            dict_mtime = float(dict_csv.stat().st_mtime)
+    except Exception:
+        dict_mtime = None
+    try:
+        if map_csv.exists():
+            map_mtime = float(map_csv.stat().st_mtime)
+    except Exception:
+        map_mtime = None
+
+    cache_dict_mtime = _kie_dictionary_bootstrap_cache.get("dict_mtime")
+    cache_map_mtime = _kie_dictionary_bootstrap_cache.get("map_mtime")
+    csv_unchanged = (
+        cache_dict_mtime is not None
+        and cache_map_mtime is not None
+        and cache_dict_mtime == dict_mtime
+        and cache_map_mtime == map_mtime
+    )
+    if value_count > 0 and mapping_count > 0 and csv_unchanged:
+        return
+
+    now_iso = now_bj_iso()
+    inserted_values = 0
+    inserted_mappings = 0
+
+    try:
+        existing_value_keys = set()
+        if value_count > 0:
+            rows = db.execute(text("""
+                SELECT standard_dimension, standard_value
+                FROM kie_system_data_standard_values
+            """)).mappings().all()
+            for row in rows:
+                existing_value_keys.add((
+                    str(row.get("standard_dimension") or "").strip().upper(),
+                    str(row.get("standard_value") or "").strip(),
+                ))
+
+        if dict_csv.exists():
+            with dict_csv.open("r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    dim = str((row or {}).get("standard_dimension") or "").strip().upper()
+                    val = str((row or {}).get("standard_value") or "").strip()
+                    if not dim or not val:
+                        continue
+                    key = (dim, val)
+                    if key in existing_value_keys:
+                        continue
+                    db.execute(text("""
+                        INSERT INTO kie_system_data_standard_values (
+                            standard_dimension, standard_value, value_type, definition,
+                            alias_values, is_active, created_at, updated_at
+                        ) VALUES (
+                            :standard_dimension, :standard_value, :value_type, :definition,
+                            :alias_values, :is_active, :created_at, :updated_at
+                        )
+                    """), {
+                        "standard_dimension": dim,
+                        "standard_value": val,
+                        "value_type": str((row or {}).get("value_type") or "enum").strip() or "enum",
+                        "definition": str((row or {}).get("definition") or "").strip() or None,
+                        "alias_values": str((row or {}).get("alias_values") or "").strip() or None,
+                        "is_active": 0 if str((row or {}).get("is_active") or "").strip().lower() in {"0", "false", "no", "off"} else 1,
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
+                    })
+                    existing_value_keys.add(key)
+                    inserted_values += 1
+
+        existing_mapping_keys = set()
+        if mapping_count > 0:
+            rows = db.execute(text("""
+                SELECT provider, model_key_inferred, source_field, source_enum_value, standard_dimension, standard_value
+                FROM kie_system_data_standard_mappings
+            """)).mappings().all()
+            for row in rows:
+                existing_mapping_keys.add((
+                    str(row.get("provider") or "kie").strip() or "kie",
+                    str(row.get("model_key_inferred") or "").strip(),
+                    str(row.get("source_field") or "").strip(),
+                    str(row.get("source_enum_value") or "").strip(),
+                    str(row.get("standard_dimension") or "").strip().upper(),
+                    str(row.get("standard_value") or "").strip(),
+                ))
+
+        if map_csv.exists():
+            with map_csv.open("r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    provider_value = str((row or {}).get("provider") or "kie").strip() or "kie"
+                    model_key_value = str((row or {}).get("model_key_inferred") or "").strip()
+                    source_field_value = str((row or {}).get("source_field") or "").strip()
+                    source_enum_value_value = str((row or {}).get("source_enum_value") or "").strip()
+                    standard_dimension_value = str((row or {}).get("standard_dimension") or "").strip().upper()
+                    standard_value_value = str((row or {}).get("standard_value") or "").strip()
+                    if not source_field_value or not source_enum_value_value or not standard_dimension_value or not standard_value_value:
+                        continue
+                    key = (
+                        provider_value,
+                        model_key_value,
+                        source_field_value,
+                        source_enum_value_value,
+                        standard_dimension_value,
+                        standard_value_value,
+                    )
+                    if key in existing_mapping_keys:
+                        continue
+                    db.execute(text("""
+                        INSERT INTO kie_system_data_standard_mappings (
+                            provider, model_key_inferred, model_title, model_url,
+                            source_field, source_enum_value, standard_dimension, standard_value,
+                            confidence, note, is_active, is_billing_related, created_at, updated_at
+                        ) VALUES (
+                            :provider, :model_key_inferred, :model_title, :model_url,
+                            :source_field, :source_enum_value, :standard_dimension, :standard_value,
+                            :confidence, :note, :is_active, :is_billing_related, :created_at, :updated_at
+                        )
+                    """), {
+                        "provider": provider_value,
+                        "model_key_inferred": model_key_value or None,
+                        "model_title": str((row or {}).get("model_title") or "").strip() or None,
+                        "model_url": str((row or {}).get("model_url") or "").strip() or None,
+                        "source_field": source_field_value,
+                        "source_enum_value": source_enum_value_value,
+                        "standard_dimension": standard_dimension_value,
+                        "standard_value": standard_value_value,
+                        "confidence": str((row or {}).get("confidence") or "").strip() or None,
+                        "note": str((row or {}).get("note") or "").strip() or None,
+                        "is_active": 0 if str((row or {}).get("is_active") or "").strip().lower() in {"0", "false", "no", "off"} else 1,
+                        "is_billing_related": 1 if str((row or {}).get("is_billing_related") or "").strip().lower() in {"1", "true", "yes", "on"} else 0,
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
+                    })
+                    existing_mapping_keys.add(key)
+                    inserted_mappings += 1
+
+        _kie_dictionary_bootstrap_cache["dict_mtime"] = dict_mtime
+        _kie_dictionary_bootstrap_cache["map_mtime"] = map_mtime
+        if inserted_values > 0 or inserted_mappings > 0:
+            db.commit()
+            logger.info(
+                "settings.kie.dictionary bootstrapped | values_inserted=%s mappings_inserted=%s dict_csv=%s map_csv=%s",
+                inserted_values,
+                inserted_mappings,
+                str(dict_csv),
+                str(map_csv),
+            )
+        else:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    except Exception:
+        db.rollback()
+        logger.exception("settings.kie.dictionary bootstrap failed")
+        raise
 
 
 _KIE_ENUM_FACT_CSV = Path(__file__).resolve().parents[3] / "_kie_input_param_enum_values_for_db.csv"
@@ -5051,6 +5232,7 @@ def list_kie_standard_values_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     _ensure_kie_standard_tables_for_admin(db)
+    _bootstrap_kie_data_dictionary_if_empty(db)
 
     where = ["1=1"]
     params: Dict[str, Any] = {"limit": int(limit)}
@@ -5084,6 +5266,7 @@ def export_kie_standard_values_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     _ensure_kie_standard_tables_for_admin(db)
+    _bootstrap_kie_data_dictionary_if_empty(db)
 
     where = ["1=1"]
     params: Dict[str, Any] = {"limit": int(limit)}
@@ -5133,6 +5316,7 @@ def import_kie_standard_values_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     _ensure_kie_standard_tables_for_admin(db)
+    _bootstrap_kie_data_dictionary_if_empty(db)
 
     items = payload.items or []
     received = len(items)
@@ -5232,6 +5416,7 @@ def get_kie_standard_value_options(
     # Any authenticated user can read dictionary options used by project-creation forms.
     _ = current_user
     _ensure_kie_standard_tables_for_admin(db)
+    _bootstrap_kie_data_dictionary_if_empty(db)
 
     raw_dimensions = [str(x or "").strip() for x in str(dimensions or "").split(",")]
     target_dimensions = [x for x in raw_dimensions if x]
@@ -5290,6 +5475,7 @@ def list_kie_standard_mappings_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     _ensure_kie_standard_tables_for_admin(db)
+    _bootstrap_kie_data_dictionary_if_empty(db)
 
     where = ["1=1"]
     params: Dict[str, Any] = {"limit": int(limit)}
@@ -5566,6 +5752,7 @@ def export_kie_data_dictionary_bundle_manage(
         raise HTTPException(status_code=403, detail="Only system/admin users can manage system API settings")
 
     _ensure_kie_standard_tables_for_admin(db)
+    _bootstrap_kie_data_dictionary_if_empty(db)
 
     value_rows = db.execute(text("""
         SELECT id, standard_dimension, standard_value, value_type, definition, alias_values, is_active, created_at, updated_at

@@ -19671,6 +19671,11 @@ def _build_video_provider_options(req: VideoGenerationRequest, quality: Optional
         options["mode"] = normalized_mode
         options["__mode_source"] = "request"
 
+    normalized_ref_mode = _normalize_video_ref_mode(getattr(req, "ref_mode", None))
+    if normalized_ref_mode:
+        options["ref_mode"] = normalized_ref_mode
+        options["__ref_mode_source"] = "request"
+
     normalized_quality = str(quality if quality is not None else (req.quality or "")).strip().lower()
     if normalized_quality:
         options["quality"] = normalized_quality

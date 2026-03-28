@@ -824,3 +824,13 @@ kie,topaz/video-upscale,https://docs.kie.ai/market/topaz/video-upscale.md,topaz/
 kie,topaz/video-upscale,https://docs.kie.ai/market/topaz/video-upscale.md,topaz/video-upscale,paths.post.input.upscale_factor,2,UPSCALE_FACTOR,2,MEDIUM,std_to_api:nearest_lower
 kie,topaz/video-upscale,https://docs.kie.ai/market/topaz/video-upscale.md,topaz/video-upscale,paths.post.input.upscale_factor,4,UPSCALE_FACTOR,4,MEDIUM,std_to_api:nearest_lower
 kie,topaz/video-upscale,https://docs.kie.ai/market/topaz/video-upscale.md,topaz/video-upscale,paths.post.input.upscale_factor,4,UPSCALE_FACTOR,8,MEDIUM,std_to_api:nearest_lower
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,16:9,ASPECT_RATIO,16:9,HIGH,std_to_api:exact
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,1:1,HIGH,std_to_api:exact
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,21:9,ASPECT_RATIO,21:9,HIGH,std_to_api:exact
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,2:3,MEDIUM,std_to_api:nearest_ratio
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,3:2,MEDIUM,std_to_api:nearest_ratio
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,3:4,ASPECT_RATIO,3:4,HIGH,std_to_api:exact
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,4:3,ASPECT_RATIO,4:3,HIGH,std_to_api:exact
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:16,HIGH,std_to_api:exact
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,9:16,ASPECT_RATIO,9:21,MEDIUM,std_to_api:nearest_ratio
+zlhub,zlhub doubao-seedance-2-0,https://zlhub.xiaowaiyou.cn/zhonglian/api/v1,doubao-seedance-2-0,paths.post.input.aspect_ratio,1:1,ASPECT_RATIO,AUTO,LOW,std_to_api:fallback_baseline

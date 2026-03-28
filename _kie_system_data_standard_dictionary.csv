@@ -32,6 +32,7 @@ MODE,PRO,enum,生成模式标准值,
 MODE,SPICY,enum,生成模式标准值,
 MODE,STANDARD,enum,生成模式标准值,std
 MODEL_ID,bytedance/seedance-1.5-pro,string,模型唯一标识,
+MODEL_ID,doubao-seedance-2-0,string,模型唯一标识,
 MODEL_ID,bytedance/seedream,string,模型唯一标识,
 MODEL_ID,bytedance/seedream-v4-edit,string,模型唯一标识,
 MODEL_ID,bytedance/seedream-v4-text-to-image,string,模型唯一标识,

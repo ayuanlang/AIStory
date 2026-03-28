@@ -208,7 +208,8 @@ def _bootstrap_db_post_init() -> None:
 
 _RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
 _RUN_GENERATION_QUEUE_WORKER_ON_START = os.getenv("RUN_GENERATION_QUEUE_WORKER_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
-_RUNTIME_DIAG_LOG_ENABLED = os.getenv("RUNTIME_DIAG_LOG_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+_RUNTIME_DIAG_LOG_ENABLED = os.getenv("RUNTIME_DIAG_LOG_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+_RUNTIME_DIAG_HEARTBEAT_ENABLED = os.getenv("RUNTIME_DIAG_HEARTBEAT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 _RUNTIME_DIAG_LOG_INTERVAL_SECONDS = max(15, int(os.getenv("RUNTIME_DIAG_LOG_INTERVAL_SECONDS", "60") or 60))
 _RUNTIME_DIAG_HIGH_WATERMARK_MB = max(256, int(os.getenv("RUNTIME_DIAG_HIGH_WATERMARK_MB", "1400") or 1400))
 _RUNTIME_DIAG_HIGH_WATERMARK_COOLDOWN_SECONDS = max(30, int(os.getenv("RUNTIME_DIAG_HIGH_WATERMARK_COOLDOWN_SECONDS", "180") or 180))
@@ -510,7 +511,8 @@ async def _runtime_diag_log_loop(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             payload = _collect_runtime_diag_payload()
-            logger.info("runtime.diag | %s", json.dumps(payload, ensure_ascii=False, default=str))
+            if _RUNTIME_DIAG_HEARTBEAT_ENABLED:
+                logger.info("runtime.diag | %s", json.dumps(payload, ensure_ascii=False, default=str))
 
             vmrss_kb = int(payload.get("vmrss_kb") or 0)
             now_ts = time.time()

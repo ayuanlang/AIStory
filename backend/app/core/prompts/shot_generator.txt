@@ -647,7 +647,7 @@
   - **Opening Hook JSON 门禁 (Opening Hook JSON Gate, 强制)**：若当前行为集首场（`EPxx_SC01` 或承担开场职责），JSON 审计块中的 `opening_hook_coverage.sh01_status` 必须为 `PRIMARY_PASS`，且同时包含 `opening_highlight=covered` 与 `flashback_bridge=covered`。
   - **首秒抓取联动校验 (First-Second Hook Coupling, 强制)**：当 `opening_hook_coverage.sh01_status=PRIMARY_PASS` 时，`Shot Logic (CN)` 与 `Video Content` 必须可见承接“首秒抓取”证据；若缺失，必须先重写镜头再输出。
   - **Start Frame 最低维度槽位**：`[Global Style]`、`Viewpoint Anchor`、`Viewing Direction`、`Viewpoint Setup`、`Focal Length`、`Framing/Angle`、`Noise/Grain Strategy`、`Anti-Copy Constraint`、`Lighting Structure`、`Single-Canvas/Shared-Space Guard`、`Layers`、每个可见核心角色的 `Viewer-Relative Facing`。任一缺失即判该字段无效。
-  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、微节拍节奏必须可推导满足“单个微节拍约 1s - 3s”的时长护栏、所有可见角色的可见反应/状态变化、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
+  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、微节拍节奏必须可推导满足“单个微节拍约 1s - 3s”的时长护栏、所有可见角色的可见反应/状态变化、`Lighting Blueprint（光线说明）`（必须写清主光来源/方向、明暗趋势、色温倾向，以及必要时的变化理由）、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
   - **End Frame 最低维度槽位**：`[Global Style]`、最终 `Viewpoint Anchor`、最终 `Viewing Direction`、最终 `Viewpoint Setup`、重算后的 `Layers`、每个可见核心角色的最终朝向、动作后视觉证据、与 Start/Video 可推导的一致性。任一缺失即判该字段无效。
   - **Shot Logic (CN) 最低维度槽位**：`场景类型分析`、`时长/主节拍数`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验` 八项必须齐全；若输入已给出 Source Beat 或当前镜头承担闪回桥接/全覆盖闭环职责，逻辑稿中还必须显式反映该镜头承接的是哪个 Beat、覆盖了哪些关键信息、是否存在桥接锚点，以及微节拍是否满足 **1s - 3s** 节奏护栏。任一缺失即判该字段无效。
   - **运镜丰富性核验槽位 (Cinematography Verification Slot, 强制)**：运镜核验信息不得写入 `Shot Logic (CN)` 或任何表格列；必须输出到表格后的 JSON 审计块中。
@@ -664,7 +664,7 @@
     - 若同一项由多个镜头共同完成，必须在 `evidence_shot_ids` 中列出全部关键 `Shot ID`。
   - **合规 JSON 示例（必须满足五项全通过，且含高级运镜）**：
     - `---SHOT_AUDIT_JSON_BEGIN---`
-    - `{"scene_id":"EP03_SC05","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"宏大开场","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"EWS 建置 + Crane Down from high to eye-level，前中后景与行动路径可读"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02","EP03_SC05_SH03","EP03_SC05_SH04"],"evidence_note":"EWS/WS -> Medium OTS -> Medium Close-up -> Insert"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH03"],"evidence_note":"CHAR:[@Lin] 眼周紧绷、下颌收紧、呼吸短停"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH04"],"evidence_note":"PROP:[Evidence Key] 从 closed -> open，锁芯亮起"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02"],"evidence_note":"Crane Down 建置空间规模；Rack Focus 切换信息主次"}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}`
+    - `{"scene_id":"EP03_SC05","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"宏大开场","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"EWS 建置 + Crane Down from high to eye-level，前中后景与行动路径可读；主光从右后上方进入并保持空间层次"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02","EP03_SC05_SH03","EP03_SC05_SH04"],"evidence_note":"EWS/WS -> Medium OTS -> Medium Close-up -> Insert，并伴随对比度由环境建置到人物反应逐步提升"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH03"],"evidence_note":"CHAR:[@Lin] 眼周紧绷、下颌收紧、呼吸短停；眼神光稳定可读"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH04"],"evidence_note":"PROP:[Evidence Key] 从 closed -> open，锁芯亮起；局部冷光强调金属纹理"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02"],"evidence_note":"Crane Down 建置空间规模；Rack Focus 切换信息主次；光线从环境主光平滑过渡到人物主光"}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}`
     - `---SHOT_AUDIT_JSON_END---`
   - **核验失败处理**：若五项任一为“未通过”，必须先重排分镜再输出最终表格，禁止带着未通过项直接输出。
 - **维度门禁触发后禁止带病输出 (No Partial Pass-Through, 强制)**：只要四段中的任一字段未通过维度检查，该 Shot 整行不得输出到最终表格；必须先完成重写，再重新执行同一轮维度检查。
@@ -846,6 +846,10 @@
           - **Adverbs**: Slowly, Rapidly, Gradually, Abruptly, Smoothly.
           - **Example**: "Viewpoint **slowly** pushes in...", "**Abrupt** whip pan to..."
       *   **视频质感连续性 (Video Lighting/Lens/Grain Continuity, 强制)**：Video Content 必须明确说明光照变化趋势（是否变化/为何变化）、焦距策略是否切换、颗粒/噪点控制是否保持一致，避免“首尾帧参数断裂”。若焦距发生变化，必须写清从哪个焦距/焦距区间过渡到哪个焦距/焦距区间，以及该变化服务于何种信息重心转移（例如空间交代 -> 情绪压迫，或关系镜 -> 反应近景）。
+      *   **视频光线说明硬规则 (Video Lighting Blueprint, 强制)**：每条 `Video Content` 必须包含至少 1 句可执行的光线说明，且要与动作/机位同段出现，不得只在 `Start Frame` / `End Frame` 提及。
+          - **最低写法**：`主光来源/方向 + 明暗趋势 + 色温倾向 + 是否随动作变化`。
+          - **合规示例**：`Key light stays camera-left at a 45-degree slant with a cool steel tint, contrast rises slightly as CHAR:[@A] steps into the doorway shadow, and fill remains soft to keep both faces readable.`
+          - **不合规示例**：`cinematic lighting`, `dramatic light`, `nice mood light`（缺少来源、方向和变化信息）。
         *   **多样性 (Variety, Recommended)**：尽量在一个 Scene 内引入 1 种能服务叙事的高级技法（Advanced FX / Perspective），并让其与基础镜头形成变化，但**不得**为了满足术语而牺牲动作可生成性、主体可读性与物理连贯。
 
   2.  **动作流与拆解 (Action Flow & Decomposition)**：

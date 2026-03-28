@@ -1120,6 +1120,8 @@ class MediaGenerationService:
         if dim == "DURATION_SECONDS":
             try:
                 num = float(value)
+                if num <= 0:
+                    return None
                 if abs(num - int(num)) < 1e-9:
                     return str(int(num))
                 return str(num)
@@ -1703,6 +1705,17 @@ class MediaGenerationService:
         if dim in {"SOUND_SUPPORTED", "MULTI_SHOTS_SUPPORTED"}:
             return value.upper() == "TRUE"
 
+        if dim == "DURATION_SECONDS":
+            try:
+                num = float(value)
+            except Exception:
+                return None
+            if num <= 0:
+                return None
+            if abs(num - int(num)) < 1e-9:
+                return str(int(num))
+            return str(num)
+
         return value
 
     def _get_kie_standard_reverse_mapping(
@@ -1960,7 +1973,16 @@ class MediaGenerationService:
             elif dim == "RESOLUTION_TIER":
                 resolved["resolution"] = str(runtime_value).strip()
             elif dim == "DURATION_SECONDS":
-                resolved["duration"] = str(runtime_value).strip()
+                try:
+                    duration_num = float(runtime_value)
+                except Exception:
+                    duration_num = None
+                if duration_num is None or duration_num <= 0:
+                    continue
+                if abs(duration_num - int(duration_num)) < 1e-9:
+                    resolved["duration"] = str(int(duration_num))
+                else:
+                    resolved["duration"] = str(duration_num)
             elif dim == "MODE":
                 resolved["mode"] = str(runtime_value).strip().lower()
             elif dim == "QUALITY_LEVEL":
@@ -4437,9 +4459,7 @@ class MediaGenerationService:
                     "role": "last_frame"
                 })
 
-            # Ensure duration is within valid range. 
-            # Note: The default 5s often causes InvalidParameter for Doubao (Seedance).
-            # "Switch back to config, unless invalid" -> Validate and fallback to -1 (Auto).
+            # Ensure duration is always a valid positive value for Doubao payloads.
             final_duration = duration
             model_lower = str(model or "").strip().lower()
             is_seedance_model = "seedance" in model_lower or "1-5-pro" in model_lower
@@ -4448,21 +4468,38 @@ class MediaGenerationService:
             if tool_conf.get("duration"):
                 final_duration = tool_conf.get("duration")
 
+            allowed_duration_values = self._normalize_duration_enum_values(
+                tool_conf.get("durations_seconds")
+                or tool_conf.get("duration_values")
+                or tool_conf.get("allowed_durations")
+            )
+            if not allowed_duration_values and is_seedance_model:
+                # Seedance models commonly accept fixed buckets; avoid non-positive or auto sentinel.
+                allowed_duration_values = [5, 10]
+
             try:
                 d_int = int(final_duration)
-                if is_seedance_model:
-                    final_duration = -1
-                else:
-                    # Filter out <=0 and the known-bad default 5 (unless 5 works for some models, but here it failed)
-                    if d_int <= 0 or d_int == 5:
-                        final_duration = -1
-                    else:
-                        final_duration = d_int
-            except:
-                final_duration = -1
+            except Exception:
+                d_int = None
+
+            if d_int is None or d_int <= 0:
+                d_int = int(allowed_duration_values[0]) if allowed_duration_values else 5
+
+            if allowed_duration_values:
+                mapped_duration = self._map_duration_nearest(
+                    d_int,
+                    allowed_duration_values,
+                    prefer_higher_on_tie=is_seedance_model,
+                )
+                if mapped_duration is not None:
+                    d_int = int(mapped_duration)
+
+            final_duration = int(max(1, d_int))
 
             if is_seedance_model:
-                _debug_log(f"[DoubaoVideo] duration_in={duration}, duration_cfg={tool_conf.get('duration')}, duration_final={final_duration}, seedance_forced_auto=True")
+                _debug_log(
+                    f"[DoubaoVideo] duration_in={duration}, duration_cfg={tool_conf.get('duration')}, allowed={allowed_duration_values}, duration_final={final_duration}"
+                )
 
             # Map aspect ratio for Doubao (Ark): keep adaptive when provided.
             final_ratio = self._normalize_aspect_ratio_value(aspect_ratio) or "16:9"
@@ -6789,10 +6826,82 @@ class MediaGenerationService:
             tool_conf.get("reference_audio_urls") or tool_conf.get("ref_audio_urls") or []
         )
 
+        dropped_mixed_reference_counts = {
+            "image": 0,
+            "video": 0,
+            "audio": 0,
+        }
+
+        seedance2_ref_mode = ""
+        seedance2_payload_mode = ""
+        if is_seedance2:
+            raw_ref_mode = str(
+                tool_conf.get("ref_mode")
+                or tool_conf.get("video_ref_mode")
+                or tool_conf.get("video_mode")
+                or tool_conf.get("video_mode_unified")
+                or ""
+            ).strip().lower()
+
+            if raw_ref_mode in {"refs_video", "entity_refs", "reference", "reference_images", "reference_image"}:
+                seedance2_ref_mode = "entity_refs"
+            elif raw_ref_mode in {"start_end", "start-end", "start+end", "first_last", "first_last_frame", "first_and_last"}:
+                seedance2_ref_mode = "start_end"
+            elif raw_ref_mode in {"end", "last", "last_frame"}:
+                seedance2_ref_mode = "end"
+            elif raw_ref_mode in {"start", "first", "first_frame", "auto"}:
+                seedance2_ref_mode = "start"
+
+            if not seedance2_ref_mode:
+                if resolved_last_frame:
+                    seedance2_ref_mode = "start_end"
+                elif len(resolved_image_refs) > 1 or reference_video_urls or reference_audio_urls:
+                    seedance2_ref_mode = "entity_refs"
+                elif resolved_image_refs:
+                    seedance2_ref_mode = "start"
+                else:
+                    seedance2_ref_mode = "start"
+
+            seedance2_payload_mode = "reference_media" if seedance2_ref_mode == "entity_refs" else "frame_content"
+
+        # Seedance-2 rejects payloads that mix first/last frame content with
+        # additional reference media roles in the same request content.
+        if is_seedance2 and (resolved_image_refs or resolved_last_frame or reference_video_urls or reference_audio_urls):
+            if seedance2_payload_mode == "frame_content":
+                keep_first_ref = str(resolved_image_refs[0] or "").strip() if resolved_image_refs else ""
+                dropped_mixed_reference_counts["image"] = max(0, len(resolved_image_refs) - (1 if keep_first_ref else 0))
+                dropped_mixed_reference_counts["video"] = len(reference_video_urls)
+                dropped_mixed_reference_counts["audio"] = len(reference_audio_urls)
+
+                resolved_image_refs = [keep_first_ref] if keep_first_ref else []
+                reference_video_urls = []
+                reference_audio_urls = []
+            else:
+                dropped_last_frame = 1 if bool(resolved_last_frame) else 0
+                resolved_last_frame = None
+                if dropped_last_frame:
+                    logger.info(
+                        "[ZLHubSeedance2] dropped last_frame in reference_media mode | trace_id=%s",
+                        zlhub_trace_id,
+                    )
+
+            if any(dropped_mixed_reference_counts.values()):
+                logger.info(
+                    "[ZLHubSeedance2] dropped mixed reference media | trace_id=%s ref_mode=%s payload_mode=%s dropped_image_refs=%s dropped_video_refs=%s dropped_audio_refs=%s",
+                    zlhub_trace_id,
+                    seedance2_ref_mode or "start",
+                    seedance2_payload_mode or "frame_content",
+                    dropped_mixed_reference_counts["image"],
+                    dropped_mixed_reference_counts["video"],
+                    dropped_mixed_reference_counts["audio"],
+                )
+
         if is_seedance2:
             logger.info(
-                "[ZLHubSeedance2] refs_resolved | trace_id=%s image_refs=%s has_last_frame=%s ref_videos=%s ref_audios=%s",
+                "[ZLHubSeedance2] refs_resolved | trace_id=%s ref_mode=%s payload_mode=%s image_refs=%s has_last_frame=%s ref_videos=%s ref_audios=%s",
                 zlhub_trace_id,
+                seedance2_ref_mode or "start",
+                seedance2_payload_mode or "frame_content",
                 len(resolved_image_refs),
                 bool(resolved_last_frame),
                 len(reference_video_urls),
@@ -6850,7 +6959,14 @@ class MediaGenerationService:
             content_payload.append({"type": "text", "text": prompt_text})
 
         if resolved_image_refs:
-            if len(resolved_image_refs) == 1 and not resolved_last_frame:
+            if is_seedance2 and seedance2_payload_mode == "reference_media":
+                for item in resolved_image_refs:
+                    content_payload.append({
+                        "type": "image_url",
+                        "image_url": {"url": item},
+                        "role": "reference_image",
+                    })
+            elif len(resolved_image_refs) == 1 and not resolved_last_frame:
                 content_payload.append({
                     "type": "image_url",
                     "image_url": {"url": resolved_image_refs[0]},
@@ -6940,6 +7056,9 @@ class MediaGenerationService:
             "resolved_reference_count": len(resolved_image_refs),
             "resolved_reference_video_count": len(reference_video_urls),
             "resolved_reference_audio_count": len(reference_audio_urls),
+            "resolved_ref_mode": seedance2_ref_mode or None,
+            "seedance2_payload_mode": seedance2_payload_mode or None,
+            "dropped_mixed_reference_counts": dropped_mixed_reference_counts,
             "moderation": moderation_results,
         }
         if is_seedance2:
@@ -8870,6 +8989,9 @@ class MediaGenerationService:
             except Exception:
                 duration_value = 5
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+            if duration_value <= 0:
+                normalized_allowed = self._normalize_duration_enum_values(allowed_durations)
+                duration_value = int(normalized_allowed[0]) if normalized_allowed else 5
             if isinstance(allowed_durations, list) and allowed_durations:
                 mapped_duration = self._map_duration_nearest(
                     duration_value,
