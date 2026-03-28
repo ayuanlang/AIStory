@@ -125,6 +125,84 @@ const normalizeBatchParallelLimit = (value) => {
     return Math.min(12, Math.max(1, Math.trunc(parsed)));
 };
 
+const normalizeAsciiSubjectSeparatorsForDeps = (value) => {
+    return String(value || '').replace(/[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)+/g, (matched) => {
+        return matched.replace(/[_-]+/g, ' ');
+    });
+};
+
+const normalizeSubjectNameForDeps = (value) => {
+    let text = String(value || '').trim();
+    if (!text) return '';
+    text = text
+        .replace(/[（【〔［]/g, '(')
+        .replace(/[）】〕］]/g, ')')
+        .replace(/[“”'"‘’`]/g, '')
+        .replace(/[\u2010-\u2015]/g, '-');
+    text = text.replace(/^CHAR:\s*/i, '');
+    text = text.replace(/^PROP:\s*/i, '');
+    text = text.replace(/^ENV:\s*/i, '');
+    text = text.replace(/^\[/, '').replace(/\]$/, '');
+    text = text.replace(/^@/, '').trim();
+    text = normalizeAsciiSubjectSeparatorsForDeps(text)
+        .replace(/\s+/g, ' ')
+        .trim();
+    return text;
+};
+
+const normalizeSubjectKeyForDeps = (value) => {
+    const stable = normalizeSubjectNameForDeps(value);
+    if (!stable) return '';
+    return normalizeEntityToken(stable)
+        .replace(/[^\p{L}\p{N}\u4e00-\u9fff]/gu, '');
+};
+
+const normalizeAsciiSubjectSeparators = normalizeAsciiSubjectSeparatorsForDeps;
+const normalizeSubjectName = normalizeSubjectNameForDeps;
+const normalizeSubjectKey = normalizeSubjectKeyForDeps;
+const normalizeImportSubjectKey = normalizeSubjectKeyForDeps;
+
+const parseVisualDependencies = (value) => {
+    let candidates = [];
+
+    if (Array.isArray(value)) {
+        candidates = value;
+    } else if (typeof value === 'string') {
+        const raw = String(value || '').trim();
+        if (!raw) return [];
+
+        if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
+            try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                    candidates = parsed;
+                } else if (typeof parsed === 'string') {
+                    candidates = [parsed];
+                }
+            } catch (_) {
+                candidates = [];
+            }
+        }
+
+        if (candidates.length === 0) {
+            candidates = raw.split(/[\n,，;；|]/);
+        }
+    } else if (value != null) {
+        candidates = [value];
+    }
+
+    const out = [];
+    const seen = new Set();
+    for (const item of candidates) {
+        const normalized = normalizeSubjectNameForDeps(item);
+        const key = normalizeSubjectKeyForDeps(normalized);
+        if (!normalized || !key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(normalized);
+    }
+    return out;
+};
+
 const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps }) => {
     const rawSrc = String(src || '').trim();
     const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
@@ -6347,79 +6425,6 @@ const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpd
         }
 
         return null;
-    };
-
-    const normalizeAsciiSubjectSeparators = (value) => {
-        return String(value || '').replace(/[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)+/g, (matched) => {
-            return matched.replace(/[_-]+/g, ' ');
-        });
-    };
-
-    const normalizeSubjectName = (value) => {
-        let text = String(value || '').trim();
-        if (!text) return '';
-        text = text
-            .replace(/[（【〔［]/g, '(')
-            .replace(/[）】〕］]/g, ')')
-            .replace(/[“”'"‘’`]/g, '')
-            .replace(/[\u2010-\u2015]/g, '-');
-        text = text.replace(/^CHAR:\s*/i, '');
-        text = text.replace(/^PROP:\s*/i, '');
-        text = text.replace(/^ENV:\s*/i, '');
-        text = text.replace(/^\[/, '').replace(/\]$/, '');
-        text = text.replace(/^@/, '').trim();
-        text = normalizeAsciiSubjectSeparators(text)
-            .replace(/\s+/g, ' ')
-            .trim();
-        return text;
-    };
-
-    const normalizeSubjectKey = (value) => {
-        const stable = normalizeSubjectName(value);
-        if (!stable) return '';
-        return normalizeEntityToken(stable)
-            .replace(/[^\p{L}\p{N}\u4e00-\u9fff]/gu, '');
-    };
-
-    const parseVisualDependencies = (value) => {
-        let candidates = [];
-
-        if (Array.isArray(value)) {
-            candidates = value;
-        } else if (typeof value === 'string') {
-            const raw = String(value || '').trim();
-            if (!raw) return [];
-
-            if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
-                try {
-                    const parsed = JSON.parse(raw);
-                    if (Array.isArray(parsed)) {
-                        candidates = parsed;
-                    } else if (typeof parsed === 'string') {
-                        candidates = [parsed];
-                    }
-                } catch (_) {
-                    candidates = [];
-                }
-            }
-
-            if (candidates.length === 0) {
-                candidates = raw.split(/[\n,，;；|]/);
-            }
-        } else if (value != null) {
-            candidates = [value];
-        }
-
-        const out = [];
-        const seen = new Set();
-        for (const item of candidates) {
-            const normalized = normalizeSubjectName(item);
-            const key = normalizeSubjectKey(normalized);
-            if (!normalized || !key || seen.has(key)) continue;
-            seen.add(key);
-            out.push(normalized);
-        }
-        return out;
     };
 
     const extractSubjectsFromMarkdownTable = (markdownText) => {
