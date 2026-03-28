@@ -2126,6 +2126,92 @@ def _get_generation_callback_payload(ticket: str) -> Dict[str, Any]:
     return dict(raw_payload or {})
 
 
+def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return result
+
+    raw_url = _extract_job_result_url(result)
+    if not raw_url:
+        return result
+
+    try:
+        user_id = int(job.get("user_id") or 0)
+    except Exception:
+        user_id = 0
+    if user_id <= 0:
+        return result
+
+    db = SessionLocal()
+    try:
+        current_user = db.query(User).filter(User.id == user_id).first()
+        if not current_user:
+            return result
+
+        req_context: Dict[str, Any] = {}
+        for key in (
+            "prompt",
+            "negative_prompt",
+            "provider",
+            "model",
+            "aspect_ratio",
+            "image_size",
+            "width",
+            "height",
+            "quality",
+            "output_format",
+            "background",
+            "project_id",
+            "episode_id",
+            "scene_id",
+            "shot_id",
+            "shot_number",
+            "shot_name",
+            "entity_id",
+            "entity_name",
+            "subject_name",
+            "subject_type",
+            "entity_type",
+            "asset_type",
+            "seed",
+            "mode",
+        ):
+            value = job.get(key)
+            if value not in (None, ""):
+                req_context[key] = value
+
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+        normalized_url, normalized_meta = _persist_data_uri_image_result(current_user, raw_url, metadata)
+        normalized_url, normalized_meta = _persist_remote_image_result(current_user, normalized_url, normalized_meta)
+
+        finalized_result = dict(result)
+        if normalized_url:
+            finalized_result["url"] = normalized_url
+        if normalized_meta is not None:
+            finalized_result["metadata"] = normalized_meta
+
+        request_mode = str(req_context.get("mode") or "").strip().lower()
+        if request_mode != "joint_diptych" and normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
+            _register_asset_helper(db, current_user.id, normalized_url, req_context, normalized_meta)
+            _bind_generated_media_to_shot(db, current_user, req_context, normalized_url)
+            _bind_generated_media_to_entity(db, current_user, req_context, normalized_url)
+        elif request_mode != "joint_diptych" and normalized_url:
+            logger.warning(
+                "[ImageJob] skipped asset registration/bind for temporary provider url | job_id=%s user_id=%s url=%s entity_id=%s shot_id=%s",
+                job_id,
+                getattr(current_user, "id", None),
+                normalized_url,
+                req_context.get("entity_id"),
+                req_context.get("shot_id"),
+            )
+
+        return finalized_result
+    except Exception as exc:
+        logger.warning("[ImageJob] callback persistence finalize failed | job_id=%s error=%s", job_id, exc)
+        return result
+    finally:
+        db.close()
+
+
 def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
     provider_task_id = _extract_job_provider_task_id(job)
     callback_ticket = _extract_job_provider_callback_ticket(job)
@@ -2166,6 +2252,19 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
             updates["finished_at"] = now_bj_iso()
 
     if normalized_status == "succeeded":
+        candidate_result = result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
+        if candidate_result:
+            effective_job = dict(job)
+            effective_job.update(updates)
+            persisted_result = _finalize_image_job_result_persistence(job_id, effective_job, dict(candidate_result))
+            persisted_result_url = _extract_job_result_url(persisted_result)
+            effective_current_result = updates.get("result") if "result" in updates else job.get("result")
+            effective_current_result_url = _extract_job_result_url(effective_current_result)
+            if persisted_result_url and (
+                persisted_result_url != effective_current_result_url or persisted_result != effective_current_result
+            ):
+                updates["result"] = persisted_result
+                callback_result_url = persisted_result_url
         if current_error:
             updates["error"] = None
     elif normalized_status in {"failed", "canceled"}:
@@ -22596,6 +22695,16 @@ async def submit_generate_image_endpoint(
         status="queued",
         user_id=current_user.id,
         username=current_user.username,
+        prompt=req_payload.get("prompt"),
+        negative_prompt=req_payload.get("negative_prompt"),
+        provider=req_payload.get("provider"),
+        model=req_payload.get("model"),
+        mode=req_payload.get("mode"),
+        aspect_ratio=req_payload.get("aspect_ratio"),
+        image_size=req_payload.get("image_size"),
+        width=req_payload.get("width"),
+        height=req_payload.get("height"),
+        quality=req_payload.get("quality"),
         callback_url=callback_url,
         provider_callback_ticket=provider_callback_ticket,
         provider_callback_url=provider_callback_url or None,
@@ -22606,7 +22715,13 @@ async def submit_generate_image_endpoint(
         shot_id=req_payload.get("shot_id"),
         shot_number=req_payload.get("shot_number"),
         shot_name=req_payload.get("shot_name"),
+        entity_id=req_payload.get("entity_id"),
+        entity_name=req_payload.get("entity_name"),
+        subject_name=req_payload.get("subject_name"),
+        subject_type=req_payload.get("subject_type"),
+        entity_type=req_payload.get("entity_type"),
         asset_type=req_payload.get("asset_type"),
+        seed=req_payload.get("seed"),
         created_at=now,
         started_at=None,
         finished_at=None,
