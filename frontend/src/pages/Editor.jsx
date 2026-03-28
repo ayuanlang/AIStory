@@ -693,6 +693,11 @@ const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode = null,
     const endRef = String(techObj?.end_frame_url || '').trim();
     const keyframes = normalizeMediaRefList(techObj?.keyframes || []);
 
+    // In reference-image mode, only keep subject references from prompt matches.
+    if (mode === 'entity_refs') {
+        return normalizeMediaRefList(entityRefUrls);
+    }
+
     if (mode === 'end') {
         if (endRef) refs.push(endRef);
         return normalizeMediaRefList(refs);
@@ -700,12 +705,7 @@ const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode = null,
 
     if (startRef) refs.push(startRef);
 
-    if (mode === 'entity_refs') {
-        refs.push(...normalizeMediaRefList(entityRefUrls));
-        refs.push(...keyframes);
-    }
-
-    if ((mode === 'start_end' || mode === 'entity_refs') && endRef) {
+    if (mode === 'start_end' && endRef) {
         refs.push(endRef);
     }
 
@@ -12141,11 +12141,9 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         includeAssociatedEntities: !strictPromptOnly,
     });
 
-    const getVideoPromptEntityRefs = () => collectMatchedEntityImageUrlsFromPrompt({
+    const getVideoPromptEntityRefs = () => collectMatchedSubjectImageUrlsFromPrompt({
         promptText,
-        associatedEntities: shot?.associated_entities || '',
         entityPool: entities,
-        includeAssociatedEntities: false,
     });
 
     useEffect(() => {
@@ -12178,7 +12176,9 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         // but image url same means same image. Let's uniq by URL to avoid UI keys issues
         activeRefs = [...new Set(activeRefs)];
     } else if (isVideoRefManager) {
-        if (isVideoManualOverride && Array.isArray(tech[storageKey])) {
+        // WYSIWYG: submit/render should use the exact refs currently stored for video mode.
+        // Auto-build is only a fallback when no stored list exists yet.
+        if (Array.isArray(tech[storageKey])) {
             activeRefs = normalizeMediaRefList(tech[storageKey]);
         } else {
             activeRefs = buildAutoVideoRefList(shot, tech, resolvedVideoMode, getVideoPromptEntityRefs());
@@ -12444,6 +12444,8 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
         return entities.find(e => e.image_url === url);
     };
 
+    const currentSubmitRefCount = activeRefs.length;
+
     // Modal Content
     const renderModal = () => {
         if (!selectedImage) return null;
@@ -12545,7 +12547,14 @@ const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images"
                             </button>
                         )}
                     </h4>
-                    <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-white/50">Used by AI: {activeRefs.length}</span>
+                    <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-white/50">Used by AI: {activeRefs.length}</span>
+                        {isVideoRefManager && (
+                            <span className="text-[10px] bg-primary/15 border border-primary/30 px-1.5 py-0.5 rounded text-primary/90">
+                                {t(`当前提交引用数 = ${currentSubmitRefCount}`, `Current submit ref count = ${currentSubmitRefCount}`)}
+                            </span>
+                        )}
+                    </div>
                 </div>
                 
                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar min-h-[90px]">
@@ -24659,11 +24668,9 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                 techObj.video_gen_mode = mode;
                 techObj.video_ref_submit_mode = 'auto';
             }
-            const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
+            const promptEntityRefs = collectMatchedSubjectImageUrlsFromPrompt({
                 promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(techObj.video_prompt_cn || '').trim()}`,
-                associatedEntities: editingShot?.associated_entities || '',
                 entityPool: entities,
-                includeAssociatedEntities: false,
             });
             techObj.video_ref_image_urls = buildAutoVideoRefList(editingShot, techObj, mode, promptEntityRefs);
             techObj.video_ref_image_urls_manual = false;
@@ -27313,13 +27320,11 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             }
 
             const effectiveVideoMode = resolveUnifiedVideoMode(tech);
-            const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
+            const promptEntityRefs = collectMatchedSubjectImageUrlsFromPrompt({
                 promptText: `${getShotVideoPromptEn(shotSnapshot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
-                associatedEntities: shotSnapshot?.associated_entities || '',
                 entityPool: resolvedEntities,
-                includeAssociatedEntities: false,
             });
-            const uniqueRefs = tech.video_ref_image_urls_manual === true && Array.isArray(tech.video_ref_image_urls)
+            const uniqueRefs = Array.isArray(tech.video_ref_image_urls)
                 ? normalizeMediaRefList(tech.video_ref_image_urls)
                 : buildAutoVideoRefList(shotSnapshot, tech, effectiveVideoMode, promptEntityRefs);
 
