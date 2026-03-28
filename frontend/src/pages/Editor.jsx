@@ -225,9 +225,13 @@ const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps
     const eagerLoad = requestedLoading === 'eager' || requestedLoading === 'auto';
     const [shouldLoad, setShouldLoad] = useState(() => eagerLoad || isWarmMediaUrl(rawSrc));
     const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
+    const [isLoaded, setIsLoaded] = useState(() => isWarmMediaUrl(rawSrc));
+
+    const { onLoad: userOnLoad, onError: userOnError, ...restImgProps } = imgProps;
 
     useEffect(() => {
         setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
+        setIsLoaded(isWarmMediaUrl(rawSrc));
         if (isWarmMediaUrl(rawSrc)) {
             setShouldLoad(true);
         }
@@ -272,22 +276,26 @@ const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps
             <img
                 src={shouldLoad ? resolvedSrc : IMG_PLACEHOLDER_SRC}
                 alt={alt}
-                className={className}
+                className={`${className} transition-all duration-300 ${isLoaded ? 'opacity-100 blur-0 scale-100' : 'opacity-85 blur-[3px] scale-[1.01] bg-white/10 animate-pulse'}`.trim()}
                 loading={imgProps.loading || 'lazy'}
                 decoding={imgProps.decoding || 'async'}
                 fetchPriority={imgProps.fetchPriority || 'low'}
                 onLoad={() => {
                     rememberWarmMediaUrl(rawSrc);
+                    setIsLoaded(true);
+                    if (typeof userOnLoad === 'function') userOnLoad();
                 }}
                 onError={() => {
                     if (!shouldLoad) {
                         setShouldLoad(true);
+                        if (typeof userOnError === 'function') userOnError();
                         return;
                     }
                     rememberBrokenMediaUrl(rawSrc);
                     setFailed(true);
+                    if (typeof userOnError === 'function') userOnError();
                 }}
-                {...imgProps}
+                {...restImgProps}
             />
         </div>
     );
@@ -20309,6 +20317,36 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
 
     const hasRunningSubjectBatchTask = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
 
+    useEffect(() => {
+        const preloadTargets = (Array.isArray(entities) ? entities : [])
+            .map((item) => String(item?.image_url || '').trim())
+            .filter(Boolean)
+            .slice(0, 18);
+
+        if (!preloadTargets.length) return;
+
+        const timers = [];
+        preloadTargets.forEach((url, idx) => {
+            if (isWarmMediaUrl(url) || isBrokenMediaUrl(url)) return;
+            const timer = setTimeout(() => {
+                try {
+                    const img = new window.Image();
+                    img.decoding = 'async';
+                    img.src = getFullUrl(url);
+                    img.onload = () => rememberWarmMediaUrl(url);
+                    img.onerror = () => rememberBrokenMediaUrl(url);
+                } catch {
+                    // Ignore preload failures and let normal rendering continue.
+                }
+            }, idx * 70);
+            timers.push(timer);
+        });
+
+        return () => {
+            timers.forEach((timer) => clearTimeout(timer));
+        };
+    }, [entities, subTab]);
+
     return (
         <div className="p-6 h-full flex flex-col w-full relative">
             {subjectNotification && (
@@ -20316,16 +20354,33 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     {subjectNotification.message}
                 </div>
             )}
-            <div className="flex justify-between items-center mb-6">
-                <div className="flex items-center gap-2">
-                    <h2 className="text-2xl font-bold">{t('角色资产库', 'Subjects Library')}</h2>
-                    <span className="text-xs text-muted-foreground font-mono">· {t('总计', 'Total')} {allEntities.length}</span>
+            <div className="flex justify-between items-start mb-6 gap-4">
+                <div className="flex flex-col gap-3">
+                    <div className="flex gap-1.5 bg-gradient-to-r from-white/10 via-white/5 to-white/10 border border-white/15 p-1.5 rounded-xl self-start shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
+                        <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary font-mono mr-1">
+                            {t('合计', 'Total')}: {allEntities.length}
+                        </span>
+                        {[
+                            { key: 'character', label: t('角色', 'Char'), title: t('角色', 'Characters') },
+                            { key: 'environment', label: t('环境', 'Env'), title: t('环境', 'Environments') },
+                            { key: 'prop', label: t('道具', 'Prop'), title: t('道具', 'Props') },
+                        ].map(({ key, label, title }) => (
+                            <button 
+                                key={key}
+                                onClick={() => setSubTab(key)}
+                                className={`px-5 py-2.5 text-xs font-extrabold uppercase rounded-lg transition-all border ${subTab === key ? 'bg-primary text-black border-primary shadow-[0_0_16px_rgba(255,210,64,0.35)]' : 'bg-black/20 border-white/10 hover:bg-white/10 text-muted-foreground hover:text-white'}`}
+                                title={title}
+                            >
+                                {label} ({subjectCategoryStats[key] || 0})
+                            </button>
+                        ))}
+                    </div>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap justify-end">
                      <button 
                         onClick={handleDeleteAllEntities}
                         className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-md transition-colors"
-                    title={t('删除全部角色资产', 'Delete All Subjects')}
+                    title={t('删除全部主体资产', 'Delete All Subjects')}
                     >
                         <Trash2 size={16} />
                     </button>
@@ -20398,22 +20453,6 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                         )}
                     </button>
 
-                    <div className="flex space-x-1 bg-card border border-white/10 p-1 rounded-lg">
-                        {[
-                            { key: 'character', label: t('角色', 'Char'), title: t('角色', 'Characters') },
-                            { key: 'environment', label: t('环境', 'Env'), title: t('环境', 'Environments') },
-                            { key: 'prop', label: t('道具', 'Prop'), title: t('道具', 'Props') },
-                        ].map(({ key, label, title }) => (
-                            <button 
-                                key={key}
-                                onClick={() => setSubTab(key)}
-                                className={`px-4 py-2 text-xs font-bold uppercase rounded-md transition-all ${subTab === key ? 'bg-primary text-black' : 'hover:bg-white/5 text-muted-foreground'}`}
-                                title={title}
-                            >
-                                {label} ({subjectCategoryStats[key] || 0})
-                            </button>
-                        ))}
-                    </div>
                 </div>
             </div>
 
@@ -20446,15 +20485,21 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 </div>
             )}
             
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-6 w-full">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6 w-full">
                 <div 
                     onClick={handleCreate}
-                    className="aspect-[3/4] border-2 border-dashed border-white/10 rounded-xl flex flex-col items-center justify-center text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer transition-all bg-black/20 w-full">
-                    <span className="text-4xl mb-2"><Plus /></span>
-                    <span className="text-xs uppercase font-bold">{t('新建', 'New')} {subTab}</span>
+                    className="border-2 border-dashed border-white/10 rounded-xl overflow-hidden text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer transition-all bg-black/20 w-full min-h-[240px] flex flex-col"
+                >
+                    <div className="aspect-video w-full flex items-center justify-center bg-black/30 border-b border-white/10">
+                        <span className="text-4xl"><Plus /></span>
+                    </div>
+                    <div className="flex-1 p-3 flex flex-col justify-center">
+                        <span className="text-xs uppercase font-bold">{t('新建', 'New')} {subTab}</span>
+                        <span className="text-[11px] text-white/40 mt-1">{t('创建并管理主体信息', 'Create and manage subject info')}</span>
+                    </div>
                 </div>
                 
-                {entities.map(entity => {
+                {entities.map((entity, entityIndex) => {
                     const trackedJob = subjectImageJobs[String(entity.id)];
                     const isBatchPending = !trackedJob && isBatchGeneratingEntities && !entity.image_url;
                     const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
@@ -20463,115 +20508,124 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                     <div 
                         key={entity.id} 
                         onClick={() => setViewingEntity(entity)}
-                        className="aspect-[3/4] bg-card border border-white/10 rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all"
+                        className="bg-card border border-white/10 rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all min-h-[260px] flex flex-col"
                     >
-                        {(trackedJob || isBatchPending) && (
-                            <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
-                                {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <RefreshCw className="animate-spin" size={10} />}
-                                {stoppingSubjectImageJobs[String(entity.id)]
-                                    ? t('停止中', 'Stopping')
-                                    : isBatchPending
-                                        ? t('排队中', 'Queued')
-                                    : String(trackedJob?.status || '').toLowerCase() === 'persisting'
-                                        ? t('同步中', 'Syncing')
-                                    : String(trackedJob?.status || '').toLowerCase() === 'running'
-                                        ? t('运行中', 'Running')
-                                        : String(trackedJob?.status || '').toLowerCase() === 'queued'
+                        <div className="relative aspect-video w-full overflow-hidden bg-black">
+                            {(trackedJob || isBatchPending) && (
+                                <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
+                                    {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <RefreshCw className="animate-spin" size={10} />}
+                                    {stoppingSubjectImageJobs[String(entity.id)]
+                                        ? t('停止中', 'Stopping')
+                                        : isBatchPending
                                             ? t('排队中', 'Queued')
-                                            : t('生成中', 'Generating')}
+                                        : String(trackedJob?.status || '').toLowerCase() === 'persisting'
+                                            ? t('同步中', 'Syncing')
+                                        : String(trackedJob?.status || '').toLowerCase() === 'running'
+                                            ? t('运行中', 'Running')
+                                            : String(trackedJob?.status || '').toLowerCase() === 'queued'
+                                                ? t('排队中', 'Queued')
+                                                : t('生成中', 'Generating')}
+                                </div>
+                            )}
+                            {trackedJob && hasRunningSubjectImageJob && (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleForceStopSubjectImage(entity);
+                                    }}
+                                    disabled={Boolean(stoppingSubjectImageJobs[String(entity.id)])}
+                                    className="absolute top-2 right-2 z-30 inline-flex items-center gap-1 rounded-md bg-red-500/80 hover:bg-red-500 text-white px-2 py-1 text-[10px] font-bold backdrop-blur-md disabled:opacity-60 disabled:cursor-not-allowed"
+                                    title={t('停止该主体的后台图片任务', 'Stop this subject background image task')}
+                                >
+                                    {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <X size={10} />}
+                                    <span>{stoppingSubjectImageJobs[String(entity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}</span>
+                                </button>
+                            )}
+
+                            {entity.image_url ? (
+                                <SafeImage
+                                    src={entity.image_url}
+                                    alt={entity.name}
+                                    className="absolute inset-0 object-cover w-full h-full"
+                                    loading={entityIndex < 8 ? 'eager' : 'lazy'}
+                                    fetchPriority={entityIndex < 4 ? 'high' : 'auto'}
+                                    fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
+                                />
+                            ) : (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/5 px-4 text-center">
+                                    <Users className="text-white/20" size={48} />
+                                    <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/55">{t('未绑定图片', 'No Linked Image')}</div>
+                                    <div className="text-[10px] text-white/35">{t('可重新选择或生成主体图', 'Select or generate a subject image')}</div>
+                                </div>
+                            )}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
+
+                            <div className={`absolute right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 ${hasRunningSubjectImageJob ? 'top-12' : 'top-2'}`}>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'library'); }}
+                                    disabled={imageActionLocked}
+                                    className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={imageActionLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片（素材库/上传）', 'Change Image (Library/Upload)')}
+                                >
+                                    <ImageIcon size={16} />
+                                </button>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'generate'); }}
+                                    disabled={imageActionLocked}
+                                    className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={t('生成 AI 图片', 'Generate AI Image')}
+                                >
+                                    <Wand2 size={16} />
+                                </button>
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleRemoveEntityImage(entity);
+                                    }}
+                                    disabled={imageActionLocked || !entity.image_url}
+                                    className="p-2 bg-amber-500/80 hover:bg-amber-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={imageActionLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                >
+                                    <Unlink size={16} />
+                                </button>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(entity); }}
+                                    disabled={isReconstructingEntity || imageActionLocked || !entity.image_url}
+                                    className="p-2 bg-indigo-500/80 hover:bg-indigo-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={t('现有资产重构（分析图片并重生成）', 'Refactor Existing Asset (analyze + regenerate)')}
+                                >
+                                    {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                                </button>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); handleCopyEntityWithLLM(entity); }}
+                                    disabled={isCopyingEntity}
+                                    className="p-2 bg-emerald-500/80 hover:bg-emerald-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={t('复制并 AI 生成新主体（参考原提示词结构）', 'Copy and AI-generate a new subject (preserve original prompt structure)')}
+                                >
+                                    {isCopyingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Copy size={16} />}
+                                </button>
+                                <button 
+                                    onClick={(e) => handleDeleteEntity(e, entity)}
+                                    className="p-2 bg-red-500/80 hover:bg-red-600 rounded-full text-white backdrop-blur-md"
+                                    title={t('删除实体', 'Delete Entity')}
+                                >
+                                    <Trash2 size={16} />
+                                </button>
                             </div>
-                        )}
-                        {trackedJob && hasRunningSubjectImageJob && (
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    void handleForceStopSubjectImage(entity);
-                                }}
-                                disabled={Boolean(stoppingSubjectImageJobs[String(entity.id)])}
-                                className="absolute top-2 right-2 z-30 inline-flex items-center gap-1 rounded-md bg-red-500/80 hover:bg-red-500 text-white px-2 py-1 text-[10px] font-bold backdrop-blur-md disabled:opacity-60 disabled:cursor-not-allowed"
-                                title={t('停止该主体的后台图片任务', 'Stop this subject background image task')}
-                            >
-                                {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <X size={10} />}
-                                <span>{stoppingSubjectImageJobs[String(entity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}</span>
-                            </button>
-                        )}
-                        {isEntityAnalyzed(entity) && (
-                            <div className="absolute bottom-2 right-2 z-30 px-2 py-1 rounded-md bg-emerald-500/20 border border-emerald-400/40 text-emerald-100 text-[10px] font-bold pointer-events-none">
-                                {t('已分析', 'Analyzed')}
-                            </div>
-                        )}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent z-10 pointer-events-none"></div>
-                        {entity.image_url ? (
-                            <SafeImage
-                                src={entity.image_url}
-                                alt={entity.name}
-                                className="absolute inset-0 object-cover w-full h-full"
-                                fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
-                            />
-                        ) : (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/5 px-4 text-center">
-                                <Users className="text-white/20" size={48} />
-                                <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/55">{t('未绑定图片', 'No Linked Image')}</div>
-                                <div className="text-[10px] text-white/35">{t('可重新选择或生成主体图', 'Select or generate a subject image')}</div>
-                            </div>
-                        )}
-                        
-                        <div className={`absolute right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 ${hasRunningSubjectImageJob ? 'top-12' : 'top-2'}`}>
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'library'); }}
-                                disabled={imageActionLocked}
-                                className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                title={imageActionLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片（素材库/上传）', 'Change Image (Library/Upload)')}
-                            >
-                                <ImageIcon size={16} />
-                            </button>
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'generate'); }}
-                                disabled={imageActionLocked}
-                                className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                title={t('生成 AI 图片', 'Generate AI Image')}
-                            >
-                                <Wand2 size={16} />
-                            </button>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    void handleRemoveEntityImage(entity);
-                                }}
-                                disabled={imageActionLocked || !entity.image_url}
-                                className="p-2 bg-amber-500/80 hover:bg-amber-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                title={imageActionLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
-                            >
-                                <Unlink size={16} />
-                            </button>
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(entity); }}
-                                disabled={isReconstructingEntity || imageActionLocked || !entity.image_url}
-                                className="p-2 bg-indigo-500/80 hover:bg-indigo-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                title={t('现有资产重构（分析图片并重生成）', 'Refactor Existing Asset (analyze + regenerate)')}
-                            >
-                                {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
-                            </button>
-                            <button
-                                onClick={(e) => { e.stopPropagation(); handleCopyEntityWithLLM(entity); }}
-                                disabled={isCopyingEntity}
-                                className="p-2 bg-emerald-500/80 hover:bg-emerald-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                title={t('复制并 AI 生成新主体（参考原提示词结构）', 'Copy and AI-generate a new subject (preserve original prompt structure)')}
-                            >
-                                {isCopyingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Copy size={16} />}
-                            </button>
-                            <button 
-                                onClick={(e) => handleDeleteEntity(e, entity)}
-                                className="p-2 bg-red-500/80 hover:bg-red-600 rounded-full text-white backdrop-blur-md"
-                                title={t('删除实体', 'Delete Entity')}
-                            >
-                                <Trash2 size={16} />
-                            </button>
+                            {isEntityAnalyzed(entity) && (
+                                <div className="absolute bottom-2 right-2 z-30 px-2 py-1 rounded-md bg-emerald-500/20 border border-emerald-400/40 text-emerald-100 text-[10px] font-bold pointer-events-none">
+                                    {t('已分析', 'Analyzed')}
+                                </div>
+                            )}
                         </div>
 
-                        <div className="absolute bottom-3 left-3 z-20 pointer-events-none">
-                            <div className="font-bold text-white capitalize">{entity.name}</div>
-                            <div className="text-[10px] text-white/60">{entity.description?.substring(0, 30)}...</div>
+                        <div className="p-3 border-t border-white/10 flex-1 flex flex-col">
+                            <div className="font-bold text-white capitalize truncate">{entity.name}</div>
+                            <div className="text-[10px] text-white/55 uppercase tracking-[0.16em] mt-1">{subTab}</div>
+                            <div className="mt-3 text-[10px] text-white/45 uppercase tracking-[0.16em]">{t('Subject介绍', 'Subject Intro')}</div>
+                            <div className="text-xs text-white/70 mt-1 line-clamp-3 leading-relaxed min-h-[3.5rem]">
+                                {String(entity.description || '').trim() || t('暂无介绍，点击卡片可编辑主体描述。', 'No intro yet. Click the card to edit subject description.')}
+                            </div>
                         </div>
                     </div>
                     );
@@ -20580,11 +20634,15 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 {entityListLoading && entities.length === 0 && Array.from({ length: 8 }).map((_, idx) => (
                     <div
                         key={`subject-skeleton-${idx}`}
-                        className="aspect-[3/4] border border-white/10 rounded-xl bg-white/[0.02] animate-pulse p-3"
+                        className="border border-white/10 rounded-xl bg-white/[0.02] animate-pulse overflow-hidden"
                     >
-                        <div className="h-[70%] rounded-lg bg-white/10 mb-3" />
-                        <div className="h-4 rounded bg-white/10 w-2/3 mb-2" />
-                        <div className="h-3 rounded bg-white/10 w-1/2" />
+                        <div className="aspect-video bg-white/10" />
+                        <div className="p-3">
+                            <div className="h-4 rounded bg-white/10 w-2/3 mb-2" />
+                            <div className="h-3 rounded bg-white/10 w-1/3 mb-3" />
+                            <div className="h-3 rounded bg-white/10 w-full mb-1.5" />
+                            <div className="h-3 rounded bg-white/10 w-5/6" />
+                        </div>
                     </div>
                 ))}
             </div>
