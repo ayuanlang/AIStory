@@ -18,14 +18,28 @@ logging.getLogger("fastapi").setLevel(logging.WARNING)
 
 
 class _SuppressUvicornAccessUploads(logging.Filter):
-    _re = re.compile(r'"(GET|HEAD)\s+/uploads/[^\s]*\s+HTTP/')
+    _req_re = re.compile(r'"(GET|HEAD)\s+/uploads/[^\s]*\s+HTTP/')
+    _status_re = re.compile(r'"\s+(\d{3})\s+')
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             msg = record.getMessage()
         except Exception:
             return True
-        return self._re.search(msg) is None
+        # Keep non-upload traffic untouched.
+        if self._req_re.search(msg) is None:
+            return True
+
+        # For /uploads access logs, suppress only successful 2xx lines.
+        # Keep 3xx/4xx/5xx lines so image loading failures remain visible.
+        status_match = self._status_re.search(msg)
+        if not status_match:
+            return True
+        try:
+            status_code = int(status_match.group(1))
+        except Exception:
+            return True
+        return not (200 <= status_code < 300)
 
 
 def configure_uvicorn_logging_noise_reduction() -> None:

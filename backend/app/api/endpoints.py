@@ -1571,6 +1571,41 @@ def _repair_entities_image_urls_from_assets(
     return entities
 
 
+def _diagnose_entity_image_url(image_url: Any) -> Dict[str, Any]:
+    raw = str(image_url or "").strip()
+    info: Dict[str, Any] = {
+        "raw": raw,
+        "is_empty": not bool(raw),
+        "is_relative_upload": False,
+        "is_absolute_upload": False,
+        "upload_suffix": "",
+        "local_path": "",
+        "local_exists": None,
+    }
+    if not raw:
+        return info
+
+    upload_suffix = ""
+    if raw.startswith("/uploads/"):
+        info["is_relative_upload"] = True
+        upload_suffix = raw[len("/uploads/"):].lstrip("/")
+    else:
+        try:
+            parsed = urllib.parse.urlparse(raw)
+            if parsed.path.startswith("/uploads/"):
+                info["is_absolute_upload"] = True
+                upload_suffix = parsed.path[len("/uploads/"):].lstrip("/")
+        except Exception:
+            upload_suffix = ""
+
+    info["upload_suffix"] = upload_suffix
+    if upload_suffix:
+        local_path = os.path.normpath(os.path.join(settings.UPLOAD_DIR, upload_suffix))
+        info["local_path"] = local_path
+        info["local_exists"] = bool(os.path.exists(local_path))
+    return info
+
+
 def _repair_shots_media_urls_from_assets(
     db: Session,
     current_user: User,
@@ -15080,7 +15115,46 @@ def read_entities(
     if type:
         query = query.filter(Entity.type == type)
     entities = query.all()
-    return _repair_entities_image_urls_from_assets(db, current_user, project, entities)
+    repaired_entities = _repair_entities_image_urls_from_assets(db, current_user, project, entities)
+
+    # Diagnostics for Render image visibility: verify returned URLs and local file presence.
+    total = len(repaired_entities or [])
+    with_image = 0
+    relative_upload = 0
+    absolute_upload = 0
+    missing_local = 0
+    sample_missing: List[Dict[str, Any]] = []
+    for ent in repaired_entities or []:
+        diag = _diagnose_entity_image_url(getattr(ent, "image_url", None))
+        if not diag.get("is_empty"):
+            with_image += 1
+        if diag.get("is_relative_upload"):
+            relative_upload += 1
+        if diag.get("is_absolute_upload"):
+            absolute_upload += 1
+        if diag.get("upload_suffix") and diag.get("local_exists") is False:
+            missing_local += 1
+            if len(sample_missing) < 5:
+                sample_missing.append({
+                    "entity_id": getattr(ent, "id", None),
+                    "entity_name": getattr(ent, "name", None) or getattr(ent, "name_en", None),
+                    "image_url": diag.get("raw"),
+                    "upload_suffix": diag.get("upload_suffix"),
+                    "local_path": diag.get("local_path"),
+                })
+
+    logger.info(
+        "[EntityImageReadDiag] project_id=%s user_id=%s total=%s with_image=%s rel_upload=%s abs_upload=%s missing_local=%s sample_missing=%s",
+        project_id,
+        getattr(current_user, "id", None),
+        total,
+        with_image,
+        relative_upload,
+        absolute_upload,
+        missing_local,
+        json.dumps(sample_missing, ensure_ascii=False),
+    )
+    return repaired_entities
 
 @router.post("/projects/{project_id}/entities", response_model=EntityOut)
 def create_entity(
@@ -15492,6 +15566,19 @@ def update_entity(
     for field, value in update_data.items():
         if field == "image_url" and value != entity.image_url:
              entity.image_url = value
+             image_diag = _diagnose_entity_image_url(value)
+             logger.info(
+                 "[EntityImageUpdateDiag] entity_id=%s project_id=%s user_id=%s image_url=%s rel_upload=%s abs_upload=%s local_exists=%s upload_suffix=%s local_path=%s",
+                 getattr(entity, "id", None),
+                 getattr(project, "id", None),
+                 getattr(current_user, "id", None),
+                 image_diag.get("raw"),
+                 image_diag.get("is_relative_upload"),
+                 image_diag.get("is_absolute_upload"),
+                 image_diag.get("local_exists"),
+                 image_diag.get("upload_suffix"),
+                 image_diag.get("local_path"),
+             )
              # Auto-register as Asset if valid URL
              if value:
                  # Check existing to avoid dupes

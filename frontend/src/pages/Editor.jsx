@@ -7,7 +7,7 @@ import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
 import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { API_URL, BASE_URL } from '../config';
+import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
 
 // Helper to handle relative URLs
@@ -16,8 +16,9 @@ const getFullUrl = (url) => {
     if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
     // If it's a relative path starting with /, append BASE_URL
     if (url.startsWith('/')) {
-        // Avoid double slash if BASE_URL ends with /
-        const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
+        const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
+        // Avoid double slash if base URL ends with /
+        const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
         return `${base}${url}`;
     }
     return url;

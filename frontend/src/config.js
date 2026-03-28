@@ -24,5 +24,9 @@ if (RAW_BASE_URL) {
 
 export const BASE_URL = resolvedBaseUrl;
 export const FALLBACK_BASE_URL = resolvedFallbackBaseUrl;
+// For media assets (e.g. /uploads/*), prefer a backend-capable base URL.
+// On Render frontend with same-origin API proxy mode, BASE_URL may be empty while
+// assets are still served by the backend service host.
+export const ASSET_BASE_URL = BASE_URL || FALLBACK_BASE_URL || '';
 export const API_URL = `${BASE_URL}/api/v1`;
 export const FALLBACK_API_URL = FALLBACK_BASE_URL ? `${FALLBACK_BASE_URL}/api/v1` : '';
