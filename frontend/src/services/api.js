@@ -2480,6 +2480,26 @@ export const deleteProviderKeyPool = async (poolId) => {
     return response.data;
 }
 
+export const listOssProviderPools = async () => {
+    const response = await api.get('/settings/system/manage/oss-provider-pools');
+    return response.data;
+}
+
+export const createOssProviderPool = async (payload) => {
+    const response = await api.post('/settings/system/manage/oss-provider-pools', payload);
+    return response.data;
+}
+
+export const updateOssProviderPool = async (poolId, payload) => {
+    const response = await api.post(`/settings/system/manage/oss-provider-pools/${poolId}`, payload);
+    return response.data;
+}
+
+export const deleteOssProviderPool = async (poolId) => {
+    const response = await api.delete(`/settings/system/manage/oss-provider-pools/${poolId}`);
+    return response.data;
+}
+
 export const listKieStandardValuesManage = async (params = {}) => {
     const response = await api.get('/settings/system/manage/kie-standard-values', {
         params: {

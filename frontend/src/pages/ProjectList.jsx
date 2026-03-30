@@ -1395,10 +1395,6 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         });
     };
 
-    const openSystemLogsPage = () => {
-        trackMenuAction('project_list.admin.system_logs', t('系统日志', 'System Logs'), () => navigate('/admin/logs'));
-    };
-
     const openUserAdminPage = () => {
         trackMenuAction('project_list.admin.user_admin', t('管理面板', 'Admin Panel'), () => navigate('/admin/users'));
     };
@@ -1528,12 +1524,6 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     {currentUser?.is_superuser && (
                         <>
                             <SidebarActionItem
-                                icon={Activity}
-                                label={t('系统日志', 'System Logs')}
-                                compact={isSidebarCollapsed}
-                                onClick={openSystemLogsPage}
-                            />
-                            <SidebarActionItem
                                 icon={Shield}
                                 label={t('管理面板', 'Admin Panel')}
                                 compact={isSidebarCollapsed}
@@ -1605,13 +1595,6 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} compact={false} mobile />
                     {currentUser?.is_superuser && (
                         <>
-                            <SidebarActionItem
-                                icon={Activity}
-                                label={t('系统日志', 'System Logs')}
-                                compact={false}
-                                mobile
-                                onClick={openSystemLogsPage}
-                            />
                             <SidebarActionItem
                                 icon={Shield}
                                 label={t('管理面板', 'Admin Panel')}

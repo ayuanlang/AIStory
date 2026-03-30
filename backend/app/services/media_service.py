@@ -17,6 +17,8 @@ import traceback
 import math
 import ipaddress
 import mimetypes
+import shutil
+import tempfile
 from PIL import Image
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union, Callable, Set
@@ -28,6 +30,7 @@ from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
 from app.core.config import settings
 from app.core.mp4_faststart import optimize_mp4_faststart
 from app.services.billing_service import BillingService
+from app.services.oss_storage_service import oss_storage_service
 from app.services.system_default_api_service import get_task_default_system_setting
 from sqlalchemy import cast, String, func, text
 from sqlalchemy.orm import load_only
@@ -138,6 +141,113 @@ class MediaGenerationService:
     SMART_ROUTER_PROVIDER = "smart_router"
     USER_API_STRATEGY_FIXED = "fixed"
     USER_API_STRATEGY_SMART_DEFAULT = "smart_default"
+
+    def _build_local_generated_url(self, user_id: int, filename: str) -> str:
+        relative_path = f"/uploads/{user_id}/{filename}"
+        if settings.RENDER_EXTERNAL_URL:
+            return f"{settings.RENDER_EXTERNAL_URL.rstrip('/')}{relative_path}"
+        return relative_path
+
+    def _persist_binary_locally(self, binary: bytes, *, user_id: int, filename: str) -> str:
+        upload_dir = settings.UPLOAD_DIR
+        user_dir = os.path.join(upload_dir, str(user_id))
+        if not os.path.isabs(user_dir):
+            user_dir = os.path.abspath(user_dir)
+        os.makedirs(user_dir, exist_ok=True)
+        file_path = os.path.join(user_dir, filename)
+        with open(file_path, "wb") as handle:
+            handle.write(binary)
+        return self._build_local_generated_url(user_id, filename)
+
+    def _persist_generated_bytes(
+        self,
+        binary: bytes,
+        *,
+        user_id: int,
+        filename: str,
+        content_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        uploaded = oss_storage_service.upload_bytes(
+            binary,
+            user_id=user_id,
+            filename=filename,
+            content_type=content_type,
+            category="generated",
+            metadata=metadata,
+            cache_control="public, max-age=31536000",
+        )
+        if uploaded and uploaded.get("url"):
+            return str(uploaded["url"])
+        return self._persist_binary_locally(binary, user_id=user_id, filename=filename)
+
+    def _finalize_generated_file(
+        self,
+        file_path: str,
+        *,
+        user_id: int,
+        filename: str,
+        content_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        uploaded = oss_storage_service.upload_file(
+            file_path,
+            user_id=user_id,
+            filename=filename,
+            content_type=content_type,
+            category="generated",
+            metadata=metadata,
+            cache_control="public, max-age=31536000",
+        )
+        if uploaded and uploaded.get("url"):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+            return str(uploaded["url"])
+
+        upload_dir = settings.UPLOAD_DIR
+        user_dir = os.path.join(upload_dir, str(user_id))
+        if not os.path.isabs(user_dir):
+            user_dir = os.path.abspath(user_dir)
+        os.makedirs(user_dir, exist_ok=True)
+        final_path = os.path.join(user_dir, filename)
+        if os.path.abspath(file_path) != os.path.abspath(final_path):
+            shutil.move(file_path, final_path)
+        return self._build_local_generated_url(user_id, filename)
+
+    def _build_generated_storage_metadata(
+        self,
+        *,
+        asset_type: Optional[str] = None,
+        provider_options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        provider_options = provider_options if isinstance(provider_options, dict) else {}
+        meta: Dict[str, Any] = {}
+        resolved_asset_type = str(provider_options.get("__asset_type") or asset_type or "").strip().lower()
+        if resolved_asset_type:
+            meta["asset_type"] = resolved_asset_type
+        for src_key, dst_key in (
+            ("__subject_type", "subject_type"),
+            ("__subject_name", "subject_name"),
+            ("__entity_id", "entity_id"),
+            ("__entity_name", "entity_name"),
+            ("__entity_type", "entity_type"),
+            ("__project_id", "project_id"),
+            ("__episode_id", "episode_id"),
+            ("__scene_id", "scene_id"),
+            ("__shot_id", "shot_id"),
+        ):
+            value = provider_options.get(src_key)
+            if value not in (None, ""):
+                meta[dst_key] = value
+        subject_name_ascii = provider_options.get("__subject_name_ascii")
+        if subject_name_ascii not in (None, ""):
+            meta["subject_name"] = subject_name_ascii
+        entity_name_ascii = provider_options.get("__entity_name_ascii")
+        if entity_name_ascii not in (None, ""):
+            meta["entity_name"] = entity_name_ascii
+        return meta
     USER_API_STRATEGY_LOW_PRICE_REPLACE = "low_price_replace"
     _AGENT_POLICY_CATEGORY = "System_Payment"
     _AGENT_POLICY_PROVIDER = "agent_policy"
@@ -4039,13 +4149,29 @@ class MediaGenerationService:
             primary_retry_limit=3,
         )
 
-        # Download 
+        storage_metadata = self._build_generated_storage_metadata(
+            asset_type=asset_type,
+            provider_options=provider_options,
+        )
+        if storage_metadata.get("asset_type") == "subject":
+            logger.info(
+                "[GenerateImageSubject] request_context user_id=%s asset_type=%s entity_id=%s entity_name=%s subject_name=%s subject_type=%s",
+                user_id,
+                storage_metadata.get("asset_type"),
+                storage_metadata.get("entity_id"),
+                storage_metadata.get("entity_name"),
+                storage_metadata.get("subject_name"),
+                storage_metadata.get("subject_type"),
+            )
+
+        # Download
         if result and "url" in result and result["url"]:
             result["url"] = await asyncio.to_thread(
                 self._download_and_save,
                 result["url"],
                 filename_base,
                 user_id,
+                storage_metadata,
             )
         if result and result.get("error"):
             error_provider = result.get("_attempt_provider") if isinstance(result, dict) else None
@@ -7590,31 +7716,10 @@ class MediaGenerationService:
         artifacts = data.get("artifacts", [])
         if artifacts:
              b64 = artifacts[0].get("base64")
-             # Convert to data uri for consistency or save? 
-             # The system seems to expect saving to disk for `generated_url`.
-             # We should probably save it.
-             # _download_and_save expects a URL.
-             # But here we have base64.
-             # Let's save it manually.
              try:
-                 img_bytes = base64.b64decode(b64)
-                 filename = f"gen_sd_{uuid.uuid4().hex[:8]}.png"
-                 UPLOAD_DIR = settings.UPLOAD_DIR
-                 if not os.path.isabs(UPLOAD_DIR):
-                     UPLOAD_DIR = os.path.abspath(UPLOAD_DIR)
-                 
-                 save_path = os.path.join(UPLOAD_DIR, filename)
-
-                 def _save():
-                     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                     with open(save_path, "wb") as f:
-                         f.write(img_bytes)
-
-                 await asyncio.to_thread(_save)
-                 
                  meta = {"raw": data}
                  meta.update(base_metadata)
-                 return {"url": f"/uploads/{filename}", "metadata": meta}
+                 return {"url": f"data:image/png;base64,{b64}", "metadata": meta}
              except Exception as e:
                  return {"error": f"Failed to save image: {e}"}
         return {"error": "No artifacts"}
@@ -9131,10 +9236,7 @@ class MediaGenerationService:
                 preuploaded_refs.append(hosted_ref)
             resolved_refs = preuploaded_refs
 
-        is_sora2_i2v_model = bool(
-            gen_type == "video"
-            and str(model_lower or "").strip().lower() in {"sora-2-image-to-video", "sora-2-pro-image-to-video"}
-        )
+        is_sora2_i2v_model = bool(gen_type == "video")
 
         if is_sora2_i2v_model and resolved_refs:
             converted_refs: List[str] = []
@@ -9162,7 +9264,6 @@ class MediaGenerationService:
                     ext = ".png"
                 elif "webp" in mime:
                     ext = ".webp"
-
                 uploaded_ref = await asyncio.to_thread(
                     self._upload_kie_data_uri,
                     normalized_ref,
@@ -10753,16 +10854,14 @@ class MediaGenerationService:
         return {"error": "Timeout polling KIE task"}
 
     # -- Helpers --
-    def _download_and_save(self, url: str, filename_base: str = None, user_id: int = 1) -> str:
+    def _download_and_save(
+        self,
+        url: str,
+        filename_base: str = None,
+        user_id: int = 1,
+        storage_metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
         try:
-             UPLOAD_DIR = settings.UPLOAD_DIR
-             USER_DIR = os.path.join(UPLOAD_DIR, str(user_id))
-             
-             if not os.path.isabs(USER_DIR):
-                 USER_DIR = os.path.abspath(USER_DIR)
-
-             if not os.path.exists(USER_DIR): os.makedirs(USER_DIR)
-
              if url.startswith("data:"):
                  marker = ";base64,"
                  idx = url.find(marker)
@@ -10774,15 +10873,15 @@ class MediaGenerationService:
                      if ext == ".jpe":
                          ext = ".jpg"
                      filename = f"gen_{uuid.uuid4().hex[:8]}{ext}"
-                     if filename_base: filename = f"{filename_base}_{filename}"
-                     file_path = os.path.join(USER_DIR, filename)
-                     with open(file_path, 'wb') as f:
-                         f.write(binary)
-                     relative_path = f"/uploads/{user_id}/{filename}"
-                     if settings.RENDER_EXTERNAL_URL:
-                         base = settings.RENDER_EXTERNAL_URL.rstrip('/')
-                         return f"{base}{relative_path}"
-                     return relative_path
+                     if filename_base:
+                         filename = f"{filename_base}_{filename}"
+                     return self._persist_generated_bytes(
+                         binary,
+                         user_id=user_id,
+                         filename=filename,
+                         content_type=mime,
+                        metadata=storage_metadata,
+                     )
 
              if url.startswith("/"): return url
              if "localhost" in url or "127.0.0.1" in url: return url
@@ -10838,24 +10937,38 @@ class MediaGenerationService:
                         ext = ".bin"
                 
                 filename = f"gen_{uuid.uuid4().hex[:8]}{ext}"
-                if filename_base: filename = f"{filename_base}_{filename}"
-                    
-                file_path = os.path.join(USER_DIR, filename)
-                with open(file_path, 'wb') as f:
-                    for chunk in response.iter_content(4096): f.write(chunk)
+                if filename_base:
+                    filename = f"{filename_base}_{filename}"
 
-                if ext == ".mp4":
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                file_path = temp_file.name
+                try:
+                    with temp_file:
+                        for chunk in response.iter_content(4096):
+                            if chunk:
+                                temp_file.write(chunk)
+
+                    if ext == ".mp4":
+                        try:
+                            if optimize_mp4_faststart(file_path):
+                                _debug_log(f"[MediaService] Applied mp4 faststart optimization: {file_path}")
+                        except Exception as faststart_error:
+                            _debug_log(f"[MediaService] MP4 faststart optimization skipped: {faststart_error}", "warning")
+
+                    resolved_content_type = ct or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                    return self._finalize_generated_file(
+                        file_path,
+                        user_id=user_id,
+                        filename=filename,
+                        content_type=resolved_content_type,
+                        metadata=storage_metadata,
+                    )
+                except Exception:
                     try:
-                        if optimize_mp4_faststart(file_path):
-                            _debug_log(f"[MediaService] Applied mp4 faststart optimization: {file_path}")
-                    except Exception as faststart_error:
-                        _debug_log(f"[MediaService] MP4 faststart optimization skipped: {faststart_error}", "warning")
-                
-                relative_path = f"/uploads/{user_id}/{filename}"
-                if settings.RENDER_EXTERNAL_URL:
-                    base = settings.RENDER_EXTERNAL_URL.rstrip('/')
-                    return f"{base}{relative_path}"
-                return relative_path
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+                    raise
         except Exception as e:
             _debug_log(f"Download failed: {e}", "error")
         return url

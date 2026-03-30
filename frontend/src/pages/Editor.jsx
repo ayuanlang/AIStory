@@ -272,11 +272,18 @@ const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps
     if (!resolvedSrc) return fallback || null;
 
     return (
-        <div ref={containerRef} className="contents">
+        <div ref={containerRef} className={`relative flex items-center justify-center overflow-hidden bg-[#151515] ${className ? className.replace('object-cover', '').replace('object-contain', '').replace('max-w-full', 'w-full').replace('max-h-full', 'h-full') : ''}`}>
+            {!isLoaded && !failed && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
+                    <Loader2 className="w-5 h-5 animate-spin text-white/20" />
+                </div>
+            )}
             <img
-                src={shouldLoad ? resolvedSrc : IMG_PLACEHOLDER_SRC}
+                src={shouldLoad ? resolvedSrc : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='}
                 alt={alt}
-                className={`${className} transition-all duration-300 ${isLoaded ? 'opacity-100 blur-0 scale-100' : 'opacity-85 blur-[3px] scale-[1.01] bg-white/10 animate-pulse'}`.trim()}
+                className={`absolute inset-0 w-full h-full transition-all duration-700 z-10 ${(className || '').includes('object-contain') ? 'object-contain' : 'object-cover'} ${
+                    isLoaded ? 'opacity-100 blur-0 scale-100 bg-transparent' : 'opacity-0 blur-[10px] scale-110 bg-[#151515]'
+                }`}
                 loading={imgProps.loading || 'lazy'}
                 decoding={imgProps.decoding || 'async'}
                 fetchPriority={imgProps.fetchPriority || 'low'}
@@ -756,11 +763,13 @@ const LazyHoverVideo = ({
     const [shouldLoad, setShouldLoad] = useState(() => isWarmMediaUrl(src));
     const [videoFailed, setVideoFailed] = useState(() => !src || isBrokenMediaUrl(src));
     const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
+    const [isVideoLoaded, setIsVideoLoaded] = useState(() => isWarmMediaUrl(src));
 
     useEffect(() => {
         setVideoFailed(!src || isBrokenMediaUrl(src));
         if (isWarmMediaUrl(src)) {
             setShouldLoad(true);
+            setIsVideoLoaded(true);
         }
     }, [src]);
 
@@ -777,6 +786,7 @@ const LazyHoverVideo = ({
                 entries.forEach((entry) => {
                     if (entry.isIntersecting) {
                         setShouldLoad(true);
+            setIsVideoLoaded(true);
                     }
                 });
             },
@@ -794,6 +804,7 @@ const LazyHoverVideo = ({
         if (!playOnHover) return;
         if (!shouldLoad) {
             setShouldLoad(true);
+            setIsVideoLoaded(true);
             return;
         }
         const video = videoRef.current;
@@ -818,17 +829,29 @@ const LazyHoverVideo = ({
     return (
         <div
             ref={containerRef}
-            className={className}
+            className={`relative flex items-center justify-center overflow-hidden bg-[#151515] ${className ? className.replace('relative', '') : ''}`}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
         >
+            {!isVideoLoaded && !videoFailed && !poster && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
+                    <Loader2 className="w-5 h-5 animate-spin text-white/20" />
+                </div>
+            )}
+            
+            {!posterFailed && poster && (
+                <div className={`absolute inset-0 z-0 transition-opacity duration-700 ${isVideoLoaded ? 'opacity-0 delay-300' : 'opacity-100'}`}>
+                    <SafeImage src={poster} className="absolute inset-0 w-full h-full object-cover" />
+                </div>
+            )}
+
             <video
                 ref={videoRef}
                 src={shouldLoad && !videoFailed ? getFullUrl(src) : undefined}
-                poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
                 preload={shouldLoad ? preload : 'none'}
-                className={mediaClassName}
+                className={`z-10 relative transition-all duration-700 ${mediaClassName} ${isVideoLoaded ? 'opacity-100 blur-0 scale-100 bg-transparent' : 'opacity-0 blur-[10px] scale-105 bg-[#151515]'}`}
                 onLoadedData={() => {
+                    setIsVideoLoaded(true);
                     rememberWarmMediaUrl(src);
                     if (poster) rememberWarmMediaUrl(poster);
                 }}
@@ -20498,18 +20521,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
             )}
             
             <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6 w-full">
-                <div 
-                    onClick={handleCreate}
-                    className="border-2 border-dashed border-white/10 rounded-xl overflow-hidden text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer transition-all bg-black/20 w-full min-h-[240px] flex flex-col"
-                >
-                    <div className="aspect-video w-full flex items-center justify-center bg-black/30 border-b border-white/10">
-                        <span className="text-4xl"><Plus /></span>
-                    </div>
-                    <div className="flex-1 p-3 flex flex-col justify-center">
-                        <span className="text-xs uppercase font-bold">{t('新建', 'New')} {subTab}</span>
-                        <span className="text-[11px] text-white/40 mt-1">{t('创建并管理主体信息', 'Create and manage subject info')}</span>
-                    </div>
-                </div>
+                
                 
                 {entities.map((entity, entityIndex) => {
                     const trackedJob = subjectImageJobs[String(entity.id)];
@@ -20683,7 +20695,7 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                             {/* Left: Image */}
                             <div className="w-1/2 bg-black relative flex items-center justify-center">
                                 {viewingEntity.image_url ? (
-                                    <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="max-w-full max-h-full object-contain" fallback={<div className="flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
+                                    <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
                                 ) : (
                                     <div className="flex flex-col items-center justify-center px-8 text-center text-white/20">
                                         <Users size={64} />
@@ -31270,17 +31282,22 @@ const Editor = ({
             const currentStage = currentProj?.global_info?.workflow_stage || 'script';
             let nextStage = 'script';
 
-            const [entities, scenes, episodes] = await Promise.all([
+            const [entities, episodes] = await Promise.all([
                 fetchEntities(id).catch(() => []),
-                fetchScenes(id).catch(() => []),
                 fetchEpisodes(id).catch(() => [])
             ]);
 
             const hasAssets = entities && entities.length > 0;
-            const hasScenes = scenes && scenes.length > 0;
+            let hasScenes = false;
+            
+            if (episodes && episodes.length > 0) {
+                const ep1Scenes = await fetchScenes(episodes[0].id).catch(() => []);
+                hasScenes = ep1Scenes && ep1Scenes.length > 0;
+            }
+
             let allAssetsReady = false;
             if (hasAssets) {
-                // Ignore missing images only if strictly required. The instruction: "资产图片全部都生成好后进入分镜阶段"
+                // 如果所有的资产都有对应图片了，就应该进入分镜阶段
                 allAssetsReady = entities.every(e => !!e.image_url);
             }
 
@@ -31305,9 +31322,7 @@ const Editor = ({
 
             if (allVideosReady) {
                 nextStage = 'montage';
-            } else if (hasShots && allAssetsReady) {
-                nextStage = 'shots';
-            } else if (allAssetsReady && hasScenes) {
+            } else if (hasAssets && allAssetsReady) {
                 nextStage = 'shots';
             } else if (hasAssets || hasScenes) {
                 nextStage = 'subjects';
@@ -33952,10 +33967,10 @@ useEffect(() => {
                 <div className="flex items-center gap-2 md:gap-3 flex-wrap md:flex-nowrap justify-end w-full md:w-auto">
                     <button
                         onClick={() => {
-                            trackMenuAction('editor.action.generator', t('???', 'Generator'), () => setActiveTab('generator'));
+                            trackMenuAction('editor.action.generator', t('生成器', 'Generator'), () => setActiveTab('generator'));
                         }}
                         className={`p-1.5 rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'generator' ? 'text-primary bg-white/10' : 'text-muted-foreground hover:text-white hover:bg-white/10'}`}
-                        title={t('???', 'Generator')}
+                        title={t('生成器', 'Generator')}
                     >
                         <Wand2 className="w-4 h-4" />
                         

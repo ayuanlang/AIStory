@@ -33,6 +33,7 @@ from app.models.all_models import (
     SystemAPISetting,
     TaskDefaultSystemAPI,
     ProviderKeyPool,
+    OSSProviderPool,
     SystemAPIBillingRule,
     TransactionAction,
     SMTPSystemConfig,
@@ -104,6 +105,10 @@ from app.schemas.settings import (
     ProviderKeyPoolCreate,
     ProviderKeyPoolUpdate,
     ProviderKeyPoolOut,
+    OSSProviderPoolCreate,
+    OSSProviderPoolUpdate,
+    OSSProviderPoolOut,
+    OSSProviderPoolCredential,
     SystemAPIBillingRuleCreate,
     SystemAPIBillingRuleUpdate,
     SystemAPIBillingRuleOut,
@@ -1295,6 +1300,43 @@ def _safe_json_text(value: Any) -> str:
         return "{}"
 
 
+def _safe_json_list(value) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8", errors="ignore")
+        except Exception:
+            return []
+    if isinstance(value, str):
+        raw_obj: Any = value
+        for _ in range(3):
+            if isinstance(raw_obj, list):
+                return raw_obj
+            if not isinstance(raw_obj, str):
+                return []
+            raw = raw_obj.strip()
+            if not raw:
+                return []
+            parsed = None
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(raw)
+                except Exception:
+                    parsed = None
+            if parsed is None:
+                return []
+            raw_obj = parsed
+        return raw_obj if isinstance(raw_obj, list) else []
+    return []
+
+
 def _assign_wide_modality_fields(target: SystemAPISetting, source: Any) -> None:
     # Wide dimension fields were removed from system_api_settings.
     # Keep this as a no-op to preserve import compatibility with historical payloads.
@@ -1630,6 +1672,58 @@ def _normalize_key_weights(values, keys: List[str]) -> List[float]:
     if len(parsed) < len(keys):
         parsed.extend([1.0] * (len(keys) - len(parsed)))
     return parsed[:len(keys)]
+
+
+def _normalize_oss_credential_items(values: Any) -> List[Dict[str, Any]]:
+    items = values if isinstance(values, list) else _safe_json_list(values)
+    normalized: List[Dict[str, Any]] = []
+    for item in items:
+        raw = item if isinstance(item, dict) else _safe_json_dict(item)
+        access_key = str(raw.get("access_key") or raw.get("accessKey") or raw.get("ak") or "").strip()
+        secret_key = str(raw.get("secret_key") or raw.get("secretKey") or raw.get("sk") or "").strip()
+        session_token = str(raw.get("session_token") or raw.get("sessionToken") or raw.get("token") or "").strip() or None
+        label = str(raw.get("label") or "").strip() or None
+        if not access_key or not secret_key:
+            continue
+        weight_raw = raw.get("weight")
+        try:
+            weight = float(weight_raw) if weight_raw is not None and str(weight_raw).strip() != "" else None
+        except Exception:
+            weight = None
+        is_active_raw = raw.get("is_active")
+        is_active = True if is_active_raw is None else bool(is_active_raw)
+        normalized.append({
+            "access_key": access_key,
+            "secret_key": secret_key,
+            "session_token": session_token,
+            "label": label,
+            "weight": weight,
+            "is_active": is_active,
+        })
+    return normalized
+
+
+def _serialize_oss_provider_pool_row(row: OSSProviderPool) -> OSSProviderPoolOut:
+    credentials = [OSSProviderPoolCredential(**item) for item in _normalize_oss_credential_items(getattr(row, "credentials", None))]
+    return OSSProviderPoolOut(
+        id=row.id,
+        provider=str(getattr(row, "provider", "") or "").strip(),
+        provider_alias=str(getattr(row, "provider_alias", "") or "").strip() or None,
+        endpoint=str(getattr(row, "endpoint", "") or "").strip(),
+        region=str(getattr(row, "region", "") or "").strip() or None,
+        bucket=str(getattr(row, "bucket", "") or "").strip(),
+        public_base_url=_normalize_optional_http_url(getattr(row, "public_base_url", None)),
+        root_prefix=str(getattr(row, "root_prefix", "") or "").strip().strip("/") or None,
+        credentials=credentials,
+        strategy=_normalize_key_strategy(getattr(row, "strategy", None)),
+        weights=_normalize_key_weights(getattr(row, "weights", None), [item.access_key for item in credentials]),
+        default_storage_class=str(getattr(row, "default_storage_class", "") or "").strip() or None,
+        retention_days=int(getattr(row, "retention_days", 0)) if getattr(row, "retention_days", None) not in (None, "") else None,
+        force_path_style=bool(getattr(row, "force_path_style", False)),
+        is_active=bool(getattr(row, "is_active", False)),
+        created_at=getattr(row, "created_at", None),
+        updated_at=getattr(row, "updated_at", None),
+    )
 
 
 def _validate_provider_bundle_payload(providers: List[Any]) -> Dict[str, Any]:
@@ -8790,6 +8884,37 @@ def _db_has_table(db: Session, table_name: str) -> bool:
         return False
 
 
+def _ensure_oss_provider_pools_table(db: Session) -> bool:
+    try:
+        conn = db.connection()
+        inspector = inspect(conn)
+        if not inspector.has_table("oss_provider_pools"):
+            OSSProviderPool.__table__.create(bind=conn, checkfirst=True)
+            logger.warning("settings.oss.runtime_bootstrap created oss_provider_pools table")
+        inspector = inspect(conn)
+        existing_cols = {str(c.get("name") or "").strip() for c in inspector.get_columns("oss_provider_pools")}
+        missing_columns = [
+            column
+            for column in OSSProviderPool.__table__.columns
+            if not column.primary_key and column.name not in existing_cols
+        ]
+        if missing_columns:
+            dialect_name = str(conn.dialect.name or "").lower()
+            with db.begin_nested():
+                for column in missing_columns:
+                    column_type_sql = column.type.compile(dialect=conn.dialect)
+                    ddl = f"ALTER TABLE oss_provider_pools ADD COLUMN {'IF NOT EXISTS ' if dialect_name == 'postgresql' else ''}{column.name} {column_type_sql}"
+                    conn.execute(text(ddl))
+            logger.warning(
+                "settings.oss.runtime_bootstrap added_missing_columns=%s",
+                ",".join(column.name for column in missing_columns),
+            )
+        return True
+    except Exception as exc:
+        logger.warning("settings.oss.runtime_bootstrap skipped err=%s", str(exc)[:300])
+        return False
+
+
 _SQLITE_LOCK_RETRY_DELAYS = (0.35, 0.8, 1.5)
 
 
@@ -10525,6 +10650,149 @@ def delete_provider_key_pool(
     db.delete(record)
     db.commit()
     _invalidate_provider_pool_cache()
+    return {"ok": True}
+
+
+@router.get("/settings/system/manage/oss-provider-pools", response_model=List[OSSProviderPoolOut])
+def list_oss_provider_pools(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage OSS provider pools")
+    if not _ensure_oss_provider_pools_table(db):
+        return []
+
+    rows = db.query(OSSProviderPool).order_by(OSSProviderPool.provider.asc(), OSSProviderPool.id.asc()).all()
+    return [_serialize_oss_provider_pool_row(row) for row in rows]
+
+
+@router.post("/settings/system/manage/oss-provider-pools", response_model=OSSProviderPoolOut)
+def create_oss_provider_pool(
+    payload: OSSProviderPoolCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage OSS provider pools")
+    if not _ensure_oss_provider_pools_table(db):
+        raise HTTPException(status_code=503, detail="oss_provider_pools table not found")
+
+    provider_name = _normalize_system_provider_name(payload.provider)
+    endpoint = str(payload.endpoint or "").strip().rstrip("/")
+    bucket = str(payload.bucket or "").strip()
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="provider is required")
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="endpoint is required")
+    if not bucket:
+        raise HTTPException(status_code=400, detail="bucket is required")
+
+    credential_payloads = [item.model_dump() if hasattr(item, "model_dump") else item.dict() for item in (payload.credentials or [])]
+    credentials = _normalize_oss_credential_items(credential_payloads)
+    now = now_bj_iso()
+    record = OSSProviderPool(
+        provider=provider_name,
+        provider_alias=str(payload.provider_alias or "").strip() or None,
+        endpoint=endpoint,
+        region=str(payload.region or "").strip() or None,
+        bucket=bucket,
+        public_base_url=_normalize_optional_http_url(payload.public_base_url),
+        root_prefix=str(payload.root_prefix or "").strip().strip("/") or None,
+        credentials=credentials,
+        strategy=_normalize_key_strategy(payload.strategy),
+        weights=_normalize_key_weights(payload.weights, [item.get("access_key") or str(idx) for idx, item in enumerate(credentials)]),
+        default_storage_class=str(payload.default_storage_class or "").strip() or None,
+        retention_days=int(payload.retention_days) if payload.retention_days is not None else None,
+        force_path_style=bool(payload.force_path_style),
+        is_active=True if payload.is_active is None else bool(payload.is_active),
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return _serialize_oss_provider_pool_row(record)
+
+
+@router.post("/settings/system/manage/oss-provider-pools/{pool_id}", response_model=OSSProviderPoolOut)
+def update_oss_provider_pool(
+    pool_id: int,
+    payload: OSSProviderPoolUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage OSS provider pools")
+    if not _ensure_oss_provider_pools_table(db):
+        raise HTTPException(status_code=503, detail="oss_provider_pools table not found")
+
+    record = db.query(OSSProviderPool).filter(OSSProviderPool.id == pool_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="OSS provider pool entry not found")
+
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    if "provider" in patch:
+        provider_name = _normalize_system_provider_name(patch.get("provider"))
+        if not provider_name:
+            raise HTTPException(status_code=400, detail="provider cannot be empty")
+        record.provider = provider_name
+    if "provider_alias" in patch:
+        record.provider_alias = str(patch.get("provider_alias") or "").strip() or None
+    if "endpoint" in patch:
+        endpoint = str(patch.get("endpoint") or "").strip().rstrip("/")
+        if not endpoint:
+            raise HTTPException(status_code=400, detail="endpoint cannot be empty")
+        record.endpoint = endpoint
+    if "region" in patch:
+        record.region = str(patch.get("region") or "").strip() or None
+    if "bucket" in patch:
+        bucket = str(patch.get("bucket") or "").strip()
+        if not bucket:
+            raise HTTPException(status_code=400, detail="bucket cannot be empty")
+        record.bucket = bucket
+    if "public_base_url" in patch:
+        record.public_base_url = _normalize_optional_http_url(patch.get("public_base_url"))
+    if "root_prefix" in patch:
+        record.root_prefix = str(patch.get("root_prefix") or "").strip().strip("/") or None
+    if "credentials" in patch:
+        record.credentials = _normalize_oss_credential_items(patch.get("credentials") or [])
+    if "strategy" in patch:
+        record.strategy = _normalize_key_strategy(patch.get("strategy"))
+    if "weights" in patch:
+        credential_keys = [item.get("access_key") or str(idx) for idx, item in enumerate(_normalize_oss_credential_items(getattr(record, "credentials", None)))]
+        record.weights = _normalize_key_weights(patch.get("weights"), credential_keys)
+    if "default_storage_class" in patch:
+        record.default_storage_class = str(patch.get("default_storage_class") or "").strip() or None
+    if "retention_days" in patch:
+        record.retention_days = int(patch.get("retention_days")) if patch.get("retention_days") not in (None, "") else None
+    if "force_path_style" in patch:
+        record.force_path_style = bool(patch.get("force_path_style"))
+    if "is_active" in patch:
+        record.is_active = bool(patch.get("is_active"))
+    record.updated_at = now_bj_iso()
+    db.commit()
+    db.refresh(record)
+    return _serialize_oss_provider_pool_row(record)
+
+
+@router.delete("/settings/system/manage/oss-provider-pools/{pool_id}")
+def delete_oss_provider_pool(
+    pool_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage OSS provider pools")
+    if not _ensure_oss_provider_pools_table(db):
+        raise HTTPException(status_code=503, detail="oss_provider_pools table not found")
+
+    record = db.query(OSSProviderPool).filter(OSSProviderPool.id == pool_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="OSS provider pool entry not found")
+
+    db.delete(record)
+    db.commit()
     return {"ok": True}
 
 

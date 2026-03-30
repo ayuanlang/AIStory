@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, generateKiePricingRulesManage, applyKiePricingRulesManage, getAdminUsersPage, aiAssistantAnalyzeSupplierFeatures, aiAssistantApplySupplierFeatures } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
+
 import { getUiLang, tUI } from '../lib/uiLang';
 
 const UserAdmin = () => {
@@ -147,9 +148,11 @@ const UserAdmin = () => {
     const [selectedSupplierFeatureModelKeys, setSelectedSupplierFeatureModelKeys] = useState([]);
     const [selectedSupplierTargetApiIds, setSelectedSupplierTargetApiIds] = useState([]);
     const [supplierFeatureFilterMode, setSupplierFeatureFilterMode] = useState('all');
+    const [supplierOpsSubtab, setSupplierOpsSubtab] = useState('feature_analysis');
     const [selectedKieSuggestionIds, setSelectedKieSuggestionIds] = useState([]);
     const [isKieSuggestionEditOpen, setIsKieSuggestionEditOpen] = useState(false);
     const [editingKieSuggestionIndex, setEditingKieSuggestionIndex] = useState(-1);
+
     const [editingKieSuggestionMeta, setEditingKieSuggestionMeta] = useState({ system_api_id: '', model: '' });
     const [kieSuggestionEditForm, setKieSuggestionEditForm] = useState({
         target_system_api_id: '',
@@ -219,10 +222,30 @@ const UserAdmin = () => {
     const [providerKeyPoolRows, setProviderKeyPoolRows] = useState([]);
     const [isProviderKeyPoolLoading, setIsProviderKeyPoolLoading] = useState(false);
     const [selectedKeyPoolId, setSelectedKeyPoolId] = useState('');
-    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', provider_alias: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });
+    const [keyPoolForm, setKeyPoolForm] = useState({ provider: '', provider_alias: '', api_keys: '', strategy: 'random', weights: '', intro_url: '' });        
+    const [ossProviderPoolRows, setOssProviderPoolRows] = useState([]);        
+    const [isOssProviderPoolLoading, setIsOssProviderPoolLoading] = useState(false);
+    const [selectedOssProviderPoolId, setSelectedOssProviderPoolId] = useState('');
+    const [ossProviderPoolForm, setOssProviderPoolForm] = useState({
+        provider: 'qiniu',
+        provider_alias: '',
+        endpoint: '',
+        region: '',
+        bucket: '',
+        public_base_url: '',
+        root_prefix: 'aistory/upload',
+        credentials_text: '[]',
+        strategy: 'random',
+        weights_text: '[]',
+        default_storage_class: '',
+        retention_days: '',
+        force_path_style: false,
+        is_active: true,
+    });
     const [taskDefaultApiRows, setTaskDefaultApiRows] = useState([]);
     const [isTaskDefaultApiLoading, setIsTaskDefaultApiLoading] = useState(false);
     const [selectedTaskDefaultCategory, setSelectedTaskDefaultCategory] = useState('');
+
     const [taskDefaultForm, setTaskDefaultForm] = useState({ task_category: 'LLM', system_api_id: '' });
     const [kieStandardValueRows, setKieStandardValueRows] = useState([]);
     const [kieStandardMappingRows, setKieStandardMappingRows] = useState([]);
@@ -987,10 +1010,11 @@ const UserAdmin = () => {
 
     const pauseAdminRefresh = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    const refreshSystemApiAdminViews = async ({ includeSystemApi = true, includeProviderPools = false, includeTaskDefaults = false, includeKie = false, includePayment = false, includeSmtp = false, includeBillingRules = false } = {}) => {
+    const refreshSystemApiAdminViews = async ({ includeSystemApi = true, includeProviderPools = false, includeOssPools = false, includeTaskDefaults = false, includeKie = false, includePayment = false, includeSmtp = false, includeBillingRules = false } = {}) => {
         let refreshedSelectedSystemApiId = selectedSystemApiId;
         if (includeSystemApi) {
             const result = await fetchSystemApiManageRows();
+
             refreshedSelectedSystemApiId = String(result?.selectedSystemApiId || '');
             await pauseAdminRefresh();
         }
@@ -998,9 +1022,14 @@ const UserAdmin = () => {
             await fetchProviderKeyPools();
             await pauseAdminRefresh();
         }
+        if (includeOssPools) {
+            await fetchOssProviderPools();
+            await pauseAdminRefresh();
+        }
         if (includeTaskDefaults) {
             await fetchTaskDefaultApis();
             await pauseAdminRefresh();
+
         }
         if (includeKie) {
             await fetchKieStandardMappingsAndValues();
@@ -1020,7 +1049,7 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
-        if (activeTab === 'system_api' || activeTab === 'pricing_rules' || activeTab === 'supplier_ops') {
+        if (activeTab === 'system_api' || activeTab === 'pricing_rules' || activeTab === 'supplier_ops' || activeTab === 'oss_pools') {
             if (activeTab === 'system_api') {
                 refreshSystemApiAdminViews({
                     includeSystemApi: true,
@@ -1037,6 +1066,15 @@ const UserAdmin = () => {
                 });
                 return;
             }
+            if (activeTab === 'oss_pools') {
+                refreshSystemApiAdminViews({
+                    includeSystemApi: true,
+                    includeProviderPools: true,
+                    includeOssPools: true,
+                });
+                return;
+            }
+
             fetchSystemApiManageRows();
         }
     }, [activeTab]);
@@ -2905,9 +2943,23 @@ const UserAdmin = () => {
         }
     };
 
+    const fetchOssProviderPools = async () => {
+        setIsOssProviderPoolLoading(true);
+        try {
+            const rows = await listOssProviderPools();
+            setOssProviderPoolRows(Array.isArray(rows) ? rows : []);
+        } catch (e) {
+            console.error('Failed to load oss provider pools', e);
+            setOssProviderPoolRows([]);
+        } finally {
+            setIsOssProviderPoolLoading(false);
+        }
+    };
+
     const fetchTaskDefaultApis = async () => {
         setIsTaskDefaultApiLoading(true);
         try {
+
             const rows = await listTaskDefaultApisManage();
             const normalized = Array.isArray(rows) ? rows : [];
             setTaskDefaultApiRows(normalized);
@@ -2923,7 +2975,7 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
-        if (activeTab === 'system_api' || activeTab === 'supplier_ops') {
+        if (activeTab === 'system_api' || activeTab === 'supplier_ops' || activeTab === 'oss_pools') {
             // Loaded by refreshSystemApiAdminViews to avoid request bursts on admin page entry.
         }
     }, [activeTab]);
@@ -3004,8 +3056,49 @@ const UserAdmin = () => {
     }, [selectedKeyPoolId, providerKeyPoolRows]);
 
     useEffect(() => {
+        if (!selectedOssProviderPoolId) {
+            setOssProviderPoolForm({
+                provider: 'qiniu',
+                provider_alias: '',
+                endpoint: '',
+                region: '',
+                bucket: '',
+                public_base_url: '',
+                root_prefix: 'aistory/upload',
+                credentials_text: '[]',
+                strategy: 'random',
+                weights_text: '[]',
+                default_storage_class: '',
+                retention_days: '',
+                force_path_style: false,
+                is_active: true,
+            });
+            return;
+        }
+        const row = ossProviderPoolRows.find((item) => String(item.id) === String(selectedOssProviderPoolId));
+        if (!row) return;
+        setOssProviderPoolForm({
+            provider: row.provider || 'qiniu',
+            provider_alias: row.provider_alias || '',
+            endpoint: row.endpoint || '',
+            region: row.region || '',
+            bucket: row.bucket || '',
+            public_base_url: row.public_base_url || '',
+            root_prefix: row.root_prefix || '',
+            credentials_text: JSON.stringify(Array.isArray(row.credentials) ? row.credentials : [], null, 2),
+            strategy: row.strategy || 'random',
+            weights_text: JSON.stringify(Array.isArray(row.weights) ? row.weights : [], null, 2),
+            default_storage_class: row.default_storage_class || '',
+            retention_days: row.retention_days === null || row.retention_days === undefined ? '' : String(row.retention_days),
+            force_path_style: !!row.force_path_style,
+            is_active: row.is_active !== false,
+        });
+    }, [selectedOssProviderPoolId, ossProviderPoolRows]);
+
+    useEffect(() => {
         if (!selectedTaskDefaultCategory) {
             return;
+
         }
         const row = taskDefaultApiRows.find((item) => String(item?.task_category || '') === String(selectedTaskDefaultCategory));
         if (!row) {
@@ -3104,9 +3197,86 @@ const UserAdmin = () => {
         } catch (e) { alert(e?.response?.data?.detail || e.message || 'Failed'); }
     };
 
+    const parseOssProviderPoolPayloadFromForm = () => {
+        let credentials = [];
+        let weights = [];
+        try {
+            credentials = JSON.parse(String(ossProviderPoolForm.credentials_text || '[]').trim() || '[]');
+            if (!Array.isArray(credentials)) throw new Error('credentials must be an array');
+        } catch (e) {
+            throw new Error(t('凭证 JSON 格式不正确', 'Credentials JSON is invalid'));
+        }
+        try {
+            weights = JSON.parse(String(ossProviderPoolForm.weights_text || '[]').trim() || '[]');
+            if (!Array.isArray(weights)) throw new Error('weights must be an array');
+        } catch (e) {
+            throw new Error(t('权重 JSON 格式不正确', 'Weights JSON is invalid'));
+        }
+        return {
+            provider: String(ossProviderPoolForm.provider || '').trim(),       
+            provider_alias: String(ossProviderPoolForm.provider_alias || '').trim() || undefined,
+            endpoint: String(ossProviderPoolForm.endpoint || '').trim(),       
+            region: String(ossProviderPoolForm.region || '').trim() || undefined,
+            bucket: String(ossProviderPoolForm.bucket || '').trim(),
+            public_base_url: String(ossProviderPoolForm.public_base_url || '').trim() || undefined,
+            root_prefix: String(ossProviderPoolForm.root_prefix || '').trim() || undefined,
+            credentials,
+            strategy: String(ossProviderPoolForm.strategy || 'random').trim() || 'random',
+            weights,
+            default_storage_class: String(ossProviderPoolForm.default_storage_class || '').trim() || undefined,
+            retention_days: String(ossProviderPoolForm.retention_days || '').trim() ? Number(ossProviderPoolForm.retention_days) : undefined,
+            force_path_style: !!ossProviderPoolForm.force_path_style,
+            is_active: !!ossProviderPoolForm.is_active,
+        };
+    };
+
+    const handleCreateOssProviderPool = async () => {
+        try {
+            const payload = parseOssProviderPoolPayloadFromForm();
+            await createOssProviderPool(payload);
+            await fetchOssProviderPools();
+            setSelectedOssProviderPoolId('');
+            alert(t('OSS 供应商配置已创建', 'OSS provider pool created'));     
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('创建 OSS 供应商 配置失败', 'Failed to create OSS provider pool'));
+        }
+    };
+
+    const handleUpdateOssProviderPool = async () => {
+        if (!selectedOssProviderPoolId) {
+            alert(t('请先选择一条 OSS 配置记录', 'Select an OSS provider pool record first'));
+            return;
+        }
+        try {
+            const payload = parseOssProviderPoolPayloadFromForm();
+            await updateOssProviderPool(Number(selectedOssProviderPoolId), payload);
+            await fetchOssProviderPools();
+            alert(t('OSS 供应商配置已更新', 'OSS provider pool updated'));     
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('更新 OSS 供应商 配置失败', 'Failed to update OSS provider pool'));
+        }
+    };
+
+    const handleDeleteOssProviderPool = async () => {
+        if (!selectedOssProviderPoolId) {
+            alert(t('请先选择一条 OSS 配置记录', 'Select an OSS provider pool record first'));
+            return;
+        }
+        if (!await confirmUiMessage(t('确认删除该 OSS 供应商配置？', 'Delete this OSS provider pool entry?'))) return;
+        try {
+            await deleteOssProviderPool(Number(selectedOssProviderPoolId));    
+            setSelectedOssProviderPoolId('');
+            await fetchOssProviderPools();
+            alert(t('OSS 供应商配置已删除', 'OSS provider pool deleted'));     
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('删除 OSS 供应商 配置失败', 'Failed to delete OSS provider pool'));
+        }
+    };
+
     const handleCreateTaskDefaultApi = async () => {
         const taskCategory = String(taskDefaultForm.task_category || '').trim();
-        const systemApiId = Number(taskDefaultForm.system_api_id || 0);
+        const systemApiId = Number(taskDefaultForm.system_api_id || 0);        
+
         if (!taskCategory) {
             alert(t('task_category 不能为空', 'task_category is required'));
             return;
@@ -4589,6 +4759,7 @@ const UserAdmin = () => {
         { id: 'config_sync', label: t('配置同步', 'Config Sync'), icon: Database },
         { id: 'pricing_rules', label: t('计费规则', 'Pricing Rules'), icon: DollarSign },
         { id: 'supplier_ops', label: t('供应商运营', 'Supplier Ops'), icon: Settings },
+        { id: 'oss_pools', label: t('OSS 存储配置', 'OSS Storage'), icon: Database },
         { id: 'kie_pricing', label: t('KIE 定价助手', 'KIE Pricing Assistant'), icon: Settings },
         { id: 'prompt_skills', label: t('Prompt Skills', 'Prompt Skills'), icon: List },
         { id: 'storage_usage', label: t('磁盘统计', 'Storage Usage'), icon: HardDrive },
@@ -8122,9 +8293,22 @@ const UserAdmin = () => {
 
                     {activeTab === 'supplier_ops' && (
                         <div className="space-y-4">
+                            <div className="flex flex-wrap gap-2 border border-white/10 rounded-xl bg-white/5 p-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setSupplierOpsSubtab('feature_analysis')}
+                                    className={`px-3 py-2 rounded-lg text-sm font-semibold ${supplierOpsSubtab === 'feature_analysis' ? 'bg-cyan-600 text-white' : 'bg-black/20 text-gray-300 hover:bg-white/10 hover:text-white'}`}
+                                >
+                                    {t('供应商分析', 'Supplier Analysis')}     
+                                </button>
+                                
+                            </div>
+
+                            {supplierOpsSubtab === 'feature_analysis' && (     
                             <div className="border border-cyan-500/20 rounded p-3 bg-cyan-500/5 space-y-3">
                                 <div className="text-sm font-bold text-cyan-200">{t('供应商 API 特征分析', 'Supplier API Feature Analysis')}</div>
-                                <div className="text-xs text-cyan-100/80">
+                                <div className="text-xs text-cyan-100/80">     
+
                                     {t('通过来源页面抓取 + LLM 结构化分析，提取并写入模型特征（分辨率、画幅比、时长、参考图限制、基础模型、mode 等）。', 'Use source-page fetch + LLM structured analysis to extract and persist model features (resolution, aspect ratio, duration, reference-image limits, base model, generation modes, etc.).')}
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -8379,8 +8563,204 @@ const UserAdmin = () => {
                                     </div>
                                 )}
                             </div>
+                            )}
+
+                            
                         </div>
                     )}
+                    {activeTab === 'oss_pools' && (
+                                <div className="border border-sky-500/20 rounded p-4 bg-sky-500/5 space-y-4">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div>
+                                            <div className="text-sm font-bold text-sky-200">{t('OSS 供应商配置', 'OSS Provider Pool Configuration')}</div>     
+                                            <div className="text-xs text-sky-100/80 mt-1">{t('管理 oss_provider_pools 表，支持多供应商、多个凭证和启用状态。credentials 与 weights 使用 JSON 数组编辑。', 'Manage the oss_provider_pools table, including multi-provider pools, multiple credentials, and activation state. Edit credentials and weights as JSON arrays.')}</div>
+                                        </div>
+                                        <button onClick={fetchOssProviderPools} className="text-xs text-sky-300 hover:text-sky-100 flex items-center gap-1"><RefreshCw size={12} /> {t('刷新', 'Refresh')}</button>
+                                    </div>
+
+                                    {isOssProviderPoolLoading ? (
+                                        <div className="text-sm text-gray-400">{t('加载中...', 'Loading...')}</div>
+                                    ) : (
+                                        <>
+                                            <div className="hidden md:block overflow-x-auto">
+                                                <table className="w-full text-xs">
+                                                    <thead>
+                                                        <tr className="text-gray-400 border-b border-white/10">
+                                                            <th className="text-left py-1.5 px-2">ID</th>
+                                                            <th className="text-left py-1.5 px-2">Provider</th>
+                                                            <th className="text-left py-1.5 px-2">Alias</th>
+                                                            <th className="text-left py-1.5 px-2">Endpoint</th>
+                                                            <th className="text-left py-1.5 px-2">Bucket</th>
+                                                            <th className="text-left py-1.5 px-2">{t('凭证数', 'Credentials')}</th>
+                                                            <th className="text-left py-1.5 px-2">{t('启用', 'Active')}</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {ossProviderPoolRows.map((row) => (
+                                                            <tr
+                                                                key={row.id}   
+                                                                className={`border-b border-white/5 cursor-pointer hover:bg-white/5 ${String(row.id) === String(selectedOssProviderPoolId) ? 'bg-sky-500/10' : ''}`}
+                                                                onClick={() => setSelectedOssProviderPoolId(String(row.id))}
+                                                            >
+                                                                <td className="py-1.5 px-2">{row.id}</td>
+                                                                <td className="py-1.5 px-2 font-mono">{row.provider}</td>
+                                                                <td className="py-1.5 px-2">{row.provider_alias || '-'}</td>
+                                                                <td className="py-1.5 px-2 max-w-[260px] truncate" title={row.endpoint || '-'}>{row.endpoint || '-'}</td>
+                                                                <td className="py-1.5 px-2">{row.bucket || '-'}</td>
+                                                                <td className="py-1.5 px-2">{Array.isArray(row.credentials) ? row.credentials.length : 0}</td> 
+                                                                <td className="py-1.5 px-2">{row.is_active ? t('是', 'Yes') : t('否', 'No')}</td>
+                                                            </tr>
+                                                        ))}
+                                                        {ossProviderPoolRows.length === 0 && (
+                                                            <tr><td colSpan={7} className="py-3 px-2 text-center text-gray-500">{t('暂无 OSS 配置', 'No OSS provider pools')}</td></tr>
+                                                        )}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            <div className="md:hidden space-y-2">
+                                                {ossProviderPoolRows.map((row) => (
+                                                    <button
+                                                        key={`oss-pool-card-${row.id}`}
+                                                        type="button"
+                                                        onClick={() => setSelectedOssProviderPoolId(String(row.id))}
+                                                        className={`w-full rounded-lg border p-3 text-left space-y-2 transition-colors ${String(row.id) === String(selectedOssProviderPoolId) ? 'border-sky-400/40 bg-sky-500/10' : 'border-white/10 bg-black/20 hover:bg-white/5'}`}
+                                                    >
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="font-semibold text-sm text-white">#{row.id} {row.provider || '-'}</div>        
+                                                                <div className="text-xs text-gray-400 mt-1 break-all">{row.endpoint || '-'}</div>
+                                                            </div>
+                                                            <span className={`shrink-0 rounded px-2 py-1 text-[11px] ${row.is_active ? 'bg-emerald-950/60 text-emerald-100' : 'bg-gray-800 text-gray-300'}`}>{row.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}</span>
+                                                        </div>
+                                                        <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-300">
+                                                            <div className="rounded bg-black/20 px-2 py-1.5"><div className="text-gray-500 mb-1">Bucket</div><div>{row.bucket || '-'}</div></div>
+                                                            <div className="rounded bg-black/20 px-2 py-1.5"><div className="text-gray-500 mb-1">{t('凭证数', 'Credentials')}</div><div>{Array.isArray(row.credentials) ? row.credentials.length : 0}</div></div>
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Provider</label>
+                                                    <input value={ossProviderPoolForm.provider} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, provider: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono" placeholder="qiniu / s3 / minio" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Alias</label>
+                                                    <input value={ossProviderPoolForm.provider_alias} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, provider_alias: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="Qiniu CN South" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Endpoint</label>
+                                                    <input value={ossProviderPoolForm.endpoint} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, endpoint: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://s3.cn-south-1.qiniucs.com" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Region</label>
+                                                    <input value={ossProviderPoolForm.region} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, region: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="cn-south-1" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Bucket</label>
+                                                    <input value={ossProviderPoolForm.bucket} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, bucket: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="aistoryboard" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Public Base URL</label>
+                                                    <input value={ossProviderPoolForm.public_base_url} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, public_base_url: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="https://cdn.example.com" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Root Prefix</label>
+                                                    <input value={ossProviderPoolForm.root_prefix} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, root_prefix: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm font-mono" placeholder="aistory/upload" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Strategy</label>
+                                                    <select value={ossProviderPoolForm.strategy} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, strategy: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm">
+                                                        <option value="random">{t('随机', 'Random')}</option>
+                                                        <option value="round_robin">{t('轮询', 'Round Robin')}</option>
+                                                        <option value="weighted">{t('权重随机', 'Weighted Random')}</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Default Storage Class</label>
+                                                    <input value={ossProviderPoolForm.default_storage_class} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, default_storage_class: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="STANDARD" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs uppercase text-gray-400 mb-1">Retention Days</label>
+                                                    <input value={ossProviderPoolForm.retention_days} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, retention_days: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" placeholder="30" />
+                                                </div>
+                                                <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={!!ossProviderPoolForm.force_path_style} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, force_path_style: e.target.checked }))} /> force_path_style</label>
+                                                <label className="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" checked={!!ossProviderPoolForm.is_active} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, is_active: e.target.checked }))} /> {t('启用该池', 'Pool Active')}</label>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <label className="block text-xs uppercase text-gray-400">Credentials ({t('多个密钥池', 'Multiple Keys')})</label>
+                                                    <button 
+                                                        onClick={() => {
+                                                            let creds = [];
+                                                            try { creds = JSON.parse(ossProviderPoolForm.credentials_text || '[]'); } catch(e){}
+                                                            if (!Array.isArray(creds)) creds = [];
+                                                            creds.push({ access_key: '', secret_key: '', label: '', is_active: true });
+                                                            setOssProviderPoolForm(f => ({ ...f, credentials_text: JSON.stringify(creds, null, 2) }));
+                                                        }}
+                                                        className="text-xs px-2 py-1 bg-sky-600/20 hover:bg-sky-600/40 text-sky-400 rounded flex items-center gap-1 transition-colors"
+                                                    ><Plus size={12}/> {t('添加密钥', 'Add Credential')}</button>
+                                                </div>
+                                                {(() => {
+                                                    let creds = [];
+                                                    try { creds = JSON.parse(ossProviderPoolForm.credentials_text || '[]'); } catch(e){ return <div className="text-red-400 text-xs text-center py-2">JSON Parse Error in Credentials</div>; }
+                                                    if (!Array.isArray(creds)) creds = [];
+                                                    const updateCred = (index, field, value) => {
+                                                        const newCreds = [...creds];
+                                                        newCreds[index] = { ...newCreds[index], [field]: value };
+                                                        setOssProviderPoolForm(f => ({ ...f, credentials_text: JSON.stringify(newCreds, null, 2) }));
+                                                    };
+                                                    const removeCred = (index) => {
+                                                        const newCreds = creds.filter((_, i) => i !== index);
+                                                        setOssProviderPoolForm(f => ({ ...f, credentials_text: JSON.stringify(newCreds, null, 2) }));
+                                                    };
+
+                                                    return creds.length === 0 ? (
+                                                        <div className="text-center text-gray-500 text-xs py-4 bg-black/20 border border-white/5 rounded italic">{t('暂无配置凭证', 'No credentials configured')}</div>
+                                                    ) : creds.map((cred, idx) => (
+                                                        <div key={idx} className="border border-white/10 rounded p-3 bg-black/20 gap-2 flex flex-col relative group">
+                                                            <button onClick={() => removeCred(idx)} className="absolute right-2 top-2 text-red-400/50 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" title={t('删除', 'Delete')}><Trash2 size={14}/></button>
+                                                            <div className="grid grid-cols-2 gap-2">
+                                                                <div>
+                                                                    <div className="text-[10px] text-gray-500 mb-0.5">Access Key</div>
+                                                                    <input className="w-full bg-black/40 border border-gray-700/50 rounded px-2 py-1 text-xs" value={cred.access_key || ''} onChange={e => updateCred(idx, 'access_key', e.target.value)} placeholder="Access Key" />
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-[10px] text-gray-500 mb-0.5">Secret Key</div>
+                                                                    <input className="w-full bg-black/40 border border-gray-700/50 rounded px-2 py-1 text-xs" value={cred.secret_key || ''} onChange={e => updateCred(idx, 'secret_key', e.target.value)} placeholder="Secret Key" />
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-[10px] text-gray-500 mb-0.5">Label (可选)</div>
+                                                                    <input className="w-full bg-black/40 border border-gray-700/50 rounded px-2 py-1 text-xs" value={cred.label || ''} onChange={e => updateCred(idx, 'label', e.target.value)} placeholder="e.g. primary" />
+                                                                </div>
+                                                                <div className="flex items-center pt-2 pb-0.5 px-1">
+                                                                    <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+                                                                        <input type="checkbox" checked={cred.is_active !== false} onChange={e => updateCred(idx, 'is_active', e.target.checked)} className="rounded border-gray-700/50 bg-black/40" />
+                                                                        {t('启用此密钥', 'Active')}
+                                                                    </label>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ));
+                                                })()}
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs uppercase text-gray-400 mb-1">Weights JSON</label>
+                                                <textarea value={ossProviderPoolForm.weights_text} onChange={(e) => setOssProviderPoolForm((f) => ({ ...f, weights_text: e.target.value }))} rows={3} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono" placeholder="[1, 3, 1]" />
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2">
+                                                <button onClick={handleCreateOssProviderPool} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs flex items-center gap-1"><Plus size={12} /> {t(' 新建', 'Create')}</button>
+                                                <button onClick={handleUpdateOssProviderPool} disabled={!selectedOssProviderPoolId} className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded text-xs flex items-center gap-1"><Edit2 size={12} /> {t('更新', 'Update')}</button>    
+                                                <button onClick={handleDeleteOssProviderPool} disabled={!selectedOssProviderPoolId} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold rounded text-xs flex items-center gap-1"><Trash2 size={12} /> {t('删除', 'Delete')}</button>   
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            )}
 
                     {activeTab === 'kie_pricing' && (
                         <div className="space-y-4">

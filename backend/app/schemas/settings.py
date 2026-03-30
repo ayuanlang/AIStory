@@ -1001,3 +1001,69 @@ class ProviderKeyPoolOut(BaseModel):
     updated_at: Optional[str] = None
     class Config:
         from_attributes = True
+
+
+class OSSProviderPoolCredential(BaseModel):
+    access_key: str
+    secret_key: str
+    session_token: Optional[str] = None
+    label: Optional[str] = None
+    weight: Optional[float] = None
+    is_active: Optional[bool] = True
+
+
+class OSSProviderPoolCreate(BaseModel):
+    provider: str
+    provider_alias: Optional[str] = None
+    endpoint: str
+    region: Optional[str] = None
+    bucket: str
+    public_base_url: Optional[str] = None
+    root_prefix: Optional[str] = None
+    credentials: List[OSSProviderPoolCredential] = Field(default_factory=list)
+    strategy: Optional[str] = "random"
+    weights: Optional[List[float]] = None
+    default_storage_class: Optional[str] = None
+    retention_days: Optional[int] = None
+    force_path_style: Optional[bool] = False
+    is_active: Optional[bool] = True
+
+
+class OSSProviderPoolUpdate(BaseModel):
+    provider: Optional[str] = None
+    provider_alias: Optional[str] = None
+    endpoint: Optional[str] = None
+    region: Optional[str] = None
+    bucket: Optional[str] = None
+    public_base_url: Optional[str] = None
+    root_prefix: Optional[str] = None
+    credentials: Optional[List[OSSProviderPoolCredential]] = None
+    strategy: Optional[str] = None
+    weights: Optional[List[float]] = None
+    default_storage_class: Optional[str] = None
+    retention_days: Optional[int] = None
+    force_path_style: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class OSSProviderPoolOut(BaseModel):
+    id: int
+    provider: str
+    provider_alias: Optional[str] = None
+    endpoint: str
+    region: Optional[str] = None
+    bucket: str
+    public_base_url: Optional[str] = None
+    root_prefix: Optional[str] = None
+    credentials: List[OSSProviderPoolCredential] = Field(default_factory=list)
+    strategy: Optional[str] = "random"
+    weights: List[float] = Field(default_factory=list)
+    default_storage_class: Optional[str] = None
+    retention_days: Optional[int] = None
+    force_path_style: Optional[bool] = False
+    is_active: Optional[bool] = True
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True

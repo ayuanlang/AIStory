@@ -18,6 +18,7 @@ ProjectAssetReviewRound = getattr(models, "ProjectAssetReviewRound", None)
 ProjectAssetReviewMessage = getattr(models, "ProjectAssetReviewMessage", None)
 SystemAPISetting = models.SystemAPISetting
 ProviderKeyPool = models.ProviderKeyPool
+OSSProviderPool = getattr(models, "OSSProviderPool", None)
 SystemAPIBillingRule = models.SystemAPIBillingRule
 TransactionAction = models.TransactionAction
 SMTPSystemConfig = models.SMTPSystemConfig
@@ -649,6 +650,20 @@ def check_and_migrate_tables(*, critical_only: bool = False):
                 logger.info("Ensured provider_key_pool.provider_alias column")
         except Exception as e:
             logger.error(f"Failed to ensure provider_key_pool.provider_alias column: {e}")
+
+        # Ensure oss_provider_pools table exists for OSS admin/storage routing.
+        try:
+            if OSSProviderPool is not None and not inspector.has_table("oss_provider_pools"):
+                OSSProviderPool.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created oss_provider_pools table")
+        except Exception as e:
+            logger.error(f"Failed to ensure oss_provider_pools table: {e}")
+
+        try:
+            if OSSProviderPool is not None:
+                _ensure_missing_table_columns("oss_provider_pools", OSSProviderPool, is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure oss_provider_pools columns: {e}")
 
         # Ensure dedicated default API mapping table exists.
         try:

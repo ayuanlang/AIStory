@@ -12,6 +12,7 @@ from app.models import all_models as models
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
+from app.services.oss_storage_service import oss_storage_service
 from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_service
 from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_registry, get_skill_meta
 from app.core.prompts.scene_analysis_feature_skills import (
@@ -61,6 +62,7 @@ import urllib.parse
 import socket
 import sys
 import time
+import io
 
 
 IMAGE_SYNC_TIMEOUT_SECONDS = min(300, max(55, int(os.getenv("IMAGE_SYNC_TIMEOUT_SECONDS", "180"))))
@@ -1116,22 +1118,54 @@ def _persist_data_uri_image_result(
         file_ext = f".{subtype}"
 
     binary = base64.b64decode(b64_part)
+    filename = f"provider_result_{uuid.uuid4().hex[:16]}{file_ext}"
+
+    updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    updated_metadata["stored_from_data_uri"] = True
+    updated_metadata["stored_from_data_uri_mime"] = mime
+    updated_metadata["stored_from_data_uri_bytes"] = len(binary)
+
+    uploaded = oss_storage_service.upload_bytes(
+        binary,
+        user_id=int(getattr(current_user, "id", 0) or 0),
+        filename=filename,
+        content_type=mime,
+        category="generated",
+        cache_control="public, max-age=31536000",
+    )
+    if uploaded and uploaded.get("url"):
+        updated_metadata["oss"] = {
+            "provider": uploaded.get("provider"),
+            "bucket": uploaded.get("bucket"),
+            "key": uploaded.get("key"),
+            "endpoint": uploaded.get("endpoint"),
+        }
+        try:
+            with Image.open(io.BytesIO(binary)) as img:
+                updated_metadata["width"] = int(img.width)
+                updated_metadata["height"] = int(img.height)
+                if img.format:
+                    updated_metadata["format"] = str(img.format)
+        except Exception as exc:
+            logger.warning("data-uri image metadata probe failed in-memory err=%s", exc)
+        logger.info(
+            "[ImageResultNormalize] stored provider data URI in OSS | user_id=%s bytes=%s mime=%s url=%s",
+            getattr(current_user, "id", None),
+            len(binary),
+            mime,
+            uploaded["url"],
+        )
+        return str(uploaded["url"]), updated_metadata
+
     upload_root = settings.UPLOAD_DIR
     if not os.path.isabs(upload_root):
         upload_root = os.path.abspath(upload_root)
 
     user_dir = os.path.join(upload_root, str(getattr(current_user, "id", "unknown")), "generated")
     os.makedirs(user_dir, exist_ok=True)
-
-    filename = f"provider_result_{uuid.uuid4().hex[:16]}{file_ext}"
     save_path = os.path.join(user_dir, filename)
     with open(save_path, "wb") as f:
         f.write(binary)
-
-    updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
-    updated_metadata["stored_from_data_uri"] = True
-    updated_metadata["stored_from_data_uri_mime"] = mime
-    updated_metadata["stored_from_data_uri_bytes"] = len(binary)
 
     try:
         with Image.open(save_path) as img:
@@ -1226,31 +1260,18 @@ def _persist_remote_image_result(
         else:
             file_ext = ".png"
 
-    upload_root = settings.UPLOAD_DIR
-    if not os.path.isabs(upload_root):
-        upload_root = os.path.abspath(upload_root)
-
-    user_dir = os.path.join(upload_root, str(getattr(current_user, "id", "unknown")), "generated")
-    os.makedirs(user_dir, exist_ok=True)
-
     filename = f"provider_result_{uuid.uuid4().hex[:16]}{file_ext}"
-    save_path = os.path.join(user_dir, filename)
+    chunks: List[bytes] = []
     bytes_written = 0
     try:
-        with open(save_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 256):
-                if not chunk:
-                    continue
-                bytes_written += len(chunk)
-                if bytes_written > max_remote_image_bytes:
-                    raise ValueError(f"remote image too large: {bytes_written} > {max_remote_image_bytes}")
-                f.write(chunk)
+        for chunk in response.iter_content(chunk_size=1024 * 256):
+            if not chunk:
+                continue
+            bytes_written += len(chunk)
+            if bytes_written > max_remote_image_bytes:
+                raise ValueError(f"remote image too large: {bytes_written} > {max_remote_image_bytes}")
+            chunks.append(chunk)
     except Exception as exc:
-        try:
-            if os.path.exists(save_path):
-                os.remove(save_path)
-        except Exception:
-            pass
         logger.warning(
             "[ImageResultNormalize] remote image persistence failed | user_id=%s url=%s err=%s",
             getattr(current_user, "id", None),
@@ -1271,11 +1292,55 @@ def _persist_remote_image_result(
     if bytes_written <= 0:
         return media_url, metadata
 
+    binary = b"".join(chunks)
+
     updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
     updated_metadata["stored_from_remote_url"] = raw
     updated_metadata["stored_from_remote_url_bytes"] = bytes_written
     if content_type:
         updated_metadata["stored_from_remote_url_content_type"] = content_type
+
+    uploaded = oss_storage_service.upload_bytes(
+        binary,
+        user_id=int(getattr(current_user, "id", 0) or 0),
+        filename=filename,
+        content_type=content_type or f"image/{file_ext.lstrip('.')}",
+        category="generated",
+        cache_control="public, max-age=31536000",
+    )
+    if uploaded and uploaded.get("url"):
+        updated_metadata["oss"] = {
+            "provider": uploaded.get("provider"),
+            "bucket": uploaded.get("bucket"),
+            "key": uploaded.get("key"),
+            "endpoint": uploaded.get("endpoint"),
+        }
+        try:
+            with Image.open(io.BytesIO(binary)) as img:
+                updated_metadata["width"] = int(img.width)
+                updated_metadata["height"] = int(img.height)
+                if img.format:
+                    updated_metadata["format"] = str(img.format)
+        except Exception as exc:
+            logger.warning("remote image metadata probe failed in-memory err=%s", exc)
+        logger.info(
+            "[ImageResultNormalize] stored remote image in OSS | user_id=%s source_url=%s normalized_url=%s bytes=%s",
+            getattr(current_user, "id", None),
+            raw,
+            uploaded["url"],
+            bytes_written,
+        )
+        return str(uploaded["url"]), updated_metadata
+
+    upload_root = settings.UPLOAD_DIR
+    if not os.path.isabs(upload_root):
+        upload_root = os.path.abspath(upload_root)
+
+    user_dir = os.path.join(upload_root, str(getattr(current_user, "id", "unknown")), "generated")
+    os.makedirs(user_dir, exist_ok=True)
+    save_path = os.path.join(user_dir, filename)
+    with open(save_path, "wb") as f:
+        f.write(binary)
 
     try:
         with Image.open(save_path) as img:
@@ -2215,8 +2280,27 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
                 req_context[key] = value
 
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+        logger.info(
+            "[ImageJobPersist] start | job_id=%s user_id=%s entity_id=%s entity_name=%s shot_id=%s raw_url=%s metadata_keys=%s",
+            job_id,
+            getattr(current_user, "id", None),
+            req_context.get("entity_id"),
+            req_context.get("entity_name") or req_context.get("subject_name"),
+            req_context.get("shot_id"),
+            raw_url,
+            sorted(list(metadata.keys())) if isinstance(metadata, dict) else [],
+        )
         normalized_url, normalized_meta = _persist_data_uri_image_result(current_user, raw_url, metadata)
         normalized_url, normalized_meta = _persist_remote_image_result(current_user, normalized_url, normalized_meta)
+        logger.info(
+            "[ImageJobPersist] normalized | job_id=%s user_id=%s entity_id=%s shot_id=%s normalized_url=%s oss=%s",
+            job_id,
+            getattr(current_user, "id", None),
+            req_context.get("entity_id"),
+            req_context.get("shot_id"),
+            normalized_url,
+            bool((normalized_meta or {}).get("oss")) if isinstance(normalized_meta, dict) else False,
+        )
 
         finalized_result = dict(result)
         if normalized_url:
@@ -17721,7 +17805,35 @@ def upload_asset(
     # Get base URL from request ideally, but relative works for frontend
     base_url = settings.RENDER_EXTERNAL_URL.rstrip('/') if settings.RENDER_EXTERNAL_URL else ""
     url = f"{base_url}/uploads/{current_user.id}/{filename}"
-    
+
+    oss_url = None
+    if oss_storage_service.is_enabled(db):
+        try:
+            oss_res = oss_storage_service.upload_file(
+                file_path,
+                user_id=current_user.id,
+                filename=file.filename,
+                content_type=file.content_type,
+                category="uploads"
+            )
+            if oss_res and oss_res.get("url"):
+                oss_url = oss_res.get("url")
+                meta_info['oss'] = {
+                    'provider': oss_res.get('provider'),
+                    'bucket': oss_res.get('bucket'),
+                    'key': oss_res.get('key'),
+                }
+        except Exception as e:
+            logger.warning(f"OSS upload failed for asset: {e}")
+
+    if oss_url:
+        url = oss_url
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except:
+            pass
+
     asset = Asset(
         user_id=current_user.id,
         type=type,
@@ -17757,6 +17869,8 @@ def delete_asset(
                 file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
                 if os.path.exists(file_path):
                     os.remove(file_path)
+        elif asset.url:
+            oss_storage_service.delete_url(asset.url)
     except Exception as e:
         print(f"Error deleting file for asset {asset_id}: {e}")
 
@@ -17786,6 +17900,8 @@ def batch_delete_assets(
                     file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
                     if os.path.exists(file_path):
                         os.remove(file_path)
+            elif asset.url:
+                oss_storage_service.delete_url(asset.url)
         except Exception as e:
             print(f"Error deleting file for asset {asset.id}: {e}")
         
@@ -21280,6 +21396,12 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
 
     asset_type = str(get_attr(req, "asset_type") or "").strip().lower()
     if asset_type != "subject":
+        logger.info(
+            "[SubjectMediaBind] skipped non-subject asset_type=%s media_url=%s user_id=%s",
+            asset_type or None,
+            media_url,
+            getattr(current_user, "id", None),
+        )
         return
 
     entity = None
@@ -21305,6 +21427,15 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
             ).order_by(Entity.id.desc()).first()
 
     if not entity:
+        logger.warning(
+            "[SubjectMediaBind] entity_not_found entity_id=%s entity_name=%s subject_name=%s project_id=%s media_url=%s user_id=%s",
+            entity_id_raw,
+            get_attr(req, "entity_name"),
+            get_attr(req, "subject_name"),
+            get_attr(req, "project_id"),
+            media_url,
+            getattr(current_user, "id", None),
+        )
         return
 
     try:
@@ -21335,8 +21466,25 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
             return
 
     if str(entity.image_url or "").strip() == stable_media_url:
+        logger.info(
+            "[SubjectMediaBind] unchanged | entity_id=%s name=%s project_id=%s media_url=%s user_id=%s",
+            getattr(entity, "id", None),
+            getattr(entity, "name", None) or getattr(entity, "name_en", None),
+            getattr(entity, "project_id", None),
+            stable_media_url,
+            getattr(current_user, "id", None),
+        )
         return
 
+    logger.info(
+        "[SubjectMediaBind] update_begin | entity_id=%s name=%s project_id=%s previous_url=%s next_url=%s user_id=%s",
+        getattr(entity, "id", None),
+        getattr(entity, "name", None) or getattr(entity, "name_en", None),
+        getattr(entity, "project_id", None),
+        getattr(entity, "image_url", None),
+        stable_media_url,
+        getattr(current_user, "id", None),
+    )
     entity.image_url = stable_media_url
     db.add(entity)
     db.commit()
@@ -21957,8 +22105,25 @@ async def _run_generate_image(
             image_provider_options["fallbackModel"] = fallback_model_candidate
 
         if is_subject_generation and resolved_subject_type:
+            subject_entity = None
+            entity_id_hint = getattr(req, "entity_id", None)
+            if entity_id_hint not in (None, ""):
+                try:
+                    subject_entity = db.query(Entity).filter(Entity.id == int(entity_id_hint)).first()
+                except Exception:
+                    subject_entity = None
             image_provider_options["__subject_type"] = resolved_subject_type
             image_provider_options["__asset_type"] = "subject"
+            if getattr(req, "entity_id", None) not in (None, ""):
+                image_provider_options["__entity_id"] = getattr(req, "entity_id", None)
+            if getattr(req, "project_id", None) not in (None, ""):
+                image_provider_options["__project_id"] = getattr(req, "project_id", None)
+            if getattr(req, "episode_id", None) not in (None, ""):
+                image_provider_options["__episode_id"] = getattr(req, "episode_id", None)
+            if getattr(req, "scene_id", None) not in (None, ""):
+                image_provider_options["__scene_id"] = getattr(req, "scene_id", None)
+            if getattr(req, "shot_id", None) not in (None, ""):
+                image_provider_options["__shot_id"] = getattr(req, "shot_id", None)
             subject_name_hint = str(
                 getattr(req, "subject_name", None)
                 or getattr(req, "entity_name", None)
@@ -21968,6 +22133,51 @@ async def _run_generate_image(
             ).strip()
             if subject_name_hint:
                 image_provider_options["__subject_name"] = subject_name_hint
+            entity_name_hint = str(
+                getattr(req, "entity_name", None)
+                or request_meta.get("entity_name")
+                or subject_name_hint
+                or ""
+            ).strip()
+            if entity_name_hint:
+                image_provider_options["__entity_name"] = entity_name_hint
+            entity_type_hint = str(
+                getattr(req, "entity_type", None)
+                or request_meta.get("entity_type")
+                or resolved_subject_type
+                or ""
+            ).strip()
+            if entity_type_hint:
+                image_provider_options["__entity_type"] = entity_type_hint
+            subject_name_ascii = str(
+                getattr(subject_entity, "name_en", None)
+                or request_meta.get("subject_name_en")
+                or request_meta.get("entity_name_en")
+                or ""
+            ).strip()
+            if subject_name_ascii:
+                image_provider_options["__subject_name_ascii"] = subject_name_ascii
+            entity_name_ascii = str(
+                getattr(subject_entity, "name_en", None)
+                or request_meta.get("entity_name_en")
+                or request_meta.get("subject_name_en")
+                or ""
+            ).strip()
+            if entity_name_ascii:
+                image_provider_options["__entity_name_ascii"] = entity_name_ascii
+            logger.info(
+                "[GenerateImageSubject] request_context user_id=%s asset_type=%s entity_id=%s entity_name=%s subject_name=%s subject_name_ascii=%s subject_type=%s project_id=%s scene_id=%s shot_id=%s",
+                getattr(current_user, "id", None),
+                image_provider_options.get("__asset_type"),
+                image_provider_options.get("__entity_id"),
+                image_provider_options.get("__entity_name"),
+                image_provider_options.get("__subject_name"),
+                image_provider_options.get("__subject_name_ascii"),
+                image_provider_options.get("__subject_type"),
+                image_provider_options.get("__project_id"),
+                image_provider_options.get("__scene_id"),
+                image_provider_options.get("__shot_id"),
+            )
 
         if max_images_per_call is not None:
             files_urls = image_provider_options.get("filesUrl")
@@ -23025,14 +23235,32 @@ async def update_my_avatar(
     if len(content) > max_avatar_bytes:
         raise HTTPException(status_code=413, detail=f"Avatar file too large (max {settings.MAX_AVATAR_UPLOAD_MB}MB)")
 
-    def _write_avatar():
-        with open(save_path, "wb") as f:
-            f.write(content)
+    oss_url = None
+    if oss_storage_service.is_enabled(db):
+        try:
+            oss_res = oss_storage_service.upload_bytes(
+                content,
+                user_id=current_user.id,
+                filename=filename,
+                content_type=file.content_type or f"image/{ext.lstrip('.')}",
+                category="avatars"
+            )
+            if oss_res and oss_res.get("url"):
+                oss_url = oss_res.get("url")
+        except Exception as e:
+            logger.warning(f"OSS upload failed for avatar: {e}")
 
-    await asyncio.to_thread(_write_avatar)
+    if oss_url:
+        user.avatar_url = oss_url
+    else:
+        def _write_avatar():
+            with open(save_path, "wb") as f:
+                f.write(content)
 
-    relative_path = os.path.relpath(save_path, upload_root).replace("\\", "/")
-    user.avatar_url = f"/uploads/{relative_path}"
+        await asyncio.to_thread(_write_avatar)
+        relative_path = os.path.relpath(save_path, upload_root).replace("\\", "/")
+        user.avatar_url = f"/uploads/{relative_path}"
+
     db.commit()
     db.refresh(user)
     _refresh_user_identity_cache(user)

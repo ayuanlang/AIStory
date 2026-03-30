@@ -574,6 +574,27 @@ class ProviderKeyPool(Base):
     updated_at = Column(String, default=now_bj_iso)
 
 
+class OSSProviderPool(Base):
+    __tablename__ = "oss_provider_pools"
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String, index=True, nullable=False)
+    provider_alias = Column(String, nullable=True)
+    endpoint = Column(String, nullable=False)
+    region = Column(String, nullable=True)
+    bucket = Column(String, nullable=False)
+    public_base_url = Column(String, nullable=True)
+    root_prefix = Column(String, nullable=True)
+    credentials = Column(JSON, default=[])
+    strategy = Column(String, default="random")
+    weights = Column(JSON, default=[])
+    default_storage_class = Column(String, nullable=True)
+    retention_days = Column(Integer, nullable=True)
+    force_path_style = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+
 class RechargePlan(Base):
     __tablename__ = "recharge_plans"
     id = Column(Integer, primary_key=True, index=True)
