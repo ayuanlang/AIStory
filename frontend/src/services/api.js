@@ -103,7 +103,29 @@ const isRetryableNetworkRequest = (config = {}) => {
 };
 
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        try {
+            const method = String(response.config?.method || '').toLowerCase();
+            const url = String(response.config?.url || '').toLowerCase();
+            
+            const isMutation = ['post', 'put', 'patch', 'delete'].includes(method);
+            const isRelevantUrl = url.includes('/entities') || url.includes('/shots') || url.includes('/scenes') || url.includes('/episodes') || url.includes('/projects');
+            
+            let shouldDispatch = isMutation && isRelevantUrl;
+
+            if (!shouldDispatch && method === 'get' && response.data && typeof response.data === 'object' && (url.includes('/tasks/') || url.includes('/jobs/'))) {
+                const status = String(response.data.status || response.data.state || '').toLowerCase();
+                if (status === 'completed' || status === 'succeeded' || status === 'success') {
+                    shouldDispatch = true;
+                }
+            }
+
+            if (shouldDispatch && typeof window !== 'undefined') {
+                window.dispatchEvent(new Event('aistory:workflow_stage_check'));
+            }
+        } catch(e) {}
+        return response;
+    },
     async (error) => {
         const originalConfig = error?.config || {};
         if (!shouldRetryWithFallback(error)) {

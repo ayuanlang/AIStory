@@ -5,7 +5,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -3816,7 +3816,19 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
     return (
         <div className="p-4 sm:p-6 lg:p-8 w-full h-full overflow-y-auto">
             <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center mb-8">
-                <h2 className="text-2xl font-bold">{mode === 'generator' ? t('生成器', 'Generators') : t('项目总览', 'Project Overview')}</h2>
+                <div className="flex items-center gap-4">
+                    <h2 className="text-2xl font-bold">{mode === 'generator' ? t('生成器', 'Generators') : t('项目总览', 'Project Overview')}</h2>
+                    {mode === 'overview' && (
+                        <div className="flex items-center px-3 py-1 rounded-full bg-primary/20 border border-primary/30 text-primary text-sm font-medium">
+                            {t('阶段', 'Stage')}: {
+                                (info?.workflow_stage === 'montage') ? t('剪辑', 'Montage') :
+                                (info?.workflow_stage === 'shots') ? t('分镜', 'Shots') :
+                                (info?.workflow_stage === 'subjects') ? t('资产', 'Assets') :
+                                t('剧本', 'Script')
+                            }
+                        </div>
+                    )}
+                </div>
                 <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center justify-center gap-2 w-full sm:w-auto">
                     <SettingsIcon className="w-4 h-4" /> {t('保存修改', 'Save Changes')}
                 </button>
@@ -31248,7 +31260,113 @@ const Editor = ({
     // Global Logging Context
     const { addLog } = useLog();
 
+    
+    const evalWorkflowStageTimerRef = useRef(null);
+
+    const evalProjectWorkflowStage = async (isInitialLoad = false) => {
+        if (!id) return;
+        try {
+            const currentProj = await fetchProject(id);
+            const currentStage = currentProj?.global_info?.workflow_stage || 'script';
+            let nextStage = 'script';
+
+            const [entities, scenes, episodes] = await Promise.all([
+                fetchEntities(id).catch(() => []),
+                fetchScenes(id).catch(() => []),
+                fetchEpisodes(id).catch(() => [])
+            ]);
+
+            const hasAssets = entities && entities.length > 0;
+            const hasScenes = scenes && scenes.length > 0;
+            let allAssetsReady = false;
+            if (hasAssets) {
+                // Ignore missing images only if strictly required. The instruction: "资产图片全部都生成好后进入分镜阶段"
+                allAssetsReady = entities.every(e => !!e.image_url);
+            }
+
+            let allVideosReady = false;
+            let hasShots = false;
+            if (allAssetsReady && episodes && episodes.length > 0) {
+                let anyActive = false;
+                let allVids = true;
+                for (const ep of episodes) {
+                    const epShots = await fetchEpisodeShots(id, ep.id).catch(() => []);
+                    if (epShots && epShots.length > 0) {
+                        hasShots = true;
+                        anyActive = true;
+                        if (!epShots.every(s => !!s.video_url)) {
+                            allVids = false;
+                            break;
+                        }
+                    }
+                }
+                allVideosReady = anyActive && allVids;
+            }
+
+            if (allVideosReady) {
+                nextStage = 'montage';
+            } else if (hasShots && allAssetsReady) {
+                nextStage = 'shots';
+            } else if (allAssetsReady && hasScenes) {
+                nextStage = 'shots';
+            } else if (hasAssets || hasScenes) {
+                nextStage = 'subjects';
+            } else {
+                nextStage = 'script';
+            }
+
+            if (nextStage !== currentStage) {
+                console.log(`Advancing project stage: ${currentStage} => ${nextStage}`);
+                await updateProject(id, {
+                    global_info: {
+                        ...(currentProj?.global_info || {}),
+                        workflow_stage: nextStage
+                    }
+                });
+                setProject(prev => ({
+                    ...prev,
+                    global_info: {
+                        ...(prev?.global_info || {}),
+                        workflow_stage: nextStage
+                    }
+                }));
+                // Navigate on advancement
+                setActiveTab(nextStage);
+            } else if (isInitialLoad) {
+                // If it's the initial load, and the active tab is just the default 'overview'
+                if (!initialActiveTab || initialActiveTab === 'overview') {
+                    setActiveTab(nextStage);
+                }
+            }
+        } catch (e) {
+            console.error("Failed to eval project stage", e);
+        }
+    };
+
+    
+
+    const checkWorkflowStageDebounced = useCallback((force = false) => {
+        if (evalWorkflowStageTimerRef.current) {
+            clearTimeout(evalWorkflowStageTimerRef.current);
+        }
+        if (force) {
+            evalProjectWorkflowStage(true);
+        } else {
+            evalWorkflowStageTimerRef.current = setTimeout(() => {
+                evalProjectWorkflowStage(false);
+            }, 2000); // Debounce API events by 2 seconds
+        }
+    }, [id]);
+
     useEffect(() => {
+        // Run once on enter
+        checkWorkflowStageDebounced(true);
+        
+        const handleEvent = () => checkWorkflowStageDebounced(false);
+        window.addEventListener('aistory:workflow_stage_check', handleEvent);
+        return () => window.removeEventListener('aistory:workflow_stage_check', handleEvent);
+    }, [checkWorkflowStageDebounced]);
+useEffect(() => {
         loadProjectData();
     }, [id]);
 
@@ -33658,14 +33776,13 @@ const Editor = ({
         : t('选择剧集', 'Select Episode');
 
     const MENU_ITEMS = [
-        { id: 'overview', label: t('项目信息', 'Project Info'), icon: LayoutDashboard },
-        { id: 'generator', label: t('生成器', 'Generators'), icon: Sparkles },
-        { id: 'script', label: t('剧本', 'Script'), icon: FileText },
-        { id: 'subjects', label: t('角色资产', 'Subjects'), icon: Users },
-        { id: 'scenes', label: t('场景', 'Scenes'), icon: Clapperboard },
-        { id: 'shots', label: t('镜头', 'Shots'), icon: Film },
-        { id: 'montage', label: t('剪辑', 'Montage'), icon: Video },
-    ];
+    { id: 'overview', label: '项目信息', icon: Briefcase },
+    { id: 'script', label: '剧本', icon: FileText },
+    { id: 'subjects', label: '资产', icon: Users },
+    { id: 'scenes', label: '场景', icon: ImageIcon },
+    { id: 'shots', label: '分镜', icon: Film },
+    { id: 'montage', label: '剪辑', icon: Video }
+];
     const activeMenuItem = MENU_ITEMS.find((item) => item.id === activeTab) || MENU_ITEMS[0];
 
     const trackMenuAction = (menuKey, menuLabel, actionFn) => {
@@ -33724,11 +33841,7 @@ const Editor = ({
     };
 
     const navigateTopMenu = (item) => {
-        if (!item) return;
-        trackMenuAction(`editor.top_menu.${item.id}`, item.label, () => {
-            setActiveTab(item.id);
-            if (item.id === 'shots') setEditingShot(null);
-        });
+        setActiveTab(item.id);
     };
 
     return (
@@ -33814,7 +33927,7 @@ const Editor = ({
                         </select>
                     </div>
                     <div className="overflow-x-auto no-scrollbar">
-                        <div className="flex items-center bg-transparent min-w-max">
+                        <div className="flex justify-center items-center bg-transparent min-w-max w-full">
                             {MENU_ITEMS.map(item => {
                                 const Icon = item.icon;
                                 const isActive = activeTab === item.id;
@@ -33824,6 +33937,7 @@ const Editor = ({
                                         onClick={() => navigateTopMenu(item)}
                                         className={`shrink-0 flex items-center gap-2 px-4 py-1.5 text-xs font-bold transition-all relative ${isActive ? 'text-primary' : 'text-muted-foreground hover:text-white'}`}
                                     >
+                                        
                                         <Icon className="w-3.5 h-3.5" />
                                         {item.label}
                                         {isActive && <div className="absolute bottom-[-13px] left-0 right-0 h-[2px] bg-primary shadow-[0_0_10px_rgba(255,255,255,0.5)]"></div>}
@@ -33836,6 +33950,16 @@ const Editor = ({
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-2 md:gap-3 flex-wrap md:flex-nowrap justify-end w-full md:w-auto">
+                    <button
+                        onClick={() => {
+                            trackMenuAction('editor.action.generator', t('???', 'Generator'), () => setActiveTab('generator'));
+                        }}
+                        className={`p-1.5 rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'generator' ? 'text-primary bg-white/10' : 'text-muted-foreground hover:text-white hover:bg-white/10'}`}
+                        title={t('???', 'Generator')}
+                    >
+                        <Wand2 className="w-4 h-4" />
+                        
+                    </button>
                     <button
                         onClick={() => trackMenuAction('editor.ui_language.toggle', t('切换界面语言', 'Toggle UI Language'), () => setUiLang(prev => prev === 'zh' ? 'en' : 'zh'))}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
@@ -33860,24 +33984,7 @@ const Editor = ({
                         <ArrowLeft className="w-4 h-4" />
                         <span className="text-xs font-medium hidden sm:block">{t('返回项目', 'Back to Projects')}</span>
                     </button>
-                    <>
-                        <button 
-                            onClick={() => trackMenuAction('editor.action.import', t('导入内容', 'Import Content'), () => setIsImportOpen(true))}
-                            className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
-                            title={t('导入内容', 'Import Content')}
-                        >
-                            <Upload className="w-4 h-4" />
-                            <span className="text-xs font-medium hidden sm:block">{t('导入', 'Import')}</span>
-                        </button>
-                        <button 
-                            onClick={() => trackMenuAction('editor.action.export', t('导出项目', 'Export Project'), handleExport)}
-                            className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5" 
-                            title={t('导出项目', 'Export Project')}
-                        >
-                            <Download className="w-4 h-4" />
-                            <span className="text-xs font-medium hidden sm:block">{t('导出', 'Export')}</span>
-                        </button>
-                    </>
+                    
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.job_pool', t('任务池', 'Job Pool'), () => setIsJobPoolOpen(true));
