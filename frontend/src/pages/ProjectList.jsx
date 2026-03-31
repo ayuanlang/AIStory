@@ -71,6 +71,11 @@ import { motion } from 'framer-motion';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 import {
+    PROJECT_EP_TONE_OPTIONS,
+    PROJECT_EP_GLOBAL_STYLE_OPTIONS,
+    PROJECT_EP_LIGHTING_OPTIONS,
+    PROJECT_EP_LENS_PREFERENCE_OPTIONS,
+    PROJECT_EP_RESOLUTION_OPTIONS,
     PROJECT_EP_TYPE_OPTIONS,
     PROJECT_EP_LANGUAGE_OPTIONS,
     PROJECT_EP_BASE_POSITIONING_OPTIONS,
@@ -120,6 +125,13 @@ const PROJECT_CREATE_DEFAULT_OPTIONS = {
     base_positioning: [...PROJECT_EP_BASE_POSITIONING_OPTIONS],
     aspect_ratio: [...PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS],
     image_size: [...PROJECT_CREATE_FALLBACK_IMAGE_SIZE_OPTIONS],
+    era: [...PROJECT_SCENE_ANALYSIS_ERA_OPTIONS],
+    lens_preference: [...PROJECT_EP_LENS_PREFERENCE_OPTIONS],
+    broadcast_safety_level: [...PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS],
+    resolution: [...PROJECT_EP_RESOLUTION_OPTIONS],
+    color_tone: [...PROJECT_EP_TONE_OPTIONS],
+    global_style: [...PROJECT_EP_GLOBAL_STYLE_OPTIONS],
+    lighting: [...PROJECT_EP_LIGHTING_OPTIONS]
 };
 
 const createDefaultProjectSceneAnalysisConfig = () => ({
@@ -230,12 +242,28 @@ const normalizeProjectCreateOptions = (payload) => {
         ...PROJECT_CREATE_DEFAULT_OPTIONS.image_size,
     ]);
 
+
+    const era = uniqueNonEmptyStrings(safe.era);
+    const lensPreference = uniqueNonEmptyStrings(safe.lens_preference);
+    const broadcastSafetyLevel = uniqueNonEmptyStrings(safe.broadcast_safety_level);
+    const resolution = uniqueNonEmptyStrings(safe.resolution);
+    const colorTone = uniqueNonEmptyStrings(safe.color_tone);
+    const globalStyle = uniqueNonEmptyStrings(safe.global_style);
+    const lighting = uniqueNonEmptyStrings(safe.lighting);
+
     return {
         type: type.length ? type : [...PROJECT_CREATE_DEFAULT_OPTIONS.type],
         language: language.length ? language : [...PROJECT_CREATE_DEFAULT_OPTIONS.language],
         base_positioning: basePositioning.length ? basePositioning : [...PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning],
         aspect_ratio: aspectRatio.length ? aspectRatio : [...PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio],
         image_size: imageSize.length ? imageSize : [...PROJECT_CREATE_DEFAULT_OPTIONS.image_size],
+        era: era.length ? era : [...PROJECT_CREATE_DEFAULT_OPTIONS.era],
+        lens_preference: lensPreference.length ? lensPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference],
+        broadcast_safety_level: broadcastSafetyLevel.length ? broadcastSafetyLevel : [...PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level],
+        resolution: resolution.length ? resolution : [...PROJECT_CREATE_DEFAULT_OPTIONS.resolution],
+        color_tone: colorTone.length ? colorTone : [...PROJECT_CREATE_DEFAULT_OPTIONS.color_tone],
+        global_style: globalStyle.length ? globalStyle : [...PROJECT_CREATE_DEFAULT_OPTIONS.global_style],
+        lighting: lighting.length ? lighting : [...PROJECT_CREATE_DEFAULT_OPTIONS.lighting]
     };
 };
 
@@ -427,6 +455,18 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newDescription, setNewDescription] = useState('');
     const [newShareUsers, setNewShareUsers] = useState('');
     const [newReviewerUsers, setNewReviewerUsers] = useState('');
+    const [newEra, setNewEra] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.era));
+    const [newLensPreference, setNewLensPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference));
+    const [newBroadcastSafetyLevel, setNewBroadcastSafetyLevel] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level));
+    const [newResolution, setNewResolution] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.resolution));
+    const [newColorTone, setNewColorTone] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.color_tone));
+    const [newGlobalStyle, setNewGlobalStyle] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.global_style));
+    const [newLighting, setNewLighting] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.lighting));
+    const [newProjectSeed, setNewProjectSeed] = useState('');
+    const [newPlannedCompletionTime, setNewPlannedCompletionTime] = useState('');
+    const [newBudget, setNewBudget] = useState('');
+    const [isCreateTechVisualCollapsed, setIsCreateTechVisualCollapsed] = useState(true);
+    const [isCreateManagementCollapsed, setIsCreateManagementCollapsed] = useState(true);
     const [projectCreateOptions, setProjectCreateOptions] = useState(PROJECT_CREATE_DEFAULT_OPTIONS);
     const [newType, setNewType] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.type));
     const [newLanguage, setNewLanguage] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.language));
@@ -608,6 +648,13 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                         ? prev
                         : pickPreferredOrFirst(normalized.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE)
                 ));
+                setNewEra((prev) => (normalized.era.includes(prev) ? prev : pickPreferredOrFirst(normalized.era)));
+                setNewLensPreference((prev) => (normalized.lens_preference.includes(prev) ? prev : pickPreferredOrFirst(normalized.lens_preference)));
+                setNewBroadcastSafetyLevel((prev) => (normalized.broadcast_safety_level.includes(prev) ? prev : pickPreferredOrFirst(normalized.broadcast_safety_level)));
+                setNewResolution((prev) => (normalized.resolution.includes(prev) ? prev : pickPreferredOrFirst(normalized.resolution)));
+                setNewColorTone((prev) => (normalized.color_tone.includes(prev) ? prev : pickPreferredOrFirst(normalized.color_tone)));
+                setNewGlobalStyle((prev) => (normalized.global_style.includes(prev) ? prev : pickPreferredOrFirst(normalized.global_style)));
+                setNewLighting((prev) => (normalized.lighting.includes(prev) ? prev : pickPreferredOrFirst(normalized.lighting)));
             } catch (error) {
                 console.error('Failed to load project-create dictionary options', error);
             }
@@ -725,6 +772,18 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         setNewBasePositioning(pickPreferredOrFirst(projectCreateOptions.base_positioning));
         setNewAspectRatio(pickPreferredOrFirst(projectCreateOptions.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
         setNewImageSize(pickPreferredOrFirst(projectCreateOptions.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
+        setNewEra(pickPreferredOrFirst(projectCreateOptions.era));
+        setNewLensPreference(pickPreferredOrFirst(projectCreateOptions.lens_preference));
+        setNewBroadcastSafetyLevel(pickPreferredOrFirst(projectCreateOptions.broadcast_safety_level));
+        setNewResolution(pickPreferredOrFirst(projectCreateOptions.resolution));
+        setNewColorTone(pickPreferredOrFirst(projectCreateOptions.color_tone));
+        setNewGlobalStyle(pickPreferredOrFirst(projectCreateOptions.global_style));
+        setNewLighting(pickPreferredOrFirst(projectCreateOptions.lighting));
+        setNewProjectSeed('');
+        setNewPlannedCompletionTime('');
+        setNewBudget('');
+        setIsCreateTechVisualCollapsed(true);
+        setIsCreateManagementCollapsed(true);
         setNewVideoSoundEnabled(true);
         setIsCreateCollaboratorsCollapsed(true);
         setIsCreateSceneAnalysisCollapsed(true);
@@ -747,13 +806,26 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 type: String(newType || '').trim(),
                 language: String(newLanguage || '').trim(),
                 base_positioning: String(newBasePositioning || '').trim(),
+                era: String(newEra || '').trim(),
+                lens_preference: String(newLensPreference || '').trim(),
+                broadcast_safety_level: String(newBroadcastSafetyLevel || '').trim(),
                 notes: description,
                 tech_params: {
                     visual_standard: {
                         aspect_ratio: String(newAspectRatio || '').trim(),
                         image_size: String(newImageSize || '').trim(),
+                        resolution: String(newResolution || '').trim(),
+                        color_tone: String(newColorTone || '').trim(),
+                        global_style: String(newGlobalStyle || '').trim(),
+                        lighting: String(newLighting || '').trim(),
+                        project_seed: String(newProjectSeed || '').trim(),
                         sound: Boolean(newVideoSoundEnabled),
                     },
+                },
+                
+                management_collaboration: {
+                    planned_completion_time: String(newPlannedCompletionTime || '').trim(),
+                    budget: String(newBudget || '').trim(),
                 },
                 project_generation_defaults: {
                     sound: Boolean(newVideoSoundEnabled),
@@ -1913,34 +1985,121 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                 <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isCreateCollaboratorsCollapsed ? '' : 'rotate-180'}`} />
                                             </button>
 
-                                            {!isCreateCollaboratorsCollapsed && (
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 px-4 pb-4">
-                                                    <div>
-                                                        <label className="block text-xs font-semibold tracking-wide mb-2 text-primary/95">{t('分享人（可选，可多个）', 'Share Users (Optional, Multiple)')}</label>
-                                                        <textarea
-                                                            className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[96px]"
-                                                            value={newShareUsers}
-                                                            onChange={(e) => setNewShareUsers(e.target.value)}
-                                                            placeholder={t('输入用户名或邮箱，支持逗号、分号或换行分隔', 'Enter usernames or emails, separated by commas, semicolons, or new lines')}
-                                                        />
-                                                        <div className="mt-2 text-xs text-muted-foreground">
-                                                            {formatParsedUserHint(newShareUsers, t)}
-                                                        </div>
-                                                    </div>
-                                                    <div>
-                                                        <label className="block text-xs font-semibold tracking-wide mb-2 text-primary/95">{t('审核人（可选，可多个）', 'Reviewer Users (Optional, Multiple)')}</label>
-                                                        <textarea
-                                                            className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[96px]"
-                                                            value={newReviewerUsers}
-                                                            onChange={(e) => setNewReviewerUsers(e.target.value)}
-                                                            placeholder={t('输入用户名或邮箱，保存时校验是否存在', 'Enter usernames or emails. Existence will be validated on save')}
-                                                        />
-                                                        <div className="mt-2 text-xs text-muted-foreground">
-                                                            {formatParsedUserHint(newReviewerUsers, t)}
-                                                        </div>
-                                                    </div>
+                                            
+                                        <div className="mt-4 border-t border-white/10 pt-3">
+                                            <button
+                                                className="flex items-center gap-2 text-sm font-semibold text-primary/80 hover:text-primary transition-colors"
+                                                onClick={() => setIsCreateTechVisualCollapsed(!isCreateTechVisualCollapsed)}
+                                            >
+                                                {isCreateTechVisualCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronDown className="w-4 h-4 rotate-180" />}
+                                                {t('项目信息的技术与视觉参数', 'Tech & Visual Parameters')}
+                                            </button>
+                                        </div>
+                                        {!isCreateTechVisualCollapsed && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 ml-2 border-l-2 border-primary/20 pl-4 py-2">
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
+                                                        {projectCreateOptions.image_size.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
                                                 </div>
-                                            )}
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('分辨率', 'Resolution')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newResolution} onChange={(e) => setNewResolution(e.target.value)}>
+                                                        {projectCreateOptions.resolution.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('色调', 'Color Tone')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newColorTone} onChange={(e) => setNewColorTone(e.target.value)}>
+                                                        {projectCreateOptions.color_tone.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('全局风格', 'Global Style')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newGlobalStyle} onChange={(e) => setNewGlobalStyle(e.target.value)}>
+                                                        {projectCreateOptions.global_style.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('光照', 'Lighting')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLighting} onChange={(e) => setNewLighting(e.target.value)}>
+                                                        {projectCreateOptions.lighting.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('项目 Seed', 'Project Seed')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        value={newProjectSeed}
+                                                        onChange={e => setNewProjectSeed(e.target.value)}
+                                                        placeholder={t('留空默认随机', 'Leave empty for random')}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div className="mt-4 border-t border-white/10 pt-3">
+                                            <button
+                                                className="flex items-center gap-2 text-sm font-semibold text-primary/80 hover:text-primary transition-colors"
+                                                onClick={() => setIsCreateManagementCollapsed(!isCreateManagementCollapsed)}
+                                            >
+                                                {isCreateManagementCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronDown className="w-4 h-4 rotate-180" />}
+                                                {t('项目协作与管理', 'Project Management & Collaboration')}
+                                            </button>
+                                        </div>
+                                        {!isCreateManagementCollapsed && (
+                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3 ml-2 border-l-2 border-primary/20 pl-4 py-2">
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('计划完成时间', 'Planned Completion Time')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        type="date"
+                                                        value={newPlannedCompletionTime}
+                                                        onChange={e => setNewPlannedCompletionTime(e.target.value)}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('预算 (¥)', 'Budget')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        type="number"
+                                                        value={newBudget}
+                                                        onChange={e => setNewBudget(e.target.value)}
+                                                        placeholder="0.00"
+                                                    />
+                                                </div>
+                                                <div className="lg:col-span-2">
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('共享用户', 'Share Users')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        value={newShareUsers}
+                                                        onChange={e => setNewShareUsers(e.target.value)}
+                                                        placeholder={t('逗号分隔用户名', 'Comma-separated usernames')}
+                                                    />
+                                                </div>
+                                                <div className="lg:col-span-2">
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('审核人', 'Reviewers')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        value={newReviewerUsers}
+                                                        onChange={e => setNewReviewerUsers(e.target.value)}
+                                                        placeholder={t('逗号分隔用户名', 'Comma-separated usernames')}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
                                         </div>
                                     </motion.div>
                                 )}
