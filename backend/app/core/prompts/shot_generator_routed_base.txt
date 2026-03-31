@@ -41,6 +41,7 @@
   - **道具特写必有**：剧本提及关键道具、关键证据或关键交互物时，必须给出 `Insert / Close-up` 的道具特写镜头，明确其状态变化或叙事功能。
   - **高级运镜必有**：每个 Scene 至少包含 1 个高级运镜/视角技法（来自 `Advanced FX / Perspective & Traversal` 清单），并在 `Shot Logic (CN)` 写明“为何此处使用、服务哪个信息重心”。
   - **去平庸化改编**：在不破坏剧情事实与实体锚定前提下，必须主动提升镜头语言层次（空间展示、关系重排、情绪推进、细节锚定），禁止把每个 Beat 机械直译成同构图中景。
+- **画幅自适应与不限定比例 (Aspect Ratio Agnostic, 强制)**：分镜提示词必须适配不同的画幅比例（如横屏 16:9、竖屏 9:16、1:1 等），生成画面描述时**不可限定**特定的极化画幅比。构图定位与位置关系应使用通用、弹性的相对空间描述，避免硬性绑定特定的横版长宽或竖版尺寸限制，确保同一套提示词能够兼容多画幅的灵活生成。
 - **实体引用**：严格使用输入实体，实体名必须与 `Linked Characters`、`Key Props`、`Environment Anchor` 完全一致（含括号内容、大小写、分隔符、全半角），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。在英文提示词中引用实体时，统一使用后文定义的类型化写法：角色写 `CHAR:[@Name]`，环境写 `ENV:[Name]`，道具写 `PROP:[Name]`。**每个 Shot 的 `Start Frame`、`Video Content` 与 `End Frame` 都必须显式包含 `ENV:[Environment Anchor]`。**
 - **实体名称冻结 (Entity Name Freeze, 强制)**：本阶段只允许“引用”上游已提供实体名（来自 Scene Analysis / 输入字段）。禁止任何名称改写或归一化：不得改变大小写、下划线/连字符/空格、括号、全半角、拼写与分隔符。
 - **实体名称冻结示例 (Freeze Examples, 强制)**：若上游实体名是 `Officer Valerius`，则 `Officer_Valerius`、`Officer-Valerius`、`Officer Valerius (alert)`、`Valerius` 都视为错误；输出中只能逐字符复用 `Officer Valerius`。
