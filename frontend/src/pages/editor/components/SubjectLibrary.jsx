@@ -1,0 +1,4745 @@
+﻿
+import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { useLog } from '../../../context/LogContext';
+import ReactMarkdown from 'react-markdown';
+import { useStore } from '../../../lib/store';
+import LogPanel from '../../../components/LogPanel';
+import ProjectStatusBar from '../../../components/ProjectStatusBar';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
+import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
+
+import {
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
+} from '../editorHelpers';
+
+import { 
+    fetchProject, 
+    updateProject,
+    generateProjectStoryGlobal,
+    analyzeProjectNovel,
+    generateProjectCharacterProfile,
+    fetchEpisodes, 
+    createEpisode, 
+    updateEpisode,
+    updateEpisodeSegments,
+    deleteEpisode,
+    fetchScenes, 
+    createScene,
+    updateScene, 
+    deleteScene,
+    regenerateScene,
+    fetchShots,
+    fetchEpisodeShots,
+    createShot,
+    updateShot,
+    deleteShot,
+    fetchEntities, 
+    createEntity,
+    cloneEntityWithLLM,
+    updateEntity,
+    deleteEntity,
+    deleteAllEntities,
+    generateImage,
+    submitImageGenerationJob,
+    getImageGenerationJobStatus,
+    generateVideo,
+    generateVoice,
+    fetchAssets, 
+    generateSceneShots,
+    regenerateSceneShots,
+    fetchSceneShotsPrompt,
+    createAsset,
+    uploadAsset,
+    getSettings,
+    getSystemSettings,
+    getPromptSubmitLanguagePreference,
+    resolvePromptSubmitLanguage,
+    translateText,
+    refinePrompt,
+    analyzeScene,
+    waitForAsyncTask,
+    stopAsyncTask,
+    fetchPrompt,
+    fetchMe,
+    fetchShot,
+    analyzeEntityImage,
+    applySceneAIResult,
+    updateSceneLatestAIResult,
+    getSceneLatestAIResult,
+    generateEpisodeCharacterProfile,
+    generateEpisodeScenes,
+    generateProjectEpisodeScripts,
+    getProjectEpisodeScriptsStatus,
+    stopProjectEpisodeScripts,
+    startSceneAiShotsBatch,
+    getSceneAiShotsBatchStatus,
+    stopSceneAiShotsBatch,
+    startEpisodeScenesGeneration,
+    getEpisodeScenesGenerationStatus,
+    stopEpisodeScenesGeneration,
+    startShotMediaBatch,
+    getShotMediaBatchStatus,
+    getVideoGenerationJobStatus,
+    getGenerationJobPool,
+    stopGenerationJob,
+    deleteGenerationJob,
+    stopAllGenerationJobs,
+    stopShotMediaBatch,
+    saveProjectStoryGeneratorGlobalInput,
+    exportProjectStoryGlobalPackage,
+    importProjectStoryGlobalPackage,
+    saveProjectCharacterCanonInput,
+    saveProjectCharacterCanonCategories,
+    updateProjectCharacterProfiles,
+    fetchProjectReviewThreads,
+    createProjectReviewThread,
+    fetchReviewThreadRounds,
+    fetchReviewRoundMessages,
+    createReviewRoundMessage,
+    markReviewThreadRead,
+    recordSystemLogAction,
+    rebindShotMediaAssets,
+    getCachedUserPreferences,
+} from '../../../services/api';
+
+import RefineControl from '../../../components/RefineControl.jsx';
+import VideoStudio from '../../../components/VideoStudio';
+import InputGroup from './InputGroup';
+import MarkdownCell from './MarkdownCell';
+import {
+    PROVIDER_LABELS,
+    MODEL_OPTIONS,
+    getSettingSourceByCategory,
+    formatProviderModelEndpointError,
+} from '../editorConfig';
+import {
+    PROJECT_EP_TYPE_OPTIONS,
+    PROJECT_EP_LANGUAGE_OPTIONS,
+    PROJECT_EP_BASE_POSITIONING_OPTIONS,
+    PROJECT_EP_GLOBAL_STYLE_OPTIONS,
+    PROJECT_EP_TONE_OPTIONS,
+    PROJECT_EP_LIGHTING_OPTIONS,
+    PROJECT_EP_QUALITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_REGION_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_WORKFLOW_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_GOAL_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_CHARACTER_EMPHASIS_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_NARRATIVE_DENSITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_COMMERCIAL_CONSTRAINT_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_MODALITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_CONTINUITY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS,
+    PROJECT_SCENE_ANALYSIS_DEFAULTS,
+    normalizeProjectEpisodeType,
+    normalizeProjectEpisodeLanguage,
+    normalizeProjectEpisodeBasePositioning,
+    normalizeProjectEpisodeGlobalStyle,
+    normalizeProjectEpisodeTone,
+    normalizeProjectEpisodeLighting,
+    normalizeProjectEpisodeQuality,
+} from '../projectOptionConfig';
+
+// RefineControl moved to components/RefineControl.jsx
+import { processPrompt } from '../../../lib/promptUtils';
+import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../../../lib/entityToken';
+import SettingsPage from '../../Settings';
+import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
+
+// Character Canon (Authoritative) generator (shared)
+
+import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
+export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3 }) => {
+    const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
+    const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
+    const IMAGE_JOB_CACHE_PURGE_MARKER_KEY = `aistory.imageJobCachePurge.${IMAGE_JOB_CACHE_PURGE_VERSION}`;
+    const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
+    const SUBJECT_BATCH_RUNTIME_STALE_MS = 1000 * 60;
+    const SUBJECT_BATCH_WATCHDOG_INTERVAL_MS = 1000 * 5;
+    const SUBJECT_IMAGE_JOB_OWNER_PAGE = 'subject-library';
+    const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
+    const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 2;
+    const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
+    const createSubjectBatchTaskState = useCallback(() => ({
+        running: false,
+        progress: null,
+        scopeKey: '',
+        updatedAt: 0,
+    }), []);
+
+    const normalizeSubjectBatchTask = useCallback((rawTask) => {
+        const now = Date.now();
+        if (!rawTask || typeof rawTask !== 'object') {
+            return createSubjectBatchTaskState();
+        }
+
+        const updatedAt = Number(rawTask.updatedAt || 0) || 0;
+        if (updatedAt > 0 && (now - updatedAt) > SUBJECT_BATCH_RUNTIME_TTL_MS) {
+            return createSubjectBatchTaskState();
+        }
+
+        return {
+            running: Boolean(rawTask.running),
+            progress: rawTask.progress && typeof rawTask.progress === 'object' ? rawTask.progress : null,
+            scopeKey: String(rawTask.scopeKey || ''),
+            updatedAt,
+        };
+    }, [createSubjectBatchTaskState]);
+
+    const readSubjectBatchRuntimeStorage = useCallback(() => {
+        try {
+            const raw = localStorage.getItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return null;
+            return {
+                generate: normalizeSubjectBatchTask(parsed.generate),
+                analyze: normalizeSubjectBatchTask(parsed.analyze),
+                reconstruct: normalizeSubjectBatchTask(parsed.reconstruct),
+            };
+        } catch {
+            return null;
+        }
+    }, [normalizeSubjectBatchTask]);
+
+    const writeSubjectBatchRuntimeStorage = useCallback((runtime) => {
+        try {
+            if (!runtime || typeof runtime !== 'object') {
+                localStorage.removeItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY);
+                return;
+            }
+
+            const payload = {
+                generate: normalizeSubjectBatchTask(runtime.generate),
+                analyze: normalizeSubjectBatchTask(runtime.analyze),
+                reconstruct: normalizeSubjectBatchTask(runtime.reconstruct),
+            };
+
+            const hasRunning = Boolean(payload.generate.running || payload.analyze.running || payload.reconstruct.running);
+            if (!hasRunning) {
+                localStorage.removeItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY);
+                return;
+            }
+
+            localStorage.setItem(SUBJECT_BATCH_RUNTIME_STORAGE_KEY, JSON.stringify(payload));
+        } catch {
+            // ignore storage failures
+        }
+    }, [normalizeSubjectBatchTask]);
+
+    const persistedRuntime = readSubjectBatchRuntimeStorage();
+
+    if (!window.__AISTORY_SUBJECT_BATCH_RUNTIME__) {
+        window.__AISTORY_SUBJECT_BATCH_RUNTIME__ = {
+            generate: persistedRuntime?.generate || createSubjectBatchTaskState(),
+            analyze: persistedRuntime?.analyze || createSubjectBatchTaskState(),
+            reconstruct: persistedRuntime?.reconstruct || createSubjectBatchTaskState(),
+            listeners: new Set(),
+        };
+    }
+
+    const subjectBatchRuntime = window.__AISTORY_SUBJECT_BATCH_RUNTIME__;
+    const getSubjectBatchSnapshot = useCallback(() => ({
+        generate: { ...subjectBatchRuntime.generate },
+        analyze: { ...subjectBatchRuntime.analyze },
+        reconstruct: { ...subjectBatchRuntime.reconstruct },
+    }), [subjectBatchRuntime]);
+    const emitSubjectBatchRuntime = useCallback(() => {
+        writeSubjectBatchRuntimeStorage(subjectBatchRuntime);
+        const snapshot = getSubjectBatchSnapshot();
+        subjectBatchRuntime.listeners.forEach((listener) => {
+            try {
+                listener(snapshot);
+            } catch {
+                // ignore listener errors
+            }
+        });
+    }, [getSubjectBatchSnapshot, subjectBatchRuntime, writeSubjectBatchRuntimeStorage]);
+    const updateSubjectBatchTask = useCallback((task, patch) => {
+        if (!subjectBatchRuntime[task]) return;
+        subjectBatchRuntime[task] = {
+            ...subjectBatchRuntime[task],
+            ...(patch || {}),
+            updatedAt: Date.now(),
+        };
+        emitSubjectBatchRuntime();
+    }, [emitSubjectBatchRuntime, subjectBatchRuntime]);
+    const subscribeSubjectBatchRuntime = useCallback((listener) => {
+        subjectBatchRuntime.listeners.add(listener);
+        return () => {
+            subjectBatchRuntime.listeners.delete(listener);
+        };
+    }, [subjectBatchRuntime]);
+
+    const { addLog: onLog } = useLog();
+    const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
+
+    const subjectBatchScopeKey = String(projectId || '');
+    const SUBJECT_BATCH_PARALLEL_LIMIT = userBatchParallelLimit;
+    const isMountedRef = useRef(false);
+    const [subTab, setSubTab] = useState('character');
+    const [entityListLoading, setEntityListLoading] = useState(false);
+    const [entities, setEntities] = useState([]);
+    const [allEntities, setAllEntities] = useState([]); // Store ALL entities for cross-reference
+    const [selectedEntity, setSelectedEntity] = useState(null);
+    const [showImageModal, setShowImageModal] = useState(false);
+    const [imageModalTab, setImageModalTab] = useState('library'); // library, upload, generate
+    const [generating, setGenerating] = useState(false);
+    const [uploading, setUploading] = useState(false);
+    const [prompt, setPrompt] = useState('');
+    const [promptDrafts, setPromptDrafts] = useState({ cn: '', en: '' });
+    const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
+    const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
+    const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
+    const [refImage, setRefImage] = useState(null);
+    const [refSelectionMode, setRefSelectionMode] = useState(null); // 'assets'
+    const [assets, setAssets] = useState([]);
+    const [assetsLoading, setAssetsLoading] = useState(false);
+    const [assetKeyword, setAssetKeyword] = useState('');
+    const [assetProjectFilter, setAssetProjectFilter] = useState('all');
+    const [assetImageTypeFilter, setAssetImageTypeFilter] = useState('all');
+    const [imageSelectAction, setImageSelectAction] = useState('direct_use');
+    const [viewingEntity, setViewingEntity] = useState(null);
+    const [isBatchGeneratingEntities, setIsBatchGeneratingEntities] = useState(false);
+    const [isStoppingBatchGenerateEntities, setIsStoppingBatchGenerateEntities] = useState(false);
+    const [batchEntityProgress, setBatchEntityProgress] = useState(null);
+    const [isBatchAnalyzingEntities, setIsBatchAnalyzingEntities] = useState(false);
+    const [batchAnalyzeProgress, setBatchAnalyzeProgress] = useState(null);
+    const [isBatchReconstructingEntities, setIsBatchReconstructingEntities] = useState(false);
+    const [batchReconstructProgress, setBatchReconstructProgress] = useState(null);
+    const [isReconstructingEntity, setIsReconstructingEntity] = useState(false);
+    const [reconstructProgress, setReconstructProgress] = useState(null);
+    const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
+    const [subjectNotification, setSubjectNotification] = useState(null);
+    const [subjectImageJobs, setSubjectImageJobs] = useState({});
+    const [stoppingSubjectImageJobs, setStoppingSubjectImageJobs] = useState({});
+    const [subjectGenerationHistory, setSubjectGenerationHistory] = useState([]);
+    const [subjectGenerationHistoryLoading, setSubjectGenerationHistoryLoading] = useState(false);
+    const [subjectGenerationHistoryDeletingId, setSubjectGenerationHistoryDeletingId] = useState('');
+    const subjectImageJobsRef = useRef({});
+    const subjectImageJobPollingRef = useRef(false);
+    const subjectImageJobPollTokenRef = useRef(0);
+    const subjectImageJobTerminalLogRef = useRef(new Set());
+    const subjectBatchGenerateStopRequestedRef = useRef(false);
+    const subjectBatchGenerateSessionRef = useRef('');
+    const subjectBatchGenerateActiveJobsRef = useRef(new Map());
+    const subjectBatchAnalyzeStopRequestedRef = useRef(false);
+    const subjectBatchAnalyzeSessionRef = useRef('');
+    const subjectBatchReconstructStopRequestedRef = useRef(false);
+    const subjectBatchReconstructSessionRef = useRef('');
+    const subjectBatchReconstructActiveJobsRef = useRef(new Map());
+    const subjectImageJobStorageKey = useMemo(() => {
+        const pid = String(projectId || '').trim();
+        return pid ? `aistory.subjectImageJobs.${pid}` : '';
+    }, [projectId]);
+    const SUBJECT_IMAGE_JOB_TTL_MS = 1000 * 60 * 60 * 6;
+    const SUBJECT_IMAGE_JOB_MAX_RUNNING_MS = 1000 * 60 * 20;
+
+    const isEphemeralProviderMediaUrl = useCallback((url) => {
+        const rawUrl = String(url || '').trim();
+        if (!rawUrl) return false;
+        try {
+            const parsed = new URL(rawUrl, window.location.origin);
+            return /^file\d+\.aitohumanize\.com$/i.test(String(parsed.hostname || '').trim());
+        } catch {
+            return false;
+        }
+    }, []);
+
+    const buildSubjectJobMeta = useCallback((entityId, jobKind = 'generate', base = {}) => ({
+        ownerPage: SUBJECT_IMAGE_JOB_OWNER_PAGE,
+        ownerScopeType: 'project',
+        ownerScopeId: String(projectId || '').trim(),
+        ownerEntityId: String(entityId || '').trim(),
+        jobKind: jobKind === 'reconstruct' ? 'reconstruct' : 'generate',
+        previousStableImageUrl: String(base?.previousStableImageUrl || '').trim(),
+        statusFailureCount: Math.max(0, Number(base?.statusFailureCount || 0) || 0),
+        lastStatusError: String(base?.lastStatusError || '').trim(),
+        lastPolledAt: Number(base?.lastPolledAt || 0) || 0,
+        persistWaitStartedAt: Number(base?.persistWaitStartedAt || 0) || 0,
+        lastPersistWaitLogAt: Number(base?.lastPersistWaitLogAt || 0) || 0,
+    }), [projectId]);
+
+    const describeSubjectJobOwner = useCallback((payload, entityId) => {
+        const stableEntityId = String(payload?.ownerEntityId || entityId || '').trim() || 'unknown-entity';
+        const stableScopeId = String(payload?.ownerScopeId || projectId || '').trim() || 'unknown-project';
+        const stableJobKind = payload?.jobKind === 'reconstruct' ? 'reconstruct' : 'generate';
+        return `subject-library/project:${stableScopeId}/entity:${stableEntityId}/${stableJobKind}`;
+    }, [projectId]);
+
+    const extractSubjectHistoryField = useCallback((item, fieldName) => {
+        if (!item || typeof item !== 'object') return '';
+        const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+        const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+        const context = item?.context && typeof item.context === 'object' ? item.context : {};
+        const directValue = item?.[fieldName];
+        if (directValue !== undefined && directValue !== null && String(directValue).trim() !== '') return directValue;
+        const metaValue = metadata?.[fieldName];
+        if (metaValue !== undefined && metaValue !== null && String(metaValue).trim() !== '') return metaValue;
+        const payloadValue = payload?.[fieldName];
+        if (payloadValue !== undefined && payloadValue !== null && String(payloadValue).trim() !== '') return payloadValue;
+        const contextValue = context?.[fieldName];
+        if (contextValue !== undefined && contextValue !== null && String(contextValue).trim() !== '') return contextValue;
+        return '';
+    }, []);
+
+    const normalizeSubjectGenerationHistory = useCallback((items) => {
+        const list = Array.isArray(items) ? items : [];
+        return list
+            .map((item) => {
+                const result = item?.result;
+                const resultUrl = typeof result === 'string'
+                    ? String(result).trim()
+                    : String(result?.url || result?.result_url || result?.image_url || '').trim();
+                const jobKind = String(extractSubjectHistoryField(item, 'jobKind') || '').trim().toLowerCase();
+                return {
+                    ...item,
+                    entityId: String(extractSubjectHistoryField(item, 'entity_id') || extractSubjectHistoryField(item, 'ownerEntityId') || '').trim(),
+                    projectId: String(extractSubjectHistoryField(item, 'project_id') || extractSubjectHistoryField(item, 'ownerScopeId') || '').trim(),
+                    subjectName: String(extractSubjectHistoryField(item, 'subject_name') || extractSubjectHistoryField(item, 'entity_name') || '').trim(),
+                    resultUrl,
+                    displayLabel: jobKind === 'reconstruct' ? t('主体重构', 'Subject Reconstruction') : t('主体生图', 'Subject Image Generation'),
+                    createdAtMs: Date.parse(String(item?.created_at || item?.started_at || item?.finished_at || '')) || 0,
+                };
+            })
+            .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+    }, [extractSubjectHistoryField, t]);
+
+    const fetchSubjectGenerationHistory = useCallback(async (entity) => {
+        const stableEntityId = String(entity?.id || entity || '').trim();
+        if (!stableEntityId) {
+            setSubjectGenerationHistory([]);
+            return;
+        }
+
+        setSubjectGenerationHistoryLoading(true);
+        try {
+            const imagePool = await getGenerationJobPool({ kind: 'image', running_only: false, limit: 300 });
+            const normalized = normalizeSubjectGenerationHistory(imagePool?.items || []);
+            const filtered = normalized.filter((item) => {
+                if (item.projectId && String(projectId || '').trim() && item.projectId !== String(projectId || '').trim()) {
+                    return false;
+                }
+                return item.entityId === stableEntityId;
+            });
+            setSubjectGenerationHistory(filtered.slice(0, 12));
+        } catch (e) {
+            onLog?.(`Failed to load subject generation history: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+            setSubjectGenerationHistory([]);
+        } finally {
+            setSubjectGenerationHistoryLoading(false);
+        }
+    }, [getGenerationJobPool, normalizeSubjectGenerationHistory, onLog, projectId]);
+
+    useEffect(() => {
+        if (!selectedEntity?.id) {
+            setSubjectGenerationHistory([]);
+            return;
+        }
+        fetchSubjectGenerationHistory(selectedEntity);
+    }, [fetchSubjectGenerationHistory, selectedEntity]);
+
+    const handleDeleteSubjectGenerationHistoryItem = useCallback(async (item) => {
+        const kind = String(item?.kind || '').trim();
+        const jobId = String(item?.job_id || '').trim();
+        if (!kind || !jobId || !selectedEntity?.id) return;
+
+        setSubjectGenerationHistoryDeletingId(jobId);
+        try {
+            await deleteGenerationJob(kind, jobId);
+            await fetchSubjectGenerationHistory(selectedEntity);
+            onLog?.(t('主体历史任务记录已删除。', 'Subject history item deleted.'), 'warning');
+        } catch (e) {
+            onLog?.(t('删除主体历史失败：', 'Failed to delete subject history item: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
+        } finally {
+            setSubjectGenerationHistoryDeletingId('');
+        }
+    }, [deleteGenerationJob, fetchSubjectGenerationHistory, onLog, selectedEntity, t]);
+
+    const forceClearSubjectImageJob = useCallback(async (entityId, payload, reason) => {
+        const stableEntityId = String(entityId || payload?.ownerEntityId || '').trim();
+        const stableJobId = String(payload?.jobId || '').trim();
+        const ownerLabel = describeSubjectJobOwner(payload, stableEntityId);
+        const reasonText = String(reason || 'forced clear').trim();
+
+        if (stableJobId) {
+            try {
+                await stopGenerationJob('image', stableJobId, { force: true });
+            } catch {
+                // Best effort stop.
+            }
+            try {
+                await deleteGenerationJob('image', stableJobId);
+            } catch {
+                // Best effort delete.
+            }
+        }
+
+        setSubjectImageJobs((prev) => {
+            const next = { ...(prev || {}) };
+            delete next[stableEntityId];
+            return next;
+        });
+        setStoppingSubjectImageJobs((prev) => {
+            const next = { ...(prev || {}) };
+            delete next[stableEntityId];
+            return next;
+        });
+
+        if (onLog) {
+            onLog(
+                t(
+                    `已强制清理主体任务：${ownerLabel}，原因：${reasonText}`,
+                    `Subject job force-cleared: ${ownerLabel}. Reason: ${reasonText}`
+                ),
+                'warning'
+            );
+        }
+    }, [deleteGenerationJob, describeSubjectJobOwner, onLog, stopGenerationJob, t]);
+
+    const setLocalSubjectImageJobState = useCallback((entityId, patch = {}) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId) return;
+
+        setSubjectImageJobs(prev => ({
+            ...(prev || {}),
+            [stableEntityId]: {
+                ...(prev?.[stableEntityId] || {}),
+                ...patch,
+            },
+        }));
+    }, []);
+
+    const clearLocalSubjectImageJobState = useCallback((entityId) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId) return;
+
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            delete next[stableEntityId];
+            return next;
+        });
+        setStoppingSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            delete next[stableEntityId];
+            return next;
+        });
+    }, []);
+
+    const showSubjectNotification = useCallback((message, type = 'success') => {
+        setSubjectNotification({ message, type });
+        setTimeout(() => setSubjectNotification(null), 3000);
+    }, []);
+
+    const shouldLogSubjectJobTerminal = useCallback((jobId, outcome) => {
+        const stableJobId = String(jobId || '').trim();
+        const stableOutcome = String(outcome || '').trim().toLowerCase();
+        if (!stableJobId || !stableOutcome) return true;
+        const dedupeKey = `${stableJobId}:${stableOutcome}`;
+        if (subjectImageJobTerminalLogRef.current.has(dedupeKey)) {
+            return false;
+        }
+        subjectImageJobTerminalLogRef.current.add(dedupeKey);
+        return true;
+    }, []);
+
+    const isSubjectBatchStopSignal = useCallback((error) => {
+        return String(error?.message || '').trim() === '__subject_batch_stop__';
+    }, []);
+
+    const trackSubjectBatchImageJob = useCallback((kind, entity, jobId) => {
+        const stableJobId = String(jobId || '').trim();
+        const stableEntityId = String(entity?.id || '').trim();
+        if (!stableJobId || !stableEntityId) return;
+        const previousStableImageUrl = String(entity?.image_url || '').trim();
+
+        const targetMap = kind === 'reconstruct'
+            ? subjectBatchReconstructActiveJobsRef.current
+            : subjectBatchGenerateActiveJobsRef.current;
+
+        targetMap.set(stableEntityId, stableJobId);
+        setSubjectImageJobs(prev => ({
+            ...(prev || {}),
+            [stableEntityId]: {
+                ...(prev?.[stableEntityId] || {}),
+                jobId: stableJobId,
+                status: 'queued',
+                startedAt: Date.now(),
+                entityName: entity?.name || entity?.name_en || stableEntityId,
+                ...buildSubjectJobMeta(stableEntityId, kind, { previousStableImageUrl }),
+            },
+        }));
+    }, [buildSubjectJobMeta]);
+
+    const untrackSubjectBatchImageJob = useCallback((kind, entityId) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId) return;
+        const targetMap = kind === 'reconstruct'
+            ? subjectBatchReconstructActiveJobsRef.current
+            : subjectBatchGenerateActiveJobsRef.current;
+        targetMap.delete(stableEntityId);
+    }, []);
+
+    const forceStopTrackedSubjectBatchImageJobs = useCallback(async (kind) => {
+        const targetMap = kind === 'reconstruct'
+            ? subjectBatchReconstructActiveJobsRef.current
+            : subjectBatchGenerateActiveJobsRef.current;
+        const entries = Array.from(targetMap.entries());
+        targetMap.clear();
+        if (entries.length === 0) return 0;
+
+        await Promise.allSettled(entries.map(async ([, jobId]) => {
+            const stableJobId = String(jobId || '').trim();
+            if (!stableJobId) return;
+            await stopGenerationJob('image', stableJobId, { force: true });
+        }));
+
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            entries.forEach(([entityId]) => {
+                delete next[String(entityId)];
+            });
+            return next;
+        });
+
+        return entries.length;
+    }, [stopGenerationJob]);
+
+    const clearPendingSubjectBatchImagePlaceholders = useCallback(() => {
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            let changed = false;
+
+            Object.entries(next).forEach(([entityId, job]) => {
+                const stableJobId = String(job?.jobId || '').trim();
+                const status = String(job?.status || '').trim().toLowerCase();
+                if (stableJobId) {
+                    return;
+                }
+                if (status === 'queued' || status === 'running' || status === 'persisting') {
+                    delete next[entityId];
+                    changed = true;
+                }
+            });
+
+            return changed ? next : prev;
+        });
+        setStoppingSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            let changed = false;
+            Object.keys(next).forEach((entityId) => {
+                const stableEntityId = String(entityId || '').trim();
+                if (!stableEntityId) return;
+                delete next[stableEntityId];
+                changed = true;
+            });
+            return changed ? next : prev;
+        });
+    }, []);
+
+    const normalizeSubjectImageJobs = useCallback((raw) => {
+        if (!raw || typeof raw !== 'object') return {};
+        const now = Date.now();
+        const cleaned = {};
+        Object.entries(raw).forEach(([entityId, value]) => {
+            const stableEntityId = String(entityId || '').trim();
+            const jobId = String(value?.jobId || '').trim();
+            const startedAt = Number(value?.startedAt || 0) || now;
+            if (!stableEntityId || !jobId) return;
+            if ((now - startedAt) > SUBJECT_IMAGE_JOB_TTL_MS) return;
+            const jobKind = value?.jobKind === 'reconstruct' ? 'reconstruct' : 'generate';
+            cleaned[stableEntityId] = {
+                jobId,
+                startedAt,
+                entityName: String(value?.entityName || '').trim(),
+                status: String(value?.status || '').trim(),
+                ...buildSubjectJobMeta(stableEntityId, jobKind, value),
+            };
+        });
+        return cleaned;
+    }, [SUBJECT_IMAGE_JOB_TTL_MS, buildSubjectJobMeta]);
+
+    const readSubjectImageJobsStorage = useCallback(() => {
+        if (!subjectImageJobStorageKey) return {};
+        try {
+            const raw = localStorage.getItem(subjectImageJobStorageKey);
+            if (!raw) return {};
+            return normalizeSubjectImageJobs(JSON.parse(raw));
+        } catch {
+            return {};
+        }
+    }, [normalizeSubjectImageJobs, subjectImageJobStorageKey]);
+
+    const writeSubjectImageJobsStorage = useCallback((jobs) => {
+        if (!subjectImageJobStorageKey) return;
+        try {
+            const normalized = normalizeSubjectImageJobs(jobs);
+            if (Object.keys(normalized).length === 0) {
+                localStorage.removeItem(subjectImageJobStorageKey);
+                return;
+            }
+            localStorage.setItem(subjectImageJobStorageKey, JSON.stringify(normalized));
+        } catch {
+            // ignore storage failures
+        }
+    }, [normalizeSubjectImageJobs, subjectImageJobStorageKey]);
+
+    useEffect(() => {
+        if (!window?.localStorage) return;
+        try {
+            if (window.localStorage.getItem(IMAGE_JOB_CACHE_PURGE_MARKER_KEY) === '1') return;
+
+            const imageJobPrefixes = [
+                'aistory.subjectImageJobs.',
+                'aistory.shotImageJobs.',
+                'aistory.shotVideoJobs.',
+                'aistory.shotGenerationState.',
+            ];
+
+            const keysToRemove = [];
+            for (let index = 0; index < window.localStorage.length; index += 1) {
+                const key = String(window.localStorage.key(index) || '');
+                if (!key) continue;
+                if (key === SUBJECT_BATCH_RUNTIME_STORAGE_KEY || imageJobPrefixes.some((prefix) => key.startsWith(prefix))) {
+                    keysToRemove.push(key);
+                }
+            }
+
+            keysToRemove.forEach((key) => {
+                window.localStorage.removeItem(key);
+            });
+            window.localStorage.setItem(IMAGE_JOB_CACHE_PURGE_MARKER_KEY, '1');
+        } catch {
+            // ignore storage failures
+        }
+
+        subjectBatchGenerateActiveJobsRef.current.clear();
+        subjectBatchReconstructActiveJobsRef.current.clear();
+        if (window.__AISTORY_SUBJECT_BATCH_RUNTIME__) {
+            window.__AISTORY_SUBJECT_BATCH_RUNTIME__.generate = createSubjectBatchTaskState();
+            window.__AISTORY_SUBJECT_BATCH_RUNTIME__.analyze = createSubjectBatchTaskState();
+            window.__AISTORY_SUBJECT_BATCH_RUNTIME__.reconstruct = createSubjectBatchTaskState();
+            emitSubjectBatchRuntime();
+        }
+        setSubjectImageJobs({});
+        setStoppingSubjectImageJobs({});
+    }, [createSubjectBatchTaskState, emitSubjectBatchRuntime]);
+
+    const resolvedPromptSubmitLang = useMemo(() => {
+        return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
+    }, [promptSubmitLangPref, uiLang]);
+
+    const effectivePromptSubmitLang = useMemo(() => {
+        if (tempPromptSubmitLang === 'cn' || tempPromptSubmitLang === 'en') {
+            return tempPromptSubmitLang;
+        }
+        return resolvedPromptSubmitLang;
+    }, [tempPromptSubmitLang, resolvedPromptSubmitLang]);
+
+    const promptLangText = useCallback((lang) => {
+        return lang === 'cn' ? t('中文', 'Chinese') : t('英文', 'English');
+    }, [t]);
+
+    const promptLangPrefText = useCallback((pref) => {
+        if (pref === 'cn') return t('中文', 'Chinese');
+        if (pref === 'auto') return t('跟随界面语言', 'Follow UI');
+        return t('英文', 'English');
+    }, [t]);
+
+    const getSubjectImageJobEntry = useCallback((entityOrId) => {
+        const stableEntityId = String(entityOrId?.id || entityOrId || '').trim();
+        if (!stableEntityId) return null;
+        return subjectImageJobs[stableEntityId] || null;
+    }, [subjectImageJobs]);
+
+    const isSubjectImageActionLocked = useCallback((entityOrId) => {
+        const stableEntityId = String(entityOrId?.id || entityOrId || '').trim();
+        if (!stableEntityId) return false;
+        return Boolean(subjectImageJobs[stableEntityId] || stoppingSubjectImageJobs[stableEntityId]);
+    }, [stoppingSubjectImageJobs, subjectImageJobs]);
+
+    const notifySubjectImageActionLocked = useCallback((entityOrId) => {
+        const stableEntityId = String(entityOrId?.id || entityOrId || '').trim();
+        const entityName = String(entityOrId?.name || entityOrId?.name_en || stableEntityId).trim() || stableEntityId;
+        const message = t(
+            `主体图片任务运行中，暂时不能更换或移除图片：${entityName}`,
+            `Subject image job is running. Image changes are temporarily disabled: ${entityName}`
+        );
+        showSubjectNotification(message, 'warning');
+        onLog?.(message, 'warning');
+    }, [onLog, showSubjectNotification, t]);
+
+    const getResolvedEntityGlobalStyleText = useCallback(() => {
+        const info = currentEpisode?.episode_info?.e_global_info;
+        const projectInfo = project?.global_info;
+        return String(
+            info?.Global_Style
+            || info?.global_style
+            || projectInfo?.Global_Style
+            || projectInfo?.global_style
+            || ''
+        ).trim();
+    }, [currentEpisode?.episode_info?.e_global_info, project?.global_info]);
+
+    const prependEntityGlobalStyleToPromptHead = useCallback((text, options = {}) => {
+        const rawText = String(text || '').trim();
+        if (!rawText) return rawText;
+
+        const { injectIfMissing = true } = options || {};
+        const globalStyle = getResolvedEntityGlobalStyleText();
+        if (!globalStyle) return rawText;
+
+        const tokenPattern = /[\[【]\s*(global style|global_style)\s*[\]】]/ig;
+        const replaced = rawText.replace(tokenPattern, `[Global Style](${globalStyle})`);
+        if (replaced !== rawText) return replaced;
+        if (!injectIfMissing) return rawText;
+
+        if (/\[Global Style\]\s*\(/i.test(rawText)) return rawText;
+        if (rawText.toLowerCase().startsWith(globalStyle.toLowerCase())) return rawText;
+
+        return `[Global Style](${globalStyle}). ${rawText}`;
+    }, [getResolvedEntityGlobalStyleText]);
+
+    useEffect(() => {
+        const syncPromptSubmitLangPref = () => {
+            setPromptSubmitLangPref(getPromptSubmitLanguagePreference());
+        };
+
+        syncPromptSubmitLangPref();
+        window.addEventListener('storage', syncPromptSubmitLangPref);
+        window.addEventListener('focus', syncPromptSubmitLangPref);
+        return () => {
+            window.removeEventListener('storage', syncPromptSubmitLangPref);
+            window.removeEventListener('focus', syncPromptSubmitLangPref);
+        };
+    }, []);
+
+    const getEntityPromptByLang = useCallback((entity, lang) => {
+        if (!entity) return '';
+        if (lang === 'cn') {
+            return String(entity.generation_prompt_cn || entity.generation_prompt_en || '').trim();
+        }
+        return String(entity.generation_prompt_en || entity.generation_prompt_cn || '').trim();
+    }, []);
+
+    const buildProcessedEntityPrompt = useCallback((entity, lang) => {
+        if (!entity) return '';
+
+        let rawPrompt = getEntityPromptByLang(entity, lang);
+        if (!rawPrompt && entity.description) {
+            const match = entity.description.match(/Prompt:\s*(.*)/);
+            if (match && match[1]) {
+                rawPrompt = match[1].trim();
+            }
+        }
+
+        const epInfo = currentEpisode?.episode_info || {};
+        let processed = processPrompt(rawPrompt, epInfo, allEntities) || '';
+        const infoSource = epInfo.e_global_info || epInfo;
+        const suffixes = [
+            infoSource?.type,
+            infoSource?.lighting,
+            infoSource?.tech_params?.visual_standard?.quality,
+        ].filter(Boolean);
+        if (suffixes.length > 0) {
+            processed += (processed ? ', ' : '') + suffixes.join(', ');
+        }
+
+        return prependEntityGlobalStyleToPromptHead(processed, { injectIfMissing: true });
+    }, [allEntities, currentEpisode?.episode_info, getEntityPromptByLang, prependEntityGlobalStyleToPromptHead]);
+
+    const applySubjectEntityImageLocally = useCallback((entityId, imageUrl) => {
+        const stableEntityId = String(entityId || '').trim();
+        const stableImageUrl = String(imageUrl || '').trim();
+        if (!stableEntityId || !stableImageUrl || !isMountedRef.current) return;
+
+        setAllEntities(prev => prev.map(item => String(item?.id) === stableEntityId ? { ...item, image_url: stableImageUrl } : item));
+        setEntities(prev => prev.map(item => String(item?.id) === stableEntityId ? { ...item, image_url: stableImageUrl } : item));
+        setViewingEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
+        setSelectedEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
+        if (showImageModal && String(selectedEntity?.id || '') === stableEntityId) {
+            setShowImageModal(false);
+        }
+    }, [selectedEntity?.id, showImageModal]);
+
+    const clearSubjectEntityImageLocally = useCallback((entityId) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId || !isMountedRef.current) return;
+
+        const applyClear = (item) => (String(item?.id || '') === stableEntityId ? { ...item, image_url: null } : item);
+        setAllEntities(prev => prev.map(applyClear));
+        setEntities(prev => prev.map(applyClear));
+        setViewingEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: null } : prev));
+        setSelectedEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: null } : prev));
+        if (showImageModal && String(selectedEntity?.id || '') === stableEntityId) {
+            setShowImageModal(false);
+        }
+    }, [selectedEntity?.id, showImageModal]);
+
+    const refreshPersistedSubjectEntityImage = useCallback(async (entityId) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!projectId || !stableEntityId) return '';
+
+        const latestEntities = await fetchEntities(projectId);
+        const latestEntity = (Array.isArray(latestEntities) ? latestEntities : []).find((item) => String(item?.id || '') === stableEntityId);
+        const recoveredUrl = String(latestEntity?.image_url || '').trim();
+        if (!recoveredUrl || isEphemeralProviderMediaUrl(recoveredUrl)) {
+            return '';
+        }
+
+        applySubjectEntityImageLocally(stableEntityId, recoveredUrl);
+        return recoveredUrl;
+    }, [applySubjectEntityImageLocally, fetchEntities, isEphemeralProviderMediaUrl, projectId]);
+
+    const awaitPersistedSubjectEntityImage = useCallback(async (entityId, options = {}) => {
+        const stableEntityId = String(entityId || '').trim();
+        if (!stableEntityId) return '';
+
+        const initialUrl = String(options?.initialUrl || '').trim();
+        if (initialUrl && !isEphemeralProviderMediaUrl(initialUrl)) {
+            return initialUrl;
+        }
+
+        const timeoutMsRaw = Number(options?.timeoutMs || 0) || 0;
+        const intervalMsRaw = Number(options?.intervalMs || 0) || 0;
+        const timeoutMs = Math.max(3000, timeoutMsRaw || 20000);
+        const intervalMs = Math.max(1000, intervalMsRaw || 2500);
+        const entityLabel = String(options?.entityName || stableEntityId).trim() || stableEntityId;
+        const deadline = Date.now() + timeoutMs;
+
+        let recoveredUrl = '';
+        while (Date.now() < deadline) {
+            try {
+                recoveredUrl = await refreshPersistedSubjectEntityImage(stableEntityId);
+            } catch (refreshErr) {
+                console.warn('Failed to refresh persisted subject entity image', refreshErr);
+            }
+            if (recoveredUrl) {
+                return recoveredUrl;
+            }
+            await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        }
+
+        if (onLog) {
+            onLog(
+                t(
+                    `等待主体稳定图片地址超时：${entityLabel}`,
+                    `Timed out waiting for durable subject image URL: ${entityLabel}`
+                ),
+                'warning'
+            );
+        }
+        return '';
+    }, [isEphemeralProviderMediaUrl, onLog, refreshPersistedSubjectEntityImage, t]);
+
+    const applyGenerateBatchState = useCallback((running, progress) => {
+        if (!isMountedRef.current) return;
+        setIsBatchGeneratingEntities(Boolean(running));
+        setBatchEntityProgress(progress || null);
+    }, []);
+
+    const applyAnalyzeBatchState = useCallback((running, progress) => {
+        if (!isMountedRef.current) return;
+        setIsBatchAnalyzingEntities(Boolean(running));
+        setBatchAnalyzeProgress(progress || null);
+    }, []);
+
+    const applyReconstructBatchState = useCallback((running, progress) => {
+        if (!isMountedRef.current) return;
+        setIsBatchReconstructingEntities(Boolean(running));
+        setBatchReconstructProgress(progress || null);
+    }, []);
+
+    const updateGenerateBatchRuntimeState = useCallback((running, progress) => {
+        updateSubjectBatchTask('generate', {
+            running: Boolean(running),
+            progress: progress || null,
+            scopeKey: subjectBatchScopeKey,
+        });
+        applyGenerateBatchState(running, progress);
+    }, [applyGenerateBatchState, subjectBatchScopeKey]);
+
+    const updateAnalyzeBatchRuntimeState = useCallback((running, progress) => {
+        updateSubjectBatchTask('analyze', {
+            running: Boolean(running),
+            progress: progress || null,
+            scopeKey: subjectBatchScopeKey,
+        });
+        applyAnalyzeBatchState(running, progress);
+    }, [applyAnalyzeBatchState, subjectBatchScopeKey]);
+
+    const updateReconstructBatchRuntimeState = useCallback((running, progress) => {
+        updateSubjectBatchTask('reconstruct', {
+            running: Boolean(running),
+            progress: progress || null,
+            scopeKey: subjectBatchScopeKey,
+        });
+        applyReconstructBatchState(running, progress);
+    }, [applyReconstructBatchState, subjectBatchScopeKey]);
+
+    const hasSubjectBatchJobState = useCallback((jobKind) => {
+        const stableJobKind = String(jobKind || '').trim();
+        if (!stableJobKind) return false;
+
+        return Object.values(subjectImageJobs || {}).some((job) => {
+            if (!job || typeof job !== 'object') return false;
+            const currentJobKind = String(job?.jobKind || 'generate').trim();
+            return currentJobKind === stableJobKind;
+        });
+    }, [subjectImageJobs]);
+
+    const clearSubjectBatchRuntimeUi = useCallback((task) => {
+        const stableTask = String(task || '').trim();
+        if (stableTask === 'generate') {
+            updateGenerateBatchRuntimeState(false, null);
+            setIsStoppingBatchGenerateEntities(false);
+            return;
+        }
+        if (stableTask === 'analyze') {
+            updateAnalyzeBatchRuntimeState(false, null);
+            return;
+        }
+        if (stableTask === 'reconstruct') {
+            updateReconstructBatchRuntimeState(false, null);
+        }
+    }, [updateAnalyzeBatchRuntimeState, updateGenerateBatchRuntimeState, updateReconstructBatchRuntimeState]);
+
+    const tryHealSubjectBatchRuntime = useCallback((options = {}) => {
+        const {
+            task,
+            uiRunning,
+            sessionRef,
+            activeJobsRef,
+            jobKind,
+            stopRequestedRef,
+            snapshot = null,
+            staleMs = 0,
+            allowSessionReset = false,
+        } = options;
+
+        const stableTask = String(task || '').trim();
+        if (!stableTask || !uiRunning) return false;
+
+        if (!allowSessionReset && String(sessionRef?.current || '').trim()) {
+            return false;
+        }
+
+        if (activeJobsRef?.current?.size > 0) {
+            return false;
+        }
+
+        if (jobKind && hasSubjectBatchJobState(jobKind)) {
+            return false;
+        }
+
+        if (staleMs > 0) {
+            const taskState = snapshot?.[stableTask] || createSubjectBatchTaskState();
+            const updatedAt = Number(taskState?.updatedAt || 0) || 0;
+            if (!taskState?.running) return false;
+            if (updatedAt <= 0 || (Date.now() - updatedAt) <= staleMs) {
+                return false;
+            }
+        }
+
+        // Guard: if the global runtime object still shows this task as recently
+        // running, do NOT heal — the batch loop is still alive in a background
+        // closure even though the component remounted with fresh refs.
+        const globalTaskState = subjectBatchRuntime?.[stableTask];
+        if (globalTaskState?.running) {
+            const globalUpdatedAt = Number(globalTaskState?.updatedAt || 0) || 0;
+            if (globalUpdatedAt > 0 && (Date.now() - globalUpdatedAt) < SUBJECT_BATCH_RUNTIME_STALE_MS) {
+                return false;
+            }
+        }
+
+        if (sessionRef) {
+            sessionRef.current = '';
+        }
+        if (stopRequestedRef) {
+            stopRequestedRef.current = false;
+        }
+
+        clearSubjectBatchRuntimeUi(stableTask);
+        return true;
+    }, [clearSubjectBatchRuntimeUi, createSubjectBatchTaskState, hasSubjectBatchJobState, subjectBatchRuntime]);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        const applySnapshot = (snapshot) => {
+            const generateTask = snapshot?.generate || createSubjectBatchTaskState();
+            const analyzeTask = snapshot?.analyze || createSubjectBatchTaskState();
+            const reconstructTask = snapshot?.reconstruct || createSubjectBatchTaskState();
+
+            if (generateTask.scopeKey === subjectBatchScopeKey && generateTask.running) {
+                applyGenerateBatchState(true, generateTask.progress || null);
+            } else {
+                applyGenerateBatchState(false, null);
+            }
+
+            if (analyzeTask.scopeKey === subjectBatchScopeKey && analyzeTask.running) {
+                applyAnalyzeBatchState(true, analyzeTask.progress || null);
+            } else {
+                applyAnalyzeBatchState(false, null);
+            }
+
+            if (reconstructTask.scopeKey === subjectBatchScopeKey && reconstructTask.running) {
+                applyReconstructBatchState(true, reconstructTask.progress || null);
+            } else {
+                applyReconstructBatchState(false, null);
+            }
+        };
+
+        applySnapshot(getSubjectBatchSnapshot());
+        return subscribeSubjectBatchRuntime(applySnapshot);
+    }, [applyAnalyzeBatchState, applyGenerateBatchState, applyReconstructBatchState, subjectBatchScopeKey]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'generate',
+            uiRunning: isBatchGeneratingEntities,
+            sessionRef: subjectBatchGenerateSessionRef,
+            activeJobsRef: subjectBatchGenerateActiveJobsRef,
+            jobKind: 'generate',
+            stopRequestedRef: subjectBatchGenerateStopRequestedRef,
+        });
+    }, [isBatchGeneratingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'analyze',
+            uiRunning: isBatchAnalyzingEntities,
+            sessionRef: subjectBatchAnalyzeSessionRef,
+            stopRequestedRef: subjectBatchAnalyzeStopRequestedRef,
+        });
+    }, [isBatchAnalyzingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        tryHealSubjectBatchRuntime({
+            task: 'reconstruct',
+            uiRunning: isBatchReconstructingEntities,
+            sessionRef: subjectBatchReconstructSessionRef,
+            activeJobsRef: subjectBatchReconstructActiveJobsRef,
+            jobKind: 'reconstruct',
+            stopRequestedRef: subjectBatchReconstructStopRequestedRef,
+        });
+    }, [isBatchReconstructingEntities, tryHealSubjectBatchRuntime]);
+
+    useEffect(() => {
+        const hasTopLevelBatchUi = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
+        if (!hasTopLevelBatchUi) return;
+
+        const timer = window.setInterval(() => {
+            const snapshot = getSubjectBatchSnapshot();
+            tryHealSubjectBatchRuntime({
+                task: 'generate',
+                uiRunning: isBatchGeneratingEntities,
+                sessionRef: subjectBatchGenerateSessionRef,
+                activeJobsRef: subjectBatchGenerateActiveJobsRef,
+                jobKind: 'generate',
+                stopRequestedRef: subjectBatchGenerateStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+
+            tryHealSubjectBatchRuntime({
+                task: 'analyze',
+                uiRunning: isBatchAnalyzingEntities,
+                sessionRef: subjectBatchAnalyzeSessionRef,
+                stopRequestedRef: subjectBatchAnalyzeStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+
+            tryHealSubjectBatchRuntime({
+                task: 'reconstruct',
+                uiRunning: isBatchReconstructingEntities,
+                sessionRef: subjectBatchReconstructSessionRef,
+                activeJobsRef: subjectBatchReconstructActiveJobsRef,
+                jobKind: 'reconstruct',
+                stopRequestedRef: subjectBatchReconstructStopRequestedRef,
+                snapshot,
+                staleMs: SUBJECT_BATCH_RUNTIME_STALE_MS,
+                allowSessionReset: true,
+            });
+        }, SUBJECT_BATCH_WATCHDOG_INTERVAL_MS);
+
+        return () => {
+            window.clearInterval(timer);
+        };
+    }, [
+        getSubjectBatchSnapshot,
+        isBatchAnalyzingEntities,
+        isBatchGeneratingEntities,
+        isBatchReconstructingEntities,
+        tryHealSubjectBatchRuntime,
+    ]);
+
+    useEffect(() => {
+        setSubjectImageJobs(readSubjectImageJobsStorage());
+    }, [readSubjectImageJobsStorage]);
+
+    useEffect(() => {
+        writeSubjectImageJobsStorage(subjectImageJobs);
+    }, [subjectImageJobs, writeSubjectImageJobsStorage]);
+
+    useEffect(() => {
+        subjectImageJobsRef.current = subjectImageJobs || {};
+    }, [subjectImageJobs]);
+
+    useEffect(() => {
+        if (Object.keys(subjectImageJobs || {}).length === 0) return;
+
+        let disposed = false;
+        const pollToken = subjectImageJobPollTokenRef.current + 1;
+        subjectImageJobPollTokenRef.current = pollToken;
+
+        const isActivePoll = () => !disposed && subjectImageJobPollTokenRef.current === pollToken;
+        const getCurrentJobEntry = (entityId, expectedJobId = '') => {
+            const stableEntityId = String(entityId || '').trim();
+            if (!stableEntityId) return null;
+            const currentEntry = subjectImageJobsRef.current?.[stableEntityId] || null;
+            if (!currentEntry) return null;
+            const stableExpectedJobId = String(expectedJobId || '').trim();
+            if (!stableExpectedJobId) return currentEntry;
+            return String(currentEntry?.jobId || '').trim() === stableExpectedJobId ? currentEntry : null;
+        };
+
+        const pollOnce = async () => {
+            if (disposed || subjectImageJobPollingRef.current) return;
+            subjectImageJobPollingRef.current = true;
+            try {
+                const completed = [];
+                const statusUpdates = {};
+                const jobEntries = Object.entries(subjectImageJobsRef.current || {});
+                if (jobEntries.length === 0 || !isActivePoll()) {
+                    return;
+                }
+                for (const [entityId, job] of jobEntries) {
+                    const jobId = String(job?.jobId || '').trim();
+                    if (!jobId) {
+                        if (!getCurrentJobEntry(entityId)) {
+                            continue;
+                        }
+                        const localStatus = String(job?.status || '').trim().toLowerCase();
+                        if (localStatus === 'queued' || localStatus === 'running' || localStatus === 'persisting') {
+                            continue;
+                        }
+                        completed.push(entityId);
+                        continue;
+                    }
+
+                    let statusResp = null;
+                    try {
+                        statusResp = await getImageGenerationJobStatus(jobId);
+                    } catch (statusErr) {
+                        const detail = String(statusErr?.response?.data?.detail || statusErr?.message || 'unknown error').trim();
+                        const nextFailureCount = Math.max(0, Number(job?.statusFailureCount || 0) || 0) + 1;
+                        if (nextFailureCount >= SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES) {
+                            await forceClearSubjectImageJob(
+                                entityId,
+                                job,
+                                `status polling failed ${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}: ${detail}`
+                            );
+                        } else {
+                            statusUpdates[String(entityId)] = {
+                                statusFailureCount: nextFailureCount,
+                                lastStatusError: detail,
+                                lastPolledAt: Date.now(),
+                            };
+                            if (isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
+                                onLog(
+                                    t(
+                                        `主体任务状态查询失败（${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}）：${job?.entityName || entityId} - ${detail}`,
+                                        `Subject job status polling failed (${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}): ${job?.entityName || entityId} - ${detail}`
+                                    ),
+                                    'warning'
+                                );
+                            }
+                        }
+                        continue;
+                    }
+
+                    const status = String(statusResp?.status || '').trim().toLowerCase();
+                    const generatedUrl = extractImageJobResultUrl(statusResp);
+                    if (generatedUrl) {
+                        const currentJob = getCurrentJobEntry(entityId, jobId);
+                        if (!currentJob) {
+                            continue;
+                        }
+                        const canPersistGeneratedUrl = !isEphemeralProviderMediaUrl(generatedUrl);
+                        if (canPersistGeneratedUrl) {
+                            try {
+                                await updateEntity(Number(entityId), { image_url: generatedUrl });
+                            } catch {
+                                // Best effort; local refresh still updates UX.
+                            }
+                        }
+                        if (canPersistGeneratedUrl && currentJob) {
+                            clearLocalSubjectImageJobState(entityId);
+                            applySubjectEntityImageLocally(entityId, generatedUrl);
+                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
+                                onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                            }
+                            continue;
+                        }
+
+                        let recoveredUrl = '';
+                        try {
+                            recoveredUrl = await refreshPersistedSubjectEntityImage(entityId);
+                        } catch (refreshErr) {
+                            console.warn('Failed to refresh entity after temporary image result URL', refreshErr);
+                        }
+
+                        if (recoveredUrl) {
+                            if (getCurrentJobEntry(entityId, jobId)) {
+                                clearLocalSubjectImageJobState(entityId);
+                            }
+                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
+                                onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                            }
+                            continue;
+                        }
+
+                        const now = Date.now();
+                        const persistWaitStartedAt = Number(job?.persistWaitStartedAt || 0) || now;
+                        const lastPersistWaitLogAt = Number(job?.lastPersistWaitLogAt || 0) || 0;
+                        const persistWaitElapsed = now - persistWaitStartedAt;
+
+                        if ((now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
+                            onLog(
+                                t(
+                                    `主体任务返回了临时图片地址，正在等待稳定图片入库：${job?.entityName || entityId}`,
+                                    `Subject job returned a temporary image URL; waiting for durable image persistence: ${job?.entityName || entityId}`
+                                ),
+                                'process'
+                            );
+                        }
+
+                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS) {
+                            if (getCurrentJobEntry(entityId, jobId)) {
+                                clearLocalSubjectImageJobState(entityId);
+                            }
+                            if (isActivePoll() && onLog) {
+                                onLog(
+                                    t(
+                                        `主体任务已完成，但在等待稳定图片超时后仍未拿到可持久化地址：${job?.entityName || entityId}`,
+                                        `Subject job finished, but no durable image URL was available before the persistence wait timed out: ${job?.entityName || entityId}`
+                                    ),
+                                    'warning'
+                                );
+                            }
+                            continue;
+                        }
+
+                        statusUpdates[String(entityId)] = {
+                            status: 'persisting',
+                            lastPolledAt: now,
+                            statusFailureCount: 0,
+                            lastStatusError: '',
+                            persistWaitStartedAt,
+                            lastPersistWaitLogAt: now,
+                        };
+                        continue;
+                    }
+
+                    if (status === 'queued' || status === 'running') {
+                        if (!isActivePoll() || !getCurrentJobEntry(entityId, jobId)) {
+                            continue;
+                        }
+                        const startedAtMs = Number(job?.startedAt || 0) || 0;
+                        if (startedAtMs > 0 && (Date.now() - startedAtMs) > SUBJECT_IMAGE_JOB_MAX_RUNNING_MS) {
+                            await forceClearSubjectImageJob(
+                                entityId,
+                                job,
+                                `running longer than ${Math.round(SUBJECT_IMAGE_JOB_MAX_RUNNING_MS / 60000)} minutes`
+                            );
+                            continue;
+                        }
+                        statusUpdates[String(entityId)] = {
+                            status,
+                            statusFailureCount: 0,
+                            lastStatusError: '',
+                            lastPolledAt: Date.now(),
+                        };
+                        continue;
+                    }
+
+                    if (status === 'succeeded' || status === 'completed') {
+                        let recoveredUrl = '';
+                        if (projectId) {
+                            try {
+                                recoveredUrl = await refreshPersistedSubjectEntityImage(entityId);
+                            } catch (refreshErr) {
+                                console.warn('Failed to refresh entity after succeeded image job without result URL', refreshErr);
+                            }
+                        }
+                        if (getCurrentJobEntry(entityId, jobId)) {
+                            clearLocalSubjectImageJobState(entityId);
+                        }
+                        if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
+                            onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                        }
+                        continue;
+                    }
+
+                    if (status === 'failed' || status === 'canceled' || status === 'cancelled' || status === 'error') {
+                        if (getCurrentJobEntry(entityId, jobId)) {
+                            clearLocalSubjectImageJobState(entityId);
+                        }
+                        if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'failed') && onLog) {
+                            onLog(t(`主体生成失败：${job?.entityName || entityId} - ${statusResp?.error || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${statusResp?.error || status}`), 'error');
+                        }
+                        continue;
+                    }
+                }
+
+                if (isActivePoll() && Object.keys(statusUpdates).length > 0) {
+                    setSubjectImageJobs(prev => {
+                        const base = { ...(prev || {}) };
+                        let changed = false;
+                        for (const [entityId, patch] of Object.entries(statusUpdates)) {
+                            const existing = base[String(entityId)];
+                            if (!existing) continue;
+                            const nextEntry = {
+                                ...existing,
+                                ...patch,
+                            };
+                            const patchChanged = Object.keys(nextEntry).some((key) => nextEntry[key] !== existing[key]);
+                            if (!patchChanged) continue;
+                            base[String(entityId)] = {
+                                ...nextEntry,
+                            };
+                            changed = true;
+                        }
+                        return changed ? base : prev;
+                    });
+                }
+
+                if (isActivePoll() && completed.length > 0) {
+                    setSubjectImageJobs(prev => {
+                        const next = { ...(prev || {}) };
+                        completed.forEach((entityId) => {
+                            delete next[String(entityId)];
+                        });
+                        return next;
+                    });
+                }
+            } finally {
+                subjectImageJobPollingRef.current = false;
+            }
+        };
+
+        void pollOnce();
+        const timer = setInterval(() => {
+            void pollOnce();
+        }, 2500);
+
+        return () => {
+            disposed = true;
+            if (subjectImageJobPollTokenRef.current === pollToken) {
+                subjectImageJobPollTokenRef.current += 1;
+            }
+            clearInterval(timer);
+        };
+    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, subjectImageJobs, t]);
+
+    const openMediaPicker = (callback, context = {}) => {
+        setPickerConfig({ isOpen: true, callback, context });
+    };
+
+    // Load entities - NOW FETCHES ALL and filters locally
+    const loadEntities = useCallback(async () => {
+        if (!projectId) return [];
+        setEntityListLoading(true);
+        try {
+            const data = await fetchEntities(projectId); // Fetch ALL types
+            const processedData = Array.isArray(data) ? data.map(item => {
+                if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
+                    return { ...item, type: 'poster' };
+                }
+                return item;
+            }) : [];
+            setAllEntities(processedData);
+            return processedData;
+        } catch (e) {
+            console.error(e);
+            return [];
+        } finally {
+            setEntityListLoading(false);
+        }
+    }, [projectId]);
+
+    const awaitShotGenerationEntities = useCallback(async () => {
+        if (!projectId) return Array.isArray(entities) ? entities : [];
+        if (Array.isArray(entities) && entities.length > 0 && !entityListLoading) {
+            return entities;
+        }
+        const loaded = await loadEntities();
+        if (Array.isArray(loaded) && loaded.length > 0) {
+            return loaded;
+        }
+        return Array.isArray(entities) ? entities : [];
+    }, [entities, entityListLoading, loadEntities, projectId]);
+
+    useEffect(() => {
+        loadEntities();
+    }, [loadEntities]);
+
+    // Local Filtering based on subTab
+    useEffect(() => {
+        setEntities(allEntities.filter(e => e.type === subTab));
+    }, [allEntities, subTab]);
+
+    const subjectCategoryStats = useMemo(() => {
+        return allEntities.reduce((stats, entity) => {
+            const entityType = String(entity?.type || '').toLowerCase();
+            if (Object.prototype.hasOwnProperty.call(stats, entityType)) {
+                stats[entityType].total += 1;
+                if (entity.image_url) {
+                    stats[entityType].generated += 1;
+                }
+            }
+            return stats;
+        }, { 
+            character: { total: 0, generated: 0 }, 
+            environment: { total: 0, generated: 0 }, 
+            prop: { total: 0, generated: 0 }, 
+            poster: { total: 0, generated: 0 } 
+        });
+    }, [allEntities]);
+
+    // Create Entity
+    const [isAnalyzingEntity, setIsAnalyzingEntity] = useState(false);
+    const [isCopyingEntity, setIsCopyingEntity] = useState(false);
+
+    const handleAnalyzeEntity = async (entity) => {
+        if (!entity || !entity.id || !entity.image_url) {
+            alert("No entity or image selected.");
+            return;
+        }
+
+        const formatEntityAnalysisError = (error) => {
+            const detail = error?.response?.data?.detail;
+            if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+                const parts = [
+                    detail.message,
+                    detail.code,
+                    detail.stage,
+                    (detail.provider || detail.model)
+                        ? `provider=${detail.provider || 'unknown'} model=${detail.model || 'unknown'}`
+                        : '',
+                ].filter(Boolean);
+                if (parts.length > 0) return parts.join(' | ');
+                try {
+                    return JSON.stringify(detail);
+                } catch {
+                    return error?.message || 'Unknown analysis error';
+                }
+            }
+            return detail || error?.message || 'Unknown analysis error';
+        };
+        
+        setIsAnalyzingEntity(true);
+        if (onLog) onLog(`Analyzing image for subject ${entity.name}...`, "process");
+        
+        try {
+            const updated = await analyzeEntityImage(entity.id);
+            setSelectedEntity(prev => (prev?.id === updated.id ? updated : prev));
+            setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
+            setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+            setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+            if (onLog) onLog("Subject updated from analysis.", "success");
+        } catch (e) {
+            console.error(e);
+            alert("Analysis failed: " + formatEntityAnalysisError(e));
+            if (onLog) onLog("Analysis failed.", "error");
+        } finally {
+            setIsAnalyzingEntity(false);
+        }
+    };
+
+    const collectAssetUrlTokens = useCallback((rawUrl) => {
+        const tokens = new Set();
+        const stableRaw = String(rawUrl || '').trim();
+        if (!stableRaw) return tokens;
+
+        const pushToken = (value) => {
+            const stable = String(value || '').trim().toLowerCase();
+            if (!stable) return;
+            tokens.add(stable);
+        };
+
+        pushToken(stableRaw);
+
+        let parsedPath = '';
+        try {
+            const parsed = new URL(stableRaw, window.location.origin);
+            parsedPath = decodeURIComponent(String(parsed.pathname || '')).trim();
+        } catch {
+            try {
+                parsedPath = decodeURIComponent(stableRaw).trim();
+            } catch {
+                parsedPath = stableRaw;
+            }
+        }
+
+        if (!parsedPath) return tokens;
+
+        pushToken(parsedPath);
+        const stripped = parsedPath.replace(/^\/+/, '');
+        pushToken(stripped);
+
+        if (parsedPath.includes('/uploads/')) {
+            const idx = parsedPath.indexOf('/uploads/');
+            const tail = parsedPath.slice(idx + '/uploads/'.length);
+            pushToken(tail);
+            pushToken(`uploads/${tail}`);
+        }
+
+        if (stripped.startsWith('uploads/')) {
+            pushToken(stripped.slice('uploads/'.length));
+        }
+
+        const segments = parsedPath.split('/').filter(Boolean);
+        if (segments.length > 0) {
+            pushToken(segments[segments.length - 1]);
+        }
+
+        return tokens;
+    }, []);
+
+    const buildUploadedImageTokenSet = useCallback(async () => {
+        const tokenSet = new Set();
+        const assetRows = await fetchAssets();
+        const imageAssets = Array.isArray(assetRows) ? assetRows.filter((item) => String(item?.type || '').toLowerCase() === 'image') : [];
+        imageAssets.forEach((asset) => {
+            const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+            const source = String(meta?.source || '').trim().toLowerCase();
+            if (source !== 'file_upload') return;
+            const tokens = collectAssetUrlTokens(asset?.url);
+            tokens.forEach((token) => tokenSet.add(token));
+        });
+        return tokenSet;
+    }, [collectAssetUrlTokens]);
+
+    const isUserUploadedEntityImage = useCallback((entity, uploadedTokenSet) => {
+        if (!entity || !entity.id) return false;
+        const imageUrl = String(entity?.image_url || '').trim();
+        if (!imageUrl) return false;
+        const tokenSet = uploadedTokenSet instanceof Set ? uploadedTokenSet : new Set();
+        if (tokenSet.size === 0) return false;
+        const tokens = collectAssetUrlTokens(imageUrl);
+        for (const token of tokens) {
+            if (tokenSet.has(token)) return true;
+        }
+        return false;
+    }, [collectAssetUrlTokens]);
+
+    const getEntityCustomAttributes = useCallback((entity) => {
+        const raw = entity?.custom_attributes;
+        if (!raw) return {};
+        if (typeof raw === 'string') {
+            try {
+                const parsed = JSON.parse(raw);
+                return parsed && typeof parsed === 'object' ? parsed : {};
+            } catch {
+                return {};
+            }
+        }
+        return typeof raw === 'object' ? raw : {};
+    }, []);
+
+    const isEntityAnalyzed = useCallback((entity) => {
+        const attrs = getEntityCustomAttributes(entity);
+        const analysisResult = attrs?.analysis_result;
+        if (!analysisResult) return false;
+
+        if (typeof analysisResult === 'string') {
+            return analysisResult.trim().length > 0;
+        }
+
+        if (typeof analysisResult !== 'object') {
+            return false;
+        }
+
+        const content = analysisResult.content;
+        if (typeof content === 'string') {
+            return content.trim().length > 0;
+        }
+        if (Array.isArray(content)) {
+            return content.length > 0;
+        }
+        if (content && typeof content === 'object') {
+            return Object.keys(content).length > 0;
+        }
+
+        return Object.keys(analysisResult).length > 0;
+    }, [getEntityCustomAttributes]);
+
+    const handleBatchAnalyzeExistingSubjects = async () => {
+        const runtimeSnapshot = getSubjectBatchSnapshot();
+        if (runtimeSnapshot?.analyze?.running && runtimeSnapshot?.analyze?.scopeKey === subjectBatchScopeKey) {
+            alert(t('批量提示词反推任务正在运行中，请稍候。', 'Batch prompt reverse task is already running.'));
+            return;
+        }
+
+        if (runtimeSnapshot?.reconstruct?.running && runtimeSnapshot?.reconstruct?.scopeKey === subjectBatchScopeKey) {
+            alert(t('批量参考生图任务正在运行中，请稍候。', 'Batch reference image generation task is already running.'));
+            return;
+        }
+
+        if (isBatchReconstructingEntities) {
+            alert(t('批量参考生图任务正在运行中，请稍候。', 'Batch reference image generation task is already running.'));
+            return;
+        }
+
+        let uploadedImageTokens = new Set();
+        try {
+            uploadedImageTokens = await buildUploadedImageTokenSet();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
+            alert(t(`读取上传资产失败：${detail}`, `Failed to load uploaded assets: ${detail}`));
+            return;
+        }
+
+        const hasImageEntities = allEntities.filter(item => item?.id && String(item?.image_url || '').trim());
+        const targets = hasImageEntities.filter((item) => isUserUploadedEntityImage(item, uploadedImageTokens));
+        const skippedSystemCount = Math.max(0, hasImageEntities.length - targets.length);
+        if (targets.length === 0) {
+            alert(t('当前没有可分析的“用户上传图片”主体。系统生成图片将被自动跳过。', 'No user-uploaded subject images available for analysis. System-generated images are skipped.'));
+            return;
+        }
+
+        const confirmed = await confirmUiMessage(t(
+            `将批量提示词反推并反写 ${targets.length} 个“用户上传图片”主体信息${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `Run batch prompt reverse and write back metadata for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
+        ));
+        if (!confirmed) return;
+
+        subjectBatchAnalyzeStopRequestedRef.current = false;
+        const batchSessionId = `subject-analyze-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        subjectBatchAnalyzeSessionRef.current = batchSessionId;
+
+        updateAnalyzeBatchRuntimeState(true, { current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
+
+        let successCount = 0;
+        let failedCount = 0;
+        let processedCount = 0;
+
+        try {
+            const shouldStopBatchAnalyze = () => (
+                subjectBatchAnalyzeSessionRef.current !== batchSessionId
+                || subjectBatchAnalyzeStopRequestedRef.current
+            );
+            let nextTargetIndex = 0;
+            const workerCount = Math.max(1, Math.min(SUBJECT_BATCH_PARALLEL_LIMIT, targets.length));
+
+            const runAnalyzeWorker = async () => {
+                while (!shouldStopBatchAnalyze()) {
+                    const targetIndex = nextTargetIndex;
+                    nextTargetIndex += 1;
+                    const entity = targets[targetIndex];
+                    if (!entity) return;
+
+                    const entityLabel = entity?.name || entity?.name_en || entity?.id;
+                    updateAnalyzeBatchRuntimeState(true, {
+                        current: Math.min(processedCount + 1, targets.length),
+                        total: targets.length,
+                        status: t(`分析中：${entityLabel}`, `Analyzing: ${entityLabel}`),
+                    });
+
+                    try {
+                        const updated = await analyzeEntityImage(entity.id);
+                        if (shouldStopBatchAnalyze()) {
+                            continue;
+                        }
+                        setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+                        setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+                        setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
+                        successCount += 1;
+                    } catch (error) {
+                        if (shouldStopBatchAnalyze()) {
+                            continue;
+                        }
+                        failedCount += 1;
+                        if (onLog) {
+                            onLog(
+                                t(
+                                    `批量提示词反推失败：${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`,
+                                    `Batch prompt reverse failed: ${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`
+                                ),
+                                'error'
+                            );
+                        }
+                    } finally {
+                        processedCount += 1;
+                        updateAnalyzeBatchRuntimeState(true, {
+                            current: processedCount,
+                            total: targets.length,
+                            status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
+                        });
+                    }
+                }
+            };
+
+            await Promise.allSettled(Array.from({ length: workerCount }, () => runAnalyzeWorker()));
+
+            if (subjectBatchAnalyzeSessionRef.current !== batchSessionId || subjectBatchAnalyzeStopRequestedRef.current) {
+                const stoppedSummary = t(
+                    `批量提示词反推已停止：成功 ${successCount}，失败 ${failedCount}`,
+                    `Batch prompt reverse stopped: ${successCount} succeeded, ${failedCount} failed`
+                );
+                if (onLog) onLog(stoppedSummary, 'warning');
+                alert(stoppedSummary);
+                return;
+            }
+
+            const summary = t(
+                `批量提示词反推完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
+                `Batch prompt reverse complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
+            );
+            if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
+            alert(summary);
+        } finally {
+            if (subjectBatchAnalyzeSessionRef.current === batchSessionId) {
+                subjectBatchAnalyzeSessionRef.current = '';
+            }
+            subjectBatchAnalyzeStopRequestedRef.current = false;
+            updateAnalyzeBatchRuntimeState(false, null);
+        }
+    };
+
+    const reconstructEntityAssetCore = useCallback(async (entity, onProgress, runtimeOptions = null) => {
+        const progress = typeof onProgress === 'function' ? onProgress : () => {};
+        const shouldStop = typeof runtimeOptions?.shouldStop === 'function' ? runtimeOptions.shouldStop : () => false;
+        const onJobCreated = typeof runtimeOptions?.onJobCreated === 'function' ? runtimeOptions.onJobCreated : null;
+
+        if (shouldStop()) {
+            throw new Error('__subject_batch_stop__');
+        }
+
+        const setStep = (step, zh, en, percent) => {
+            progress({ step, label: t(zh, en), percent: Number(percent || 0) });
+        };
+
+        setStep('analyzing', '正在分析当前图片...', 'Analyzing current image...', 20);
+        const analyzed = await analyzeEntityImage(entity.id);
+        if (shouldStop()) {
+            throw new Error('__subject_batch_stop__');
+        }
+        setViewingEntity(prev => (prev?.id === analyzed.id ? analyzed : prev));
+        setEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
+        setAllEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
+
+        setStep('prompt', '正在整理新的提示词...', 'Refining prompt...', 55);
+
+        const epInfo = currentEpisode?.episode_info || {};
+        const preferredImageSize = getEpisodePreferredImageSize(epInfo);
+        let rawPrompt = getEntityPromptByLang(analyzed, resolvedPromptSubmitLang);
+        if (!rawPrompt && analyzed.description) {
+            const match = analyzed.description.match(/Prompt:\s*(.*)/);
+            if (match && match[1]) {
+                rawPrompt = match[1].trim();
+            }
+        }
+
+        let finalPrompt = processPrompt(rawPrompt, epInfo, allEntities) || rawPrompt || '';
+        const infoSource = epInfo.e_global_info || epInfo;
+        const suffixes = [
+            infoSource?.type,
+            infoSource?.lighting,
+            infoSource?.tech_params?.visual_standard?.quality,
+        ].filter(Boolean);
+        if (suffixes.length > 0) {
+            finalPrompt = `${finalPrompt}${finalPrompt ? ', ' : ''}${suffixes.join(', ')}`;
+        }
+        finalPrompt = prependEntityGlobalStyleToPromptHead(finalPrompt, { injectIfMissing: true });
+
+        const primaryRefUrl = String(analyzed?.image_url || entity?.image_url || '').trim();
+        const depUrls = [];
+        const deps = parseVisualDependencies(analyzed.visual_dependencies);
+        deps.forEach(dep => {
+            const depValue = String(dep).trim();
+            const depNormalized = normalizeEntityToken(depValue);
+            const target = allEntities.find(e => {
+                if (!e) return false;
+                if (String(e.id).trim() === depValue) return true;
+                if (normalizeEntityToken(e.name || '') === depNormalized) return true;
+                if (normalizeEntityToken(e.name_en || '') === depNormalized) return true;
+                return false;
+            });
+            if (target?.image_url) depUrls.push(target.image_url);
+        });
+        const combinedRefs = [primaryRefUrl, ...depUrls]
+            .map(url => String(url || '').trim())
+            .filter(Boolean);
+        const uniqueRefs = [...new Set(combinedRefs)];
+
+        if (shouldStop()) {
+            throw new Error('__subject_batch_stop__');
+        }
+
+        setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
+        const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+            project_id: projectId,
+            episode_id: currentEpisode?.id,
+            entity_id: analyzed?.id,
+            entity_name: analyzed?.name || analyzed?.name_en,
+            subject_name: analyzed?.name || analyzed?.name_en,
+            subject_type: analyzed?.type,
+            entity_type: analyzed?.type,
+            prompt_language: resolvedPromptSubmitLang,
+            asset_type: 'subject',
+            ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+            negative_prompt: buildEntityNegativePrompt(rawPrompt, analyzed || entity, allEntities),
+            ...(onJobCreated ? { on_job_created: onJobCreated } : {})
+        });
+
+        if (shouldStop()) {
+            throw new Error('__subject_batch_stop__');
+        }
+
+        if (!asset?.url) {
+            throw new Error(t('生成结果缺少图片地址', 'Generated result missing image URL'));
+        }
+
+        let resolvedAssetUrl = String(asset.url || '').trim();
+        if (isEphemeralProviderMediaUrl(resolvedAssetUrl)) {
+            if (onLog) {
+                onLog(
+                    t(
+                        `主体重构返回了临时图片地址，正在等待稳定图片入库：${analyzed?.name || analyzed?.name_en || analyzed?.id}`,
+                        `Subject reconstruction returned a temporary image URL; waiting for durable image persistence: ${analyzed?.name || analyzed?.name_en || analyzed?.id}`
+                    ),
+                    'process'
+                );
+            }
+            resolvedAssetUrl = await awaitPersistedSubjectEntityImage(analyzed.id, {
+                initialUrl: resolvedAssetUrl,
+                entityName: analyzed?.name || analyzed?.name_en || analyzed?.id,
+            });
+            if (!resolvedAssetUrl) {
+                throw new Error(t('等待主体稳定图片地址超时', 'Timed out waiting for durable subject image URL'));
+            }
+        }
+
+        await updateEntity(analyzed.id, { image_url: resolvedAssetUrl });
+        const updatedEntity = { ...analyzed, image_url: resolvedAssetUrl };
+        setViewingEntity(prev => (prev?.id === updatedEntity.id ? updatedEntity : prev));
+        setEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
+        setAllEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
+
+        setStep('done', '重构完成', 'Refactor completed', 100);
+        return updatedEntity;
+    }, [allEntities, awaitPersistedSubjectEntityImage, currentEpisode?.episode_info, currentEpisode?.id, getEntityPromptByLang, isEphemeralProviderMediaUrl, onLog, prependEntityGlobalStyleToPromptHead, projectId, resolvedPromptSubmitLang, t]);
+
+    const handleBatchAnalyzeAndReconstructSubjects = async () => {
+        const runtimeSnapshot = getSubjectBatchSnapshot();
+        if (
+            (runtimeSnapshot?.generate?.running && runtimeSnapshot?.generate?.scopeKey === subjectBatchScopeKey) ||
+            (runtimeSnapshot?.analyze?.running && runtimeSnapshot?.analyze?.scopeKey === subjectBatchScopeKey) ||
+            (runtimeSnapshot?.reconstruct?.running && runtimeSnapshot?.reconstruct?.scopeKey === subjectBatchScopeKey) ||
+            isBatchGeneratingEntities ||
+            isBatchAnalyzingEntities ||
+            isReconstructingEntity
+        ) {
+            alert(t('有其他批量任务正在运行，请稍后。', 'Another batch task is running. Please wait.'));
+            return;
+        }
+
+        let uploadedImageTokens = new Set();
+        try {
+            uploadedImageTokens = await buildUploadedImageTokenSet();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
+            alert(t(`读取上传资产失败：${detail}`, `Failed to load uploaded assets: ${detail}`));
+            return;
+        }
+
+        const hasImageEntities = allEntities.filter(item => item?.id && String(item?.image_url || '').trim());
+        const targets = hasImageEntities.filter((item) => isUserUploadedEntityImage(item, uploadedImageTokens));
+        const skippedSystemCount = Math.max(0, hasImageEntities.length - targets.length);
+        if (targets.length === 0) {
+            alert(t('当前没有可执行“批量参考生图”的用户上传图片主体。', 'No user-uploaded subject images available for batch reference image generation.'));
+            return;
+        }
+
+        const confirmed = await confirmUiMessage(t(
+            `将对 ${targets.length} 个“用户上传图片”主体执行“批量参考生图”${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `Run batch reference image generation for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
+        ));
+        if (!confirmed) return;
+
+        subjectBatchReconstructStopRequestedRef.current = false;
+        const batchSessionId = `subject-reference-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        subjectBatchReconstructSessionRef.current = batchSessionId;
+
+        updateReconstructBatchRuntimeState(true, { current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
+
+        let successCount = 0;
+        let failedCount = 0;
+        let processedCount = 0;
+
+        try {
+            const shouldStopBatchReconstruct = () => (
+                subjectBatchReconstructSessionRef.current !== batchSessionId
+                || subjectBatchReconstructStopRequestedRef.current
+            );
+            let nextTargetIndex = 0;
+            const workerCount = Math.max(1, Math.min(SUBJECT_BATCH_PARALLEL_LIMIT, targets.length));
+
+            const runReconstructWorker = async () => {
+                while (!shouldStopBatchReconstruct()) {
+                    const targetIndex = nextTargetIndex;
+                    nextTargetIndex += 1;
+                    const entity = targets[targetIndex];
+                    if (!entity) return;
+
+                    const entityLabel = entity?.name || entity?.name_en || entity?.id;
+                    updateReconstructBatchRuntimeState(true, {
+                        current: Math.min(processedCount + 1, targets.length),
+                        total: targets.length,
+                        status: t(
+                            `处理中：${entityLabel}`,
+                            `Processing: ${entityLabel}`
+                        ),
+                    });
+
+                    let createdJobId = '';
+                    try {
+                        const updated = await reconstructEntityAssetCore(entity, null, {
+                            shouldStop: shouldStopBatchReconstruct,
+                            onJobCreated: (jobId) => {
+                                const stableJobId = String(jobId || '').trim();
+                                if (!stableJobId) return;
+                                createdJobId = stableJobId;
+                                if (shouldStopBatchReconstruct()) {
+                                    void stopGenerationJob('image', stableJobId, { force: true });
+                                    return;
+                                }
+                                trackSubjectBatchImageJob('reconstruct', entity, stableJobId);
+                            },
+                        });
+
+                        if (shouldStopBatchReconstruct()) {
+                            continue;
+                        }
+
+                        if (!updated?.id) {
+                            throw new Error('Reconstructed subject result missing entity payload');
+                        }
+                        successCount += 1;
+                    } catch (error) {
+                        if (shouldStopBatchReconstruct() || isSubjectBatchStopSignal(error)) {
+                            continue;
+                        }
+                        failedCount += 1;
+                        if (onLog) {
+                            onLog(
+                                t(
+                                    `批量参考生图失败：${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`,
+                                    `Batch reference image generation failed: ${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`
+                                ),
+                                'error'
+                            );
+                        }
+                    } finally {
+                        if (createdJobId) {
+                            untrackSubjectBatchImageJob('reconstruct', entity?.id);
+                        }
+                        processedCount += 1;
+                        updateReconstructBatchRuntimeState(true, {
+                            current: processedCount,
+                            total: targets.length,
+                            status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
+                        });
+                    }
+                }
+            };
+
+            await Promise.allSettled(Array.from({ length: workerCount }, () => runReconstructWorker()));
+
+            if (subjectBatchReconstructSessionRef.current !== batchSessionId || subjectBatchReconstructStopRequestedRef.current) {
+                const stoppedSummary = t(
+                    `批量参考生图已停止：成功 ${successCount}，失败 ${failedCount}`,
+                    `Batch reference image generation stopped: ${successCount} succeeded, ${failedCount} failed`
+                );
+                if (onLog) onLog(stoppedSummary, 'warning');
+                alert(stoppedSummary);
+                return;
+            }
+
+            const summary = t(
+                `批量参考生图完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
+                `Batch reference image generation complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
+            );
+            if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
+            alert(summary);
+        } finally {
+            if (subjectBatchReconstructSessionRef.current === batchSessionId) {
+                subjectBatchReconstructSessionRef.current = '';
+            }
+            subjectBatchReconstructActiveJobsRef.current.clear();
+            setSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                targets.forEach((entity) => {
+                    const stableEntityId = String(entity?.id || '').trim();
+                    if (!stableEntityId) return;
+                    const existing = next[stableEntityId];
+                    if (!existing) return;
+                    if (String(existing?.jobKind || 'reconstruct').trim() !== 'reconstruct') return;
+                    delete next[stableEntityId];
+                });
+                return next;
+            });
+            setStoppingSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                targets.forEach((entity) => {
+                    const stableEntityId = String(entity?.id || '').trim();
+                    if (!stableEntityId) return;
+                    delete next[stableEntityId];
+                });
+                return next;
+            });
+            clearPendingSubjectBatchImagePlaceholders();
+            subjectBatchReconstructStopRequestedRef.current = false;
+            updateReconstructBatchRuntimeState(false, null);
+        }
+    };
+
+    const handleReconstructEntityAsset = async (entity) => {
+        if (!entity || !entity.id || !entity.image_url) {
+            alert(t('请先为主体选择一张现有图片再重构。', 'Please select an existing subject image before refactoring.'));
+            return;
+        }
+
+        if (!await confirmUiMessage(t(
+            `将基于当前图片分析并重写提示词，然后重新生成 ${entity.name || '该主体'} 的图片。是否继续？`,
+            `This will analyze the current image, rewrite prompt, and regenerate image for ${entity.name || 'this subject'}. Continue?`
+        ))) return;
+
+        setIsReconstructingEntity(true);
+        setReconstructProgress({ step: 'analyzing', label: t('正在分析当前图片...', 'Analyzing current image...'), percent: 20 });
+        if (onLog) onLog(`Refactoring subject asset: ${entity.name || entity.name_en || entity.id}`, 'process');
+
+        try {
+            await reconstructEntityAssetCore(entity, (progress) => {
+                setReconstructProgress(progress);
+            });
+            if (onLog) onLog(`Subject asset refactor completed: ${entity.name || entity.name_en || entity.id}`, 'success');
+        } catch (e) {
+            console.error(e);
+            alert(t('资产重构失败：', 'Asset refactor failed: ') + (e.response?.data?.detail || e.message));
+            if (onLog) onLog(`Subject asset refactor failed: ${entity.name || entity.name_en || entity.id}`, 'error');
+        } finally {
+            setIsReconstructingEntity(false);
+            setTimeout(() => setReconstructProgress(null), 1200);
+        }
+    };
+
+    const handleCreate = async () => {
+        // Create a temporary "New Entity" state to open the modal in "Create Mode"
+        // We use a special ID 'new' to signal that this is not yet in DB
+        setViewingEntity({
+            id: 'new',
+            name: '',
+            type: subTab,
+            description: '',
+            anchor_description: '',
+            generation_prompt_en: '',
+            generation_prompt_cn: '',
+            appearance_cn: '',
+            clothing: '',
+            visual_params: '',
+            atmosphere: '',
+            narrative_description: '',
+            name_en: '',
+            role: '',
+            archetype: '',
+            gender: ''
+        });
+    };
+
+    // Helper: Update Field (Sync to DB if not new)
+    const handleFieldUpdate = (field, value) => {
+        if (!viewingEntity) return;
+        
+        // Always update local viewing state
+        setViewingEntity(prev => ({ ...prev, [field]: value }));
+
+        // Only sync to server if it's an existing entity
+        if (viewingEntity.id !== 'new') {
+            const updated = { ...viewingEntity, [field]: value };
+            
+            // Optimistic Update
+            setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+            setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+            
+            updateEntity(updated.id, { [field]: value }).catch(console.error);
+        }
+    };
+
+    // Helper: Commit Create (Save manually)
+    const handleCommitCreate = async () => {
+        if (!viewingEntity || !viewingEntity.name) {
+            alert("Name is required");
+            return;
+        }
+        try {
+            // Must clone and remove the 'new' ID
+            const payload = { ...viewingEntity };
+            delete payload.id; 
+            
+            const newEnt = await createEntity(projectId, payload);
+            
+            // Update local state with real object (and real ID)
+            setAllEntities(prev => [...prev, newEnt]);
+            
+            // If current tab matches, show it
+            if (newEnt.type === subTab) {
+                setEntities(prev => [...prev, newEnt]);
+            }
+            
+            // Switch view to the real entity (no longer 'new')
+            setViewingEntity(newEnt);
+            alert("Subject Created Successfully!");
+        } catch (e) {
+            console.error(e);
+            alert("Failed to create subject: " + e.message);
+        }
+    };
+
+    const handleCopyEntityWithLLM = async (entity) => {
+        if (!entity || !entity.id || !projectId) return;
+
+        const instruction = await promptUiMessage(
+            t('描述你希望如何基于当前主体生成一个新主体（将保留原提示词结构，仅改写内容差异）', 'Describe how to generate a new subject from this one (the original prompt structure will be preserved, only content deltas will be rewritten).'),
+            {
+                title: t('复制并 AI 生成主体', 'Copy + AI Generate Subject'),
+                confirmText: t('开始生成', 'Generate'),
+                cancelText: t('取消', 'Cancel'),
+                placeholder: t('例如：保留服装结构与镜头结构，改为雨夜、疲惫神态、手持破损公文包', 'Example: Keep wardrobe and camera structure, change to rainy night, exhausted expression, holding a damaged briefcase'),
+            }
+        );
+
+        const stableInstruction = String(instruction || '').trim();
+        if (!stableInstruction) return;
+
+        const newNameHintInput = await promptUiMessage(
+            t('可选：输入新主体名称（留空则由系统自动命名）', 'Optional: Enter a new subject name (leave empty for auto naming).'),
+            {
+                title: t('新主体名称（可选）', 'New Subject Name (Optional)'),
+                confirmText: t('继续', 'Continue'),
+                cancelText: t('取消', 'Cancel'),
+                placeholder: t('例如：林月_雨夜版', 'Example: LinYue_RainyNight'),
+            }
+        );
+
+        if (newNameHintInput === null) return;
+        const newNameHint = String(newNameHintInput || '').trim();
+
+        setIsCopyingEntity(true);
+        if (onLog) onLog(t(`主体复制生成中：${entity.name || entity.name_en || entity.id}`, `Copying subject with AI: ${entity.name || entity.name_en || entity.id}`), 'process');
+        try {
+            const created = await cloneEntityWithLLM(projectId, entity.id, {
+                modification_instruction: stableInstruction,
+                new_name_hint: newNameHint || null,
+            });
+
+            const refreshed = await loadEntities();
+            const stableCreatedId = String(created?.id || '').trim();
+            const hydrated = (Array.isArray(refreshed) ? refreshed : []).find((item) => String(item?.id || '').trim() === stableCreatedId);
+            const nextEntity = hydrated || created;
+
+            if (String(nextEntity?.type || '').trim()) {
+                setSubTab(String(nextEntity.type).trim());
+            }
+            setViewingEntity(nextEntity);
+            setSelectedEntity((prev) => {
+                const prevId = String(prev?.id || '').trim();
+                return prevId && prevId === stableCreatedId ? nextEntity : prev;
+            });
+
+            if (onLog) onLog(t(`主体复制生成成功：${created?.name || created?.id}`, `Subject cloned successfully: ${created?.name || created?.id}`), 'success');
+        } catch (e) {
+            console.error(e);
+            alert(t('主体复制生成失败：', 'Subject clone failed: ') + (e?.response?.data?.detail || e?.message || 'Unknown error'));
+            if (onLog) onLog(t('主体复制生成失败', 'Subject clone failed'), 'error');
+        } finally {
+            setIsCopyingEntity(false);
+        }
+    };
+
+
+    // Delete Entity
+    const handleDeleteEntity = async (e, entity) => {
+        e.stopPropagation();
+        if (!await confirmUiMessage(`Are you sure you want to delete ${entity.name}?`)) return;
+        try {
+            await deleteEntity(entity.id);
+            loadEntities();
+            if (viewingEntity?.id === entity.id) setViewingEntity(null);
+        } catch (e) {
+            console.error(e);
+            alert(`Failed to delete entity: ${e?.message || 'Unknown error'}`);
+        }
+    };
+
+    const handleDeleteAllEntities = async () => {
+        if (!await confirmUiMessage("WARNING: This will delete ALL subjects/entities in this library. This action cannot be undone. Are you sure?")) return;
+        try {
+            await deleteAllEntities(projectId);
+            loadEntities();
+            setViewingEntity(null);
+        } catch (e) {
+            console.error(e);
+            alert(`Failed to delete all entities: ${e?.message || 'Unknown error'}`);
+        }
+    };
+    
+    // Open Image Modal
+    const handleOpenImageModal = (entity, defaultTab = 'library') => {
+        if (defaultTab !== 'generate' && isSubjectImageActionLocked(entity)) {
+            notifySubjectImageActionLocked(entity);
+            return;
+        }
+        setSelectedEntity(entity);
+        setImageModalTab(defaultTab); // This might cause render before prompt is set?
+        setImageSelectAction('direct_use');
+        setTempPromptSubmitLang('');
+        setShowPromptLangMenu(false);
+        setAssetKeyword('');
+        setAssetImageTypeFilter('all');
+        const currentProjectKey = String(projectId || '').trim();
+        setAssetProjectFilter(currentProjectKey || 'all');
+        
+        const cnPrompt = buildProcessedEntityPrompt(entity, 'cn');
+        const enPrompt = buildProcessedEntityPrompt(entity, 'en');
+        const openingLang = resolvedPromptSubmitLang === 'cn' ? 'cn' : 'en';
+
+        setPromptDrafts({ cn: cnPrompt, en: enPrompt });
+        setPrompt(openingLang === 'cn' ? cnPrompt : enPrompt);
+        setShowImageModal(true); // Show AFTER setting everything
+
+        setRefImage(null);
+        setRefSelectionMode(null); 
+        loadAssets();
+    };
+
+    useEffect(() => {
+        if (!showImageModal || imageModalTab !== 'generate') return;
+        const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
+        const currentDraft = String(promptDrafts?.[currentLang] || '').trim();
+        setPrompt(currentDraft);
+    }, [effectivePromptSubmitLang, imageModalTab, showImageModal, promptDrafts]);
+
+    useEffect(() => {
+        if (!showImageModal) return;
+        if (!selectedEntity?.id) return;
+        if (!isSubjectImageActionLocked(selectedEntity)) return;
+        if (imageModalTab === 'generate') return;
+        setImageModalTab('generate');
+    }, [imageModalTab, isSubjectImageActionLocked, selectedEntity, showImageModal]);
+
+    // Load Assets
+    const loadAssets = async () => {
+        setAssetsLoading(true);
+        try {
+            const data = await fetchAssets();
+            const imageAssets = data.filter(a => a.type === 'image');
+            setAssets(imageAssets);
+
+            const currentProjectKey = String(projectId || '').trim();
+            if (!currentProjectKey) return;
+
+            const hasCurrentProjectAssets = imageAssets.some((asset) => {
+                const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+                return String(meta.project_id || '').trim() === currentProjectKey;
+            });
+            if (hasCurrentProjectAssets) {
+                setAssetProjectFilter(currentProjectKey);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setAssetsLoading(false);
+        }
+    };
+
+    const getAssetMeta = useCallback((asset) => {
+        if (!asset || typeof asset !== 'object') return {};
+        const meta = asset.meta_info;
+        return meta && typeof meta === 'object' ? meta : {};
+    }, []);
+
+    const getAssetProjectId = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const idVal = meta.project_id;
+        return String(idVal || '').trim();
+    }, [getAssetMeta]);
+
+    const getAssetProjectLabel = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const projectId = String(meta.project_id || '').trim();
+        const projectTitle = String(meta.project_title || '').trim();
+        if (projectTitle && projectId) return `${projectTitle} (#${projectId})`;
+        if (projectTitle) return projectTitle;
+        if (projectId) return `Project #${projectId}`;
+        return t('未标注项目', 'Unassigned Project');
+    }, [getAssetMeta, t]);
+
+    const getAssetImageType = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const source = String(meta.source || '').trim().toLowerCase();
+        if (source === 'file_upload') return 'uploaded_asset';
+        return String(
+            meta.asset_type ||
+            meta.frame_type ||
+            meta.subject_type ||
+            meta.entity_type ||
+            meta.category ||
+            ''
+        ).trim().toLowerCase();
+    }, [getAssetMeta]);
+
+    const getAssetImageTypeLabel = useCallback((typeName) => {
+        const normalized = String(typeName || '').trim().toLowerCase();
+        if (normalized === 'uploaded_asset') {
+            return t('上传资产', 'Uploaded Asset');
+        }
+        return typeName;
+    }, [t]);
+
+    const assetProjectOptions = useMemo(() => {
+        const map = new Map();
+        for (const asset of assets || []) {
+            const projectId = getAssetProjectId(asset);
+            if (!projectId) continue;
+            if (!map.has(projectId)) {
+                map.set(projectId, getAssetProjectLabel(asset));
+            }
+        }
+        return Array.from(map.entries())
+            .map(([value, label]) => ({ value, label }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [assets, getAssetProjectId, getAssetProjectLabel]);
+
+    const assetImageTypeOptions = useMemo(() => {
+        const set = new Set();
+        for (const asset of assets || []) {
+            const typeName = getAssetImageType(asset);
+            if (typeName) set.add(typeName);
+        }
+        set.add('uploaded_asset');
+        return Array.from(set)
+            .map((value) => ({ value, label: getAssetImageTypeLabel(value) }))
+            .sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
+    }, [assets, getAssetImageType, getAssetImageTypeLabel]);
+
+    const filteredAssets = useMemo(() => {
+        const keyword = String(assetKeyword || '').trim().toLowerCase();
+        return (assets || []).filter((asset) => {
+            const projectId = getAssetProjectId(asset);
+            if (assetProjectFilter !== 'all' && projectId !== assetProjectFilter) return false;
+
+            const imageType = getAssetImageType(asset);
+            if (assetImageTypeFilter !== 'all' && imageType !== assetImageTypeFilter) return false;
+
+            if (!keyword) return true;
+            const meta = getAssetMeta(asset);
+            const haystack = [
+                asset?.name,
+                asset?.filename,
+                asset?.remark,
+                asset?.url,
+                meta?.project_title,
+                meta?.project_id,
+                meta?.asset_type,
+                meta?.frame_type,
+                meta?.subject_type,
+                meta?.entity_type,
+                meta?.category,
+            ]
+                .map(v => String(v || '').toLowerCase())
+                .join(' ');
+            return haystack.includes(keyword);
+        });
+    }, [
+        assets,
+        assetKeyword,
+        assetProjectFilter,
+        assetImageTypeFilter,
+        getAssetProjectId,
+        getAssetImageType,
+        getAssetMeta,
+    ]);
+
+    const imageLibraryViewportRef = useRef(null);
+    const imageRefPickerViewportRef = useRef(null);
+    const [imageLibraryViewportSize, setImageLibraryViewportSize] = useState({ width: 0, height: 0 });
+    const [imageRefPickerViewportSize, setImageRefPickerViewportSize] = useState({ width: 0, height: 0 });
+    const [imageLibraryScrollTop, setImageLibraryScrollTop] = useState(0);
+    const [imageRefPickerScrollTop, setImageRefPickerScrollTop] = useState(0);
+
+    const resolveAssetGridColumns = useCallback((width) => {
+        if (width >= 1024) return 4;
+        if (width >= 640) return 3;
+        return 2;
+    }, []);
+
+    const imageLibraryColumns = useMemo(() => resolveAssetGridColumns(imageLibraryViewportSize.width), [resolveAssetGridColumns, imageLibraryViewportSize.width]);
+    const imageRefPickerColumns = useMemo(() => resolveAssetGridColumns(imageRefPickerViewportSize.width), [resolveAssetGridColumns, imageRefPickerViewportSize.width]);
+    const imageLibraryGap = 16;
+    const imageRefPickerGap = 8;
+
+    const imageLibraryRowHeight = useMemo(() => {
+        const width = Number(imageLibraryViewportSize.width || 0);
+        if (!width) return 220;
+        const cardWidth = Math.max(80, (width - imageLibraryGap * (imageLibraryColumns - 1)) / imageLibraryColumns);
+        return cardWidth + imageLibraryGap;
+    }, [imageLibraryViewportSize.width, imageLibraryColumns]);
+
+    const imageRefPickerRowHeight = useMemo(() => {
+        const width = Number(imageRefPickerViewportSize.width || 0);
+        if (!width) return 160;
+        const cardWidth = Math.max(72, (width - imageRefPickerGap * (imageRefPickerColumns - 1)) / imageRefPickerColumns);
+        return cardWidth + imageRefPickerGap;
+    }, [imageRefPickerViewportSize.width, imageRefPickerColumns]);
+
+    const buildVirtualWindow = useCallback((itemsLength, columns, rowHeight, viewportHeight, scrollTop, overscanRows = 3) => {
+        const totalRows = Math.ceil(Math.max(0, itemsLength) / Math.max(1, columns));
+        const visibleRows = Math.max(1, Math.ceil(Math.max(1, viewportHeight) / Math.max(1, rowHeight)));
+        const startRow = Math.max(0, Math.floor(Math.max(0, scrollTop) / Math.max(1, rowHeight)) - overscanRows);
+        const endRow = Math.min(totalRows, startRow + visibleRows + overscanRows * 2);
+        const startIndex = startRow * columns;
+        const endIndex = Math.min(itemsLength, endRow * columns);
+        return {
+            startIndex,
+            endIndex,
+            topSpacerHeight: startRow * rowHeight,
+            bottomSpacerHeight: Math.max(0, totalRows - endRow) * rowHeight,
+        };
+    }, []);
+
+    const imageLibraryWindow = useMemo(() => buildVirtualWindow(
+        filteredAssets.length,
+        imageLibraryColumns,
+        imageLibraryRowHeight,
+        imageLibraryViewportSize.height,
+        imageLibraryScrollTop,
+        3,
+    ), [
+        filteredAssets.length,
+        imageLibraryColumns,
+        imageLibraryRowHeight,
+        imageLibraryViewportSize.height,
+        imageLibraryScrollTop,
+        buildVirtualWindow,
+    ]);
+
+    const imageRefPickerWindow = useMemo(() => buildVirtualWindow(
+        filteredAssets.length,
+        imageRefPickerColumns,
+        imageRefPickerRowHeight,
+        imageRefPickerViewportSize.height,
+        imageRefPickerScrollTop,
+        2,
+    ), [
+        filteredAssets.length,
+        imageRefPickerColumns,
+        imageRefPickerRowHeight,
+        imageRefPickerViewportSize.height,
+        imageRefPickerScrollTop,
+        buildVirtualWindow,
+    ]);
+
+    const imageLibraryVisibleAssets = useMemo(() => {
+        const { startIndex, endIndex } = imageLibraryWindow;
+        return filteredAssets.slice(startIndex, endIndex);
+    }, [filteredAssets, imageLibraryWindow]);
+
+    const imageRefPickerVisibleAssets = useMemo(() => {
+        const { startIndex, endIndex } = imageRefPickerWindow;
+        return filteredAssets.slice(startIndex, endIndex);
+    }, [filteredAssets, imageRefPickerWindow]);
+
+    useEffect(() => {
+        if (!showImageModal || imageModalTab !== 'library') return;
+        const node = imageLibraryViewportRef.current;
+        if (!node) return;
+
+        const updateViewport = () => {
+            setImageLibraryViewportSize({
+                width: node.clientWidth || 0,
+                height: node.clientHeight || 0,
+            });
+        };
+
+        updateViewport();
+        let observer;
+        if (typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(updateViewport);
+            observer.observe(node);
+        } else {
+            window.addEventListener('resize', updateViewport);
+        }
+
+        return () => {
+            if (observer) observer.disconnect();
+            else window.removeEventListener('resize', updateViewport);
+        };
+    }, [showImageModal, imageModalTab]);
+
+    useEffect(() => {
+        if (!showImageModal || refSelectionMode !== 'assets') return;
+        const node = imageRefPickerViewportRef.current;
+        if (!node) return;
+
+        const updateViewport = () => {
+            setImageRefPickerViewportSize({
+                width: node.clientWidth || 0,
+                height: node.clientHeight || 0,
+            });
+        };
+
+        updateViewport();
+        let observer;
+        if (typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(updateViewport);
+            observer.observe(node);
+        } else {
+            window.addEventListener('resize', updateViewport);
+        }
+
+        return () => {
+            if (observer) observer.disconnect();
+            else window.removeEventListener('resize', updateViewport);
+        };
+    }, [showImageModal, refSelectionMode]);
+
+    useEffect(() => {
+        setImageLibraryScrollTop(0);
+        setImageRefPickerScrollTop(0);
+        const libraryNode = imageLibraryViewportRef.current;
+        if (libraryNode) libraryNode.scrollTop = 0;
+        const pickerNode = imageRefPickerViewportRef.current;
+        if (pickerNode) pickerNode.scrollTop = 0;
+    }, [assetKeyword, assetProjectFilter, assetImageTypeFilter, filteredAssets.length]);
+
+    // Image Handlers
+    const handleSelectAsset = async (asset) => {
+        const selectedUrl = String(asset?.url || '').trim();
+        if (!selectedUrl) return;
+
+        const updatedEntity = await updateEntityImage(selectedUrl, false);
+        if (!updatedEntity) return;
+
+        if (imageSelectAction === 'sync_prompt') {
+            setShowImageModal(false);
+            await handleAnalyzeEntity(updatedEntity);
+            return;
+        }
+
+        if (imageSelectAction === 'rewrite_and_regenerate') {
+            setShowImageModal(false);
+            await handleReconstructEntityAsset(updatedEntity);
+            return;
+        }
+
+        setShowImageModal(false);
+        await handleAnalyzeEntity(updatedEntity);
+    };
+
+    const handleUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setUploading(true);
+        try {
+            const asset = await uploadAsset(file);
+            const updatedEntity = await updateEntityImage(asset.url, false);
+            if (updatedEntity) {
+                setShowImageModal(false);
+                await handleAnalyzeEntity(updatedEntity);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setUploading(false);
+        }
+    };
+
+    const handleGenerate = async () => {
+        if (generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)])) return;
+        const targetEntityId = Number(selectedEntity?.id || 0);
+        if (!Number.isFinite(targetEntityId) || targetEntityId <= 0) return;
+        const targetEntityName = String(selectedEntity?.name || selectedEntity?.name_en || targetEntityId);
+        const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
+        const selectedLangPrompt = getEntityPromptByLang(selectedEntity, currentLang);
+        const draftPrompt = String(promptDrafts?.[currentLang] || '').trim();
+        const promptToUse = String(draftPrompt || selectedLangPrompt || '').trim();
+        if (!promptToUse) return;
+        setGenerating(true);
+        setShowPromptLangMenu(false);
+
+        // Use shared utility for prompt processing
+        const epInfo = currentEpisode?.episode_info || {};
+        const preferredImageSize = getEpisodePreferredImageSize(epInfo);
+        // prompt likely already has suffixes appended from initialization, 
+        // but we run processPrompt again in case user added new variables.
+        // Use allEntities for resolution
+        const processedPrompt = processPrompt(promptToUse, epInfo, allEntities);
+        const finalPrompt = prependEntityGlobalStyleToPromptHead(processedPrompt, { injectIfMissing: true });
+        
+        // Update UI to show processed prompt (in case var replacement happened)
+        setPrompt(finalPrompt);
+        setPromptDrafts(prev => ({
+            ...prev,
+            [currentLang]: finalPrompt,
+        }));
+
+        try {
+            // Resolve Visual Dependencies
+            const depUrls = [];
+            if (selectedEntity && selectedEntity.visual_dependencies) {
+                 const deps = parseVisualDependencies(selectedEntity.visual_dependencies);
+                 deps.forEach(dep => {
+                     // dep can be name or id
+                     const startDep = String(dep).trim();
+                     const startDepNormalized = normalizeEntityToken(startDep);
+                     if (!startDep) return;
+                     
+                     // Use allEntities for resolution with case-insensitive match
+                     const target = allEntities.find(e => {
+                         if (!e) return false;
+                         if (String(e.id).trim() === startDep) return true;
+                         if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
+                         if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
+                         return false;
+                     });
+
+                     if (target && target.image_url) {
+                         depUrls.push(target.image_url);
+                     }
+                 });
+            }
+
+            // Combine manual ref and auto-refs
+            const allRefs = [];
+            if (refImage?.url) allRefs.push(refImage.url);
+            if (depUrls.length > 0) allRefs.push(...depUrls);
+            
+            // Deduplicate
+            const uniqueRefs = [...new Set(allRefs)];
+
+            if (onLog) {
+                onLog(
+                    `Subject generation refs: manual_ref=${refImage?.url ? 'yes' : 'no'}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                    'process'
+                );
+            }
+
+            const submitResult = await submitImageGenerationJob(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                project_id: projectId,
+                episode_id: currentEpisode?.id,
+                entity_id: targetEntityId,
+                entity_name: selectedEntity?.name || selectedEntity?.name_en,
+                subject_name: selectedEntity?.name || selectedEntity?.name_en,
+                subject_type: selectedEntity?.type,
+                entity_type: selectedEntity?.type,
+                prompt_language: effectivePromptSubmitLang,
+                asset_type: 'subject',
+                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                negative_prompt: buildEntityNegativePrompt(finalPrompt, selectedEntity, allEntities),
+            });
+
+            const jobId = String(submitResult?.job_id || '').trim();
+            if (!jobId) throw new Error('Missing image job id');
+
+            if (isMountedRef.current) {
+                setSubjectImageJobs(prev => ({
+                    ...(prev || {}),
+                    [String(targetEntityId)]: {
+                        jobId,
+                        status: 'queued',
+                        startedAt: Date.now(),
+                        entityName: targetEntityName,
+                        ...buildSubjectJobMeta(targetEntityId, 'generate'),
+                    },
+                }));
+            }
+
+            if (onLog) onLog(`Subject generation started in background: entity=${targetEntityName}, job_id=${jobId}`, 'process');
+        } catch (e) {
+            console.error(e);
+            alert("Generation Failed: " + (e.response?.data?.detail || e.message));
+        } finally {
+            if (isMountedRef.current) {
+                setGenerating(false);
+            }
+        }
+    };
+
+    const handleForceStopSubjectImage = useCallback(async (entityOverride = null) => {
+        const targetEntity = entityOverride || selectedEntity;
+        const targetEntityId = String(targetEntity?.id || '').trim();
+        if (!targetEntityId) return;
+        if (stoppingSubjectImageJobs[String(targetEntityId)]) return;
+
+        const currentJob = subjectImageJobs[String(targetEntityId)];
+        const jobId = String(currentJob?.jobId || '').trim();
+        const entityName = currentJob?.entityName || targetEntity?.name || targetEntity?.name_en || targetEntityId;
+
+        setStoppingSubjectImageJobs(prev => ({
+            ...(prev || {}),
+            [String(targetEntityId)]: true,
+        }));
+
+        setGenerating(false);
+
+        if (!jobId) {
+            setSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                delete next[String(targetEntityId)];
+                return next;
+            });
+            if (onLog) onLog(t(`已清除主体运行状态：${entityName}`, `Cleared subject running state: ${entityName}`), 'warning');
+            showSubjectNotification(t('已清除本地主体运行状态', 'Cleared local subject running state'), 'warning');
+            setStoppingSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                delete next[String(targetEntityId)];
+                return next;
+            });
+            return;
+        }
+
+        try {
+            const res = await stopGenerationJob('image', jobId, { force: true });
+            if (onLog) onLog(res?.message || t(`已请求停止主体任务：${entityName}`, `Stop requested for subject task: ${entityName}`), 'warning');
+            showSubjectNotification(t('已请求停止主体任务', 'Subject stop requested'), 'warning');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            const normalizedDetail = String(detail).trim().toLowerCase();
+            const missingJob = normalizedDetail.includes('job not found') || normalizedDetail.includes('not found');
+            if (!missingJob) {
+                if (onLog) onLog(`${t('停止主体任务失败', 'Failed to stop subject task')}: ${detail}`, 'error');
+                showSubjectNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
+                return;
+            }
+            if (onLog) onLog(t(`后端主体任务不存在，已清除本地状态：${entityName}`, `Backend subject task no longer exists. Cleared local state: ${entityName}`), 'warning');
+            showSubjectNotification(t('后端任务不存在，已解除主体锁定', 'Backend job missing, subject lock cleared'), 'warning');
+        } finally {
+            setStoppingSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                delete next[String(targetEntityId)];
+                return next;
+            });
+        }
+
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            delete next[String(targetEntityId)];
+            return next;
+        });
+    }, [onLog, selectedEntity, showSubjectNotification, stopGenerationJob, stoppingSubjectImageJobs, subjectImageJobs, t]);
+
+    const handleRefUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+             // We reuse uploadAsset but don't assign to entity yet, just set as refImage
+             const asset = await uploadAsset(file);
+             setRefImage(asset);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const updateEntityImage = async (url, closeModal = true) => {
+        if (!selectedEntity) return;
+        if (isSubjectImageActionLocked(selectedEntity)) {
+            notifySubjectImageActionLocked(selectedEntity);
+            return null;
+        }
+        const targetUrl = String(url || '').trim();
+        if (!targetUrl) return;
+        try {
+            await updateEntity(selectedEntity.id, { image_url: targetUrl });
+            const updatedEntity = { ...selectedEntity, image_url: targetUrl };
+            setSelectedEntity(updatedEntity);
+            setViewingEntity(prev => (String(prev?.id || '') === String(updatedEntity.id) ? { ...prev, image_url: targetUrl } : prev));
+            setEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, image_url: targetUrl } : ent));
+            setAllEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, image_url: targetUrl } : ent));
+            if (closeModal) {
+                setShowImageModal(false);
+            }
+            return updatedEntity;
+        } catch (e) {
+            console.error(e);
+            return null;
+        }
+    };
+
+    const handleRemoveEntityImage = useCallback(async (entityOverride = null, options = {}) => {
+        const targetEntity = entityOverride || selectedEntity;
+        const stableEntityId = String(targetEntity?.id || '').trim();
+        if (!stableEntityId) return null;
+        if (isSubjectImageActionLocked(targetEntity)) {
+            notifySubjectImageActionLocked(targetEntity);
+            return null;
+        }
+
+        const currentImageUrl = String(targetEntity?.image_url || '').trim();
+        if (!currentImageUrl) return targetEntity;
+
+        const skipConfirm = Boolean(options?.skipConfirm);
+        if (!skipConfirm) {
+            const confirmed = await confirmUiMessage(
+                t('确认移除该主体当前图片关联？这不会删除素材文件，只会清空主体绑定。', 'Remove the current image association from this subject? The asset file will be kept; only the subject binding will be cleared.')
+            );
+            if (!confirmed) return null;
+        }
+
+        try {
+            await updateEntity(Number(stableEntityId), { image_url: null });
+            clearSubjectEntityImageLocally(stableEntityId);
+            showSubjectNotification(t('已移除主体图片关联', 'Subject image association removed'), 'warning');
+            onLog?.(t(`已移除主体图片关联：${targetEntity?.name || targetEntity?.name_en || stableEntityId}`, `Removed subject image association: ${targetEntity?.name || targetEntity?.name_en || stableEntityId}`), 'warning');
+            return { ...(targetEntity || {}), image_url: null };
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || t('未知错误', 'Unknown error');
+            showSubjectNotification(`${t('移除图片失败', 'Failed to remove image')}: ${detail}`, 'error');
+            return null;
+        }
+    }, [clearSubjectEntityImageLocally, confirmUiMessage, isSubjectImageActionLocked, onLog, selectedEntity, showSubjectNotification, t]);
+
+    const handleBatchGenerateEntities = async () => {
+        const MIN_BATCH_IMAGE_PROMPT_CHARS = 5;
+        const runtimeSnapshot = getSubjectBatchSnapshot();
+        if (runtimeSnapshot?.generate?.running && runtimeSnapshot?.generate?.scopeKey === subjectBatchScopeKey) {
+            alert(t('批量生图任务正在运行中，请稍候。', 'Batch image generation task is already running.'));
+            return;
+        }
+
+        const toGenerate = allEntities.filter(e => !e.image_url);
+        if (toGenerate.length === 0) {
+            alert("All entities already have images!");
+            return;
+        }
+
+        if (!await confirmUiMessage(`Batch generate images for ${toGenerate.length} entities? This will respect dependency order.`)) return;
+
+        subjectBatchGenerateStopRequestedRef.current = false;
+        const batchSessionId = `subject-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        subjectBatchGenerateSessionRef.current = batchSessionId;
+        setIsStoppingBatchGenerateEntities(false);
+
+        updateGenerateBatchRuntimeState(true, { current: 0, total: toGenerate.length, status: 'Initializing...' });
+        const batchStartedAt = Date.now();
+        setSubjectImageJobs(prev => {
+            const next = { ...(prev || {}) };
+            toGenerate.forEach((entity) => {
+                const stableEntityId = String(entity?.id || '').trim();
+                if (!stableEntityId) return;
+                next[stableEntityId] = {
+                    ...(next[stableEntityId] || {}),
+                    status: 'queued',
+                    startedAt: Number(next[stableEntityId]?.startedAt || 0) || batchStartedAt,
+                    entityName: entity?.name || entity?.name_en || stableEntityId,
+                    ...buildSubjectJobMeta(stableEntityId, 'generate', next[stableEntityId]),
+                };
+            });
+            return next;
+        });
+
+        // Determine Dependency Map
+        const nameMap = new Map();
+        allEntities.forEach(e => {
+            const normName = normalizeEntityToken(e.name || '');
+            const normNameEn = normalizeEntityToken(e.name_en || '');
+            if (normName) nameMap.set(normName, e);
+            if (normNameEn) nameMap.set(normNameEn, e);
+        });
+
+        // Current status of images (starts with existing)
+        // We use a mutable URL map to track latest URLs during the batch process
+        const urlMap = new Map();
+        allEntities.forEach(e => {
+            if (e.image_url) urlMap.set(e.id, e.image_url);
+        });
+
+        let queue = [...toGenerate];
+        let processedCount = 0;
+        let skippedPromptCount = 0;
+        
+        // Helper to check if entity is ready (all its deps have images)
+        const isReady = (ent) => {
+            const deps = parseVisualDependencies(ent.visual_dependencies);
+            if (deps.length === 0) return true;
+            
+            return deps.every(depRaw => {
+                const dep = normalizeEntityToken(depRaw);
+                let target = null;
+                 if (allEntities.find(e => String(e.id).trim() === dep)) {
+                     target = allEntities.find(e => String(e.id).trim() === dep);
+                 } else {
+                     target = nameMap.get(dep);
+                 }
+
+                if (!target) return true; // External/Unknown dep doesn't block
+                return urlMap.has(target.id);
+            });
+        };
+
+        try {
+            const shouldStopBatchGenerate = () => (
+                subjectBatchGenerateSessionRef.current !== batchSessionId
+                || subjectBatchGenerateStopRequestedRef.current
+            );
+            const workerLimit = Math.max(1, SUBJECT_BATCH_PARALLEL_LIMIT);
+            const activeTasks = new Map();
+
+            const updateGenerateActiveStatus = () => {
+                if (activeTasks.size === 0) return;
+                const activeLabels = Array.from(activeTasks.values())
+                    .map(({ entity }) => entity?.name || entity?.name_en || entity?.id)
+                    .filter(Boolean)
+                    .join(', ');
+                updateGenerateBatchRuntimeState(true, {
+                    current: Math.min(processedCount + 1, toGenerate.length),
+                    total: toGenerate.length,
+                    status: t(`生成中：${activeLabels}`, `Generating: ${activeLabels}`),
+                });
+            };
+
+            const runGenerateEntity = async (entity) => {
+                if (shouldStopBatchGenerate()) {
+                    return { entity, stopped: true };
+                }
+                const epInfo = currentEpisode?.episode_info || {};
+                const preferredImageSize = getEpisodePreferredImageSize(epInfo);
+                let basePrompt = getEntityPromptByLang(entity, resolvedPromptSubmitLang)
+                    || entity.description
+                    || `A ${entity.type} named ${entity.name}.`;
+
+                if (!basePrompt || basePrompt.trim().length < 2) {
+                    basePrompt = `${entity.type} ${entity.name}`;
+                }
+
+                const finalPrompt = prependEntityGlobalStyleToPromptHead(
+                    String(processPrompt(basePrompt, epInfo, allEntities) || '').trim(),
+                    { injectIfMissing: true }
+                );
+                if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
+                    return { entity, skippedPrompt: true };
+                }
+
+                const depUrls = [];
+                const deps = parseVisualDependencies(entity.visual_dependencies);
+                deps.forEach(dep => {
+                    const startDep = String(dep).trim();
+                    const startDepNormalized = normalizeEntityToken(startDep);
+
+                    const target = allEntities.find(e => {
+                        if (!e) return false;
+                        if (String(e.id).trim() === startDep) return true;
+                        if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
+                        if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
+                        return false;
+                    });
+
+                    if (target && urlMap.has(target.id)) {
+                        depUrls.push(urlMap.get(target.id));
+                    }
+                });
+                const uniqueRefs = [...new Set(depUrls)];
+
+                if (onLog) {
+                    onLog(
+                        `Batch subject refs: entity=${entity?.name || entity?.name_en || entity?.id}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                        'process'
+                    );
+                }
+
+                let createdJobId = '';
+                try {
+                    const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                        project_id: projectId,
+                        episode_id: currentEpisode?.id,
+                        entity_id: entity?.id,
+                        entity_name: entity?.name || entity?.name_en,
+                        subject_name: entity?.name || entity?.name_en,
+                        subject_type: entity?.type,
+                        entity_type: entity?.type,
+                        prompt_language: resolvedPromptSubmitLang,
+                        asset_type: 'subject',
+                        ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                        negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities),
+                        on_job_created: (jobId) => {
+                            const stableJobId = String(jobId || '').trim();
+                            if (!stableJobId) return;
+                            createdJobId = stableJobId;
+                            if (shouldStopBatchGenerate()) {
+                                void stopGenerationJob('image', stableJobId, { force: true });
+                                return;
+                            }
+                            trackSubjectBatchImageJob('generate', entity, stableJobId);
+                        },
+                    });
+
+                    if (shouldStopBatchGenerate()) {
+                        return { entity, stopped: true };
+                    }
+
+                    if (!res?.url) {
+                        throw new Error('Generated result missing image URL');
+                    }
+
+                    let resolvedImageUrl = String(res.url || '').trim();
+                    if (isEphemeralProviderMediaUrl(resolvedImageUrl)) {
+                        onLog?.(
+                            t(
+                                `批量主体生图返回了临时图片地址，正在等待稳定图片入库：${entity?.name || entity?.name_en || entity?.id}`,
+                                `Batch subject generation returned a temporary image URL; waiting for durable image persistence: ${entity?.name || entity?.name_en || entity?.id}`
+                            ),
+                            'process'
+                        );
+                        resolvedImageUrl = await awaitPersistedSubjectEntityImage(entity.id, {
+                            initialUrl: resolvedImageUrl,
+                            entityName: entity?.name || entity?.name_en || entity?.id,
+                        });
+                        if (!resolvedImageUrl) {
+                            throw new Error('Timed out waiting for durable subject image URL');
+                        }
+                    }
+
+                    await updateEntity(entity.id, { image_url: resolvedImageUrl });
+                    return {
+                        entity,
+                        updatedEnt: { ...entity, image_url: resolvedImageUrl },
+                        imageUrl: resolvedImageUrl,
+                    };
+                } finally {
+                    if (createdJobId) {
+                        untrackSubjectBatchImageJob('generate', entity?.id);
+                    }
+                }
+            };
+
+            const startNextGenerateTask = () => {
+                if (shouldStopBatchGenerate() || activeTasks.size >= workerLimit || queue.length === 0) {
+                    return false;
+                }
+
+                const nextEntity = queue.find(e => isReady(e)) || (activeTasks.size === 0 ? queue[0] : null);
+                if (!nextEntity) {
+                    return false;
+                }
+
+                queue = queue.filter(item => item.id !== nextEntity.id);
+                const entityId = String(nextEntity?.id || '');
+                setLocalSubjectImageJobState(entityId, {
+                    status: 'running',
+                    startedAt: Date.now(),
+                    entityName: nextEntity?.name || nextEntity?.name_en || entityId,
+                    ...buildSubjectJobMeta(entityId, 'generate'),
+                });
+                const wrappedPromise = runGenerateEntity(nextEntity)
+                    .then((value) => ({ entityId, entity: nextEntity, status: 'fulfilled', value }))
+                    .catch((reason) => ({ entityId, entity: nextEntity, status: 'rejected', reason }));
+                activeTasks.set(entityId, { entity: nextEntity, promise: wrappedPromise });
+                updateGenerateActiveStatus();
+                return true;
+            };
+
+            while (queue.length > 0 || activeTasks.size > 0) {
+                while (!shouldStopBatchGenerate() && activeTasks.size < workerLimit && startNextGenerateTask()) {
+                    // Fill available concurrency slots immediately.
+                }
+
+                if (activeTasks.size === 0) {
+                    break;
+                }
+
+                const settledTask = await Promise.race(Array.from(activeTasks.values()).map(item => item.promise));
+                activeTasks.delete(settledTask.entityId);
+
+                const entity = settledTask.entity;
+                processedCount += 1;
+
+                if (settledTask.status === 'fulfilled') {
+                    if (settledTask.value?.stopped) {
+                        // stop requested; ignore and let outer loop exit cleanly
+                        clearLocalSubjectImageJobState(entity.id);
+                    } else if (settledTask.value?.skippedPrompt) {
+                        skippedPromptCount += 1;
+                        clearLocalSubjectImageJobState(entity.id);
+                        onLog?.(
+                            t(
+                                `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
+                                `Batch image generation skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
+                            ),
+                            'warning'
+                        );
+                    } else if (settledTask.value?.imageUrl) {
+                        urlMap.set(entity.id, settledTask.value.imageUrl);
+                        const updatedEnt = settledTask.value.updatedEnt;
+                        setAllEntities(prev => prev.map(e => e.id === entity.id ? updatedEnt : e));
+                        setEntities(prev => (prev.some(p => p.id === entity.id)
+                            ? prev.map(e => e.id === entity.id ? updatedEnt : e)
+                            : prev));
+                        if (viewingEntity && viewingEntity.id === entity.id) {
+                            setViewingEntity(updatedEnt);
+                        }
+                        clearLocalSubjectImageJobState(entity.id);
+                    }
+                } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
+                    console.error(`Batch Gen Error for ${entity.name}`, settledTask.reason);
+                    onLog?.(
+                        t(
+                            `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                            `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
+                        ),
+                        'error'
+                    );
+                    setSubjectImageJobs(prev => {
+                        const stableEntityId = String(entity?.id || '').trim();
+                        const existing = prev?.[stableEntityId];
+                        if (!stableEntityId || !existing || String(existing?.jobId || '').trim()) {
+                            return prev;
+                        }
+                        const next = { ...(prev || {}) };
+                        delete next[stableEntityId];
+                        return next;
+                    });
+                }
+
+                updateGenerateBatchRuntimeState(true, {
+                    current: processedCount,
+                    total: toGenerate.length,
+                    status: t(`已处理 ${processedCount}/${toGenerate.length}`, `Processed ${processedCount}/${toGenerate.length}`),
+                });
+                updateGenerateActiveStatus();
+            }
+            if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
+                alert(t('批量生图已停止。', 'Batch image generation stopped.'));
+            } else if (skippedPromptCount > 0) {
+                alert(`Batch Generation Complete! Skipped ${skippedPromptCount} item(s) due to short prompt (<${MIN_BATCH_IMAGE_PROMPT_CHARS} chars).`);
+            } else {
+                alert("Batch Generation Complete!");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Batch Generation Failed: " + e.message);
+        } finally {
+            if (subjectBatchGenerateSessionRef.current === batchSessionId) {
+                subjectBatchGenerateSessionRef.current = '';
+            }
+            subjectBatchGenerateActiveJobsRef.current.clear();
+            setSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                toGenerate.forEach((entity) => {
+                    const stableEntityId = String(entity?.id || '').trim();
+                    if (!stableEntityId) return;
+                    const existing = next[stableEntityId];
+                    if (!existing) return;
+                    if (String(existing?.jobKind || 'generate').trim() !== 'generate') return;
+                    delete next[stableEntityId];
+                });
+                return next;
+            });
+            setStoppingSubjectImageJobs(prev => {
+                const next = { ...(prev || {}) };
+                toGenerate.forEach((entity) => {
+                    const stableEntityId = String(entity?.id || '').trim();
+                    if (!stableEntityId) return;
+                    delete next[stableEntityId];
+                });
+                return next;
+            });
+            clearPendingSubjectBatchImagePlaceholders();
+            updateGenerateBatchRuntimeState(false, null);
+            subjectBatchGenerateStopRequestedRef.current = false;
+            setIsStoppingBatchGenerateEntities(false);
+        }
+    };
+
+    const handleStopSubjectBatchTasks = async () => {
+        const hasRunningTask = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
+        if (!hasRunningTask) return;
+
+        setIsStoppingBatchGenerateEntities(true);
+        subjectImageJobPollTokenRef.current += 1;
+        let forcedStoppedJobCount = 0;
+
+        if (isBatchGeneratingEntities) {
+            subjectBatchGenerateStopRequestedRef.current = true;
+            subjectBatchGenerateSessionRef.current = '';
+            forcedStoppedJobCount += await forceStopTrackedSubjectBatchImageJobs('generate');
+            updateGenerateBatchRuntimeState(false, null);
+        }
+
+        if (isBatchAnalyzingEntities) {
+            subjectBatchAnalyzeStopRequestedRef.current = true;
+            subjectBatchAnalyzeSessionRef.current = '';
+            updateAnalyzeBatchRuntimeState(false, null);
+        }
+
+        if (isBatchReconstructingEntities) {
+            subjectBatchReconstructStopRequestedRef.current = true;
+            subjectBatchReconstructSessionRef.current = '';
+            forcedStoppedJobCount += await forceStopTrackedSubjectBatchImageJobs('reconstruct');
+            updateReconstructBatchRuntimeState(false, null);
+        }
+
+        clearPendingSubjectBatchImagePlaceholders();
+
+        setIsStoppingBatchGenerateEntities(false);
+        if (onLog) onLog(t('已请求停止当前批量任务。', 'Stop requested for current batch task.'), 'warning');
+        showSubjectNotification(
+            forcedStoppedJobCount > 0
+                ? t(`已请求停止当前批量任务，并强制停止 ${forcedStoppedJobCount} 个已提交图片任务。`, `Stop requested for current batch task. Force-stopped ${forcedStoppedJobCount} submitted image jobs.`)
+                : t('已请求停止当前批量任务。未提交的后续任务将不再继续。', 'Stop requested for current batch task. Pending unsubmitted tasks will not continue.'),
+            'warning'
+        );
+    };
+
+    const hasRunningSubjectBatchTask = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
+
+    useEffect(() => {
+        const preloadTargets = (Array.isArray(entities) ? entities : [])
+            .map((item) => String(item?.image_url || '').trim())
+            .filter(Boolean)
+            .slice(0, 18);
+
+        if (!preloadTargets.length) return;
+
+        const timers = [];
+        preloadTargets.forEach((url, idx) => {
+            if (isWarmMediaUrl(url) || isBrokenMediaUrl(url)) return;
+            const timer = setTimeout(() => {
+                try {
+                    const img = new window.Image();
+                    img.decoding = 'async';
+                    img.src = getFullUrl(url);
+                    img.onload = () => rememberWarmMediaUrl(url);
+                    img.onerror = () => rememberBrokenMediaUrl(url);
+                } catch {
+                    // Ignore preload failures and let normal rendering continue.
+                }
+            }, idx * 70);
+            timers.push(timer);
+        });
+
+        return () => {
+            timers.forEach((timer) => clearTimeout(timer));
+        };
+    }, [entities, subTab]);
+
+    return (
+        <div className="p-6 h-full flex flex-col w-full relative">
+            {subjectNotification && (
+                <div className={`absolute top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-2xl border text-sm max-w-md ${subjectNotification.type === 'error' ? 'bg-red-500/90 border-red-300/40 text-white' : subjectNotification.type === 'warning' ? 'bg-amber-500/90 border-amber-300/40 text-black' : subjectNotification.type === 'info' ? 'bg-sky-500/90 border-sky-300/40 text-white' : 'bg-emerald-500/90 border-emerald-300/40 text-white'}`}>
+                    {subjectNotification.message}
+                </div>
+            )}
+            <div className="flex justify-between items-start mb-6 gap-4">
+                <div className="flex flex-col gap-3">
+                    <div className="flex gap-1.5 bg-gradient-to-r from-white/10 via-white/5 to-white/10 border border-white/15 p-1.5 rounded-xl self-start shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
+                        <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary font-mono mr-1">
+                            {t('合计', 'Total')}: {allEntities.filter(e => e.image_url).length}/{allEntities.length}
+                        </span>
+                        {[
+                            { key: 'character', label: t('角色', 'Char'), title: t('角色', 'Characters') },
+                            { key: 'environment', label: t('环境', 'Env'), title: t('环境', 'Environments') },
+                            { key: 'prop', label: t('道具', 'Prop'), title: t('道具', 'Props') },
+                            { key: 'poster', label: t('海报', 'Poster'), title: t('封面海报', 'Cover Poster') },
+                        ].map(({ key, label, title }) => {
+                            const stat = subjectCategoryStats[key] || { total: 0, generated: 0 };
+                            return (
+                            <button
+                                key={key}
+                                onClick={() => setSubTab(key)}
+                                className={`px-5 py-2.5 text-xs font-extrabold uppercase rounded-lg transition-all border ${subTab === key ? "bg-primary text-black border-primary shadow-[0_0_16px_rgba(255,210,64,0.35)]" : "bg-black/20 border-white/10 hover:bg-white/10 text-muted-foreground hover:text-white"}`}
+                                title={title}
+                            >
+                                {label} ({stat.generated}/{stat.total})
+                            </button>
+                        )})}
+                    </div>
+                </div>
+                <div className="flex items-center gap-4 flex-wrap justify-end">
+                     <button 
+                        onClick={handleDeleteAllEntities}
+                        className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-md transition-colors"
+                    title={t('删除全部主体资产', 'Delete All Subjects')}
+                    >
+                        <Trash2 size={16} />
+                    </button>
+                     <button 
+                        onClick={handleBatchGenerateEntities}
+                        disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 disabled:opacity-50 transition-all border border-white/10"
+                        title={t('批量生成全部实体（遵循依赖）', 'Batch Generate All Entities (Respects Dependencies)')}
+                    >
+                         {isBatchGeneratingEntities ? (
+                             <>
+                                 <RefreshCw className="animate-spin" size={12} /> 
+                                 {t('批处理中', 'Batching')} {batchEntityProgress ? `${batchEntityProgress.current}/${batchEntityProgress.total}` : '...'}
+                             </>
+                         ) : (
+                             <>
+                                <Wand2 size={12} /> {t('批量生图', 'Batch Generate Images')}
+                             </>
+                         )}
+                    </button>
+                    <button
+                        onClick={handleStopSubjectBatchTasks}
+                        disabled={!hasRunningSubjectBatchTask || isStoppingBatchGenerateEntities}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-red-400/20"
+                        title={t('停止当前批量任务（支持批量生图/批量提示词反推/批量参考生图）', 'Stop current batch task (supports batch generation / prompt reverse / reference generation)')}
+                    >
+                        {isStoppingBatchGenerateEntities ? (
+                            <>
+                                <Loader2 className="animate-spin" size={12} />
+                                {t('停止中', 'Stopping')}
+                            </>
+                        ) : (
+                            <>
+                                <X size={12} /> {t('停止', 'Stop')}
+                            </>
+                        )}
+                    </button>
+                    <button
+                        onClick={handleBatchAnalyzeExistingSubjects}
+                        disabled={isBatchAnalyzingEntities || isBatchGeneratingEntities || isBatchReconstructingEntities || isReconstructingEntity || isAnalyzingEntity}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-indigo-400/20"
+                        title={t('仅批量对“用户上传图片”执行提示词反推并反写信息', 'Batch prompt reverse user-uploaded subject images only and write back metadata')}
+                    >
+                        {isBatchAnalyzingEntities ? (
+                            <>
+                                <RefreshCw className="animate-spin" size={12} />
+                                {t('批量反推中', 'Batch Prompt Reversing')} {batchAnalyzeProgress ? `${batchAnalyzeProgress.current}/${batchAnalyzeProgress.total}` : '...'}
+                            </>
+                        ) : (
+                            <>
+                                <Sparkles size={12} /> {t('批量提示词反推', 'Batch Prompt Reverse')}
+                            </>
+                        )}
+                    </button>
+                    <button
+                        onClick={handleBatchAnalyzeAndReconstructSubjects}
+                        disabled={isBatchReconstructingEntities || isBatchAnalyzingEntities || isBatchGeneratingEntities || isReconstructingEntity || isAnalyzingEntity}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-violet-500/20 hover:bg-violet-500/30 text-violet-100 flex items-center gap-2 disabled:opacity-50 transition-all border border-violet-400/20"
+                        title={t('仅对用户上传图片执行：批量参考生图', 'Batch reference image generation for user-uploaded images only')}
+                    >
+                        {isBatchReconstructingEntities ? (
+                            <>
+                                <RefreshCw className="animate-spin" size={12} />
+                                {t('批量参考生图中', 'Batch Reference Generating')} {batchReconstructProgress ? `${batchReconstructProgress.current}/${batchReconstructProgress.total}` : '...'}
+                            </>
+                        ) : (
+                            <>
+                                <Wand2 size={12} /> {t('批量参考生图', 'Batch Reference Generate')}
+                            </>
+                        )}
+                    </button>
+
+                </div>
+            </div>
+
+            {/* Batch Status Bar */}
+            {isBatchGeneratingEntities && batchEntityProgress && (
+                <div className="mb-4 bg-primary/10 border border-primary/20 rounded-lg p-3 flex items-center justify-between text-xs text-primary">
+                    <span className="font-bold flex items-center gap-2">
+                         <RefreshCw className="animate-spin" size={12} />
+                         {batchEntityProgress.status}
+                    </span>
+                    <span className="font-mono">{Math.round((batchEntityProgress.current / batchEntityProgress.total) * 100)}%</span>
+                </div>
+            )}
+            {isBatchAnalyzingEntities && batchAnalyzeProgress && (
+                <div className="mb-4 bg-indigo-500/10 border border-indigo-400/20 rounded-lg p-3 flex items-center justify-between text-xs text-indigo-200">
+                    <span className="font-bold flex items-center gap-2">
+                        <RefreshCw className="animate-spin" size={12} />
+                        {batchAnalyzeProgress.status}
+                    </span>
+                    <span className="font-mono">{Math.round((batchAnalyzeProgress.current / batchAnalyzeProgress.total) * 100)}%</span>
+                </div>
+            )}
+            {isBatchReconstructingEntities && batchReconstructProgress && (
+                <div className="mb-4 bg-violet-500/10 border border-violet-400/20 rounded-lg p-3 flex items-center justify-between text-xs text-violet-100">
+                    <span className="font-bold flex items-center gap-2">
+                        <RefreshCw className="animate-spin" size={12} />
+                        {batchReconstructProgress.status}
+                    </span>
+                    <span className="font-mono">{Math.round((batchReconstructProgress.current / batchReconstructProgress.total) * 100)}%</span>
+                </div>
+            )}
+            
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6 w-full">
+                
+                
+                {entities.map((entity, entityIndex) => {
+                    const trackedJob = subjectImageJobs[String(entity.id)];
+                    const isBatchPending = !trackedJob && isBatchGeneratingEntities && !entity.image_url;
+                    const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
+                    const hasRunningSubjectImageJob = Boolean(trackedJob) || isBatchPending;
+                    return (
+                    <div 
+                        key={entity.id} 
+                        onClick={() => setViewingEntity(entity)}
+                        className="bg-card border border-white/10 rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all min-h-[260px] flex flex-col"
+                    >
+                        <div className="relative aspect-video w-full overflow-hidden bg-black">
+                            {(trackedJob || isBatchPending) && (
+                                <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
+                                    {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <RefreshCw className="animate-spin" size={10} />}
+                                    {stoppingSubjectImageJobs[String(entity.id)]
+                                        ? t('停止中', 'Stopping')
+                                        : isBatchPending
+                                            ? t('排队中', 'Queued')
+                                        : String(trackedJob?.status || '').toLowerCase() === 'persisting'
+                                            ? t('同步中', 'Syncing')
+                                        : String(trackedJob?.status || '').toLowerCase() === 'running'
+                                            ? t('运行中', 'Running')
+                                            : String(trackedJob?.status || '').toLowerCase() === 'queued'
+                                                ? t('排队中', 'Queued')
+                                                : t('生成中', 'Generating')}
+                                </div>
+                            )}
+                            {trackedJob && hasRunningSubjectImageJob && (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleForceStopSubjectImage(entity);
+                                    }}
+                                    disabled={Boolean(stoppingSubjectImageJobs[String(entity.id)])}
+                                    className="absolute top-2 right-2 z-30 inline-flex items-center gap-1 rounded-md bg-red-500/80 hover:bg-red-500 text-white px-2 py-1 text-[10px] font-bold backdrop-blur-md disabled:opacity-60 disabled:cursor-not-allowed"
+                                    title={t('停止该主体的后台图片任务', 'Stop this subject background image task')}
+                                >
+                                    {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <X size={10} />}
+                                    <span>{stoppingSubjectImageJobs[String(entity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}</span>
+                                </button>
+                            )}
+
+                            {entity.image_url ? (
+                                <SafeImage
+                                    src={entity.image_url}
+                                    alt={entity.name}
+                                    className="absolute inset-0 object-cover w-full h-full"
+                                    loading={entityIndex < 8 ? 'eager' : 'lazy'}
+                                    fetchPriority={entityIndex < 4 ? 'high' : 'auto'}
+                                    fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
+                                />
+                            ) : (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/5 px-4 text-center">
+                                    <Users className="text-white/20" size={48} />
+                                    <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/55">{t('未绑定图片', 'No Linked Image')}</div>
+                                    <div className="text-[10px] text-white/35">{t('可重新选择或生成主体图', 'Select or generate a subject image')}</div>
+                                </div>
+                            )}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
+
+                            <div className={`absolute right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 ${hasRunningSubjectImageJob ? 'top-12' : 'top-2'}`}>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'library'); }}
+                                    disabled={imageActionLocked}
+                                    className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={imageActionLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片（素材库/上传）', 'Change Image (Library/Upload)')}
+                                >
+                                    <ImageIcon size={16} />
+                                </button>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'generate'); }}
+                                    disabled={imageActionLocked}
+                                    className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={t('生成 AI 图片', 'Generate AI Image')}
+                                >
+                                    <Wand2 size={16} />
+                                </button>
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleRemoveEntityImage(entity);
+                                    }}
+                                    disabled={imageActionLocked || !entity.image_url}
+                                    className="p-2 bg-amber-500/80 hover:bg-amber-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={imageActionLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                >
+                                    <Unlink size={16} />
+                                </button>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(entity); }}
+                                    disabled={isReconstructingEntity || imageActionLocked || !entity.image_url}
+                                    className="p-2 bg-indigo-500/80 hover:bg-indigo-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={t('现有资产重构（分析图片并重生成）', 'Refactor Existing Asset (analyze + regenerate)')}
+                                >
+                                    {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                                </button>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); handleCopyEntityWithLLM(entity); }}
+                                    disabled={isCopyingEntity}
+                                    className="p-2 bg-emerald-500/80 hover:bg-emerald-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={t('复制并 AI 生成新主体（参考原提示词结构）', 'Copy and AI-generate a new subject (preserve original prompt structure)')}
+                                >
+                                    {isCopyingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Copy size={16} />}
+                                </button>
+                                <button 
+                                    onClick={(e) => handleDeleteEntity(e, entity)}
+                                    className="p-2 bg-red-500/80 hover:bg-red-600 rounded-full text-white backdrop-blur-md"
+                                    title={t('删除实体', 'Delete Entity')}
+                                >
+                                    <Trash2 size={16} />
+                                </button>
+                            </div>
+                            {isEntityAnalyzed(entity) && (
+                                <div className="absolute bottom-2 right-2 z-30 px-2 py-1 rounded-md bg-emerald-500/20 border border-emerald-400/40 text-emerald-100 text-[10px] font-bold pointer-events-none">
+                                    {t('已分析', 'Analyzed')}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-3 border-t border-white/10 flex-1 flex flex-col">
+                            <div className="font-bold text-white capitalize truncate">{entity.name}</div>
+                            <div className="text-[10px] text-white/55 uppercase tracking-[0.16em] mt-1">{subTab}</div>
+                            <div className="mt-3 text-[10px] text-white/45 uppercase tracking-[0.16em]">{t('Subject介绍', 'Subject Intro')}</div>
+                            <div className="text-xs text-white/70 mt-1 line-clamp-3 leading-relaxed min-h-[3.5rem]">
+                                {String(entity.description || '').trim() || t('暂无介绍，点击卡片可编辑主体描述。', 'No intro yet. Click the card to edit subject description.')}
+                            </div>
+                        </div>
+                    </div>
+                    );
+                })}
+
+                {entityListLoading && entities.length === 0 && Array.from({ length: 8 }).map((_, idx) => (
+                    <div
+                        key={`subject-skeleton-${idx}`}
+                        className="border border-white/10 rounded-xl bg-white/[0.02] animate-pulse overflow-hidden"
+                    >
+                        <div className="aspect-video bg-white/10" />
+                        <div className="p-3">
+                            <div className="h-4 rounded bg-white/10 w-2/3 mb-2" />
+                            <div className="h-3 rounded bg-white/10 w-1/3 mb-3" />
+                            <div className="h-3 rounded bg-white/10 w-full mb-1.5" />
+                            <div className="h-3 rounded bg-white/10 w-5/6" />
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {entityListLoading && entities.length === 0 && (
+                <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    {t('主体加载中...', 'Loading subjects...')}
+                </div>
+            )}
+
+            {/* Entity Detail Modal */}
+            <AnimatePresence>
+                {viewingEntity && (
+                    (() => {
+                        const viewingEntityImageLocked = isSubjectImageActionLocked(viewingEntity);
+                        return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-8" onClick={() => setViewingEntity(null)}>
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-[#1e1e1e] border border-white/10 rounded-2xl w-full max-w-5xl h-[80vh] flex shadow-2xl overflow-hidden"
+                        >
+                            {/* Left: Image */}
+                            <div className="w-1/2 bg-black relative flex items-center justify-center">
+                                {viewingEntity.image_url ? (
+                                    <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
+                                ) : (
+                                    <div className="flex flex-col items-center justify-center px-8 text-center text-white/20">
+                                        <Users size={64} />
+                                        <span className="mt-4 text-sm font-bold uppercase tracking-[0.18em]">{t('图片已移除', 'Image Unlinked')}</span>
+                                        <span className="mt-2 text-xs text-white/45">{t('当前主体未绑定图片，可重新选择素材或直接生成新图。', 'This subject has no linked image. Select media again or generate a new one.')}</span>
+                                    </div>
+                                )}
+                                
+                                {viewingEntity.id !== 'new' && (
+                                    <div className="absolute top-4 left-4 flex gap-2">
+                                         <FunctionApiSelector functionName="subject_image_analysis" configs={functionApiConfigs} />
+                                         <button
+                                            onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'library'); }}
+                                            disabled={viewingEntityImageLocked}
+                                            className="p-3 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                          title={viewingEntityImageLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片', 'Change Image')}
+                                         >
+                                             <ImageIcon size={20} />
+                                         </button>
+                                         <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                void handleRemoveEntityImage(viewingEntity);
+                                            }}
+                                            disabled={viewingEntityImageLocked || !viewingEntity.image_url}
+                                            className="p-3 bg-amber-500/80 hover:bg-amber-500 text-white rounded-full backdrop-blur-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg border border-white/10"
+                                                          title={viewingEntityImageLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                         >
+                                             <Unlink size={20} />
+                                         </button>
+                                         <button 
+                                            onClick={(e) => { e.stopPropagation(); handleAnalyzeEntity(viewingEntity); }}
+                                            disabled={isAnalyzingEntity || isReconstructingEntity}
+                                            className="p-3 bg-indigo-500/80 hover:bg-indigo-500 text-white rounded-full backdrop-blur-md transition-colors disabled:opacity-50 shadow-lg border border-white/10"
+                                                          title={t('分析图片并优化主体信息（生成新的提示词文件）', 'Analyze Image & Refine Subject Info (Generates new prompt file)')}
+                                         >
+                                             {isAnalyzingEntity ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
+                                         </button>
+                                         <button 
+                                            onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(viewingEntity); }}
+                                                          disabled={isReconstructingEntity || isAnalyzingEntity || viewingEntityImageLocked || !viewingEntity.image_url}
+                                            className="p-3 bg-primary/90 hover:bg-primary text-black rounded-full backdrop-blur-md transition-colors disabled:opacity-50 shadow-lg border border-white/10"
+                                                          title={t('现有资产重构（分析图片并按新提示词重新生成）', 'Refactor Existing Asset (analyze + regenerate with new prompt)')}
+                                         >
+                                             {isReconstructingEntity ? <RefreshCw size={20} className="animate-spin" /> : <Wand2 size={20} />}
+                                         </button>
+                                    </div>
+                                )}
+                            </div>
+                            
+                            {/* Right: Info */}
+                            <div className="w-1/2 flex flex-col h-full bg-[#1e1e1e]">
+                                <div className="p-6 border-b border-white/10 flex justify-between items-start">
+                                    <div className="flex-1 mr-4">
+                                        <input 
+                                            value={viewingEntity.name || ''}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                setViewingEntity(prev => ({ ...prev, name: val }));
+                                            }}
+                                            onBlur={(e) => handleFieldUpdate('name', e.target.value)}
+                                            className="text-3xl font-bold font-serif mb-1 bg-transparent border-b border-transparent hover:border-white/10 focus:border-primary outline-none w-full transition-colors truncate"
+                                            placeholder="Entity Name"
+                                        />
+                                        <input 
+                                            value={viewingEntity.name_en || ''} 
+                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, name_en: e.target.value }))}
+                                            onBlur={(e) => handleFieldUpdate('name_en', e.target.value)}
+                                            className="text-lg text-muted-foreground font-mono bg-transparent border-b border-transparent hover:border-white/10 focus:border-primary outline-none w-full transition-colors"
+                                            placeholder="English Name"
+                                        />
+                                    </div>
+                                    <button 
+                                        onClick={() => setViewingEntity(null)}
+                                        className="p-2 hover:bg-white/10 rounded-full text-muted-foreground hover:text-white transition-colors"
+                                    >
+                                        <X size={24} />
+                                    </button>
+                                </div>
+
+                                {reconstructProgress && (
+                                    <div className="px-6 py-3 border-b border-white/10 bg-primary/5">
+                                        <div className="flex items-center justify-between text-xs mb-2">
+                                            <span className="font-bold text-primary flex items-center gap-2">
+                                                <RefreshCw className={`${isReconstructingEntity ? 'animate-spin' : ''}`} size={12} />
+                                                {reconstructProgress.label}
+                                            </span>
+                                            <span className="font-mono text-primary">{reconstructProgress.percent}%</span>
+                                        </div>
+                                        <div className="w-full h-1.5 rounded-full bg-black/30 overflow-hidden">
+                                            <div className="h-full bg-primary transition-all duration-300" style={{ width: `${reconstructProgress.percent}%` }} />
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                                    {/* Role & Archetype Tags */}
+                                    <div className="flex flex-wrap gap-2">
+                                        {['role', 'archetype', 'gender'].map(field => (
+                                            <input
+                                                key={field}
+                                                value={viewingEntity[field] || ''}
+                                                onChange={(e) => setViewingEntity(prev => ({ ...prev, [field]: e.target.value }))}
+                                                onBlur={(e) => handleFieldUpdate(field, e.target.value)}
+                                                placeholder={field}
+                                                className="px-3 py-1 bg-white/5 text-xs font-bold uppercase tracking-wider rounded-full border border-transparent focus:border-primary outline-none text-center min-w-[60px]"
+                                            />
+                                        ))}
+                                    </div>
+
+                                    {/* Description */}
+                                    <div className="space-y-2">
+                                        <h4 className="text-xs font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                            <FileText size={12} /> Description
+                                        </h4>
+                                        <textarea 
+                                            value={viewingEntity.description || ''}
+                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, description: e.target.value }))}
+                                            onBlur={(e) => handleFieldUpdate('description', e.target.value)}
+                                            className="w-full text-sm leading-relaxed text-white/80 bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none transition-colors"
+                                            placeholder="Enter description..."
+                                        />
+                                    </div>
+
+                                    {/* Environment Details */}
+                                    {viewingEntity.type === 'environment' && (
+                                        <div className="space-y-4 p-4 bg-white/5 rounded-lg border border-white/5">
+                                             <div className="space-y-1">
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('氛围', 'Atmosphere')}</h4>
+                                                 <input 
+                                                    value={viewingEntity.atmosphere || ''}
+                                                    onChange={(e) => setViewingEntity(prev => ({ ...prev, atmosphere: e.target.value }))}
+                                                    onBlur={(e) => handleFieldUpdate('atmosphere', e.target.value)}
+                                                    className="w-full text-sm bg-transparent border-b border-white/10 hover:border-white/30 focus:border-primary p-2 outline-none transition-colors"
+                                                    placeholder="Atmosphere (e.g. Dark, Cozy)"
+                                                />
+                                            </div>
+                                             <div className="space-y-1">
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('视觉参数', 'Visual Params')}</h4>
+                                                <textarea 
+                                                    value={viewingEntity.visual_params || ''}
+                                                    onChange={(e) => setViewingEntity(prev => ({ ...prev, visual_params: e.target.value }))}
+                                                    onBlur={(e) => handleFieldUpdate('visual_params', e.target.value)}
+                                                    className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none"
+                                                    placeholder="Visual parameters..."
+                                                />
+                                            </div>
+                                             <div className="space-y-1">
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('叙事描述', 'Narrative Description')}</h4>
+                                                <textarea 
+                                                    value={viewingEntity.narrative_description || ''}
+                                                    onChange={(e) => setViewingEntity(prev => ({ ...prev, narrative_description: e.target.value }))}
+                                                    onBlur={(e) => handleFieldUpdate('narrative_description', e.target.value)}
+                                                    className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none"
+                                                    placeholder="Detailed narrative (Description field)..."
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Appearance Details */}
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1">
+                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('外观', 'Appearance')}</h4>
+                                            <textarea 
+                                                value={viewingEntity.appearance_cn || ''}
+                                                onChange={(e) => setViewingEntity(prev => ({ ...prev, appearance_cn: e.target.value }))}
+                                                onBlur={(e) => handleFieldUpdate('appearance_cn', e.target.value)}
+                                                className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-20 resize-none"
+                                                placeholder="Appearance details..."
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('服装', 'Clothing')}</h4>
+                                            <textarea 
+                                                value={viewingEntity.clothing || ''}
+                                                onChange={(e) => setViewingEntity(prev => ({ ...prev, clothing: e.target.value }))}
+                                                onBlur={(e) => handleFieldUpdate('clothing', e.target.value)}
+                                                className="w-full text-sm bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-20 resize-none"
+                                                placeholder="Clothing details..."
+                                            />
+                                        </div>
+                                    </div>
+                                    
+                                    {/* Technical / Prompt */}
+                                    <div className="space-y-2">
+                                        <h4 className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                            <Wand2 size={10} /> Generation Prompt
+                                        </h4>
+                                        <div className="grid grid-cols-1 gap-3">
+                                            <div>
+                                                <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('中文提示词', 'Chinese Prompt')}</div>
+                                                <textarea
+                                                    value={viewingEntity.generation_prompt_cn || ''}
+                                                    onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_cn: e.target.value }))}
+                                                    onBlur={(e) => handleFieldUpdate('generation_prompt_cn', e.target.value)}
+                                                    className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
+                                                    placeholder={t('输入中文生图提示词...', 'Enter Chinese generation prompt...')}
+                                                />
+                                            </div>
+                                            <div>
+                                                <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('英文提示词', 'English Prompt')}</div>
+                                                <textarea
+                                                    value={viewingEntity.generation_prompt_en || ''}
+                                                    onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_en: e.target.value }))}
+                                                    onBlur={(e) => handleFieldUpdate('generation_prompt_en', e.target.value)}
+                                                    className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
+                                                    placeholder="Enter English generation prompt..."
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Action Characteristics */}
+                                    <div className="space-y-1">
+                                        <h4 className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                            <Clapperboard size={10} /> Action Characteristics
+                                        </h4>
+                                        <textarea 
+                                            value={viewingEntity.action_characteristics || ''}
+                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, action_characteristics: e.target.value }))}
+                                            onBlur={(e) => handleFieldUpdate('action_characteristics', e.target.value)}
+                                            className="w-full text-sm p-3 bg-white/5 rounded-lg border border-white/5 hover:border-white/10 focus:border-primary outline-none resize-y min-h-[60px]"
+                                            placeholder="Action characteristics..."
+                                        />
+                                    </div>
+
+                                    {/* Anchor Description */}
+                                    <div className="space-y-1">
+                                        <h4 className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                            <LinkIcon size={10} /> Anchor Description
+                                        </h4>
+                                        <textarea 
+                                            value={viewingEntity.anchor_description || ''}
+                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, anchor_description: e.target.value }))}
+                                            onBlur={(e) => handleFieldUpdate('anchor_description', e.target.value)}
+                                            className="w-full text-sm p-3 bg-white/5 rounded-lg border border-white/5 font-mono text-xs hover:border-white/10 focus:border-primary outline-none resize-y min-h-[60px]"
+                                            placeholder="Anchor description..."
+                                        />
+                                    </div>
+
+                                    {/* Dependency Strategy */}
+                                    {viewingEntity.dependency_strategy && (viewingEntity.dependency_strategy.type || viewingEntity.dependency_strategy.logic) && (
+                                        <div className="space-y-1 pt-2 border-t border-white/5">
+                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                                <Settings2 size={10} /> Dependency Strategy
+                                            </h4>
+                                            <div className="bg-white/5 rounded-lg border border-white/5 p-3 text-xs space-y-1">
+                                                {viewingEntity.dependency_strategy.type && (
+                                                    <div className="flex gap-2">
+                                                        <span className="text-muted-foreground">{t('类型：', 'Type:')}</span>
+                                                        <span className="font-bold text-primary">{viewingEntity.dependency_strategy.type}</span>
+                                                    </div>
+                                                )}
+                                                {viewingEntity.dependency_strategy.logic && (
+                                                    <div className="flex gap-2 flex-col sm:flex-row sm:items-baseline">
+                                                        <span className="text-muted-foreground whitespace-nowrap">{t('逻辑：', 'Logic:')}</span>
+                                                        <span className="text-white/80 italic">{viewingEntity.dependency_strategy.logic}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Visual Dependencies (Editable) */}
+                                    <div className="space-y-2 pt-2 border-t border-white/5">
+                                         <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('视觉依赖', 'Visual Dependencies')}</h4>
+                                         <p className="text-[10px] text-white/40 mb-1">{t('添加主体名称后，生成该主体时会自动引用其图片。', 'Add entity names to use their images as reference when generating this entity.')}</p>
+                                         <div className="bg-black/20 p-3 rounded-lg border border-white/5">
+                                             <div className="flex flex-wrap gap-2 mb-2">
+                                                 {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, i) => (
+                                                     <div key={i} className="px-2 py-1 bg-primary/20 text-primary border border-primary/20 rounded text-xs flex items-center gap-2 group">
+                                                         <span className="font-bold">{typeof dep === 'string' ? dep : JSON.stringify(dep)}</span>
+                                                         <button 
+                                                            onClick={() => {
+                                                                 const current = parseVisualDependencies(viewingEntity.visual_dependencies);
+                                                                 const newDeps = current.filter(d => d !== dep);
+                                                                 handleFieldUpdate('visual_dependencies', newDeps);
+                                                            }} 
+                                                            className="hover:text-white opacity-50 group-hover:opacity-100"
+                                                        >
+                                                            <X size={10}/>
+                                                        </button>
+                                                     </div>
+                                                 ))}
+                                             </div>
+                                             
+                                             <div className="relative flex items-center gap-2">
+                                                 <input 
+                                                     type="text" 
+                                                     placeholder="Type Entity Name & Enter..." 
+                                                     className="w-full bg-transparent text-xs outline-none text-white/90 placeholder:text-white/20"
+                                                     id="dep-input"
+                                                     onKeyDown={(e) => {
+                                                         if (e.key === 'Enter') {
+                                                             const val = e.currentTarget.value.trim();
+                                                             if(val) {
+                                                                const current = parseVisualDependencies(viewingEntity.visual_dependencies);
+                                                                if(!current.includes(val)) {
+                                                                     handleFieldUpdate('visual_dependencies', [...current, val]);
+                                                                }
+                                                                e.currentTarget.value = '';
+                                                             }
+                                                         }
+                                                     }}
+                                                 />
+                                                 <Plus className="w-3 h-3 text-muted-foreground cursor-pointer hover:text-white" onClick={() => {
+                                                     const input = document.getElementById('dep-input');
+                                                     if (!input) return;
+                                                     const val = input.value.trim();
+                                                     if (val) {
+                                                         const current = parseVisualDependencies(viewingEntity.visual_dependencies);
+                                                         if(!current.includes(val)) {
+                                                             handleFieldUpdate('visual_dependencies', [...current, val]);
+                                                         }
+                                                         input.value = '';
+                                                     }
+                                                 }}/>
+                                             </div>
+                                         </div>
+                                    </div>
+                                    {/* Create Mode Actions */}
+                                    {viewingEntity.id === 'new' && (
+                                        <div className="mt-8 pt-4 border-t border-white/10 flex justify-end gap-3 sticky bottom-0 bg-[#1e1e1e] pb-2 z-10">
+                                            <button 
+                                                onClick={() => setViewingEntity(null)}
+                                                className="px-4 py-2 rounded-lg font-bold text-xs text-muted-foreground hover:bg-white/10 transition-colors uppercase"
+                                            >
+                                                {t('取消', 'Cancel')}
+                                            </button>
+                                            <button 
+                                                onClick={handleCommitCreate}
+                                                className="px-6 py-2 rounded-lg font-bold text-xs bg-primary text-black hover:brightness-110 flex items-center gap-2 uppercase tracking-wide shadow-lg shadow-primary/20 transition-all active:scale-95"
+                                            >
+                                                <Plus size={14} strokeWidth={3} /> {t('创建主体', 'Create Subject')}
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {/* Attributes Display - Show ALL fields except the ones already shown above */
+                                    (() => {
+                                        const hiddenFields = ['id', 'project_id', 'image_url', 'created_at', 'updated_at', 'name', 'name_en', 'description', 
+                                            'author_id', 'role', 'archetype', 'gender', 'appearance_cn', 'clothing', 'generation_prompt_cn', 'generation_prompt_en', 'visual_dependencies', 'type', 'project', 'dependency_strategy', 'action_characteristics', 'anchor_description', 'custom_attributes'];
+                                        
+                                        // Flatten custom_attributes into the view if they exist
+                                        let mergedSource = { ...viewingEntity };
+                                        if (viewingEntity.custom_attributes && typeof viewingEntity.custom_attributes === 'object') {
+                                            mergedSource = { ...viewingEntity.custom_attributes, ...mergedSource };
+                                        }
+
+                                        // Merge known extra fields with potentially new ones, excluding standard
+                                        const extraFields = Object.entries(mergedSource).filter(([key, val]) => 
+                                            !hiddenFields.includes(key) && 
+                                            val !== null && 
+                                            val !== undefined
+                                        );
+
+                                        return (
+                                            <div className="space-y-2 pt-4 border-t border-white/5">
+                                                <div className="flex justify-between items-center">
+                                                    <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('其他属性', 'Other Attributes')}</h4>
+                                                    <button 
+                                                        onClick={async () => {
+                                                            const key = await promptUiMessage("Enter new attribute name:", {
+                                                                title: 'Add Attribute',
+                                                                confirmText: 'Add',
+                                                                cancelText: 'Cancel',
+                                                                placeholder: 'attribute_key',
+                                                            });
+                                                            if (key && !viewingEntity[key] && !hiddenFields.includes(key)) {
+                                                                setViewingEntity(prev => ({...prev, [key]: "New Value"}));
+                                                                // Auto save? Maybe wait for value edit.
+                                                            }
+                                                        }}
+                                                        className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded text-white"
+                                                    >
+                                                        + Add
+                                                    </button>
+                                                </div>
+                                                <div className="grid grid-cols-1 gap-2">
+                                                    {extraFields.map(([key, value]) => (
+                                                        <div key={key} className="p-3 bg-white/5 rounded-lg text-xs space-y-1 group relative">
+                                                            <div className="flex justify-between">
+                                                                <span className="opacity-50 font-mono uppercase text-[10px] break-all">{key.replace(/_/g, ' ')}</span>
+                                                                <button 
+                                                                    onClick={async () => {
+                                                                        if(!await confirmUiMessage(`Delete attribute ${key}?`)) return;
+                                                                        const updated = { ...viewingEntity };
+                                                                        delete updated[key];
+                                                                        setViewingEntity(updated);
+                                                                        setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+                                                                        setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+                                                                        // For API, we might need to send null or special flag if backend handles it, 
+                                                                        // but typically PUT replaces. If PATCH, we might need to set to null.
+                                                                        // Assuming partial update, set to null to delete? Or backend ignores missing?
+                                                                        // If backend is SQLModel/Pydantic with extra=ignore, it might persist.
+                                                                        // Let's assume we send null to clear.
+                                                                        updateEntity(updated.id, { [key]: null }); 
+                                                                    }}
+                                                                    className="opacity-0 group-hover:opacity-100 text-red-500 hover:text-red-400 p-1"
+                                                                >
+                                                                    <Trash2 size={12} />
+                                                                </button>
+                                                            </div>
+                                                            <textarea
+                                                                value={typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+                                                                onChange={(e) => {
+                                                                    setViewingEntity(prev => ({ ...prev, [key]: e.target.value }));
+                                                                }}
+                                                                onBlur={(e) => {
+                                                                    let val = e.target.value;
+                                                                    // Try to parse JSON if it looks like object
+                                                                    if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
+                                                                        try { val = JSON.parse(val); } catch(err) {} 
+                                                                    }
+                                                                    const updated = { ...viewingEntity, [key]: val };
+                                                                    setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+                                                                    setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+                                                                    updateEntity(updated.id, { [key]: val });
+                                                                }}
+                                                                className="w-full bg-transparent border-none focus:bg-black/20 focus:ring-1 focus:ring-primary rounded p-1 outline-none font-mono resize-y min-h-[40px]" 
+                                                            />
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+
+                                </div>
+                                
+                                <div className="p-4 border-t border-white/10 bg-black/20 flex justify-end gap-3">
+                                    <button
+                                        onClick={() => handleCopyEntityWithLLM(viewingEntity)}
+                                        disabled={isCopyingEntity || viewingEntity?.id === 'new'}
+                                        className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isCopyingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Copy size={16} />} {t('复制并AI生成', 'Copy + AI Generate')}
+                                    </button>
+                                    <button 
+                                        onClick={(e) => handleDeleteEntity(e, viewingEntity)}
+                                        className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-md text-sm font-bold transition-colors flex items-center gap-2"
+                                    >
+                                        <Trash2 size={16} /> Delete
+                                    </button>
+                                    <button 
+                                        onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'generate'); }}
+                                        disabled={viewingEntityImageLocked}
+                                        className="px-4 py-2 bg-primary hover:bg-primary/90 text-black rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <Wand2 size={16} /> Generate Image
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </div>
+                        );
+                    })()
+                )}
+            </AnimatePresence>
+
+            {/* Image Selection Modal */}
+            <AnimatePresence>
+                {showImageModal && (
+                    (() => {
+                        const selectedEntityImageLocked = isSubjectImageActionLocked(selectedEntity) || (isBatchGeneratingEntities && !selectedEntity?.image_url && !getSubjectImageJobEntry(selectedEntity));
+                        const selectedEntityHasRunningImageJob = Boolean(selectedEntity?.id && getSubjectImageJobEntry(selectedEntity)) || (isBatchGeneratingEntities && !selectedEntity?.image_url && !getSubjectImageJobEntry(selectedEntity));
+                        return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="bg-[#1e1e1e] border border-white/10 rounded-xl w-full max-w-2xl h-[650px] flex flex-col shadow-2xl overflow-hidden"
+                        >
+                            <div className="flex justify-between items-center p-4 border-b border-white/10 bg-black/20">
+                                <h3 className="font-bold text-lg">{t('为主体选择图片', 'Select Image for')} {selectedEntity?.name}</h3>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleRemoveEntityImage(selectedEntity)}
+                                        disabled={selectedEntityImageLocked || !selectedEntity?.image_url}
+                                        className="inline-flex items-center gap-1 rounded border border-amber-400/25 bg-amber-500/10 px-2.5 py-1.5 text-xs font-bold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title={selectedEntityImageLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                    >
+                                        <Unlink size={14} />
+                                        {t('移除图片', 'Remove Image')}
+                                    </button>
+                                    <button onClick={() => setShowImageModal(false)} className="text-white/50 hover:text-white">
+                                        <X size={20} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {selectedEntityImageLocked && (
+                                <div className="px-4 py-2 border-b border-amber-400/20 bg-amber-500/10 text-xs text-amber-100">
+                                    {t('当前主体图片任务运行中。更换、上传、移除和高级改图操作已暂时锁定；如需处理，请先停止任务。', 'A subject image job is currently running. Replace, upload, remove, and advanced image editing actions are temporarily locked; stop the job first if you need to modify the image.')}
+                                </div>
+                            )}
+
+                            <div className="flex border-b border-white/10">
+                                {['library', 'upload', 'generate', 'advanced'].map(tab => (
+                                    <button
+                                        key={tab}
+                                        onClick={() => setImageModalTab(tab)}
+                                        disabled={selectedEntityImageLocked && tab !== 'generate'}
+                                        className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${imageModalTab === tab ? 'border-primary text-primary bg-primary/5' : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'}`}
+                                    >
+                                        {tab === 'library'
+                                            ? t('素材库', 'Library')
+                                            : tab === 'upload'
+                                                ? t('上传', 'Upload')
+                                                : tab === 'generate'
+                                                    ? t('生成', 'Generate')
+                                                    : t('高级', 'Advanced')}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div
+                                ref={imageLibraryViewportRef}
+                                onScroll={(e) => setImageLibraryScrollTop(e.currentTarget.scrollTop || 0)}
+                                className="flex-1 overflow-y-auto p-4 custom-scrollbar"
+                            >
+                                {imageModalTab === 'library' && (
+                                    <div>
+                                        <div className="mb-3 grid grid-cols-1 sm:grid-cols-[1fr_180px_180px_auto] gap-2">
+                                            <input
+                                                type="text"
+                                                value={assetKeyword}
+                                                onChange={(e) => setAssetKeyword(e.target.value)}
+                                                placeholder={t('搜索素材名称/项目/类型/备注', 'Search name/project/type/remark')}
+                                                className="bg-black/40 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:border-primary/50 outline-none"
+                                            />
+                                            <select
+                                                value={assetProjectFilter}
+                                                onChange={(e) => setAssetProjectFilter(e.target.value)}
+                                                className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
+                                            >
+                                                <option value="all">{t('全部项目', 'All Projects')}</option>
+                                                {assetProjectOptions.map((item) => (
+                                                    <option key={item.value} value={item.value}>{item.label}</option>
+                                                ))}
+                                            </select>
+                                            <select
+                                                value={assetImageTypeFilter}
+                                                onChange={(e) => setAssetImageTypeFilter(e.target.value)}
+                                                className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
+                                            >
+                                                <option value="all">{t('全部图片类型', 'All Image Types')}</option>
+                                                {assetImageTypeOptions.map((item) => (
+                                                    <option key={item.value} value={item.value}>{item.label}</option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                onClick={() => {
+                                                    setAssetKeyword('');
+                                                    setAssetProjectFilter('all');
+                                                    setAssetImageTypeFilter('all');
+                                                }}
+                                                className="px-3 py-2 rounded-md text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
+                                            >
+                                                {t('重置', 'Reset')}
+                                            </button>
+                                        </div>
+                                        {imageLibraryWindow.topSpacerHeight > 0 && <div style={{ height: `${imageLibraryWindow.topSpacerHeight}px` }} />}
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                                        {imageLibraryVisibleAssets.map(asset => (
+                                            <div 
+                                                key={asset.id} 
+                                                onClick={() => {
+                                                    if (selectedEntityImageLocked) {
+                                                        notifySubjectImageActionLocked(selectedEntity);
+                                                        return;
+                                                    }
+                                                    handleSelectAsset(asset);
+                                                }}
+                                                className={`aspect-square bg-black/40 rounded-lg overflow-hidden border border-white/5 group relative ${selectedEntityImageLocked ? 'cursor-not-allowed opacity-60' : 'hover:border-primary/50 cursor-pointer'}`}
+                                            >
+                                                <AssetHoverMetaOverlay asset={asset} t={t} />
+                                                <SafeImage src={asset.url} alt="asset" className="w-full h-full object-cover" />
+                                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
+                                            </div>
+                                        ))}
+                                        </div>
+                                        {imageLibraryWindow.bottomSpacerHeight > 0 && <div style={{ height: `${imageLibraryWindow.bottomSpacerHeight}px` }} />}
+                                        {assetsLoading ? (
+                                            <div className="py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                                {t('素材加载中...', 'Loading assets...')}
+                                            </div>
+                                        ) : filteredAssets.length === 0 && (
+                                            <div className="py-12 text-center text-muted-foreground">
+                                                {t('没有匹配筛选条件的素材', 'No assets matched current filters')}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {imageModalTab === 'upload' && (
+                                    <div className="flex flex-col items-center justify-center h-full space-y-4">
+                                        <div className="p-8 border-2 border-dashed border-white/10 rounded-xl bg-black/20 hover:border-primary/50 hover:bg-primary/5 transition-all w-full max-w-sm flex flex-col items-center justify-center cursor-pointer relative">
+                                            <input 
+                                                type="file" 
+                                                accept="image/*" 
+                                                onChange={handleUpload}
+                                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                                disabled={uploading || selectedEntityImageLocked} 
+                                            />
+                                            {uploading ? (
+                                                <RefreshCw className="animate-spin text-primary mb-2" size={32} />
+                                            ) : (
+                                                <Upload className="text-muted-foreground mb-2" size={32} />
+                                            )}
+                                            <span className="text-sm font-medium text-muted-foreground">
+                                                {uploading ? t('上传中...', 'Uploading...') : t('点击或拖拽图片到此处', 'Click or drop image here')}
+                                            </span>
+                                        </div>
+                                        
+                                        <div className="w-full max-w-sm mt-8">
+                                             <div className="text-xs text-muted-foreground mb-2 uppercase font-bold tracking-wider">{t('或通过 URL 导入', 'Or import from URL')}</div>
+                                             <div className="flex gap-2">
+                                                <input 
+                                                    type="text" 
+                                                    placeholder={t('请输入图片链接（https://...）', 'Enter image URL (https://...)')} 
+                                                    className="flex-1 bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:border-primary/50 outline-none"
+                                                    disabled={selectedEntityImageLocked}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') updateEntityImage(e.target.value);
+                                                    }}
+                                                />
+                                                <button disabled={selectedEntityImageLocked} className="p-2 bg-white/10 hover:bg-white/20 rounded-md disabled:opacity-50 disabled:cursor-not-allowed">
+                                                    <LinkIcon size={18} />
+                                                </button>
+                                             </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {imageModalTab === 'advanced' && (
+                                    <div className="flex flex-col h-full">
+                                        <div className="mb-4">
+                                            <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">{t('高级优化', 'Advanced Refinement')}</h4>
+                                            <p className="text-[10px] text-white/50 mb-4">
+                                                Use AI to refine or modify the image with step-by-step instructions.
+                                            </p>
+                                        </div>
+                                        <div className="flex-1">
+                                            <RefineControl 
+                                                originalText={selectedEntity?.generation_prompt_en || ""}
+                                                onUpdate={(txt) => {
+                                                    const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
+                                                    setPrompt(txt);
+                                                    setPromptDrafts(prev => ({ ...prev, [currentLang]: txt }));
+                                                }}
+                                                currentImage={selectedEntity?.image_url}
+                                                onImageUpdate={updateEntityImage}
+                                                projectId={projectId}
+                                                featureInjector={(text) => {
+                                                    const epInfo = currentEpisode?.episode_info || {};
+                                                    const processed = processPrompt(text, epInfo, allEntities);
+                                                    return { text: processed, modified: processed !== text };
+                                                }}
+                                                onPickMedia={(cb) => openMediaPicker(cb, { entityId: selectedEntity?.id })}
+                                                type="image"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+
+                                {imageModalTab === 'generate' && (
+                                    <div className="flex flex-col h-full">
+                                        {selectedEntityHasRunningImageJob && (
+                                            <div className="mb-3 rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-2">
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <RefreshCw className="animate-spin" size={12} />}
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)]
+                                                        ? t('该主体停止请求发送中，请稍候。', 'Stop request is being sent for this subject. Please wait.')
+                                                        : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'persisting'
+                                                            ? t('该主体已完成生成，正在等待稳定图片同步到素材库。', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
+                                                        : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'running'
+                                                            ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
+                                                            : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'queued'
+                                                                ? t('该主体正在排队中，开始后将自动运行。', 'This subject is queued and will run automatically once started.')
+                                                                : t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleForceStopSubjectImage}
+                                                    disabled={Boolean(stoppingSubjectImageJobs[String(selectedEntity.id)])}
+                                                    className="shrink-0 inline-flex items-center gap-1 rounded border border-red-400/30 bg-red-500/15 px-2 py-1 text-[11px] font-bold text-red-100 hover:bg-red-500/25 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                                                    title={t('强制停止该主体的后台图片任务，并解除当前运行状态', 'Force-stop this subject background image task and clear the current running state')}
+                                                >
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <X size={12} />}
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}
+                                                </button>
+                                            </div>
+                                        )}
+                                        <textarea
+                                            value={prompt}
+                                            onChange={(e) => {
+                                                const nextText = e.target.value;
+                                                const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
+                                                setPrompt(nextText);
+                                                setPromptDrafts(prev => ({ ...prev, [currentLang]: nextText }));
+                                            }}
+                                            placeholder="Describe the image you want to generate. Use [Global Style] for episode style. Prefer CHAR:[@Name] (or [@Name]) to reference subjects."
+                                            className="w-full h-32 bg-black/40 border border-white/10 rounded-lg p-4 text-sm focus:border-primary/50 outline-none resize-none mb-4"
+                                        />
+                                        
+                                        {/* Auto-detected Visual Dependencies */}
+                                        {parseVisualDependencies(selectedEntity?.visual_dependencies).length > 0 && (
+                                            <div className="mb-4">
+                                                <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('视觉依赖（自动使用）', 'Visual Dependencies (Auto-Used)')}</label>
+                                                <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
+                                                    {parseVisualDependencies(selectedEntity.visual_dependencies).map((dep, idx) => {
+                                                        const startDep = String(dep).trim();
+                                                        const startDepNormalized = normalizeEntityToken(startDep);
+                                                        
+                                                        const depEntity = allEntities.find(e => {
+                                                            if (!e) return false;
+                                                            const entityId = String(e.id || '').trim();
+                                                            const entityName = normalizeEntityToken(e.name || '');
+                                                            const entityNameEn = normalizeEntityToken(e.name_en || '');
+                                                            if (entityId && entityId === startDep) return true;
+                                                            if (startDepNormalized && entityName && entityName === startDepNormalized) return true;
+                                                            if (startDepNormalized && entityNameEn && entityNameEn === startDepNormalized) return true;
+                                                            return false;
+                                                        });
+                                                        
+                                                        return (
+                                                            <div key={idx} className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group">
+                                                                <div className="aspect-square bg-black rounded overflow-hidden">
+                                                                     {depEntity?.image_url ? (
+                                                                         <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" />
+                                                                     ) : (
+                                                                         <div className="w-full h-full flex items-center justify-center bg-white/5">
+                                                                             <Users size={16} className="text-white/20"/>
+                                                                         </div>
+                                                                     )}
+                                                                </div>
+                                                                <div className="text-[10px] truncate font-bold text-white px-0.5" title={dep}>
+                                                                    {depEntity ? depEntity.name : dep}
+                                                                </div>
+                                                                {!depEntity && (
+                                                                    <div className="text-[8px] text-red-400 px-0.5">
+                                                                        {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        {/* Reference Image Select */}
+                                        <div className="mb-4 relative">
+                                                 <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('参考图（可选）', 'Ref Image (Optional)')}</label>
+                                                 
+                                                 {!refImage ? (
+                                                     <div className="flex gap-2 items-center">
+                                                          <div className="flex-1 flex gap-2">
+                                                              {/* Selection Buttons */}
+                                                              <button 
+                                                                onClick={() => setRefSelectionMode(refSelectionMode === 'assets' ? null : 'assets')}
+                                                                className={`p-2 rounded border border-white/10 text-xs font-bold hover:bg-white/10 flex items-center gap-1 ${refSelectionMode === 'assets' ? 'bg-primary/20 text-primary border-primary/50' : 'bg-black/40 text-muted-foreground'}`}
+                                                              >
+                                                                  <FolderOpen size={14} /> Assets
+                                                              </button>
+                                                              <div className="relative overflow-hidden w-24">
+                                                                  <button className="w-full p-2 bg-black/40 border border-white/10 rounded text-xs font-bold hover:bg-white/10 text-muted-foreground flex items-center gap-1 justify-center">
+                                                                    <Upload size={14} /> Upload
+                                                                  </button>
+                                                                  <input 
+                                                                    type="file" 
+                                                                    className="absolute inset-0 opacity-0 cursor-pointer" 
+                                                                    accept="image/*"
+                                                                    onChange={handleRefUpload}
+                                                                  />
+                                                              </div>
+                                                          </div>
+                                                          
+                                                          {/* URL Input (Fallback) */}
+                                                          <div className="w-1/3 relative">
+                                                              <input 
+                                                                  type="text" 
+                                                                  placeholder="URL..." 
+                                                                  onBlur={(e) => {
+                                                                      if (e.target.value) setRefImage({ url: e.target.value, name: 'External URL', type: 'image' });
+                                                                  }}
+                                                                  onKeyDown={(e) => {
+                                                                        if (e.key === 'Enter' && e.target.value) setRefImage({ url: e.target.value, name: 'External URL', type: 'image' });
+                                                                  }}
+                                                                  className="w-full bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
+                                                              />
+                                                          </div>
+                                                     </div>
+                                                 ) : (
+                                                     // Selected Preview State
+                                                     <div className="flex gap-3 bg-black/40 border border-white/10 rounded-lg p-2 items-center relative group">
+                                                         <div className="w-10 h-10 bg-black rounded overflow-hidden flex-shrink-0 border border-white/5">
+                                                             <SafeImage src={refImage.url} alt="ref" className="w-full h-full object-cover" />
+                                                         </div>
+                                                         <div className="flex-1 overflow-hidden">
+                                                             <div className="text-xs font-bold text-white truncate">{refImage.name || 'Reference Image'}</div>
+                                                             <div className="text-[10px] text-muted-foreground flex gap-2">
+                                                                 <span>{refImage.dimensions || 'Unknown Size'}</span>
+                                                                 {refImage.type && <span className="uppercase">{refImage.type}</span>}
+                                                             </div>
+                                                         </div>
+                                                         <button 
+                                                             onClick={() => setRefImage(null)}
+                                                             className="p-1 hover:bg-white/10 rounded-md text-white/50 hover:text-white"
+                                                         >
+                                                             <X size={14} />
+                                                         </button>
+                                                     </div>
+                                                 )}
+
+                                                 {/* Asset Picker Popover */}
+                                                 {refSelectionMode === 'assets' && !refImage && (
+                                                     <div className="absolute top-full left-0 right-0 mt-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl h-64 overflow-hidden flex flex-col">
+                                                         <div className="p-2 border-b border-white/10 flex justify-between items-center bg-black/20">
+                                                             <span className="text-xs font-bold text-muted-foreground ml-2">{t('从素材中选择', 'Select from Assets')}</span>
+                                                             <button onClick={() => setRefSelectionMode(null)}><X size={14} className="text-white/50 hover:text-white"/></button>
+                                                         </div>
+                                                         <div className="px-2 py-2 border-b border-white/10 bg-black/20 grid grid-cols-1 sm:grid-cols-[1fr_130px_130px] gap-2">
+                                                             <input
+                                                                 type="text"
+                                                                 value={assetKeyword}
+                                                                 onChange={(e) => setAssetKeyword(e.target.value)}
+                                                                 placeholder={t('搜索素材', 'Search assets')}
+                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                             />
+                                                             <select
+                                                                 value={assetProjectFilter}
+                                                                 onChange={(e) => setAssetProjectFilter(e.target.value)}
+                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                             >
+                                                                 <option value="all">{t('全部项目', 'All Projects')}</option>
+                                                                 {assetProjectOptions.map((item) => (
+                                                                     <option key={item.value} value={item.value}>{item.label}</option>
+                                                                 ))}
+                                                             </select>
+                                                             <select
+                                                                 value={assetImageTypeFilter}
+                                                                 onChange={(e) => setAssetImageTypeFilter(e.target.value)}
+                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                             >
+                                                                 <option value="all">{t('全部类型', 'All Types')}</option>
+                                                                 {assetImageTypeOptions.map((item) => (
+                                                                     <option key={item.value} value={item.value}>{item.label}</option>
+                                                                 ))}
+                                                             </select>
+                                                         </div>
+                                                         <div
+                                                             ref={imageRefPickerViewportRef}
+                                                             onScroll={(e) => setImageRefPickerScrollTop(e.currentTarget.scrollTop || 0)}
+                                                             className="flex-1 overflow-y-auto p-2 custom-scrollbar"
+                                                         >
+                                                             {imageRefPickerWindow.topSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.topSpacerHeight}px` }} />}
+                                                             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                                                                 {imageRefPickerVisibleAssets.map(asset => (
+                                                                     <div 
+                                                                         key={asset.id} 
+                                                                         onClick={() => {
+                                                                             setRefImage(asset);
+                                                                             setRefSelectionMode(null);
+                                                                         }}
+                                                                         className="aspect-square bg-black/40 rounded border border-white/5 hover:border-primary/50 cursor-pointer overflow-hidden relative group"
+                                                                     >
+                                                                         <AssetHoverMetaOverlay asset={asset} t={t} />
+                                                                         <SafeImage src={asset.url} alt={asset.name} className="w-full h-full object-cover" />
+                                                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
+                                                                     </div>
+                                                                 ))}
+                                                             </div>
+                                                             {imageRefPickerWindow.bottomSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.bottomSpacerHeight}px` }} />}
+                                                             {assetsLoading ? (
+                                                                 <div className="py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                                                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                     {t('素材加载中...', 'Loading assets...')}
+                                                                 </div>
+                                                             ) : filteredAssets.length === 0 && (
+                                                                 <div className="py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
+                                                             )}
+                                                         </div>
+                                                     </div>
+                                                 )}
+                                        </div>
+
+                                        <div className="mb-3 text-[11px] text-muted-foreground">
+                                            {t('当前提交语言：', 'Current submit language: ')}
+                                            {tempPromptSubmitLang
+                                                ? `${promptLangText(tempPromptSubmitLang)} (${t('手动临时', 'Temporary')})`
+                                                : `${promptLangPrefText(promptSubmitLangPref)}${promptSubmitLangPref === 'auto' ? ` -> ${promptLangText(resolvedPromptSubmitLang)}` : ''}`
+                                            }
+                                            {` ${t('→ 生效：', '-> Effective: ')}${promptLangText(effectivePromptSubmitLang)}`}
+                                        </div>
+
+                                        <div className="flex justify-end items-center gap-2">
+                                            <FunctionApiSelector functionName="generate_subjects" configs={functionApiConfigs} />
+                                            <button
+                                                onClick={handleGenerate}
+                                                disabled={generating || selectedEntityHasRunningImageJob || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}
+                                                className="flex items-center space-x-2 bg-primary text-black px-6 py-2 rounded-lg font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                                            >
+                                                {generating || selectedEntityHasRunningImageJob ? (
+                                                    <RefreshCw className="animate-spin" size={18} />
+                                                ) : (
+                                                    <Wand2 size={18} />
+                                                )}
+                                                <span>{(generating || selectedEntityHasRunningImageJob) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}</span>
+                                            </button>
+                                            <div className="relative">
+                                                <button
+                                                    onClick={() => setShowPromptLangMenu(prev => !prev)}
+                                                    disabled={generating || selectedEntityHasRunningImageJob}
+                                                    className="h-full px-2 py-2 rounded-lg border border-white/15 bg-black/30 text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50"
+                                                    title={t('临时切换本次提交语种', 'Temporarily switch submit language for this generation')}
+                                                >
+                                                    <ChevronDown size={16} />
+                                                </button>
+                                                {showPromptLangMenu && (
+                                                    <div className="absolute right-0 mt-2 w-48 rounded-lg border border-white/10 bg-[#121212] shadow-2xl z-20 overflow-hidden">
+                                                        <button
+                                                            onClick={() => {
+                                                                setTempPromptSubmitLang('');
+                                                                setShowPromptLangMenu(false);
+                                                            }}
+                                                            className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === '' ? 'text-primary' : 'text-white/80'}`}
+                                                        >
+                                                            {t('跟随设置默认', 'Follow settings default')} ({promptLangPrefText(promptSubmitLangPref)}{promptSubmitLangPref === 'auto' ? ` -> ${promptLangText(resolvedPromptSubmitLang)}` : ''})
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                setTempPromptSubmitLang('en');
+                                                                setShowPromptLangMenu(false);
+                                                            }}
+                                                            className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'en' ? 'text-primary' : 'text-white/80'}`}
+                                                        >
+                                                            {t('临时改为英文提交', 'Temporarily submit in English')}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                setTempPromptSubmitLang('cn');
+                                                                setShowPromptLangMenu(false);
+                                                            }}
+                                                            className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'cn' ? 'text-primary' : 'text-white/80'}`}
+                                                        >
+                                                            {t('临时改为中文提交', 'Temporarily submit in Chinese')}
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div>
+                                                    <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
+                                                    <div className="text-[11px] text-muted-foreground">{t('显示该主体最近的生图与重构结果。', 'Recent subject image and reconstruction results for this subject.')}</div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => fetchSubjectGenerationHistory(selectedEntity)}
+                                                    disabled={subjectGenerationHistoryLoading || !selectedEntity?.id}
+                                                    className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
+                                                >
+                                                    <RefreshCw className={subjectGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
+                                                    {t('刷新', 'Refresh')}
+                                                </button>
+                                            </div>
+                                            {subjectGenerationHistoryLoading ? (
+                                                <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-6 text-xs text-muted-foreground">
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                    {t('正在加载主体生成历史...', 'Loading subject generation history...')}
+                                                </div>
+                                            ) : subjectGenerationHistory.length === 0 ? (
+                                                <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
+                                                    {t('该主体还没有生成历史。', 'No generation history for this subject yet.')}
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-2 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
+                                                    {subjectGenerationHistory.map((item) => {
+                                                        const itemId = String(item?.job_id || item?.id || Math.random()).trim();
+                                                        const status = String(item?.status || '').trim().toLowerCase();
+                                                        const canPreview = Boolean(item?.resultUrl);
+                                                        const createdText = item?.created_at ? new Date(item.created_at).toLocaleString() : '-';
+                                                        const isDeleting = subjectGenerationHistoryDeletingId === itemId;
+                                                        return (
+                                                            <div key={itemId} className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                                                                <div className="flex gap-3">
+                                                                    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-black/40 flex items-center justify-center">
+                                                                        {canPreview ? (
+                                                                            <SafeImage src={item.resultUrl} className="h-full w-full object-cover" fallback={<ImageIcon className="h-5 w-5 opacity-40" />} />
+                                                                        ) : (
+                                                                            <ImageIcon className="h-5 w-5 opacity-40" />
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="min-w-0 flex-1 space-y-1">
+                                                                        <div className="flex items-start justify-between gap-2">
+                                                                            <div className="min-w-0">
+                                                                                <div className="truncate text-sm font-semibold text-white">{item.displayLabel}</div>
+                                                                                <div className="text-[11px] text-muted-foreground truncate">{item.subjectName || selectedEntity?.name || '-'}</div>
+                                                                            </div>
+                                                                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : status === 'failed' ? 'bg-red-500/15 text-red-200' : status === 'canceled' ? 'bg-slate-500/20 text-slate-200' : 'bg-amber-500/15 text-amber-100'}`}>
+                                                                                {status || 'unknown'}
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="text-[11px] text-muted-foreground">{createdText}</div>
+                                                                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => canPreview && updateEntityImage(item.resultUrl)}
+                                                                                disabled={!canPreview}
+                                                                                className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
+                                                                            >
+                                                                                <ImageIcon size={12} />
+                                                                                {t('设为当前', 'Use Result')}
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => canPreview && window.open(getFullUrl(item.resultUrl), '_blank', 'noopener,noreferrer')}
+                                                                                disabled={!canPreview}
+                                                                                className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
+                                                                            >
+                                                                                <ExternalLink size={12} />
+                                                                                {t('查看', 'Open')}
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleDeleteSubjectGenerationHistoryItem(item)}
+                                                                                disabled={isDeleting}
+                                                                                className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                                                                            >
+                                                                                {isDeleting ? <Loader2 className="animate-spin" size={12} /> : <Trash2 size={12} />}
+                                                                                {isDeleting ? t('删除中', 'Deleting') : t('删除记录', 'Delete Record')}
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                        
+                                    </div>
+                                )}
+                            </div>
+                        </motion.div>
+                    </div>
+                        );
+                    })()
+                )}
+            </AnimatePresence>
+            
+            <MediaPickerModal 
+                isOpen={pickerConfig.isOpen}
+                onClose={() => setPickerConfig(prev => ({ ...prev, isOpen: false }))}
+                onSelect={(url, type) => {
+                    if (pickerConfig.callback) pickerConfig.callback(url, type);
+                    setPickerConfig(prev => ({ ...prev, isOpen: false }));
+                }}
+                projectId={projectId}
+                context={pickerConfig.context}
+                entities={allEntities}
+                episodeId={currentEpisode?.id}
+                uiLang={uiLang}
+            />
+        </div>
+    );
+};
+
