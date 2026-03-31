@@ -6969,6 +6969,16 @@ def _attach_project_flags(project: Project, current_user: User) -> Project:
     return project
 
 def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
+    # 0. 优先使用名为“封面海报”的subject图片
+    poster_entity = db.query(Entity).filter(
+        Entity.project_id == project_id,
+        Entity.name == "封面海报",
+        Entity.image_url != None,
+        Entity.image_url != ""
+    ).first()
+    if poster_entity:
+        return poster_entity.image_url
+
     project = db.query(Project).filter(Project.id == project_id).first()
     if project and isinstance(project.global_info, dict):
         configured_cover = str(project.global_info.get("cover_image") or project.global_info.get("coverImage") or "").strip()
@@ -19399,6 +19409,8 @@ def update_user_credits(
 
 class GenerationRequest(BaseModel):
     prompt: str
+    system_api_id: Optional[int] = None
+    function_name: Optional[str] = None
     negative_prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -21513,6 +21525,43 @@ async def generate_image_endpoint(
         )
 
 
+
+def resolve_function_apis(db: Session, function_name: str, selected_system_api_id: Optional[int]):
+    from backend.app.models.all_models import FunctionAPIConfig, SystemAPISetting
+    config = db.query(FunctionAPIConfig).filter(FunctionAPIConfig.function_name == function_name).first()
+    if not config or not config.api_settings:
+        if selected_system_api_id:
+            api = db.query(SystemAPISetting).filter(SystemAPISetting.id == selected_system_api_id, SystemAPISetting.deprecated == False).first()
+            if api:
+                return [api]
+        return []
+    
+    settings = config.api_settings
+    primary_id = selected_system_api_id
+    
+    fallbacks = [s for s in settings if s.get('is_fallback')]
+    fallbacks.sort(key=lambda x: x.get('priority', 0), reverse=True)
+    fallback_ids = [s.get('system_api_id') for s in fallbacks]
+    
+    api_ids = []
+    if primary_id:
+        api_ids.append(primary_id)
+    for fid in fallback_ids:
+        if fid not in api_ids:
+            api_ids.append(fid)
+            
+    if not api_ids:
+        for s in settings:
+            if s.get('system_api_id') not in api_ids:
+                api_ids.append(s.get('system_api_id'))
+                
+    result = []
+    for aid in api_ids:
+        api = db.query(SystemAPISetting).filter(SystemAPISetting.id == aid, SystemAPISetting.deprecated == False).first()
+        if api:
+            result.append(api)
+    return result
+
 def _resolve_media_runtime_target(
     *,
     provider: Optional[str],
@@ -21776,42 +21825,44 @@ async def _run_generate_image(
         project_visual = _pick_visual_from_info(project_global_info)
 
         # Fill remaining blanks with project-level defaults.
-        if not aspect_ratio and project_visual.get("aspect_ratio"):
-            aspect_ratio = str(project_visual.get("aspect_ratio")).strip() or None
-        if not width and project_visual.get("width"):
-            width = project_visual.get("width")
-        if not height and project_visual.get("height"):
-            height = project_visual.get("height")
-        if not image_size:
-            raw_size = _normalize_project_image_size(project_visual.get("image_size"))
-            if raw_size:
-                image_size = raw_size
+        is_keyframe_generation = asset_type in {"keyframe", "shot", "start_frame", "end_frame", "shot_image"}
+        if not is_keyframe_generation:
+            if not aspect_ratio and project_visual.get("aspect_ratio"):
+                aspect_ratio = str(project_visual.get("aspect_ratio")).strip() or None
+            if not width and project_visual.get("width"):
+                width = project_visual.get("width")
+            if not height and project_visual.get("height"):
+                height = project_visual.get("height")
+            if not image_size:
+                raw_size = _normalize_project_image_size(project_visual.get("image_size"))
+                if raw_size:
+                    image_size = raw_size
 
-        # Compatibility: support resolution strings like "1920x1080" from project/episode defaults.
-        if not width or not height:
-            resolution_candidates = [
-                project_visual.get("resolution"),
-                project_global_info.get("resolution"),
-                project_global_info.get("image_resolution"),
-            ]
-            for candidate in resolution_candidates:
-                parsed_w, parsed_h = _parse_resolution_dims(candidate)
-                if parsed_w and parsed_h:
-                    if not width:
-                        width = parsed_w
-                    if not height:
-                        height = parsed_h
-                    if not image_size:
-                        long_side = max(parsed_w, parsed_h)
-                        if long_side >= 3200:
-                            image_size = "4K"
-                        elif long_side >= 2200:
-                            image_size = "2K"
-                        elif long_side >= 1200:
-                            image_size = "1K"
-                        else:
-                            image_size = "0.5K"
-                    break
+            # Compatibility: support resolution strings like "1920x1080" from project/episode defaults.
+            if not width or not height:
+                resolution_candidates = [
+                    project_visual.get("resolution"),
+                    project_global_info.get("resolution"),
+                    project_global_info.get("image_resolution"),
+                ]
+                for candidate in resolution_candidates:
+                    parsed_w, parsed_h = _parse_resolution_dims(candidate)
+                    if parsed_w and parsed_h:
+                        if not width:
+                            width = parsed_w
+                        if not height:
+                            height = parsed_h
+                        if not image_size:
+                            long_side = max(parsed_w, parsed_h)
+                            if long_side >= 3200:
+                                image_size = "4K"
+                            elif long_side >= 2200:
+                                image_size = "2K"
+                            elif long_side >= 1200:
+                                image_size = "1K"
+                            else:
+                                image_size = "0.5K"
+                        break
 
         if (not width or not height) and aspect_ratio and image_size:
             inferred_dims = _infer_project_resolution(aspect_ratio, image_size)
@@ -21822,13 +21873,13 @@ async def _run_generate_image(
                 if not height:
                     height = inferred_h
 
-        # Cast to int for safety
-        try: width = int(width) if width else 720 
-        except: width = 720
-        try: height = int(height) if height else 1080
-        except: height = 1080
+        # Cast to int for safety, but allow None for keyframes to use API defaults
+        try: width = int(width) if width else (None if is_keyframe_generation else 720)
+        except: width = None if is_keyframe_generation else 720
+        try: height = int(height) if height else (None if is_keyframe_generation else 1080)
+        except: height = None if is_keyframe_generation else 1080
 
-        if not image_size:
+        if not image_size and not is_keyframe_generation:
             max_side = max(width or 0, height or 0)
             if max_side >= 3200:
                 image_size = "4K"

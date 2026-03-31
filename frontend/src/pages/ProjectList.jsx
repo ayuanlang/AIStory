@@ -1946,10 +1946,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                 )}
 
                                 {!isCreating && isProjectsLoading && projects.length === 0 ? (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                                         {Array.from({ length: 8 }).map((_, idx) => (
                                             <div key={`project-skeleton-${idx}`} className="bg-card/40 border border-white/5 rounded-3xl overflow-hidden animate-pulse">
-                                                <div className="h-64 bg-white/5" />
+                                                <div className="aspect-video w-full bg-white/5" />
                                                 <div className="p-4 space-y-3">
                                                     <div className="h-5 bg-white/10 rounded w-2/3" />
                                                     <div className="h-3 bg-white/10 rounded w-full" />
@@ -1979,7 +1979,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                         </button>
                                     </div>
                                 ) : (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                                         {projects.map(p => (
                                             <div onClick={() => {
                                                 setRestoredEditorState(null);
@@ -1990,8 +1990,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                     transition={{ type: "spring", stiffness: 300, damping: 20 }}
                                                     className="group relative bg-card/40 backdrop-blur-md border border-white/5 rounded-3xl overflow-hidden hover:border-primary/50 transition-all shadow-lg hover:shadow-2xl hover:shadow-primary/10"
                                                 >
-                                                    {/* Card Image Area - Increased Height */}
-                                                    <div className="h-64 bg-black/60 relative overflow-hidden group-hover:bg-black/40 transition-colors">
+                                                    {/* Card Image Area - 16:9 Aspect Ratio */}
+                                                    <div className="aspect-video w-full bg-black/60 relative overflow-hidden group-hover:bg-black/40 transition-colors">
 
 
                                                        {/* Cover Image or Fallback */}

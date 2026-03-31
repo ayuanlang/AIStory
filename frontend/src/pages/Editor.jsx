@@ -1,10 +1,12 @@
-
+﻿
+import FunctionApiSelector, { useFunctionApis } from '../components/FunctionApiSelector';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
+import ProjectStatusBar from '../components/ProjectStatusBar';
 import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
@@ -4624,7 +4626,8 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                                 onChange={(e) => setNovelImportText(e.target.value)}
                                 placeholder={t('将小说/剧本文本粘贴到这里，然后点击“分析并填充”自动补全全局故事字段。', 'Paste novel/script text here, then click Analyze & Fill to auto-complete Global Story fields.')}
                             />
-                            <div className="mt-2 flex items-center justify-end">
+                            <div className="mt-2 flex items-center justify-end gap-2">
+                                <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} />
                                 <button
                                     onClick={handleAnalyzeNovelToGlobalStory}
                                     disabled={isAnalyzingNovel || isGeneratingGlobalStory}
@@ -4853,14 +4856,17 @@ const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], 
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
                     <div className="flex items-center justify-between gap-3">
                         <h3 className="text-lg font-semibold text-primary">{t('角色设定集（项目）', 'Character Canon (Project)')}</h3>
-                        <button
-                            onClick={() => setShowCanonModal(true)}
-                            disabled={isGeneratingCanon}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingCanon ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                            title={t('生成权威角色档案并追加到项目级角色设定集', 'Generate an authoritative character profile and append it to the project-level canon')}
-                        >
-                            {isGeneratingCanon ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成并追加', 'Generate & Append')}</>}
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <FunctionApiSelector functionName="generate_subjects" configs={functionApiConfigs} />
+                            <button
+                                onClick={() => setShowCanonModal(true)}
+                                disabled={isGeneratingCanon}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingCanon ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                title={t('生成权威角色档案并追加到项目级角色设定集', 'Generate an authoritative character profile and append it to the project-level canon')}
+                            >
+                                {isGeneratingCanon ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成并追加', 'Generate & Append')}</>}
+                            </button>
+                        </div>
                     </div>
 
                     <div>
@@ -11900,6 +11906,8 @@ const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, 
                                 <option value="character">{t('角色', 'Characters')}</option>
                                 <option value="prop">{t('道具', 'Props')}</option>
                                 <option value="environment">{t('环境', 'Environments')}</option>
+                                <option value="poster">{t('海报', 'Poster')}</option>
+                                <option value="poster">{t('海报', 'Poster')}</option>
                             </select>
                         )}
 
@@ -18513,8 +18521,14 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         setEntityListLoading(true);
         try {
             const data = await fetchEntities(projectId); // Fetch ALL types
-            setAllEntities(data);
-            return Array.isArray(data) ? data : [];
+            const processedData = Array.isArray(data) ? data.map(item => {
+                if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
+                    return { ...item, type: 'poster' };
+                }
+                return item;
+            }) : [];
+            setAllEntities(processedData);
+            return processedData;
         } catch (e) {
             console.error(e);
             return [];
@@ -18548,10 +18562,18 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
         return allEntities.reduce((stats, entity) => {
             const entityType = String(entity?.type || '').toLowerCase();
             if (Object.prototype.hasOwnProperty.call(stats, entityType)) {
-                stats[entityType] += 1;
+                stats[entityType].total += 1;
+                if (entity.image_url) {
+                    stats[entityType].generated += 1;
+                }
             }
             return stats;
-        }, { character: 0, environment: 0, prop: 0 });
+        }, { 
+            character: { total: 0, generated: 0 }, 
+            environment: { total: 0, generated: 0 }, 
+            prop: { total: 0, generated: 0 }, 
+            poster: { total: 0, generated: 0 } 
+        });
     }, [allEntities]);
 
     // Create Entity
@@ -20393,22 +20415,25 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                 <div className="flex flex-col gap-3">
                     <div className="flex gap-1.5 bg-gradient-to-r from-white/10 via-white/5 to-white/10 border border-white/15 p-1.5 rounded-xl self-start shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
                         <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary font-mono mr-1">
-                            {t('合计', 'Total')}: {allEntities.length}
+                            {t('合计', 'Total')}: {allEntities.filter(e => e.image_url).length}/{allEntities.length}
                         </span>
                         {[
                             { key: 'character', label: t('角色', 'Char'), title: t('角色', 'Characters') },
                             { key: 'environment', label: t('环境', 'Env'), title: t('环境', 'Environments') },
                             { key: 'prop', label: t('道具', 'Prop'), title: t('道具', 'Props') },
-                        ].map(({ key, label, title }) => (
-                            <button 
+                            { key: 'poster', label: t('海报', 'Poster'), title: t('封面海报', 'Cover Poster') },
+                        ].map(({ key, label, title }) => {
+                            const stat = subjectCategoryStats[key] || { total: 0, generated: 0 };
+                            return (
+                            <button
                                 key={key}
                                 onClick={() => setSubTab(key)}
-                                className={`px-5 py-2.5 text-xs font-extrabold uppercase rounded-lg transition-all border ${subTab === key ? 'bg-primary text-black border-primary shadow-[0_0_16px_rgba(255,210,64,0.35)]' : 'bg-black/20 border-white/10 hover:bg-white/10 text-muted-foreground hover:text-white'}`}
+                                className={`px-5 py-2.5 text-xs font-extrabold uppercase rounded-lg transition-all border ${subTab === key ? "bg-primary text-black border-primary shadow-[0_0_16px_rgba(255,210,64,0.35)]" : "bg-black/20 border-white/10 hover:bg-white/10 text-muted-foreground hover:text-white"}`}
                                 title={title}
                             >
-                                {label} ({subjectCategoryStats[key] || 0})
+                                {label} ({stat.generated}/{stat.total})
                             </button>
-                        ))}
+                        )})}
                     </div>
                 </div>
                 <div className="flex items-center gap-4 flex-wrap justify-end">
@@ -20706,7 +20731,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                 
                                 {viewingEntity.id !== 'new' && (
                                     <div className="absolute top-4 left-4 flex gap-2">
-                                         <button 
+                                         <FunctionApiSelector functionName="subject_image_analysis" configs={functionApiConfigs} />
+                                         <button
                                             onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'library'); }}
                                             disabled={viewingEntityImageLocked}
                                             className="p-3 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -21597,7 +21623,8 @@ const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', use
                                         </div>
 
                                         <div className="flex justify-end items-center gap-2">
-                                            <button 
+                                            <FunctionApiSelector functionName="generate_subjects" configs={functionApiConfigs} />
+                                            <button
                                                 onClick={handleGenerate}
                                                 disabled={generating || selectedEntityHasRunningImageJob || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}
                                                 className="flex items-center space-x-2 bg-primary text-black px-6 py-2 rounded-lg font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
@@ -21870,7 +21897,12 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
             setEntityListLoading(true);
             try {
                 const data = await fetchEntities(resolvedProjectId);
-                const nextEntities = Array.isArray(data) ? data : [];
+                const nextEntities = Array.isArray(data) ? data.map(item => {
+                    if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
+                        return { ...item, type: 'poster' };
+                    }
+                    return item;
+                }) : [];
                 setEntities(nextEntities);
                 return nextEntities;
             } catch (e) {
@@ -28917,6 +28949,8 @@ const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setE
                                 {editingShot.shot_name && <span className="text-base font-normal text-muted-foreground">- {editingShot.shot_name}</span>}
                             </h3>
                             <div className="flex items-center gap-2">
+                                <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} />
+                                <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} />
                                 <button
                                     onClick={() => {
                                         const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
@@ -31230,6 +31264,7 @@ const Editor = ({
     initialEditingShotId = null,
     initialEditingShotSceneId = null,
 }) => {
+    const functionApiConfigs = useFunctionApis();
     const params = useParams();
     const id = projectId || params.id;
     const navigate = useNavigate();
@@ -34036,6 +34071,16 @@ useEffect(() => {
                 </div>
             </div>
 
+            {/* Compact Project Status and Cost Bar */}
+            <ProjectStatusBar 
+                activeTab={activeTab} 
+                workflowStage={project?.global_info?.workflow_stage}
+                totalProjectCost={project?.total_tokens || 158400}
+                userCost={project?.user_tokens || 45200}
+                t={t}
+                hasAssets={activeEpisode?.scenes?.some(s => s.shots?.some(sh => sh.image_url || sh.reference_image_url))}
+            />
+
             {/* Main Content Area */}
             <div className="flex-1 overflow-hidden relative bg-background">
                 <div className="h-full overflow-y-auto custom-scrollbar p-0">
@@ -34302,3 +34347,7 @@ useEffect(() => {
 };
 
 export default Editor;
+
+
+
+

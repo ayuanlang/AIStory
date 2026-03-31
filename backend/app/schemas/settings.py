@@ -1067,3 +1067,18 @@ class OSSProviderPoolOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class FunctionAPISettingItem(BaseModel):
+    system_api_id: int
+    priority: int = 0
+    is_fallback: bool = False
+
+class FunctionAPIConfigUpdate(BaseModel):
+    api_settings: List[FunctionAPISettingItem]
+
+class FunctionAPIConfigOut(BaseModel):
+    function_name: str
+    api_settings: List[dict]
+    class Config:
+        from_attributes = True

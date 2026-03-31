@@ -1877,6 +1877,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
     } = options || {};
 
     const effectiveRequestOptions = { ...(requestOptions || {}) };
+    if (effectiveRequestOptions.function_name) { effectiveRequestOptions.system_api_id = Number(localStorage.getItem('func_api_' + effectiveRequestOptions.function_name)) || null; }
     const userPrefs = getCachedUserPreferences() || DEFAULT_USER_PREFERENCES;
     const advanced = userPrefs?.advanced_model && typeof userPrefs.advanced_model === 'object'
         ? userPrefs.advanced_model
@@ -2720,7 +2721,7 @@ export const deleteSetting = async (id) => {
     return response.data;
 }
 
-export const analyzeEntityImage = async (entityId) => {
+export const analyzeEntityImage = async (entityId, functionName = null, systemApiId = null) => {
     try {
         const response = await api.post(`/entities/${entityId}/analyze`);
         return response.data;
@@ -2798,11 +2799,13 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
     return await asyncLLMPost('/tools/refine_prompt', { original_prompt, instruction, type });
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null) => {
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = null, systemApiId = null) => {
     const payload = { 
         text: scriptText,
         system_prompt: systemPrompt,
         include_negative_prompt: true,
+        function_name: functionName,
+        system_api_id: systemApiId,
     };
     if (projectId) {
         payload.project_id = projectId;
@@ -3011,11 +3014,6 @@ export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.po
 export const getSystemAIAssistantApply = async (payload = {}) => (await api.post('/settings/system/ai-assistant/apply', payload || {})).data;
 export const aiAssistantExchangeRate = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/exchange-rate', payload || {})).data;
 export const aiAssistantFetchPricing = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/fetch-pricing', payload || {})).data;
-export const aiAssistantAnalyzeSupplierFeatures = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/analyze-supplier-features', payload || {})).data;
-export const aiAssistantApplySupplierFeatures = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/apply-supplier-features', payload || {})).data;
-export const fetchKiePricingManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/fetch', payload || {})).data;
-export const generateKiePricingRulesManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/generate', payload || {})).data;
-export const applyKiePricingRulesManage = async (payload = {}) => (await api.post('/settings/system/manage/kie-pricing/apply', payload || {})).data;
 export const getTransactions = async (limit=100, userId=null) => {
     let url = `/billing/transactions?limit=${limit}`;
     if (userId) url += `&user_id=${userId}`;
@@ -3023,3 +3021,14 @@ export const getTransactions = async (limit=100, userId=null) => {
     return runSingleFlight(key, async () => (await api.get(url)).data);
 };
 export const updateUserCredits = async (userId, credits, mode='set') => (await api.post(`/billing/users/${userId}/credits`, { amount: credits, mode })).data;
+
+// -- Function API Configs --
+export const getFunctionApiConfigs = async () => {
+    const response = await api.get('/settings/system/function_api_configs');
+    return response.data;
+};
+
+export const updateFunctionApiConfig = async (functionName, payload) => {
+    const response = await api.post(`/settings/system/function_api_configs/${functionName}`, payload);
+    return response.data;
+};

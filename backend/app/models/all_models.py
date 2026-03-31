@@ -417,6 +417,31 @@ class TaskDefaultSystemAPI(Base):
     created_at = Column(String, default=now_bj_iso)
     updated_at = Column(String, default=now_bj_iso)
 
+class FunctionAPIConfig(Base):
+    """高级功能到可用 API 的配置表 (JSON 格式存储).
+
+    每一个特定的功能对应一条记录。
+    支持的功能：
+      generate_subjects      (生成实体：角色、道具、环境、不含封面)
+      generate_cover         (生成封面)
+      generate_shot_images   (生成分镜图片)
+      generate_videos        (生成视频)
+      script_analysis        (剧本分析)
+      subject_image_analysis (subjects图片分析)
+
+    fields:
+      function_name: 功能名称，全局唯一
+      api_settings: JSON数组，例如 [{"system_api_id": 1, "priority": 10, "is_fallback": true}, ...]
+    """
+    __tablename__ = "function_api_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    function_name = Column(String, unique=True, index=True, nullable=False)   
+    api_settings = Column(JSON, default=list) # 存储的是配置项列表： [{system_api_id, priority, is_fallback}]
+    
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
 
 class SystemAPIBillingRule(Base):
     """�?system_api_settings.id 绑定的细化计费规则（宽表）�?

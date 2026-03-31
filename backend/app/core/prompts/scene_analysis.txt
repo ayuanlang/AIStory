@@ -407,9 +407,9 @@
 - 角色变体依赖链强制（Mandatory）：上述拆分出的角色必须写明 `visual_dependencies` 与 `dependency_strategy`，形成可追溯继承链：
   - 基准角色：`dependency_strategy.type=Original`，`visual_dependencies=[]`；
   - 派生时期/状态态/换装角色：`dependency_strategy.type=Type A/Type B`，`visual_dependencies` 指向基准或上一阶段角色；
-  - `dependency_strategy.logic` 必须明确“继承不变锚点 + 允许变化项（时期/状态态/服装）”；若换装涉及已抽取服饰/装备道具，也必须说明与这些道具的依赖关系。
+  - `dependency_strategy.logic` 必须明确“继承不变锚点 + 允许变化项（时期/状态/服装）”；若换装涉及已抽取服饰/装备道具，也必须说明与这些道具的依赖关系。
 - 角色分期依赖合规示例（Mandatory）：
-  - 不合规：仅一个 `CHAR:[@Lin]`，同时描述“青年+中年+换装+雨淋状态态”。
+  - 不合规：仅一个 `CHAR:[@Lin]`，同时描述“青年+中年+换装+雨淋状态”。
   - 合规：
     - `CHAR:[@Lin Young]` -> `Original`, `visual_dependencies=[]`；
     - `CHAR:[@Lin Adult Formal]` -> `Type A`, `visual_dependencies=["CHAR:[@Lin Young]"]`；
