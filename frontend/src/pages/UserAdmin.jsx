@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
 import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
 import Footer from '../components/Footer';
-import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
@@ -409,7 +409,7 @@ const UserAdmin = () => {
 
         try {
             setIsSupplierFeatureAnalyzing(true);
-            const result = await aiAssistantAnalyzeSupplierFeatures({
+            const result = await ({
                 provider,
                 source_urls: urls,
                 selected_system_api_ids: selectedSupplierTargetApiIds,
@@ -550,7 +550,7 @@ const UserAdmin = () => {
 
         try {
             setIsSupplierFeatureApplying(true);
-            const applyResult = await aiAssistantApplySupplierFeatures({
+            const applyResult = await ({
                 provider,
                 models: selectedModels,
                 create_missing_models: true,
@@ -1050,20 +1050,13 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
-        if (activeTab === 'system_api' || activeTab === 'pricing_rules' || activeTab === 'supplier_ops' || activeTab === 'oss_pools') {
+        if (activeTab === 'system_api' || activeTab === 'pricing_rules' || activeTab === 'oss_pools') {
             if (activeTab === 'system_api') {
                 refreshSystemApiAdminViews({
                     includeSystemApi: true,
                     includeProviderPools: true,
                     includeTaskDefaults: true,
                     includeKie: true,
-                });
-                return;
-            }
-            if (activeTab === 'supplier_ops') {
-                refreshSystemApiAdminViews({
-                    includeSystemApi: true,
-                    includeProviderPools: true,
                 });
                 return;
             }
@@ -1967,7 +1960,7 @@ const UserAdmin = () => {
             // Step-3 optimization: if suggestions already exist, apply directly without regenerating.
             if (applyBaseRules && Array.isArray(kiePricingResult?.matches) && kiePricingResult.matches.length > 0) {
                 setIsKiePricingLoading(true);
-                const applyResult = await applyKiePricingRulesManage({
+                const applyResult = await ({
                     provider_filter: kiePricingResult?.provider_filter || kiePricingProviderFilter,
                     include_deprecated: false,
                     selected_system_api_ids: selectedIds,
@@ -1992,7 +1985,7 @@ const UserAdmin = () => {
             const rawTablesText = String(kiePricingManualTablesText || '').trim();
 
             setIsKiePricingLoading(true);
-            const result = await generateKiePricingRulesManage({
+            const result = await ({
                 url: kiePricingUrl,
                 provider_filter: kiePricingProviderFilter,
                 include_deprecated: false,
@@ -2976,7 +2969,7 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
-        if (activeTab === 'system_api' || activeTab === 'supplier_ops' || activeTab === 'oss_pools') {
+        if (activeTab === 'system_api' || activeTab === 'oss_pools') {
             // Loaded by refreshSystemApiAdminViews to avoid request bursts on admin page entry.
         }
     }, [activeTab]);
@@ -4753,20 +4746,19 @@ const UserAdmin = () => {
     );
 
     const adminTabs = [
-        { id: 'function_api_config', label: t('功能API配置', 'Function APIs'), icon: Settings },
         { id: 'users', label: t('用户', 'Users'), icon: User },
+        { id: 'function_api_config', label: t('功能API配置', 'Function APIs'), icon: Settings },
         { id: 'pricing', label: t('定价', 'Pricing'), icon: DollarSign },
         { id: 'transactions', label: t('记录', 'History'), icon: Activity },
         { id: 'system_api', label: t('系统 API', 'System API'), icon: Key },
         { id: 'config_sync', label: t('配置同步', 'Config Sync'), icon: Database },
         { id: 'pricing_rules', label: t('计费规则', 'Pricing Rules'), icon: DollarSign },
-        { id: 'supplier_ops', label: t('供应商运营', 'Supplier Ops'), icon: Settings },
         { id: 'oss_pools', label: t('OSS 存储配置', 'OSS Storage'), icon: Database },
-        { id: 'kie_pricing', label: t('KIE 定价助手', 'KIE Pricing Assistant'), icon: Settings },
         { id: 'prompt_skills', label: t('Prompt Skills', 'Prompt Skills'), icon: List },
         { id: 'storage_usage', label: t('磁盘统计', 'Storage Usage'), icon: HardDrive },
         { id: 'runtime_logs', label: t('系统日志', 'Runtime Logs'), icon: List },
         { id: 'payment', label: t('支付', 'Payment'), icon: CreditCard },
+        
         { id: 'smtp', label: t('邮件 SMTP', 'Email SMTP'), icon: Mail },
     ];
 
@@ -5054,6 +5046,11 @@ const UserAdmin = () => {
                                 </div>
                             </div>
                         </div>
+                    )}
+
+                    {/* Function API Configs TAB */}
+                    {activeTab === 'function_api_config' && (
+                        <FunctionApiConfigTab />
                     )}
 
                     {/* SMTP TAB */}
@@ -5374,9 +5371,6 @@ const UserAdmin = () => {
                     )}
 
                     {/* USERS TAB */}
-                    {activeTab === 'function_api_config' && (
-                        <FunctionApiConfigTab />
-                    )}
                     {activeTab === 'users' && (
                         <div>
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-300">
@@ -8296,283 +8290,6 @@ const UserAdmin = () => {
                         </div>
                     )}
 
-                    {activeTab === 'supplier_ops' && (
-                        <div className="space-y-4">
-                            <div className="flex flex-wrap gap-2 border border-white/10 rounded-xl bg-white/5 p-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setSupplierOpsSubtab('feature_analysis')}
-                                    className={`px-3 py-2 rounded-lg text-sm font-semibold ${supplierOpsSubtab === 'feature_analysis' ? 'bg-cyan-600 text-white' : 'bg-black/20 text-gray-300 hover:bg-white/10 hover:text-white'}`}
-                                >
-                                    {t('供应商分析', 'Supplier Analysis')}     
-                                </button>
-                                
-                            </div>
-
-                            {supplierOpsSubtab === 'feature_analysis' && (     
-                            <div className="border border-cyan-500/20 rounded p-3 bg-cyan-500/5 space-y-3">
-                                <div className="text-sm font-bold text-cyan-200">{t('供应商 API 特征分析', 'Supplier API Feature Analysis')}</div>
-                                <div className="text-xs text-cyan-100/80">     
-
-                                    {t('通过来源页面抓取 + LLM 结构化分析，提取并写入模型特征（分辨率、画幅比、时长、参考图限制、基础模型、mode 等）。', 'Use source-page fetch + LLM structured analysis to extract and persist model features (resolution, aspect ratio, duration, reference-image limits, base model, generation modes, etc.).')}
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                    <div>
-                                        <label className="block text-xs uppercase text-gray-300 mb-1">provider</label>
-                                        <input
-                                            value={supplierFeatureProvider}
-                                            onChange={(e) => setSupplierFeatureProvider(e.target.value)}
-                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                            placeholder="grsai / kie / volcengine"
-                                        />
-                                    </div>
-                                    <div className="md:col-span-2">
-                                        <label className="block text-xs uppercase text-gray-300 mb-1">{t('关键词（逗号分隔）', 'Keywords (comma-separated)')}</label>
-                                        <input
-                                            value={supplierFeatureKeywords}
-                                            onChange={(e) => setSupplierFeatureKeywords(e.target.value)}
-                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                            placeholder="resolution, aspect ratio, duration, t2i, i2v, digital human"
-                                        />
-                                    </div>
-                                </div>
-                                <div className="border border-cyan-500/20 rounded p-2 bg-black/20 space-y-2">
-                                    <div className="text-[11px] text-cyan-200">{t('供应商快捷入口（按数据去重）', 'Provider Quick Entry (Deduped by Data)')}</div>
-                                    <div className="flex flex-wrap gap-2">
-                                        {systemApiProviderSummaryRows.map((item) => (
-                                            <button
-                                                key={`supplier-ops-provider-${item.provider}`}
-                                                type="button"
-                                                onClick={() => setSupplierFeatureProvider(String(item.provider || ''))}
-                                                className={`rounded border px-2.5 py-1.5 text-[11px] ${String(supplierFeatureProvider || '').trim() === String(item.provider || '').trim() ? 'border-cyan-300 bg-cyan-700/20 text-cyan-50' : 'border-cyan-500/20 bg-black/20 text-cyan-100/80 hover:bg-cyan-500/10'}`}
-                                            >
-                                                <span className="font-mono">{item.provider}</span>
-                                                <span className={`ml-2 rounded px-1 py-0.5 ${item.has_callable_entry ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/20 text-amber-200'}`}>
-                                                    {item.has_callable_entry ? t('已启用', 'Enabled') : t('已禁用', 'Disabled')}
-                                                </span>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                {(() => {
-                                    const normalizedProvider = String(supplierFeatureProvider || '').trim().toLowerCase();
-                                    const candidateRows = systemApiRows.filter((row) => {
-                                        if (String(row?.category || '').startsWith('System_')) return false;
-                                        if (!normalizedProvider) return true;
-                                        return String(row?.provider || '').trim().toLowerCase() === normalizedProvider;
-                                    });
-                                    const candidateIds = candidateRows
-                                        .map((row) => Number(row?.id || 0))
-                                        .filter((id) => Number.isFinite(id) && id > 0);
-                                    const selectedInCandidate = candidateIds.filter((id) => selectedSupplierTargetApiIds.includes(id));
-                                    const allChecked = candidateIds.length > 0 && selectedInCandidate.length === candidateIds.length;
-                                    return (
-                                        <div className="border border-cyan-500/20 rounded p-2 bg-black/20 space-y-2">
-                                            <div className="flex items-center justify-between gap-2">
-                                                <div className="text-xs text-cyan-200">{t('从 System API 选择分析目标（可多选）', 'Select System APIs for Batch Analysis (multi-select)')}</div>
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setSelectedSupplierTargetApiIds((prev) => {
-                                                            const keep = prev.filter((id) => !candidateIds.includes(id));
-                                                            return [...keep, ...candidateIds];
-                                                        })}
-                                                        className="px-2 py-1 text-[11px] rounded bg-cyan-700 hover:bg-cyan-600 text-white"
-                                                    >
-                                                        {t('全选当前筛选', 'Select Filtered')}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setSelectedSupplierTargetApiIds((prev) => prev.filter((id) => !candidateIds.includes(id)))}
-                                                        className="px-2 py-1 text-[11px] rounded bg-gray-700 hover:bg-gray-600 text-white"
-                                                    >
-                                                        {t('清空当前筛选', 'Clear Filtered')}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <div className="text-[11px] text-cyan-100/80">
-                                                {t('已选', 'Selected')}: {selectedSupplierTargetApiIds.length} | {t('当前候选', 'Candidates')}: {candidateRows.length}
-                                            </div>
-                                            <div className="max-h-48 overflow-auto border border-cyan-500/20 rounded p-2 space-y-1">
-                                                {candidateRows.length === 0 && (
-                                                    <div className="text-[11px] text-gray-400">{t('暂无可选 System API', 'No System API candidates')}</div>
-                                                )}
-                                                {candidateRows.map((row) => {
-                                                    const rowId = Number(row?.id || 0);
-                                                    const checked = selectedSupplierTargetApiIds.includes(rowId);
-                                                    return (
-                                                        <label key={`supplier-target-${rowId}`} className="flex items-center gap-2 text-[11px] text-cyan-100/90">
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={checked}
-                                                                onChange={(e) => toggleSupplierTargetApiId(rowId, e.target.checked)}
-                                                            />
-                                                            <span className="font-mono">#{rowId}</span>
-                                                            <span>{`[${row.category || '-'}] ${row.provider || '-'} / ${row.model || '-'}`}</span>
-                                                        </label>
-                                                    );
-                                                })}
-                                            </div>
-                                            <label className="flex items-center gap-2 text-[11px] text-cyan-100/80">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={allChecked}
-                                                    onChange={(e) => {
-                                                        if (e.target.checked) {
-                                                            setSelectedSupplierTargetApiIds((prev) => {
-                                                                const keep = prev.filter((id) => !candidateIds.includes(id));
-                                                                return [...keep, ...candidateIds];
-                                                            });
-                                                        } else {
-                                                            setSelectedSupplierTargetApiIds((prev) => prev.filter((id) => !candidateIds.includes(id)));
-                                                        }
-                                                    }}
-                                                />
-                                                {t('全选/反选当前候选', 'Toggle all current candidates')}
-                                            </label>
-                                        </div>
-                                    );
-                                })()}
-                                <div>
-                                    <label className="block text-xs uppercase text-gray-300 mb-1">{t('来源 URL（每行一个）', 'Source URLs (one per line)')}</label>
-                                    <textarea
-                                        rows={3}
-                                        value={supplierFeatureUrlsText}
-                                        onChange={(e) => setSupplierFeatureUrlsText(e.target.value)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
-                                        placeholder={t('https://example.com/docs/model-a\nhttps://example.com/pricing', 'https://example.com/docs/model-a\nhttps://example.com/pricing')}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs uppercase text-gray-300 mb-1">{t('用户补充信息（可为空）', 'User Supplement (optional)')}</label>
-                                    <textarea
-                                        rows={3}
-                                        value={supplierFeatureUserSupplement}
-                                        onChange={(e) => setSupplierFeatureUserSupplement(e.target.value)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs"
-                                        placeholder={t('例如：重点关注 text token 计费规则、voice 的 sample rate 与 bitrate。', 'Example: Focus on text token pricing and voice sample-rate/bitrate support.')}
-                                    />
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    <button
-                                        onClick={handleAnalyzeSupplierFeatures}
-                                        disabled={isSupplierFeatureAnalyzing}
-                                        className="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-bold rounded text-sm"
-                                    >
-                                        {isSupplierFeatureAnalyzing ? t('分析中...', 'Analyzing...') : t('1) 分析并预览', '1) Analyze and Preview')}
-                                    </button>
-                                    <button
-                                        onClick={handleApplySupplierFeatures}
-                                        disabled={isSupplierFeatureApplying || !supplierFeatureResult || selectedSupplierFeatureModelKeys.length === 0}
-                                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded text-sm"
-                                    >
-                                        {isSupplierFeatureApplying
-                                            ? t('保存中...', 'Saving...')
-                                            : t('2) 保存选中到数据库', '2) Save Selected to DB')}
-                                    </button>
-                                </div>
-                                {supplierFeatureResult && (
-                                    <div className="text-xs text-cyan-100/90 border border-cyan-500/30 rounded p-2 bg-black/20 space-y-1">
-                                        <div>{`provider: ${supplierFeatureResult.provider || '-'}`}</div>
-                                        <div>{`${t('分析页面数', 'Analyzed Pages')}: ${Number(supplierFeatureResult.analyzed_url_count || 0)}`}</div>
-                                        <div>{`${t('选中系统 API 数', 'Selected System APIs')}: ${Number(supplierFeatureResult.selected_system_api_count || 0)}`}</div>
-                                        <div>{`${t('模型条数', 'Models')}: ${Array.isArray(supplierFeatureResult.models) ? supplierFeatureResult.models.length : 0}`}</div>
-                                        <div>{`${t('新增', 'Created')}: ${Number(supplierFeatureResult.saved_created || 0)} | ${t('更新', 'Updated')}: ${Number(supplierFeatureResult.saved_updated || 0)}`}</div>
-                                        {String(supplierFeatureResult.llm_input || '').trim() && (
-                                            <details className="mt-2 border border-cyan-500/20 rounded p-2 bg-black/30">
-                                                <summary className="cursor-pointer text-[11px] text-cyan-200 font-semibold">{t('LLM 输入', 'LLM Input')}</summary>
-                                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all bg-black/40 border border-cyan-500/20 rounded p-2 text-[11px] text-cyan-100">
-{String(supplierFeatureResult.llm_input || '')}
-                                                </pre>
-                                            </details>
-                                        )}
-                                        {String(supplierFeatureResult.llm_output || supplierFeatureResult.llm_raw || '').trim() && (
-                                            <details className="mt-2 border border-cyan-500/20 rounded p-2 bg-black/30">
-                                                <summary className="cursor-pointer text-[11px] text-cyan-200 font-semibold">{t('LLM 输出', 'LLM Output')}</summary>
-                                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all bg-black/40 border border-cyan-500/20 rounded p-2 text-[11px] text-cyan-100">
-{String(supplierFeatureResult.llm_output || supplierFeatureResult.llm_raw || '')}
-                                                </pre>
-                                            </details>
-                                        )}
-                                        {Array.isArray(supplierFeatureResult.models) && supplierFeatureResult.models.length > 0 && (
-                                            <div className="pt-2 space-y-1">
-                                                <div className="text-[11px] text-cyan-200/90">
-                                                    {t('勾选需要写入数据库的模型', 'Select models to save into DB')}
-                                                </div>
-                                                <div className="flex flex-wrap gap-2 pb-1">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setSupplierFeatureFilterMode('all')}
-                                                        className={`px-2 py-1 text-[11px] rounded border ${supplierFeatureFilterMode === 'all' ? 'border-cyan-300 bg-cyan-700/30 text-cyan-100' : 'border-cyan-500/30 bg-black/30 text-cyan-200/80'}`}
-                                                    >
-                                                        {t('全部', 'All')}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setSupplierFeatureFilterMode('missing_voice_music')}
-                                                        className={`px-2 py-1 text-[11px] rounded border ${supplierFeatureFilterMode === 'missing_voice_music' ? 'border-cyan-300 bg-cyan-700/30 text-cyan-100' : 'border-cyan-500/30 bg-black/30 text-cyan-200/80'}`}
-                                                    >
-                                                        {t('缺 Voice/Music', 'Missing Voice/Music')}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setSupplierFeatureFilterMode('missing_core')}
-                                                        className={`px-2 py-1 text-[11px] rounded border ${supplierFeatureFilterMode === 'missing_core' ? 'border-cyan-300 bg-cyan-700/30 text-cyan-100' : 'border-cyan-500/30 bg-black/30 text-cyan-200/80'}`}
-                                                    >
-                                                        {t('缺核心字段', 'Missing Core Fields')}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setSupplierFeatureFilterMode('missing_billing')}
-                                                        className={`px-2 py-1 text-[11px] rounded border ${supplierFeatureFilterMode === 'missing_billing' ? 'border-cyan-300 bg-cyan-700/30 text-cyan-100' : 'border-cyan-500/30 bg-black/30 text-cyan-200/80'}`}
-                                                    >
-                                                        {t('缺计费线索', 'Missing Billing Hints')}
-                                                    </button>
-                                                </div>
-                                                <div className="max-h-44 overflow-auto space-y-1 pr-1">
-                                                    {getFilteredSupplierModels().map((item, idx) => {
-                                                        const rowKey = supplierFeatureModelKey(item);
-                                                        const checked = selectedSupplierFeatureModelKeys.includes(rowKey);
-                                                        const capabilitySections = getSupplierCapabilitySections(item);
-                                                        return (
-                                                            <div key={`${rowKey}-${idx}`} className="border border-cyan-500/20 rounded p-2 bg-black/20 space-y-2">
-                                                                <label className="flex items-center gap-2 text-[11px] text-cyan-100/90">
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        checked={checked}
-                                                                        onChange={() => handleToggleSupplierFeatureModelKey(rowKey)}
-                                                                    />
-                                                                    <span>{`${item.category || '-'} / ${item.model || '-'}${item.base_model ? ` / base:${item.base_model}` : ''}`}</span>
-                                                                    <span className="text-cyan-300/70">{`conf:${Number(item.confidence || 0).toFixed(2)}`}</span>
-                                                                </label>
-                                                                {capabilitySections.length > 0 ? (
-                                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                                        {capabilitySections.map((section) => (
-                                                                            <details key={`${rowKey}-${section.key}`} className="border border-cyan-500/20 rounded p-1.5 bg-black/30">
-                                                                                <summary className="cursor-pointer text-[10px] text-cyan-200 font-semibold">{section.label}</summary>
-                                                                                <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all text-[10px] text-cyan-100/90 bg-black/40 border border-cyan-500/10 rounded p-1.5">
-{toPrettyFeatureJson(item?.[section.key])}
-                                                                                </pre>
-                                                                            </details>
-                                                                        ))}
-                                                                    </div>
-                                                                ) : (
-                                                                    <div className="text-[10px] text-cyan-300/60">{t('未提取到能力细节字段', 'No capability detail fields extracted')}</div>
-                                                                )}
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                            )}
-
-                            
-                        </div>
-                    )}
                     {activeTab === 'oss_pools' && (
                                 <div className="border border-sky-500/20 rounded p-4 bg-sky-500/5 space-y-4">
                                     <div className="flex items-center justify-between gap-2">
@@ -8580,7 +8297,16 @@ const UserAdmin = () => {
                                             <div className="text-sm font-bold text-sky-200">{t('OSS 供应商配置', 'OSS Provider Pool Configuration')}</div>     
                                             <div className="text-xs text-sky-100/80 mt-1">{t('管理 oss_provider_pools 表，支持多供应商、多个凭证和启用状态。credentials 与 weights 使用 JSON 数组编辑。', 'Manage the oss_provider_pools table, including multi-provider pools, multiple credentials, and activation state. Edit credentials and weights as JSON arrays.')}</div>
                                         </div>
-                                        <button onClick={fetchOssProviderPools} className="text-xs text-sky-300 hover:text-sky-100 flex items-center gap-1"><RefreshCw size={12} /> {t('刷新', 'Refresh')}</button>
+                                        <div className="flex items-center gap-4">
+                                            <button onClick={handleExportSystemConfigSyncBundle} disabled={isSystemConfigSyncExporting} className="text-xs bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded px-2 py-1 flex items-center gap-1 transition-colors">
+                                                {isSystemConfigSyncExporting ? <RefreshCw size={12} className="animate-spin" /> : <Download size={12} />} {t('导出', 'Export')}
+                                            </button>
+                                            <label className="text-xs bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded px-2 py-1 flex items-center gap-1 transition-colors cursor-pointer">
+                                                {isSystemConfigSyncImporting ? <RefreshCw size={12} className="animate-spin" /> : <Upload size={12} />} {t('导入', 'Import')}
+                                                <input type="file" accept=".json" className="hidden" onChange={handleImportSystemConfigSyncBundleFile} />
+                                            </label>
+                                            <button onClick={fetchOssProviderPools} className="text-xs text-sky-300 hover:text-sky-100 flex items-center gap-1"><RefreshCw size={12} /> {t('刷新', 'Refresh')}</button>
+                                        </div>
                                     </div>
 
                                     {isOssProviderPoolLoading ? (
@@ -8766,228 +8492,6 @@ const UserAdmin = () => {
                                     )}
                                 </div>
                             )}
-
-                    {activeTab === 'kie_pricing' && (
-                        <div className="space-y-4">
-
-                            <div className="flex flex-col md:flex-row md:items-end gap-3">
-                                <div className="flex-1">
-                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('定价页面 URL', 'Pricing page URL')}</label>
-                                    <input
-                                        value={kiePricingUrl}
-                                        onChange={(e) => setKiePricingUrl(e.target.value)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                        placeholder="https://kie.ai/zh-CN/pricing"
-                                    />
-                                </div>
-                                <div className="w-full md:w-56">
-                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('Provider 过滤', 'Provider Filter')}</label>
-                                    <input
-                                        value={kiePricingProviderFilter}
-                                        onChange={(e) => setKiePricingProviderFilter(e.target.value)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                        placeholder="kie"
-                                    />
-                                </div>
-                                <button
-                                    onClick={handleConfirmManualKiePricing}
-                                    disabled={isKiePricingLoading || !String(kiePricingManualText || '').trim()}
-                                    className="px-3 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold rounded text-sm"
-                                >
-                                    {t('1) 确认输入内容', '1) Confirm Input')}
-                                </button>
-                                <button
-                                    onClick={() => handleRunKiePricingAssistant(false)}
-                                    disabled={isKiePricingLoading || !isKiePricingConfirmed}
-                                    className="px-3 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded text-sm"
-                                >
-                                    {isKiePricingLoading ? t('生成中...', 'Generating...') : t('2) 生成规则建议', '2) Generate Suggestions')}
-                                </button>
-                                <button
-                                    onClick={() => handleRunKiePricingAssistant(true)}
-                                    disabled={isKiePricingLoading || !isKiePricingConfirmed}
-                                    className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded text-sm"
-                                >
-                                    {selectedKieSuggestionIds.length > 0
-                                        ? t('3) 应用选中基础规则', '3) Apply Selected Base Rules')
-                                        : t('3) 生成并应用基础规则', '3) Generate and Apply Base Rules')}
-                                </button>
-                            </div>
-
-                            <div className="text-xs text-gray-400 border border-white/10 rounded p-3 bg-black/20">
-                                {t('流程：手工从 KIE 页面复制内容粘贴到下方，确认后再进行模型匹配与规则生成。后端会拒绝未确认内容。', 'Flow: manually paste pricing content copied from KIE page below, confirm, then run model matching and rule generation. Backend rejects unconfirmed content.')}
-                            </div>
-
-                            <div className="space-y-2 border border-white/10 rounded p-3 bg-black/20">
-                                <div className="flex flex-wrap gap-4 text-xs text-gray-300">
-                                    <span>{t('确认状态', 'Confirm Status')}: <span className={isKiePricingConfirmed ? 'text-emerald-300' : 'text-amber-300'}>{isKiePricingConfirmed ? t('已确认', 'Confirmed') : t('未确认', 'Unconfirmed')}</span></span>
-                                    <span>{t('内容长度', 'Content Length')}: <span className="text-white">{String(kiePricingManualText || '').trim().length}</span></span>
-                                </div>
-                                <div>
-                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('手工粘贴定价文本', 'Paste Pricing Text Manually')}</label>
-                                    <textarea
-                                        rows={10}
-                                        value={kiePricingManualText}
-                                        onChange={(e) => setKiePricingManualText(e.target.value)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
-                                        placeholder={t('请从 KIE 定价页面复制需要分析的文本后粘贴到这里。', 'Paste the KIE pricing content to analyze here.')}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs uppercase text-gray-400 mb-1">{t('可选：表格 JSON 数组', 'Optional: Tables JSON Array')}</label>
-                                    <textarea
-                                        rows={3}
-                                        value={kiePricingManualTablesText}
-                                        onChange={(e) => setKiePricingManualTablesText(e.target.value)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
-                                        placeholder="[]"
-                                    />
-                                </div>
-                            </div>
-
-                            {kiePricingResult && (
-                                <div className="space-y-3">
-                                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">URL</span><div className="text-white break-all">{kiePricingResult.url || '-'}</div></div>
-                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">{t('KIE 模型数', 'KIE Models')}</span><div className="text-white">{Number(kiePricingResult.system_model_count || 0)}</div></div>
-                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">{t('建议数', 'Suggestions')}</span><div className="text-white">{Number(kiePricingResult.suggestion_count || 0)}</div></div>
-                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">{t('应用数', 'Applied')}</span><div className="text-white">{Number(kiePricingResult.applied_count || 0)}</div></div>
-                                        <div className="border border-white/10 rounded p-2 bg-black/20"><span className="text-gray-400">Provider</span><div className="text-white">{kiePricingResult.provider_filter || '-'}</div></div>
-                                    </div>
-
-                                    <div className="text-xs text-gray-400 border border-white/10 rounded p-2 bg-black/20">
-                                        {t('写入状态', 'Apply Status')}: <span className="text-white">{String(kiePricingResult.apply_status || 'not_requested')}</span>
-                                        {String(kiePricingResult.apply_message || '').trim() && (
-                                            <span className="text-sky-300">{` | ${String(kiePricingResult.apply_message || '').trim()}`}</span>
-                                        )}
-                                        {Array.isArray(kiePricingResult.applied_system_api_ids) && kiePricingResult.applied_system_api_ids.length > 0 && (
-                                            <span className="text-emerald-300">{` | ids: ${kiePricingResult.applied_system_api_ids.join(',')}`}</span>
-                                        )}
-                                    </div>
-
-                                    <div className="text-xs text-amber-300 border border-amber-500/30 rounded p-2 bg-amber-500/5">
-                                        {t('可点击每行“编辑”按钮，在弹出框里修改单位/成本，点击第 3 步时将按修改值写入数据库。', 'Click Edit on each row to modify unit/cost in popup. Step 3 will write edited values to database.')}
-                                    </div>
-
-                                    {Array.isArray(kiePricingResult.apply_receipts) && kiePricingResult.apply_receipts.length > 0 && (
-                                        <div className="text-xs text-gray-300 border border-emerald-500/30 rounded p-2 bg-emerald-500/5">
-                                            <div className="text-emerald-300 mb-1">{t('写入回执', 'Apply Receipts')}</div>
-                                            <div className="space-y-1">
-                                                {kiePricingResult.apply_receipts.map((r, idx) => (
-                                                    <div key={`apply-receipt-${idx}`} className="font-mono break-all">
-                                                        {`system_api_id=${Number(r?.system_api_id || 0)} | base_rule_id=${Number(r?.base_rule_id || 0)} | action=${String(r?.action || 'upserted')}`}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    <div className="overflow-x-auto border border-white/10 rounded">
-                                        <table className="w-full text-xs min-w-[960px]">
-                                            <thead className="bg-white/5 text-gray-300">
-                                                <tr>
-                                                    <th className="text-left p-2 w-8">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={Array.isArray(kiePricingResult?.matches) && kiePricingResult.matches.length > 0 && selectedKieSuggestionIds.length === kiePricingResult.matches.length}
-                                                            onChange={(e) => toggleAllKieSuggestions(e.target.checked)}
-                                                        />
-                                                    </th>
-                                                    <th className="text-left p-2">system_api_id</th>
-                                                    <th className="text-left p-2">provider</th>
-                                                    <th className="text-left p-2">category</th>
-                                                    <th className="text-left p-2">model</th>
-                                                    <th className="text-left p-2">{t('来源模型', 'Source Model')}</th>
-                                                    <th className="text-left p-2">{t('单位', 'Unit')}</th>
-                                                    <th className="text-left p-2">cost</th>
-                                                    <th className="text-left p-2">cost_input</th>
-                                                    <th className="text-left p-2">cost_output</th>
-                                                    <th className="text-left p-2">granular</th>
-                                                    <th className="text-left p-2">{t('置信度', 'Confidence')}</th>
-                                                    <th className="text-left p-2">{t('操作', 'Actions')}</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {(Array.isArray(kiePricingResult.matches) ? kiePricingResult.matches : []).map((row, idx) => (
-                                                    <tr key={`kie-match-${idx}`} className="border-t border-white/10">
-                                                        <td className="p-2">
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={(selectedKieSuggestionIds || []).some((x) => Number(x) === Number(row.system_api_id))}
-                                                                onChange={(e) => toggleKieSuggestionSelection(row.system_api_id, e.target.checked)}
-                                                            />
-                                                        </td>
-                                                        <td className="p-2">{row.system_api_id}</td>
-                                                        <td className="p-2">{row.provider || '-'}</td>
-                                                        <td className="p-2">{row.category || '-'}</td>
-                                                        <td className="p-2 max-w-[220px] truncate" title={row.model || '-'}>{row.model || '-'}</td>
-                                                        <td className="p-2 max-w-[220px] truncate" title={row.source_model_name || '-'}>{row.source_model_name || '-'}</td>
-                                                        <td className="p-2">{normalizeApiPricingUnitType(row?.base_rule?.billing_unit_type)}</td>
-                                                        <td className="p-2">{toNonNegativeInt(row?.base_rule?.billing_cost ?? 0)}</td>
-                                                        <td className="p-2">{toNonNegativeInt(row?.base_rule?.billing_cost_input ?? 0)}</td>
-                                                        <td className="p-2">{toNonNegativeInt(row?.base_rule?.billing_cost_output ?? 0)}</td>
-                                                        <td className="p-2">
-                                                            {Array.isArray(row?.granular_rules) && row.granular_rules.length > 0 ? (
-                                                                <details>
-                                                                    <summary className="cursor-pointer text-sky-300">{`${row.granular_rules.length} rules`}</summary>
-                                                                    <div className="mt-1 space-y-1 max-w-[260px]">
-                                                                        {row.granular_rules.map((gr, grIdx) => (
-                                                                            <div key={`gr-${idx}-${grIdx}`} className="text-[11px] text-gray-300 break-all">
-                                                                                {formatKieGranularRuleSummary(gr)}
-                                                                            </div>
-                                                                        ))}
-                                                                    </div>
-                                                                </details>
-                                                            ) : (
-                                                                <span className="text-gray-500">-</span>
-                                                            )}
-                                                        </td>
-                                                        <td className="p-2">{Number(row?.confidence || 0).toFixed(2)}</td>
-                                                        <td className="p-2">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => openKieSuggestionEditor(idx)}
-                                                                className="px-2 py-1 bg-sky-700 hover:bg-sky-600 text-white rounded text-[11px]"
-                                                            >
-                                                                {t('编辑', 'Edit')}
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                                {(!Array.isArray(kiePricingResult.matches) || kiePricingResult.matches.length === 0) && (
-                                                    <tr className="border-t border-white/10">
-                                                        <td colSpan={13} className="p-3 text-gray-400">{t('没有生成匹配建议', 'No matching suggestions generated')}</td>
-                                                    </tr>
-                                                )}
-                                            </tbody>
-                                        </table>
-                                    </div>
-
-                                    <div className="text-xs text-gray-400">
-                                        {t('已选择', 'Selected')}: {selectedKieSuggestionIds.length}
-                                    </div>
-
-                                    <div className="text-xs text-gray-400 border border-white/10 rounded p-2 bg-black/20">
-                                        {t('Tables 解析状态', 'Tables Parse Status')}: <span className="text-white">{String(kiePricingResult.tables_parse_status || 'none')}</span>
-                                        {String(kiePricingResult.tables_parse_warning || '').trim() && (
-                                            <span className="text-amber-300">{` | ${String(kiePricingResult.tables_parse_warning || '').trim()}`}</span>
-                                        )}
-                                    </div>
-
-                                    {String(kiePricingResult.llm_input || '').trim() && (
-                                        <details className="border border-white/10 rounded p-3 bg-black/20">
-                                            <summary className="cursor-pointer text-xs text-gray-300">{t('查看 LLM 输入', 'View LLM input')}</summary>
-                                            <pre className="mt-2 text-xs text-gray-300 whitespace-pre-wrap break-all">{String(kiePricingResult.llm_input || '') || '-'}</pre>
-                                        </details>
-                                    )}
-                                    <details className="border border-white/10 rounded p-3 bg-black/20">
-                                        <summary className="cursor-pointer text-xs text-gray-300">{t('查看 LLM 输出', 'View LLM output')}</summary>
-                                        <pre className="mt-2 text-xs text-gray-300 whitespace-pre-wrap break-all">{String(kiePricingResult.llm_output || kiePricingResult.llm_raw || '') || '-'}</pre>
-                                    </details>
-                                </div>
-                            )}
-                        </div>
-                    )}
 
                     {/* RUNTIME LOGS TAB */}
                     {activeTab === 'runtime_logs' && (

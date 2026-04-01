@@ -233,7 +233,7 @@ export const MediaDetailModal = ({ media, onClose }) => {
     );
 };
 
-export const AssetHoverMetaOverlay = ({ asset, t }) => {
+export const AssetHoverMetaOverlay = ({ asset, t, entities = [] }) => {
     if (!asset) return null;
 
     const meta = (asset.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
@@ -256,26 +256,38 @@ export const AssetHoverMetaOverlay = ({ asset, t }) => {
             ? t('音频', 'Audio')
             : t('图片', 'Image');
 
+    // Find Entity Info
+    let entityInfo = null;
+    if (meta.entity_id) {
+        const matchingEntity = entities.find(e => String(e.id) === String(meta.entity_id));
+        if (matchingEntity) {
+            entityInfo = `${matchingEntity.name} (${t(matchingEntity.type === 'character' ? '角色' : matchingEntity.type === 'prop' ? '道具' : '环境', matchingEntity.type)})`;
+        } else {
+            entityInfo = `ID: ${meta.entity_id}`;
+        }
+    }
+
     const rows = [
+        ...(entityInfo ? [{ label: t('实体', 'Entity'), value: entityInfo }] : []),
         { label: t('文件', 'File'), value: fileName },
         { label: t('类型', 'Type'), value: typeLabel },
         ...(resolution ? [{ label: t('分辨率', 'Resolution'), value: resolution }] : []),
         ...(size ? [{ label: t('大小', 'Size'), value: size }] : []),
         ...(assetType === 'video' && duration ? [{ label: t('时长', 'Duration'), value: String(duration).endsWith('.0') ? `${parseInt(duration, 10)}s` : `${duration}s` }] : []),
         ...(createdLabel ? [{ label: t('创建时间', 'Created'), value: createdLabel }] : []),
-    ].slice(0, 5);
+    ];
 
     return (
-        <div className="pointer-events-none absolute left-2 right-2 top-2 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150 z-10">
-            <div className="rounded-lg border border-white/10 bg-black/88 backdrop-blur-sm shadow-2xl p-2.5">
-                <div className="text-[10px] font-bold uppercase tracking-wide text-primary/80 mb-2">
-                    {t('核心信息', 'Quick Info')}
+        <div className="pointer-events-none absolute left-0 right-[-10px] top-0 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150 z-50">
+            <div className="rounded-lg border border-white/10 bg-black/95 backdrop-blur-md shadow-2xl p-3 w-56 max-w-[280px]">
+                <div className="text-[11px] font-bold uppercase tracking-wide text-primary/90 mb-2.5">
+                    {t('资产信息', 'Asset Info')}
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                     {rows.map((row) => (
-                        <div key={`${row.label}:${row.value}`} className="grid grid-cols-[52px_1fr] gap-2 text-[10px] leading-4">
-                            <div className="text-white/45 uppercase truncate">{row.label}</div>
-                            <div className="text-white/90 break-all line-clamp-2">{row.value}</div>
+                        <div key={`${row.label}:${row.value}`} className="grid grid-cols-[56px_1fr] gap-2 text-[11px] leading-snug">
+                            <div className="text-white/50 uppercase truncate">{row.label}</div>
+                            <div className="text-white/95 break-words line-clamp-3">{row.value}</div>
                         </div>
                     ))}
                 </div>
@@ -293,15 +305,13 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
     
     // Filters
-    const [filterScope, setFilterScope] = useState('project'); // 'project', 'subject', 'shot', 'type'
-    const [filterType, setFilterType] = useState('all'); // 'all', 'image', 'video'
-    const [filterValue, setFilterValue] = useState(''); // entity_id or shot_id or entity_type
-    
-    const [availableShots, setAvailableShots] = useState([]);
-    const assetsViewportRef = useRef(null);
+    const [filterScope, setFilterScope] = useState('project_subjects'); // 'project_subjects', 'project', 'subject', 'shot', 'type'
+    const [filterType, setFilterType] = useState('all');
+    const [filterValue, setFilterValue] = useState('');
     const [assetsViewportHeight, setAssetsViewportHeight] = useState(0);
     const [assetsViewportWidth, setAssetsViewportWidth] = useState(0);
     const [assetsScrollTop, setAssetsScrollTop] = useState(0);
+    const assetsViewportRef = useRef(null);
 
     const ASSET_GRID_COLUMNS = 4;
     const ASSET_GRID_GAP = 12;
@@ -413,9 +423,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         
         // Base scope is Project
         if (projectId) params.project_id = projectId;
-        
+
         // Refine scope
         let clientSideFilterIds = null; // If set, filter by these entity IDs locally
+        let requireAnyEntity = false;
 
         if (filterScope === 'subject' && filterValue) {
             params.entity_id = filterValue;
@@ -426,17 +437,21 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             // Find all entities of this type
             const targetEntities = entities.filter(e => (e.type || 'prop').toLowerCase() === filterValue.toLowerCase());
             clientSideFilterIds = new Set(targetEntities.map(e => e.id));
+        } else if (filterScope === 'project_subjects') {
+            requireAnyEntity = true;
         }
-        
+
         fetchAssets(params).then(data => {
             let res = data || [];
-            
+
             // Client-side filtering for Entity Type logic (if backend doesn't support recursive type filtering)
             if (clientSideFilterIds) {
                 res = res.filter(a => {
                     const eid = a.meta_info?.entity_id;
                     return eid && clientSideFilterIds.has(Number(eid));
                 });
+            } else if (requireAnyEntity) {
+                res = res.filter(a => !!a.meta_info?.entity_id);
             }
 
             setAssets(res);
@@ -500,6 +515,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
+                            <option value="project_subjects">{t('项目主体库', 'Project Subjects')}</option>
                             <option value="project">{t('项目全部素材', 'All Project Assets')}</option>
                             <option value="type">{t('按主体类型', 'By Subject Type')}</option>
                             <option value="subject">{t('按指定主体', 'By Exact Subject')}</option>
@@ -571,31 +587,35 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             {assetTopSpacerHeight > 0 && <div style={{ height: `${assetTopSpacerHeight}px` }} />}
                             <div className="grid grid-cols-4 gap-3">
                             {visibleAssets.map(asset => (
-                                <div 
-                                    key={asset.id} 
-                                    onClick={() => setSelectedAsset(asset)}
-                                    className="aspect-square bg-black/40 rounded overflow-hidden border border-white/5 hover:border-primary/50 cursor-pointer group relative"
+                                <div
+                                    key={asset.id}
+                                    className="relative group"
                                 >
-                                    <AssetHoverMetaOverlay asset={asset} t={t} />
-                                    {asset.type === 'video' ? (
-                                        <div className="w-full h-full flex items-center justify-center bg-black">
-                                            <Video className="text-white/50 group-hover:text-primary transition-colors"/>
-                                        </div>
-                                    ) : (
-                                        <SafeImage src={asset.url} alt="asset" className="w-full h-full object-cover" />
-                                    )}
-                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                    <div className="absolute bottom-0 inset-x-0 p-1 bg-black/60 text-[9px] truncate text-white/70">
-                                        {asset.name}
-                                    </div>
-                                    {/* Quick Select Button on Hover */}
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); onSelect(asset.url, asset.type); }}
-                                        className="absolute top-1 right-1 bg-primary text-black p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all hover:scale-110 shadow-lg"
-                                        title={t('快速选择', 'Quick Select')}
+                                    <div
+                                        onClick={() => setSelectedAsset(asset)}
+                                        className="aspect-square bg-black/40 rounded overflow-hidden border border-white/5 hover:border-primary/50 cursor-pointer relative"
                                     >
-                                        <Check size={12} strokeWidth={3} />
-                                    </button>
+                                        {asset.type === 'video' ? (
+                                            <div className="w-full h-full flex items-center justify-center bg-black">
+                                                <Video className="text-white/50 group-hover:text-primary transition-colors"/>
+                                            </div>
+                                        ) : (
+                                            <SafeImage src={asset.url} alt="asset" className="w-full h-full object-cover" />
+                                        )}
+                                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
+                                        <div className="absolute bottom-0 inset-x-0 p-1 bg-black/60 text-[9px] truncate text-white/70">
+                                            {asset.name}
+                                        </div>
+                                        {/* Quick Select Button on Hover */}
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); onSelect(asset.url, asset.type); }}
+                                            className="absolute top-1 right-1 bg-primary text-black p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all hover:scale-110 shadow-lg z-10"
+                                            title={t('快速选择', 'Quick Select')}
+                                        >
+                                            <Check size={12} strokeWidth={3} />
+                                        </button>
+                                    </div>
+                                    <AssetHoverMetaOverlay asset={asset} t={t} entities={entities} />
                                 </div>
                             ))}
                             </div>

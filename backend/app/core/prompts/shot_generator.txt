@@ -122,22 +122,28 @@
 - **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 可以拆分为多个 Shot，根据视觉需要按Beat为单位拆分或合并，长度符合时长限制。
 - **按 Beat 承接优先 (Beat-Carried Shot Priority, 强制)**：在不触发主体过载、闪回桥接或稳定态问题时，优先保持“一镜承接一 Beat”的清晰关系；若确需拆镜，应把拆分理由落实为“主体过载 / 桥接镜 / 结果落稳镜”，而不是无依据切碎或静默并镜。
 - **多主体优先加分镜 (Multi-Subject Relief by Extra Shots, 强制优先于尽量合并)**：当同一时刻/同一 beat 若要清晰承载的核心 subjects 超过 **3 个**时，优先通过增加 Shot 数量来拆解信息，让主动作主体、主受体、关键反应者、关键道具分布到连续镜头中；不得为了少切镜而把 4 个及以上核心 subjects 强压进同一个 Start/End Frame。
-**时长限制 (Duration Management: The 6-10s Control)**：
-  - **通用生成适配 (General Generation Baseline)**：所有分镜默认都应规划在 **6s - 10s** 之间。该区间更利于动作连续性、情绪展开与首尾状态落稳。除非上游执行环境有更严格硬限制，否则不要规划 6 秒以下镜头。
+**时长限制 (Duration Management: Preference-Driven 5-15s Control)**：
+  - **时长偏好路由 (Duration Preference Routing, 强制)**：先读取用户输入或上游字段中的时长倾向，再决定当前 Scene/Shot 的标准建议区间。
+    - 若用户明确要求 `长镜头优先 / 少切镜 / 慢一点 / 沉浸展开 / 一镜到底倾向`，切换为 **Long-Take Priority**。
+    - 若用户明确要求 `短镜头优先 / 快节奏 / 利落 / 碎切 / 尽量短`，切换为 **Short-Shot Priority**。
+    - 若用户未给出明确偏好，则使用 **Balanced Default**。
+  - **通用生成边界 (General Generation Envelope)**：所有分镜的默认可规划范围改为 **5s - 15s**。该范围覆盖“短镜头优先”的 5 秒级节奏与“长镜头优先”的 15 秒级展开。除非上游执行环境有更严格硬限制，否则不要默认规划 **5 秒以下**或**15 秒以上**镜头。
   - **标准时长建议 (Standard Recommendations)**：
-    - **Default Duration (常规)**: **6.0s - 8.0s**。这是绝大多数叙事镜头的默认规划区间，优先用于对话、关系建立、反应、动作承接与结果落稳。
-    - **Extended Shot (长镜头)**: **8.0s - 10.0s**。用于展示宏大环境、复杂调度、持续压迫、长路径运动或细腻情感流露。
-    - **Shorter-Than-6s 禁止默认化 (Hard Rule)**: 不得把 4s - 5s 当作常规可选时长；若镜头原本看似只需 4s - 5s，也应优先通过补充同一事件内部的 anticipation / reaction / recovery / hold / settle，把它规划进 6s - 10s，而不是压短成急促短镜。
-  - **密度匹配原则 (Density-Match for 6s+)**：
-    - 当 Duration 设定为 **6s - 10s** 时，Video Content **不等于必须新增更多事件**。长时长优先通过**延展已有动作阶段**来消化时长：如 anticipation 延长、接触后的 recovery 延长、视线停留、呼吸重置、重心回收、运镜减速与落稳。
+    - **Balanced Default (常规平衡)**: **6.0s - 10.0s**。这是绝大多数叙事镜头的常规规划区间，优先用于对话、关系建立、反应、动作承接与结果落稳。
+    - **Long-Take Priority (长镜头优先)**: **10.0s - 15.0s**。用于宏大环境、复杂调度、持续压迫、长路径运动、长情绪停留或明确追求长镜头审美的段落，且应**尽量往 10s - 15s 靠**。
+    - **Short-Shot Priority (短镜头优先)**: **5.0s - 10.0s**。用于快节奏推进、利落反应、短促冲突与高频切换节奏，且应**尽量往 5s - 10s 靠**，不再把 6 秒作为硬下限。
+    - **Shorter-Than-5s 禁止默认化 (Hard Rule)**: 不得把 3s - 4s 当作常规可选时长；若镜头原本看似只需 3s - 4s，也应优先通过补充同一事件内部的 anticipation / reaction / recovery / hold / settle，把它规划进 **至少 5s**，而不是压短成急促短镜。
+    - **Longer-Than-15s 禁止默认化 (Hard Rule)**: 不得把 16s+ 当作常规可选时长；若一个镜头看似需要超过 15s，优先检查是否应拆成连续 Shot，或把多余信息回收为同一事件内部的持续态，而不是无限拉长单镜。
+  - **密度匹配原则 (Density-Match for Preference Bands)**：
+    - 当 Duration 落在当前偏好所对应的目标区间内时，Video Content **不等于必须新增更多事件**。长时长优先通过**延展已有动作阶段**来消化时长：如 anticipation 延长、接触后的 recovery 延长、视线停留、呼吸重置、重心回收、运镜减速与落稳；短时长则优先压缩为更利落的单事件闭环，而不是为了“完整”硬塞额外动作。
     - **微节拍时长护栏 (Micro-Beat Duration Guard, 强制)**：每个微节拍的目标时长必须控制在 **1s - 3s**，并以 **约 2s/微节拍** 作为默认估算基线。少于 1s 且不可感知的碎片动作，应并入前后相邻微节拍；超过 3s 的微节拍，必须拆成两个连续微节拍或提升为新的主节拍/独立镜头，禁止把单个微节拍拖成长段无转折过程。
-    - **主/微节拍估算联动 (Primary-Micro Estimation Coupling, 强制)**：先按 `微节拍数 ≈ round(Duration / 2s)` 估算总微节拍（允许按叙事语义微调 ±1），再按 `主节拍数 ≈ ceil(微节拍数 / 2)` 估算主节拍容量，并继续受“主节拍 1-3 个”约束。`Shot Logic (CN)` 必须显式给出“时长 + 主节拍数 + 微节拍数”的联动预估。
-    - **Long Duration != More Plot Rule (长时长不等于更多剧情动作, 强制)**：即使时长为 8s，也不得为了“填满时长”而凭空新增新的打击、额外位移、夸张环境反应或第二个剧情事件。允许的是**同一事件的更长展开**，不允许的是**事件数量膨胀**。
-    - **Main-Action Density Guard (主动作密度护栏, 强制)**：6s - 10s 镜头的核心仍应维持 **1-3 个主节拍**；默认优先 **2 个主节拍**，复杂镜头最多 **3 个主节拍**。禁止因为时长变长而把主动作密度堆高到 4 个及以上独立剧情动作。
-    - **Empty Shot Warning**: 严禁设定 8s 时长却只有一个简单的 "Eye blink" 动作；但若主动作本身具备持续张力（如对峙、蓄力、缓慢逼近、受击后的回稳），则允许只保留 **1-2 个主节拍**，其余时长由持续态与镜头稳定过渡承担。
-    - **Long-Minimum Duration Note (长最小时长兼容, 强制)**：若执行环境要求更长最小时长（如 8s），默认采用**低事件密度、长动作展开**策略：1-2 个主节拍 + 1 个落稳/凝视/余势保持段即可合规，禁止为了凑满时长自动补成 3-4 个事件。
+    - **主/微节拍估算联动 (Primary-Micro Estimation Coupling, 强制)**：先按 `微节拍数 ≈ round(Duration / 2s)` 估算总微节拍（允许按叙事语义微调 ±1），再决定 `主节拍数`，并继续受主节拍密度约束。`Shot Logic (CN)` 必须显式给出“时长 + 主节拍数 + 微节拍数 + 当前时长偏好”的联动预估。
+    - **Long Duration != More Plot Rule (长时长不等于更多剧情动作, 强制)**：即使时长为 **10s - 15s**，也不得为了“填满时长”而凭空新增新的打击、额外位移、夸张环境反应或第二个剧情事件。允许的是**同一事件的更长展开**，不允许的是**事件数量膨胀**。
+    - **Main-Action Density Guard (主动作密度护栏, 强制)**：时长带宽改成 **5s - 15s** 后，主动作密度仍应由信息量主导，而不是由时长机械拉高。禁止因为时长变长而把主动作密度无节制堆高。
+    - **Empty Shot Warning**: 严禁设定 **10s - 15s** 时长却只有一个简单的 "Eye blink" 动作；但若主动作本身具备持续张力（如对峙、蓄力、缓慢逼近、受击后的回稳），则允许只保留较少主节拍，其余时长由持续态与镜头稳定过渡承担。
+    - **Long-Minimum Duration Note (长最小时长兼容, 强制)**：若执行环境要求更长最小时长（如 **10s** 或 **15s**），默认采用**低事件密度、长动作展开**策略：以更长的 anticipation / recovery / hold / settle 消化时长，禁止为了凑满时长自动补成更多剧情事件。
   - **细节填充 (Content Filling)**：
-    - 若镜头被统一规划为 6s - 10s 但原剧本动作稀缺，优先补充**同一事件内部的可见延续**（如：呼吸、眼神停留、手部张力、受力后的站稳、衣摆余动、镜头减速停住），确保画面在目标时长内保持鲜活。
+    - 若镜头被统一规划进当前偏好区间但原剧本动作稀缺，优先补充**同一事件内部的可见延续**（如：呼吸、眼神停留、手部张力、受力后的站稳、衣摆余动、镜头减速停住），确保画面在目标时长内保持鲜活。
     - **禁止自动补剧情 (No Auto-Invented Event, 强制)**：不得因为时长较长就自动补充新的攻击、防守回合、额外击退、额外转身、额外道具互动、额外 VFX 或新的环境事件。
 - **改编权限**：要参考经典影片风格，对原需求进行合理改编以匹配视觉逻辑（动作合理性），可设定主观镜头比例（如 30%）。
 - **Persistent Style Anchor**：每个镜头必须继承 [Global Style] 与上一镜头的光影/空间关系。
@@ -412,7 +418,7 @@
   - **优先写法**：把反应具体落到以下一个或多个可见通道：`body reaction`（torso fold, shoulder twist, head snap, guard opening, knees softening）、`footing reaction`（half-step retreat, planted foot scrape, heel slide, stance widening, balance catch）、`contact-zone reaction`（wrist recoil, fingers loosening, cloth pull, weapon-line vibration）、`environment reaction`（dust lift, chair leg drag, door-panel shake, puddle ripple, loose paper flutter）、`recovery reaction`（breathing reset, guard rebuild, eyes re-locking, posture re-anchoring）。
   - **受力者细化优先级**：若镜头有主受力者，至少要为其写出 `受力部位/受力轴线 + 可见位移或形变 + 回稳方向` 三项中的两项，优先写满三项。例如：`upper torso folds off-line, right foot scrapes back half a step, then shoulders square up again`。环境或施力者补充反应可以放在其后，但不能取代主受力者的具体反应。
   - **禁用抽象写法**：禁止只写 `responds strongly`, `takes the hit`, `is affected`, `tension rises`, `the impact is intense` 这类无可视锚点的描述。必须说明**哪里动了、怎么动、动到什么程度、如何回稳**。
-  - **时长填充优先级**：若镜头需要补足 `6s - 10s` 时长，优先延展上述具体反应链，如 `foot scrape + torso sway + breath catch + guard rebuild`，或 `dust lift + object tremor + posture re-anchoring`；不得为了补时长而无授权新增第二次攻击或新的剧情动作。
+  - **时长填充优先级**：若镜头需要补足当前偏好目标时长，优先延展上述具体反应链，如 `foot scrape + torso sway + breath catch + guard rebuild`，或 `dust lift + object tremor + posture re-anchoring`；不得为了补时长而无授权新增第二次攻击或新的剧情动作。
 - **Camera-Motion Pairing Rule (机位-位移匹配规则, 强制)**：`{Viewpoint Movement}` 必须和主体位移类型严格匹配。
   - 若动作结果是 `stagger`, `recovery steps`, `guard break`, `distance reopening`，优先使用 `short reactive pull`, `brief retreat`, `lateral follow`, `hold on recovery`。
   - 若动作结果是明确的 `launch`, `wall impact`, `clear flight path`, `slam arc`，才允许使用 `rapid pull-back to preserve the flight path`, `launch-preserving retreat`, `impact-path tracking`。
@@ -432,7 +438,7 @@
   - **Low-Impact Motion Guard (低冲击动作护栏, 强制)**：
     - 默认只允许 `half-step displacement`, `torso sway`, `arm check`, `brief balance break`, `one recovery step`, `guard rebuild` 这一档结果。
     - `Viewpoint Movement` 优先使用 `slight lateral follow`, `short reactive pull`, `brief retreat`, `hold on recovery`；默认避免 `Whip Pan`, `violent shake`, `rapid push-in`, `flight path tracking`。
-    - 若时长为 `6s - 10s`，额外时长必须优先给 `pressure hold`, `recovery`, `breathing reset`, `eye contact`, `stance re-anchoring`，不得再发明第二次推搡、额外摔倒或新的独立冲突。
+    - 若时长落在当前偏好目标区间且仍需补足，额外时长必须优先给 `pressure hold`, `recovery`, `breathing reset`, `eye contact`, `stance re-anchoring`，不得再发明第二次推搡、额外摔倒或新的独立冲突。
     - 低冲击镜头的反应必须尽量具体，优先写 `planted foot scrape`, `shirt or sleeve tug`, `shoulder turned off-line`, `door panel rattles slightly`, `chair leg drags a fraction`, `breath catches before stance re-anchors` 这类**可见的一阶后果**，便于模型用反应链平滑补足时长。
   - **Template L1-A: Controlled Shove With Recovery Hold (受控推搡并回稳, Level 1)**
     - **Use When**: 争执中推开对方、逼退半步、制造距离或打断对方前进，不需要重击感。
@@ -697,7 +703,7 @@
       - 该草稿必须同时完成“运镜丰富性核验预案”：先明确本 Scene 的宏大开场镜头编号、景别切换链、表情特写镜头、道具特写镜头、高级运镜镜头与用途，再进入 Start/Video/End 编写。
   5. **Define Viewpoint Physics**: 明确机位物理关系（内/外，高/低，距离）。
   6. **Generate Start Frame**: 根据 Logic 规划，定义动作的起始状态（必须符合机位物理关系，并承接对应 subject packet 的稳定描述与当前状态；若为闪回桥接镜，起帧必须明确桥接锚点是否仍在场）。
-  7. **Generate Duration**: 先按“1 微节拍约 2s”估算微节拍总数，再反推主节拍容量，最后确定总时长（根据动作密度自然估算并受 6s - 10s 约束）。
+  7. **Generate Duration**: 先识别当前镜头的时长偏好（`Short-Shot Priority / Balanced Default / Long-Take Priority`），再按“1 微节拍约 2s”估算微节拍总数，最后确定总时长（根据动作密度自然估算并受当前偏好目标区间约束，整体不得超出 **5s - 15s** 默认边界）。
   8. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作，并消费本镜 subject packets 里的动作特征、空间条件、状态变化、依赖链与 Beat 覆盖义务；若存在闪回/回切，必须在此写清桥接方式而非硬切跳变。
   9. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态，并回写本镜涉及 subject 的结果状态；若为闪回桥接镜，终帧必须明确桥接后的新时空是否已稳定成立。
   10. **Run Dimension Completeness Gate**: 对 `Shot Logic (CN)` / `Start Frame` / `Video Content` / `End Frame` 执行维度验收，并额外检查该 Shot 是否完整覆盖对应 Beat 的关键信息、是否保留必需桥接锚点；缺项即触发下方重写机制，不得直接输出。
@@ -898,7 +904,7 @@
           - `{Bad}: "(1) A approaches chair -> (2) A grabs armrests -> (3) A lowers body -> (4) A settles -> (5) A smooths coat."` (5 个独立编号，模型无法逐条执行)
           - `{Good}: "(P1) CHAR:[@A] approaches the wooden chair and grips the armrests, weight shifting forward; (P2) CHAR:[@A] lowers steadily with knees bending, settling into the cushion as coat laps smooth flat -> resulting in seated pose, hands resting on armrests."`
       *   **Pause & Texture Beats — Conditional Trigger (停顿与质感节拍 — 条件触发)**：
-        - **景别与停顿拆分 (Close-up != More Plot, 强制理解)**：镜头里**应该有一定比例的 Medium Close-up / Close-up / Insert** 来保证镜头感与情绪落点；当镜头统一规划到 `6s - 10s` 时，额外时长优先用于显式停顿、呼吸、面部微动作、受力后的回稳与视线保持，**不是**用于新增更多剧情动作。
+        - **景别与停顿拆分 (Close-up != More Plot, 强制理解)**：镜头里**应该有一定比例的 Medium Close-up / Close-up / Insert** 来保证镜头感与情绪落点；当镜头统一规划到当前偏好目标区间时，额外时长优先用于显式停顿、呼吸、面部微动作、受力后的回稳与视线保持，**不是**用于新增更多剧情动作。
         - **触发条件**：仅在以下情况下强制嵌入显式停顿/呼吸/面部微动作细节：
           1. 景别为 **Medium Close-up 或更近**（Close-up / Extreme Close-up）；
           2. 且 Duration **≥ 6s**；
@@ -921,7 +927,7 @@
       *   **Primary Sustain Action (核心维持动作)**: **Critical**.
       *   **Continuous Flow**: 确保 `Start` 到 `End` 之间没有时间真空。
         *   **Density Guideline — Two-Tier Beat Budget (密度建议 — 双层节拍预算, 强制)**：
-          - **核心认知**：当前视频生成在 **6s - 10s 的常规镜头**内通常也只应稳定承载 **2-3 个独立动作阶段**；时长增加后，优先增加的是动作展开、停顿、回稳与镜头减速，而不是新增第 4 个剧情动作。生成过程会对全文做整体语义理解并在首尾帧间插值，**不是按编号逐条精确执行**。因此必须采用"主节拍优先 + 微节拍补充"的双层预算。
+          - **核心认知**：当前视频生成在 **5s - 15s 的常规镜头**内，动作阶段数量仍应由信息密度而非时长本身决定。时长增加后，优先增加的是动作展开、停顿、回稳与镜头减速，而不是机械新增更多剧情动作。生成过程会对全文做整体语义理解并在首尾帧间插值，**不是按编号逐条精确执行**。因此必须采用"主节拍优先 + 微节拍补充"的双层预算。
           - **Tier 1 — Primary Beats (主节拍, 必达)**：每个 Shot 的 Video Content 必须且仅需 **2-3 个主节拍**（核心叙事动作阶段）。这是模型能可靠执行的上限。主节拍负责"故事推进"，用 `(P1)(P2)(P3)` 标注。
           - **Tier 2 — Micro-Beats (微节拍, 补充)**：在主节拍之间或之内，通过微节拍丰富画面质感（姿态过渡、表情变化、环境响应、呼吸节奏）。微节拍用自然语言串联在主节拍描述中，不需要独立编号。
           - **总密度预算**：Video Content 的总 token 数建议控制在 **100-240 tokens**（不含运镜声明）。目标是优先保住主节拍、反应链、结果闭环与必要语言载荷，再控制修饰密度，避免为了过度压缩而损坏动作可执行性。

@@ -21,7 +21,7 @@ export const useFunctionApis = () => {
 };
 
 const FunctionApiSelector = ({ functionName, configs, className = '' }) => {
-    const apiList = configs[functionName] || [];
+    const apiList = configs?.[functionName] || [];
     const storageKey = 'func_api_' + functionName;
     const [value, setValue] = useState(Number(localStorage.getItem(storageKey)) || '');
     

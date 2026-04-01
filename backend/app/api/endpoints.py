@@ -1,4 +1,4 @@
-﻿
+
 from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query, Response
 from fastapi.responses import StreamingResponse
 import logging
@@ -2972,8 +2972,8 @@ def _build_scene_analysis_blocking_failure_detail(
 
     body = "；".join([part for part in detail_parts if part])
     if body:
-        return "场景分析结果不可用：" + body + "。请直接重新执行 AI 场景分析。"
-    return "场景分析结果不可用：返回内容结构不完整或校验未通过。请直接重新执行 AI 场景分析。"
+        return "场景分析结果不可用：" + body + "。请直接重新执行剧本分析。"
+    return "场景分析结果不可用：返回内容结构不完整或校验未通过。请直接重新执行剧本分析。"
 
 
 @router.post("/fix-db-schema")
@@ -18591,7 +18591,7 @@ def test_smtp_config(
     try:
         _send_email_via_runtime_smtp(target_email, subject, content, strict=True)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"发送失�? {exc}")
+        raise HTTPException(status_code=400, detail=f"发送失?? {exc}")
 
     return {"success": True, "message": f"测试邮件已发送到 {target_email}"}
 
@@ -24621,6 +24621,7 @@ async def _run_generate_video(
                 prompt_candidates=prompt_candidates,
                 entity_lookup=entity_lookup,
                 manual_override=bool(shot_tech.get("video_ref_image_urls_manual")) and has_explicit_visual_refs,
+                associated_entities=shot_for_ref.associated_entities if shot_for_ref else None,
             )
             if merged_refs:
                 req.ref_image_url = merged_refs
@@ -27026,6 +27027,26 @@ def _inject_shot_prompt_anchors(
     return regex.sub(_replace, text)
 
 
+def _collect_associated_entities_refs(associated_entities_str: Optional[str], entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
+    if not isinstance(associated_entities_str, str) or not associated_entities_str.strip():
+        return []
+        
+    refs: List[str] = []
+    names = [x.strip() for x in re.split(r'[,，]', associated_entities_str) if x.strip()]
+    
+    for name in names:
+        norm_name = _normalize_entity_anchor_token(name)
+        if not norm_name:
+            continue
+        row = entity_lookup.get(norm_name)
+        if row:
+            image_url = str((row or {}).get("image_url") or "").strip()
+            if image_url:
+                refs.append(image_url)
+                
+    return [x for x in dict.fromkeys(refs) if x]
+
+
 def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
     text = str(prompt or "")
     if not text:
@@ -27241,13 +27262,21 @@ def _merge_entity_refs_for_video_mode(
     prompt_candidates: List[str],
     entity_lookup: Dict[str, Dict[str, Any]],
     manual_override: bool = False,
+    associated_entities: Optional[str] = None,
 ) -> Tuple[List[str], List[str]]:
     normalized_mode = _normalize_video_ref_mode(ref_mode)
     current_refs = _dedupe_media_ref_urls(base_refs)
     if normalized_mode != "entity_refs" or manual_override:
         return current_refs, []
 
-    auto_entity_refs = _collect_video_prompt_entity_refs(prompt_candidates, entity_lookup)
+    auto_entity_refs: List[str] = []
+    
+    if associated_entities:
+        auto_entity_refs.extend(_collect_associated_entities_refs(associated_entities, entity_lookup))
+        
+    auto_entity_refs.extend(_collect_video_prompt_entity_refs(prompt_candidates, entity_lookup))
+    auto_entity_refs = _dedupe_media_ref_urls(auto_entity_refs)
+
     if not auto_entity_refs:
         return current_refs, []
 
@@ -27495,6 +27524,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             prompt_candidates=video_prompt_candidates,
             entity_lookup=entity_lookup,
             manual_override=bool(tech.get("video_ref_image_urls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
+            associated_entities=shot.associated_entities,
         )
 
         normalized_refs, normalized_last_frame_url, batch_ref_info = _normalize_video_request_refs(
@@ -27965,7 +27995,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 start_ref_index_map,
                             )
                             start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
-                            auto_matches = _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup)
+                            auto_matches = []
+                            if shot.associated_entities:
+                                auto_matches.extend(_collect_associated_entities_refs(shot.associated_entities, entity_lookup))
+                            auto_matches.extend([x for x in _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup) if x not in auto_matches])
                             start_refs: List[str] = []
                             if isinstance(tech.get("ref_image_urls"), list):
                                 saved_refs = [str(x).strip() for x in tech.get("ref_image_urls") or [] if str(x).strip()]
@@ -28062,7 +28095,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             if isinstance(tech.get("end_ref_image_urls"), list):
                                 refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
                             else:
-                                refs.extend(_collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup))
+                                if shot.associated_entities:
+                                    refs.extend(_collect_associated_entities_refs(shot.associated_entities, entity_lookup))
+                                refs.extend([x for x in _collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup) if x not in refs])
 
                             deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
                             start_image = str(shot.image_url or "").strip()
@@ -28160,6 +28195,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             prompt_candidates=video_prompt_candidates,
                             entity_lookup=entity_lookup,
                             manual_override=bool(tech.get("video_ref_image_urls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
+                            associated_entities=shot.associated_entities,
                         )
 
                         normalized_refs, normalized_last_frame_url, batch_ref_info = _normalize_video_request_refs(
@@ -29626,5 +29662,9 @@ def apply_entity_analysis(
     db.commit()
     db.refresh(entity)
     return entity
+
+
+
+
 
 

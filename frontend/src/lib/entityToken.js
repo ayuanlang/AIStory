@@ -58,12 +58,15 @@ export const getEntityFallbackEnglishName = (entityOrDescription) => {
 const collectEntityRawNames = (entity) => {
     const values = [
         entity?.name,
+        entity?.name_zh,
         entity?.name_en,
+        entity?.subject_name_exact,
+        entity?.subject_name,
         getEntityFallbackEnglishName(entity),
     ];
-    return values
+    return Array.from(new Set(values
         .map((value) => String(value || '').trim())
-        .filter(Boolean);
+        .filter(Boolean)));
 };
 
 const escapeRegExp = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

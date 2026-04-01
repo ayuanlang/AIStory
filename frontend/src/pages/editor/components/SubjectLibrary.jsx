@@ -166,6 +166,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
     const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 2;
     const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
+    const functionApiConfigs = useFunctionApis();
     const createSubjectBatchTaskState = useCallback(() => ({
         running: false,
         progress: null,

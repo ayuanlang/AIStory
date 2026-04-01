@@ -124,6 +124,8 @@ import {
     PROJECT_EP_TONE_OPTIONS,
     PROJECT_EP_LIGHTING_OPTIONS,
     PROJECT_EP_QUALITY_OPTIONS,
+    PROJECT_EP_LENS_PREFERENCE_OPTIONS,
+    PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS,
     PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
     PROJECT_SCENE_ANALYSIS_REGION_OPTIONS,
     PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS,
@@ -155,6 +157,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
 export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], uiLang = 'en', mode = 'overview' }) => {
+    const functionApiConfigs = useFunctionApis();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const resolveVideoSoundFromInfo = (payload) => {
         const src = (payload && typeof payload === 'object') ? payload : {};
@@ -1913,7 +1916,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                         <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={info.script_title} onChange={v => updateField('script_title', v)} placeholder={t('例如：我的科幻史诗', 'e.g. My Sci-Fi Epic')} />
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <InputGroup idPrefix={prefix}
                             label={t('类型', 'Type')}
                             value={info.type}
@@ -1926,17 +1929,25 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             onChange={v => updateField('language', v)}
                                      list={PROJECT_EP_LANGUAGE_OPTIONS}
                         />
-                    </div>
-
-                    <InputGroup idPrefix={prefix}
-                        label={t('基础定位', 'Base Positioning')}
-                        value={info.base_positioning}
-                        onChange={v => updateField('base_positioning', v)}
-                        list={PROJECT_EP_BASE_POSITIONING_OPTIONS}
-                        placeholder={t('例如：都市爱情 / 科幻', 'e.g. Urban Romance / Sci-Fi')}
-                    />
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <InputGroup idPrefix={prefix}
+                            label={t('基础定位', 'Base Positioning')}
+                            value={info.base_positioning}
+                            onChange={v => updateField('base_positioning', v)}
+                            list={PROJECT_EP_BASE_POSITIONING_OPTIONS}
+                            placeholder={t('例如：都市爱情 / 科幻', 'e.g. Urban Romance / Sci-Fi')}
+                        />
+                        <InputGroup idPrefix={prefix}
+                            label={t('年代', 'Era')}
+                            value={info.era}
+                            onChange={v => updateField('era', v)}
+                            list={PROJECT_SCENE_ANALYSIS_ERA_OPTIONS}
+                        />
+                        <InputGroup idPrefix={prefix}
+                            label={t('镜头偏好', 'Lens Preference')}
+                            value={info.lens_preference}
+                            onChange={v => updateField('lens_preference', v)}
+                            list={PROJECT_EP_LENS_PREFERENCE_OPTIONS}
+                        />
                         <InputGroup idPrefix={prefix}
                             label={t('画幅比例', 'Aspect Ratio')}
                             value={info.tech_params?.visual_standard?.aspect_ratio}
@@ -1949,6 +1960,30 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             onChange={v => updateTech('image_size', v)}
                             list={["0.5K", "1K", "2K", "4K"]}
                         />
+                        <InputGroup idPrefix={prefix}
+                            label={t('播出安全等级', 'Broadcast Safety Level')}
+                            value={info.broadcast_safety_level}
+                            onChange={v => updateField('broadcast_safety_level', v)}
+                            list={PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS}
+                        />
+                        <InputGroup idPrefix={prefix}
+                            label={t('视频生成偏好', 'Video Gen Preference')}
+                            value={info.video_generation_preference}
+                            onChange={v => updateField('video_generation_preference', v)}
+                            list={PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS}
+                        />
+                        <div className="flex items-center gap-2 mt-[28px] pl-1">
+                            <input 
+                                type="checkbox" 
+                                id="hasExistingAssetsOverview" 
+                                checked={info.has_existing_assets !== false} 
+                                onChange={(e) => updateField('has_existing_assets', e.target.checked)} 
+                                className="w-4 h-4 text-primary focus:ring-primary/30 rounded border-white/20 bg-background"
+                            />
+                            <label htmlFor="hasExistingAssetsOverview" className="text-sm font-semibold text-primary/95 cursor-pointer">
+                                {t('有现有资产', 'Has Existing Assets')}
+                            </label>
+                        </div>
                     </div>
 
                     <div className="flex flex-col gap-1">
@@ -2087,42 +2122,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                 </div>
                 )}
 
-                {mode === 'overview' && (
-                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-4 xl:col-span-2">
-                    <button
-                        type="button"
-                        onClick={() => setIsSceneAnalysisDimensionsCollapsed((prev) => !prev)}
-                        className="w-full flex items-center justify-between gap-3 border-b border-white/10 pb-3 text-left"
-                    >
-                        <div>
-                            <h3 className="text-lg font-semibold text-primary">{t('场景分析维度', 'Scene Analysis Dimensions')}</h3>
-                            <p className="text-xs text-muted-foreground mt-1">{t('用于 Skill 决策引擎组合提示词。建议默认使用“双目标”：剧本优化 + 人物创作。', 'Used by the skill decision engine to compose prompts. Recommended default is dual-goal: script optimization + character creation.')}</p>
-                        </div>
-                        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isSceneAnalysisDimensionsCollapsed ? '' : 'rotate-180'}`} />
-                    </button>
 
-                    {!isSceneAnalysisDimensionsCollapsed && (
-                        <>
-                            <div className="rounded-lg border border-amber-400/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-100/90">
-                                {t('这些字段只影响 Skill 路由和提示词组合，不改变 scene_analysis 的输出结构，也不会影响下游 markdown/json 协议。', 'These fields only affect skill routing and prompt composition. They do not change the scene_analysis output structure or downstream markdown/json contracts.')}
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                                {PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS.map((field) => (
-                                    <InputGroup
-                                        key={`project-scene-analysis-${field.key}`}
-                                        idPrefix={`${prefix}scene-analysis-`}
-                                        label={t(field.labelZh, field.labelEn)}
-                                        value={info?.[field.key] || ''}
-                                        onChange={v => updateField(field.key, v)}
-                                        list={field.options}
-                                        placeholder={t('未指定', 'Unspecified')}
-                                    />
-                                ))}
-                            </div>
-                        </>
-                    )}
-                </div>
-                )}
 
                 {mode === 'overview' && (
                 <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6 xl:col-span-2">

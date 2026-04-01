@@ -1507,6 +1507,10 @@ useEffect(() => {
                                 addLog('Skipped character entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                             }
+                            if (existingEntityMap.has(normalizeEntityKey('character', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('character', entityNameEn)))) {
+                                logSkippedExistingSubject('character', entityName, entityNameEn);
+                                continue;
+                            }
                             const desc = [
                                 `Name (EN): ${entityNameEn || char.name_en || ''}`,
                                 `Description: ${char.description_cn || char.description || char.narrative_description || ''}`,
@@ -1579,6 +1583,10 @@ useEffect(() => {
                                           addLog('Skipped prop entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                              }
+                             if (existingEntityMap.has(normalizeEntityKey('prop', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('prop', entityNameEn)))) {
+                                logSkippedExistingSubject('prop', entityName, entityNameEn);
+                                continue;
+                             }
                              const desc = [
                                           `Name (EN): ${entityNameEn || prop.name_en || ''}`,
                                 `Type: ${prop.type}`, // inner type from JSON
@@ -1640,6 +1648,10 @@ useEffect(() => {
                                       const entityNameEn = String(env?.name_en || env?.english_name || env?.en_name || '').trim();
                              if (!entityName) {
                                           addLog('Skipped environment entity without name aliases (name/subject_name_exact/name_en).', 'warning');
+                                continue;
+                             }
+                             if (existingEntityMap.has(normalizeEntityKey('environment', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('environment', entityNameEn)))) {
+                                logSkippedExistingSubject('environment', entityName, entityNameEn);
                                 continue;
                              }
                              const desc = [
@@ -2737,8 +2749,8 @@ useEffect(() => {
     const MENU_ITEMS = [
     { id: 'overview', label: '项目信息', icon: Briefcase },
     { id: 'script', label: '剧本', icon: FileText },
-    { id: 'subjects', label: '资产', icon: Users },
     { id: 'scenes', label: '场景', icon: ImageIcon },
+    { id: 'subjects', label: '资产', icon: Users },
     { id: 'shots', label: '分镜', icon: Film },
     { id: 'montage', label: '剪辑', icon: Video }
 ];
@@ -2799,7 +2811,15 @@ useEffect(() => {
         }
     };
 
+    const [tabResetKey, setTabResetKey] = useState(0);
+
     const navigateTopMenu = (item) => {
+        if (item.id === activeTab) {
+            setTabResetKey(prev => prev + 1);
+        }
+        if (item.id === 'shots') {
+            setEditingShot(null);
+        }
         setActiveTab(item.id);
     };
 
@@ -2984,10 +3004,10 @@ useEffect(() => {
             <ProjectStatusBar 
                 activeTab={activeTab} 
                 workflowStage={project?.global_info?.workflow_stage}
-                totalProjectCost={project?.total_tokens || 158400}
-                userCost={project?.user_tokens || 45200}
+                totalProjectCost={project?.total_tokens || 0}
+                userCost={project?.user_tokens || 0}
                 t={t}
-                hasAssets={activeEpisode?.scenes?.some(s => s.shots?.some(sh => sh.image_url || sh.reference_image_url))}
+                hasAssets={project?.global_info?.has_existing_assets === true}
             />
 
             {/* Main Content Area */}
@@ -3032,16 +3052,16 @@ useEffect(() => {
                                 }}
                             />
                         )}
-                        {activeTab === 'script' && <ScriptEditor activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
-                        {activeTab === 'subjects' && <SubjectLibrary projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} />}
-                        {activeTab === 'scenes' && <SceneManager activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
+                        {activeTab === 'script' && <ScriptEditor key={`script-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
+                        {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${tabResetKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} />}
+                        {activeTab === 'scenes' && <SceneManager key={`scenes-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                             if (sceneId) {
                                 setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
                             }
                             setActiveTab('shots');
                         }} uiLang={uiLang} />}
-                        {activeTab === 'shots' && <ShotsView activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
-                        {activeTab === 'montage' && <VideoStudio activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
+                        {activeTab === 'shots' && <ShotsView key={`shots-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
+                        {activeTab === 'montage' && <VideoStudio key={`montage-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                     </div>
                 </div>
             </div>

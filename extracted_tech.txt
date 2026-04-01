@@ -1,0 +1,62 @@
+<div className="mt-4 border-t border-white/10 pt-3">
+                                            <button
+                                                className="flex items-center gap-2 text-sm font-semibold text-primary/80 hover:text-primary transition-colors"
+                                                onClick={() => setIsCreateTechVisualCollapsed(!isCreateTechVisualCollapsed)}
+                                            >
+                                                {isCreateTechVisualCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronDown className="w-4 h-4 rotate-180" />}
+                                                {t('项目信息的技术与视觉参数', 'Tech & Visual Parameters')}
+                                            </button>
+                                        </div>
+                                        {!isCreateTechVisualCollapsed && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 ml-2 border-l-2 border-primary/20 pl-4 py-2">
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
+                                                        {projectCreateOptions.image_size.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('分辨率', 'Resolution')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newResolution} onChange={(e) => setNewResolution(e.target.value)}>
+                                                        {projectCreateOptions.resolution.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('色调', 'Color Tone')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newColorTone} onChange={(e) => setNewColorTone(e.target.value)}>
+                                                        {projectCreateOptions.color_tone.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('全局风格', 'Global Style')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newGlobalStyle} onChange={(e) => setNewGlobalStyle(e.target.value)}>
+                                                        {projectCreateOptions.global_style.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('光照', 'Lighting')}</label>
+                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLighting} onChange={(e) => setNewLighting(e.target.value)}>
+                                                        {projectCreateOptions.lighting.map((opt) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('项目 Seed', 'Project Seed')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        value={newProjectSeed}
+                                                        onChange={e => setNewProjectSeed(e.target.value)}
+                                                        placeholder={t('留空默认随机', 'Leave empty for random')}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}

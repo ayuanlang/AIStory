@@ -453,6 +453,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
+  const [newHasExistingAssets, setNewHasExistingAssets] = useState(false);
     const [newShareUsers, setNewShareUsers] = useState('');
     const [newReviewerUsers, setNewReviewerUsers] = useState('');
     const [newEra, setNewEra] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.era));
@@ -669,69 +670,80 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             const data = await fetchProjects();
             const sorted = sortProjectsNewestFirst(data);
             setProjects(sorted);
+            
+            // Turn off loading immediately to render the project list without delay
+            setIsProjectsLoading(false);
+            setHasLoadedProjectsOnce(true);
 
-            const ownerProjects = (Array.isArray(sorted) ? sorted : []).filter((item) => {
-                if (typeof item?.is_owner === 'boolean') return item.is_owner;
-                return Number(item?.owner_id) === Number(currentUser?.id);
-            });
+            // Fetch extra stats quietly in the background
+            (async () => {
+                try {
+                    const ownerProjects = (Array.isArray(sorted) ? sorted : []).filter((item) => {
+                        if (typeof item?.is_owner === 'boolean') return item.is_owner;
+                        return Number(item?.owner_id) === Number(currentUser?.id);
+                    });
 
-            const countEntries = await Promise.all(
-                ownerProjects.map(async (item) => {
-                    try {
-                        const shares = await fetchProjectShares(item.id);
-                        return [item.id, Array.isArray(shares) ? shares.length : 0];
-                    } catch {
-                        return [item.id, 0];
-                    }
-                })
-            );
+                    const countEntries = await Promise.all(
+                        ownerProjects.map(async (item) => {
+                            try {
+                                const shares = await fetchProjectShares(item.id);
+                                return [item.id, Array.isArray(shares) ? shares.length : 0];
+                            } catch {
+                                return [item.id, 0];
+                            }
+                        })
+                    );
 
-            const nextCounts = {};
-            countEntries.forEach(([projectId, count]) => {
-                nextCounts[projectId] = count;
-            });
-            setProjectShareCounts(nextCounts);
-
-            const nextUnreadCounts = {};
-            try {
-                // Fetch once and aggregate by project_id to avoid N per-project review thread requests.
-                const [inboxRows, outboxRows] = await Promise.all([
-                    fetchReviewInboxThreads(),
-                    fetchReviewOutboxThreads(),
-                ]);
-
-                const mergedRows = [
-                    ...(Array.isArray(inboxRows) ? inboxRows : []),
-                    ...(Array.isArray(outboxRows) ? outboxRows : []),
-                ];
-                const seenThreadIds = new Set();
-
-                mergedRows.forEach((thread) => {
-                    const threadId = Number(thread?.id || 0);
-                    if (threadId > 0) {
-                        if (seenThreadIds.has(threadId)) return;
-                        seenThreadIds.add(threadId);
-                    }
-
-                    if (!thread?.has_unread) return;
-                    const projectId = Number(thread?.project_id || 0);
-                    if (projectId <= 0) return;
-                    nextUnreadCounts[projectId] = Number(nextUnreadCounts[projectId] || 0) + 1;
-                });
-            } catch {
-                // Keep unread counts at zero if review endpoints are temporarily unavailable.
-            }
-
-            (Array.isArray(sorted) ? sorted : []).forEach((item) => {
-                const projectId = Number(item?.id || 0);
-                if (projectId > 0 && nextUnreadCounts[projectId] == null) {
-                    nextUnreadCounts[projectId] = 0;
+                    const nextCounts = {};
+                    countEntries.forEach(([projectId, count]) => {
+                        nextCounts[projectId] = count;
+                    });
+                    setProjectShareCounts(nextCounts);
+                } catch (e) {
+                    console.error("Failed to fetch project shares", e);
                 }
-            });
-            setProjectUnreadReviewCounts(nextUnreadCounts);
+
+                try {
+                    const nextUnreadCounts = {};
+                    // Fetch once and aggregate by project_id to avoid N per-project review thread requests.
+                    const [inboxRows, outboxRows] = await Promise.all([
+                        fetchReviewInboxThreads(),
+                        fetchReviewOutboxThreads(),
+                    ]);
+
+                    const mergedRows = [
+                        ...(Array.isArray(inboxRows) ? inboxRows : []),
+                        ...(Array.isArray(outboxRows) ? outboxRows : []),
+                    ];
+                    const seenThreadIds = new Set();
+
+                    mergedRows.forEach((thread) => {
+                        const threadId = Number(thread?.id || 0);
+                        if (threadId > 0) {
+                            if (seenThreadIds.has(threadId)) return;
+                            seenThreadIds.add(threadId);
+                        }
+
+                        if (!thread?.has_unread) return;
+                        const projectId = Number(thread?.project_id || 0);
+                        if (projectId <= 0) return;
+                        nextUnreadCounts[projectId] = Number(nextUnreadCounts[projectId] || 0) + 1;
+                    });
+
+                    (Array.isArray(sorted) ? sorted : []).forEach((item) => {
+                        const projectId = Number(item?.id || 0);
+                        if (projectId > 0 && nextUnreadCounts[projectId] == null) {
+                            nextUnreadCounts[projectId] = 0;
+                        }
+                    });
+                    setProjectUnreadReviewCounts(nextUnreadCounts);
+                } catch (e) {
+                    // Keep unread counts at zero if review endpoints are temporarily unavailable.
+                }
+            })();
+
         } catch (error) {
             console.error("Failed to load projects", error);
-        } finally {
             setIsProjectsLoading(false);
             setHasLoadedProjectsOnce(true);
         }
@@ -1929,178 +1941,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             placeholder={t('可留空。用于记录项目背景、目标或备注', 'Can be left empty. Add context, goals, or notes for this project')}
                                         />
 
-                                        <div className="mt-5 rounded-xl border border-white/10 bg-black/15">
-                                            <button
-                                                type="button"
-                                                onClick={() => setIsCreateSceneAnalysisCollapsed((prev) => !prev)}
-                                                className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
-                                            >
-                                                <div>
-                                                    <div className="text-sm font-semibold tracking-wide text-primary">
-                                                        {t('场景分析维度（可选）', 'Scene Analysis Dimensions (Optional)')}
-                                                    </div>
-                                                    <div className="text-xs text-muted-foreground mt-0.5">
-                                                        {t('用于 Skill 决策引擎路由；默认建议主目标=剧本优化，次目标=人物创作。', 'Used by the skill decision engine for routing; recommended default is primary goal = script optimization and secondary goal = character creation.')}
-                                                    </div>
-                                                </div>
-                                                <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isCreateSceneAnalysisCollapsed ? '' : 'rotate-180'}`} />
-                                            </button>
 
-                                            {!isCreateSceneAnalysisCollapsed && (
-                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 px-4 pb-4">
-                                                    {PROJECT_SCENE_ANALYSIS_CREATE_FIELDS.map((field) => (
-                                                        <div key={`project-create-dimension-${field.key}`}>
-                                                            <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t(field.labelZh, field.labelEn)}</label>
-                                                            <select
-                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg"
-                                                                value={String(newSceneAnalysisConfig?.[field.key] || '')}
-                                                                onChange={(e) => setNewSceneAnalysisConfig((prev) => ({
-                                                                    ...(prev || {}),
-                                                                    [field.key]: e.target.value,
-                                                                }))}
-                                                            >
-                                                                <option value="">{t('未指定', 'Unspecified')}</option>
-                                                                {field.options.map((opt) => <option key={`${field.key}-${opt}`} value={opt}>{opt}</option>)}
-                                                            </select>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        <div className="mt-5 rounded-xl border border-white/10 bg-black/15">
-                                            <button
-                                                type="button"
-                                                onClick={() => setIsCreateCollaboratorsCollapsed((prev) => !prev)}
-                                                className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
-                                            >
-                                                <div>
-                                                    <div className="text-sm font-semibold tracking-wide text-primary">
-                                                        {t('共享与审核（可选）', 'Share & Review (Optional)')}
-                                                    </div>
-                                                    <div className="text-xs text-muted-foreground mt-0.5">
-                                                        {t('默认收起，不影响项目创建。', 'Collapsed by default and does not affect project creation.')}
-                                                    </div>
-                                                </div>
-                                                <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isCreateCollaboratorsCollapsed ? '' : 'rotate-180'}`} />
-                                            </button>
-
-                                            
-                                        <div className="mt-4 border-t border-white/10 pt-3">
-                                            <button
-                                                className="flex items-center gap-2 text-sm font-semibold text-primary/80 hover:text-primary transition-colors"
-                                                onClick={() => setIsCreateTechVisualCollapsed(!isCreateTechVisualCollapsed)}
-                                            >
-                                                {isCreateTechVisualCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronDown className="w-4 h-4 rotate-180" />}
-                                                {t('项目信息的技术与视觉参数', 'Tech & Visual Parameters')}
-                                            </button>
-                                        </div>
-                                        {!isCreateTechVisualCollapsed && (
-                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 ml-2 border-l-2 border-primary/20 pl-4 py-2">
-                                                <div>
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
-                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
-                                                        {projectCreateOptions.image_size.map((opt) => (
-                                                            <option key={opt} value={opt}>{opt}</option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('分辨率', 'Resolution')}</label>
-                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newResolution} onChange={(e) => setNewResolution(e.target.value)}>
-                                                        {projectCreateOptions.resolution.map((opt) => (
-                                                            <option key={opt} value={opt}>{opt}</option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('色调', 'Color Tone')}</label>
-                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newColorTone} onChange={(e) => setNewColorTone(e.target.value)}>
-                                                        {projectCreateOptions.color_tone.map((opt) => (
-                                                            <option key={opt} value={opt}>{opt}</option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('全局风格', 'Global Style')}</label>
-                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newGlobalStyle} onChange={(e) => setNewGlobalStyle(e.target.value)}>
-                                                        {projectCreateOptions.global_style.map((opt) => (
-                                                            <option key={opt} value={opt}>{opt}</option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('光照', 'Lighting')}</label>
-                                                    <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLighting} onChange={(e) => setNewLighting(e.target.value)}>
-                                                        {projectCreateOptions.lighting.map((opt) => (
-                                                            <option key={opt} value={opt}>{opt}</option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('项目 Seed', 'Project Seed')}</label>
-                                                    <input
-                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
-                                                        value={newProjectSeed}
-                                                        onChange={e => setNewProjectSeed(e.target.value)}
-                                                        placeholder={t('留空默认随机', 'Leave empty for random')}
-                                                    />
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        <div className="mt-4 border-t border-white/10 pt-3">
-                                            <button
-                                                className="flex items-center gap-2 text-sm font-semibold text-primary/80 hover:text-primary transition-colors"
-                                                onClick={() => setIsCreateManagementCollapsed(!isCreateManagementCollapsed)}
-                                            >
-                                                {isCreateManagementCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronDown className="w-4 h-4 rotate-180" />}
-                                                {t('项目协作与管理', 'Project Management & Collaboration')}
-                                            </button>
-                                        </div>
-                                        {!isCreateManagementCollapsed && (
-                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3 ml-2 border-l-2 border-primary/20 pl-4 py-2">
-                                                <div>
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('计划完成时间', 'Planned Completion Time')}</label>
-                                                    <input
-                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
-                                                        type="date"
-                                                        value={newPlannedCompletionTime}
-                                                        onChange={e => setNewPlannedCompletionTime(e.target.value)}
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('预算 (¥)', 'Budget')}</label>
-                                                    <input
-                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
-                                                        type="number"
-                                                        value={newBudget}
-                                                        onChange={e => setNewBudget(e.target.value)}
-                                                        placeholder="0.00"
-                                                    />
-                                                </div>
-                                                <div className="lg:col-span-2">
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('共享用户', 'Share Users')}</label>
-                                                    <input
-                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
-                                                        value={newShareUsers}
-                                                        onChange={e => setNewShareUsers(e.target.value)}
-                                                        placeholder={t('逗号分隔用户名', 'Comma-separated usernames')}
-                                                    />
-                                                </div>
-                                                <div className="lg:col-span-2">
-                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('审核人', 'Reviewers')}</label>
-                                                    <input
-                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
-                                                        value={newReviewerUsers}
-                                                        onChange={e => setNewReviewerUsers(e.target.value)}
-                                                        placeholder={t('逗号分隔用户名', 'Comma-separated usernames')}
-                                                    />
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        </div>
                                     </motion.div>
                                 )}
 

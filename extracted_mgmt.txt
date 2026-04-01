@@ -1,0 +1,50 @@
+<div className="mt-4 border-t border-white/10 pt-3">
+                                            <button
+                                                className="flex items-center gap-2 text-sm font-semibold text-primary/80 hover:text-primary transition-colors"
+                                                onClick={() => setIsCreateManagementCollapsed(!isCreateManagementCollapsed)}
+                                            >
+                                                {isCreateManagementCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronDown className="w-4 h-4 rotate-180" />}
+                                                {t('项目协作与管理', 'Project Management & Collaboration')}
+                                            </button>
+                                        </div>
+                                        {!isCreateManagementCollapsed && (
+                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3 ml-2 border-l-2 border-primary/20 pl-4 py-2">
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('计划完成时间', 'Planned Completion Time')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        type="date"
+                                                        value={newPlannedCompletionTime}
+                                                        onChange={e => setNewPlannedCompletionTime(e.target.value)}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('预算 (¥)', 'Budget')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        type="number"
+                                                        value={newBudget}
+                                                        onChange={e => setNewBudget(e.target.value)}
+                                                        placeholder="0.00"
+                                                    />
+                                                </div>
+                                                <div className="lg:col-span-2">
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('共享用户', 'Share Users')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        value={newShareUsers}
+                                                        onChange={e => setNewShareUsers(e.target.value)}
+                                                        placeholder={t('逗号分隔用户名', 'Comma-separated usernames')}
+                                                    />
+                                                </div>
+                                                <div className="lg:col-span-2">
+                                                    <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('审核人', 'Reviewers')}</label>
+                                                    <input
+                                                        className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30"
+                                                        value={newReviewerUsers}
+                                                        onChange={e => setNewReviewerUsers(e.target.value)}
+                                                        placeholder={t('逗号分隔用户名', 'Comma-separated usernames')}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}

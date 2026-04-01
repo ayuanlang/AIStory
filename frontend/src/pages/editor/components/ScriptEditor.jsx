@@ -13,7 +13,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
 } from '../editorHelpers';
 
 import { 
@@ -414,7 +414,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const normalized = stable.toLowerCase();
         if (
             normalized.includes('场景分析结果不可用')
-            || normalized.includes('请直接重新执行 ai 场景分析')
+            || normalized.includes('请直接重新执行剧本分析')
             || normalized.includes('please directly rerun ai scene analysis')
         ) {
             return t(
@@ -2342,6 +2342,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             message: t('场景与 subjects 导入完成，正在逐个场景检查实体缺失...', 'Scenes and subjects imported. Checking each scene for missing entities...'),
         });
 
+        const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
         let latestEntities = await fetchEntities(projectId).catch(() => []);
         const missingSceneReports = [];
         const supplementReport = {
@@ -2353,7 +2354,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
 
         for (const scene of importedSceneRows) {
-            const currentMissing = findMissingSceneSubjectRefs(scene, latestEntities);
+            const latestEntityPool = mergeEntityPoolWithSubjectIndex(latestEntities, authoritativeSubjectText);
+            const currentMissing = findMissingSceneSubjectRefs(scene, latestEntityPool);
             if (!Array.isArray(currentMissing) || currentMissing.length === 0) continue;
 
             const sceneNo = String(scene?.scene_no || '').trim();
@@ -2372,7 +2374,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
             const details = currentMissing.map((ref) => {
-                const conflicts = findCrossTypeEntityMatches(latestEntities, ref?.name, ref?.type);
+                const conflicts = findCrossTypeEntityMatches(latestEntityPool, ref?.name, ref?.type);
                 const conflictLabel = conflicts.length > 0
                     ? ` | cross_type_matches=${conflicts.map((c) => `${c?.type || 'unknown'}:${c?.name || c?.name_en || c?.id || 'unknown'}`).join(';')}`
                     : '';
@@ -4273,6 +4275,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert("Script content is too short for analysis.");
             return;
         }
+        if (isAnalyzing || analysisRunInFlightRef?.current) {
+            onLog?.("Already analyzing, duplicate click prevented.", "warning");
+            return;
+        }
 
         const projectInfo = (project?.global_info && typeof project.global_info === 'object')
             ? project.global_info
@@ -4288,12 +4294,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return '';
         };
         const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
+        
+        setIsAnalyzing(true); // Disable button immediately
+        
         if (!projectLanguage) {
             const ok = await confirmUiMessage(t(
                 '检测到项目语言为空。建议先在“项目信息”里填写语言，以保证分析输出语言稳定。是否继续分析？',
                 'Project language is empty. Set language in Project Info first for stable analysis output. Continue anyway?'
             ));
-            if (!ok) return;
+            if (!ok) {
+                setIsAnalyzing(false);
+                return;
+            }
             if (onLog) onLog('Project language is empty. Analysis continues with warning.', 'warning');
         }
 
@@ -4392,15 +4404,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 setUserPrompt(fullContent);
                 setShowAnalysisModal(true);
+                setIsAnalyzing(false); // Enable back since we are just showing the modal
             } catch (e) {
                 console.error("Failed to fetch system prompt", e);
                 // Fallback if fails
                 setSystemPrompt("Error loading system prompt.");
                 setUserPrompt(rawContent);
                 setShowAnalysisModal(true);
+                setIsAnalyzing(false);
             }
         } else {
              // Normal user flow
+             // executeAnalysis will set it back to true, but we can leave it true since it will continue turning
             executeAnalysis(rawContent);
         }
     };
@@ -4735,7 +4750,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (isAnalyzing) return;
         const generatedContent = String(llmRawResultContent || llmResultContent || '').trim();
         if (!generatedContent) {
-            alert(t('请先完成第一次 AI 场景分析，再执行“修正生成结果”。', 'Please finish the first AI Scene Analysis before running "Refine Generated Result".'));
+            alert(t('请先完成第一次剧本分析，再执行“修正生成结果”。', 'Please finish the first Script Analysis before running "Refine Generated Result".'));
             return;
         }
 
@@ -5093,7 +5108,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </>
                                 ) : (
                                     <>
-                                        <Wand2 className="w-4 h-4" /> {t('AI 场景分析', 'AI Scene Analysis')}
+                                        <Wand2 className="w-4 h-4" /> {t('剧本分析', 'Script Analysis')}
                                     </>
                                 )}
                             </button>
@@ -5102,7 +5117,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     onClick={handleStopAnalysisTask}
                                     disabled={isStoppingAnalysisTask}
                                     className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/20 hover:bg-red-500/30 text-red-100 border-red-400/40'}`}
-                                    title={t('手动停止当前 AI 场景分析任务', 'Stop the current AI scene analysis task')}
+                                    title={t('手动停止当前剧本分析任务', 'Stop the current script analysis task')}
                                 >
                                     {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
                                     {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止分析', 'Stop Analysis')}
@@ -5144,7 +5159,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2 font-semibold">
                             {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4" /> : <Loader2 className="w-4 h-4 animate-spin" />}
-                            <span>{t('AI 场景分析状态', 'AI Scene Analysis Status')}</span>
+                            <span>{t('剧本分析状态', 'Script Analysis Status')}</span>
                         </div>
                         {!isAnalyzing && (
                             <button

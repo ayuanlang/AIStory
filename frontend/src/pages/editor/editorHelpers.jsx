@@ -1797,3 +1797,22 @@ export const buildEpisodeDisplayLabel = ({ episodeNumber, title, fallbackNumber 
     return normalizedTitle || 'Untitled Episode';
 };
 
+
+export const mergeEntityPoolWithSubjectIndex = (entityPool = [], subjectText = '') => {
+    if (!subjectText || typeof subjectText !== 'string') return [...(entityPool || [])];
+    const pool = [...(entityPool || [])];
+    const subjectNames = splitSceneSubjectNames(subjectText);
+    const existingNames = new Set(pool.map(e => normalizeSubjectKey(e.name || '')));
+    subjectNames.forEach(rawToken => {
+        const parsed = parseTypedSceneSubjectToken(rawToken);
+        const candidates = buildSceneSubjectNameCandidates(parsed.name);
+        const isExisting = candidates.some(c => existingNames.has(normalizeSubjectKey(c)));
+        if (!isExisting) {
+            pool.push({
+                name: parsed.name,
+                type: parsed.type || 'character'
+            });
+        }
+    });
+    return pool;
+};
