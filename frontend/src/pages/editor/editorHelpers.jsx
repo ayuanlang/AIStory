@@ -481,7 +481,12 @@ export const extractSceneSubjectRefsFromField = (value, defaultType, sourceField
                 sourceField,
             };
         })
-        .filter((item) => String(item?.name || '').trim());
+        .filter((item) => {
+            const name = String(item?.name || '').trim();
+            if (!name) return false;
+            const lower = name.toLowerCase();
+            return lower !== 'none' && lower !== 'n/a' && lower !== '无' && lower !== 'null';
+        });
 };
 
 export const buildSceneSubjectNameCandidates = (rawName) => {
