@@ -92,6 +92,7 @@ import {
     PROJECT_SCENE_ANALYSIS_CONTINUITY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_DEFAULTS,
+    PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS,
 } from './editor/projectOptionConfig';
 
 const cinematicImages = [
@@ -129,6 +130,7 @@ const PROJECT_CREATE_DEFAULT_OPTIONS = {
     era: [...PROJECT_SCENE_ANALYSIS_ERA_OPTIONS],
     lens_preference: [...PROJECT_EP_LENS_PREFERENCE_OPTIONS],
     broadcast_safety_level: [...PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS],
+    video_generation_preference: [...PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS],
     resolution: [...PROJECT_EP_RESOLUTION_OPTIONS],
     color_tone: [...PROJECT_EP_TONE_OPTIONS],
     global_style: [...PROJECT_EP_GLOBAL_STYLE_OPTIONS],
@@ -247,6 +249,7 @@ const normalizeProjectCreateOptions = (payload) => {
     const era = uniqueNonEmptyStrings(safe.era);
     const lensPreference = uniqueNonEmptyStrings(safe.lens_preference);
     const broadcastSafetyLevel = uniqueNonEmptyStrings(safe.broadcast_safety_level);
+    const videoGenerationPreference = uniqueNonEmptyStrings(safe.video_generation_preference);
     const resolution = uniqueNonEmptyStrings(safe.resolution);
     const colorTone = uniqueNonEmptyStrings(safe.color_tone);
     const globalStyle = uniqueNonEmptyStrings(safe.global_style);
@@ -261,6 +264,7 @@ const normalizeProjectCreateOptions = (payload) => {
         era: era.length ? era : [...PROJECT_CREATE_DEFAULT_OPTIONS.era],
         lens_preference: lensPreference.length ? lensPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference],
         broadcast_safety_level: broadcastSafetyLevel.length ? broadcastSafetyLevel : [...PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level],
+        video_generation_preference: videoGenerationPreference.length ? videoGenerationPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference],
         resolution: resolution.length ? resolution : [...PROJECT_CREATE_DEFAULT_OPTIONS.resolution],
         color_tone: colorTone.length ? colorTone : [...PROJECT_CREATE_DEFAULT_OPTIONS.color_tone],
         global_style: globalStyle.length ? globalStyle : [...PROJECT_CREATE_DEFAULT_OPTIONS.global_style],
@@ -460,6 +464,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newEra, setNewEra] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.era));
     const [newLensPreference, setNewLensPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference));
     const [newBroadcastSafetyLevel, setNewBroadcastSafetyLevel] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level));
+    const [newVideoGenerationPreference, setNewVideoGenerationPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference));
     const [newResolution, setNewResolution] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.resolution));
     const [newColorTone, setNewColorTone] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.color_tone));
     const [newGlobalStyle, setNewGlobalStyle] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.global_style));
@@ -653,6 +658,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 setNewEra((prev) => (normalized.era.includes(prev) ? prev : pickPreferredOrFirst(normalized.era)));
                 setNewLensPreference((prev) => (normalized.lens_preference.includes(prev) ? prev : pickPreferredOrFirst(normalized.lens_preference)));
                 setNewBroadcastSafetyLevel((prev) => (normalized.broadcast_safety_level.includes(prev) ? prev : pickPreferredOrFirst(normalized.broadcast_safety_level)));
+                setNewVideoGenerationPreference((prev) => (normalized.video_generation_preference.includes(prev) ? prev : pickPreferredOrFirst(normalized.video_generation_preference)));
                 setNewResolution((prev) => (normalized.resolution.includes(prev) ? prev : pickPreferredOrFirst(normalized.resolution)));
                 setNewColorTone((prev) => (normalized.color_tone.includes(prev) ? prev : pickPreferredOrFirst(normalized.color_tone)));
                 setNewGlobalStyle((prev) => (normalized.global_style.includes(prev) ? prev : pickPreferredOrFirst(normalized.global_style)));
@@ -679,29 +685,14 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             // Fetch extra stats quietly in the background
             (async () => {
                 try {
-                    const ownerProjects = (Array.isArray(sorted) ? sorted : []).filter((item) => {
-                        if (typeof item?.is_owner === 'boolean') return item.is_owner;
-                        return Number(item?.owner_id) === Number(currentUser?.id);
-                    });
-
-                    const countEntries = await Promise.all(
-                        ownerProjects.map(async (item) => {
-                            try {
-                                const shares = await fetchProjectShares(item.id);
-                                return [item.id, Array.isArray(shares) ? shares.length : 0];
-                            } catch {
-                                return [item.id, 0];
-                            }
-                        })
-                    );
-
+                    const sortedArray = Array.isArray(sorted) ? sorted : [];
                     const nextCounts = {};
-                    countEntries.forEach(([projectId, count]) => {
-                        nextCounts[projectId] = count;
+                    sortedArray.forEach((item) => {
+                        nextCounts[item.id] = item.share_count || 0;
                     });
                     setProjectShareCounts(nextCounts);
                 } catch (e) {
-                    console.error("Failed to fetch project shares", e);
+                    console.error("Failed to initialize project shares", e);
                 }
 
                 try {
@@ -788,6 +779,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         setNewEra(pickPreferredOrFirst(projectCreateOptions.era));
         setNewLensPreference(pickPreferredOrFirst(projectCreateOptions.lens_preference));
         setNewBroadcastSafetyLevel(pickPreferredOrFirst(projectCreateOptions.broadcast_safety_level));
+        setNewVideoGenerationPreference(pickPreferredOrFirst(projectCreateOptions.video_generation_preference));
         setNewResolution(pickPreferredOrFirst(projectCreateOptions.resolution));
         setNewColorTone(pickPreferredOrFirst(projectCreateOptions.color_tone));
         setNewGlobalStyle(pickPreferredOrFirst(projectCreateOptions.global_style));
@@ -822,6 +814,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 era: String(newEra || '').trim(),
                 lens_preference: String(newLensPreference || '').trim(),
                 broadcast_safety_level: String(newBroadcastSafetyLevel || '').trim(),
+                video_generation_preference: String(newVideoGenerationPreference || '').trim(),
                 notes: description,
                 tech_params: {
                     visual_standard: {
@@ -1895,31 +1888,55 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('类型', 'Type')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newType} onChange={(e) => setNewType(e.target.value)}>
-                                                    {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('语言', 'Language')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)}>
-                                                    {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('基础定位', 'Base Positioning')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newBasePositioning} onChange={(e) => setNewBasePositioning(e.target.value)}>
-                                                    {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('画幅比例', 'Aspect Ratio')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newAspectRatio} onChange={(e) => setNewAspectRatio(e.target.value)}>
-                                                    {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
                                                 <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
-                                                    {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                                    {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('时代设定', 'Era')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newEra} onChange={(e) => setNewEra(e.target.value)}>
+                                                    {projectCreateOptions.era.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('镜头偏好', 'Lens Preference')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLensPreference} onChange={(e) => setNewLensPreference(e.target.value)}>
+                                                    {projectCreateOptions.lens_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('播出安全级', 'Broadcast Safety Level')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newBroadcastSafetyLevel} onChange={(e) => setNewBroadcastSafetyLevel(e.target.value)}>
+                                                    {projectCreateOptions.broadcast_safety_level.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('视频生成偏好', 'Video Gen Preference')}</label>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newVideoGenerationPreference} onChange={(e) => setNewVideoGenerationPreference(e.target.value)}>
+                                                    {projectCreateOptions.video_generation_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                 </select>
                                             </div>
                                         </div>
@@ -2721,6 +2738,7 @@ const SettingsPanel = ({ currentTheme, handleThemeChange, uiLang }) => {
 };
 
 export default ProjectList;
+
 
 
 
