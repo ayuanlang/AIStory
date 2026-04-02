@@ -20716,6 +20716,7 @@ class ShotMediaBatchStartRequest(BaseModel):
     mode: str = "keyframes"  # keyframes | videos
     shot_ids: Optional[List[int]] = None
     overwrite_existing: bool = False
+    system_api_id: Optional[int] = None
 
 
 def _sanitize_filename_part(value: Optional[str], max_len: int = 48) -> str:
@@ -27541,7 +27542,7 @@ def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int
     return prev_end or None
 
 
-def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False) -> Dict[str, Any]:
+def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False, system_api_id: Optional[int] = None) -> Dict[str, Any]:
     item_db = SessionLocal()
     cancel_event = _get_shot_media_batch_cancel_event(int(episode_id), create=True)
 
@@ -27738,6 +27739,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             shot_number=shot.shot_id,
             shot_name=shot.shot_name,
             asset_type="video",
+            system_api_id=system_api_id,
         )
         _release_db_connection(item_db, "shot_media_batch_video")
         asyncio.run(_run_stage_with_retry(
@@ -27797,6 +27799,12 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
 
         mode = str((request_payload or {}).get("mode") or "keyframes").strip().lower()
         overwrite_existing = bool((request_payload or {}).get("overwrite_existing"))
+        system_api_id = request_payload.get("system_api_id")
+        if system_api_id is not None:
+            try:
+                system_api_id = int(system_api_id)
+            except ValueError:
+                system_api_id = None
         requested_shot_ids = [int(x) for x in ((request_payload or {}).get("shot_ids") or []) if x]
         batch_max_concurrency = _resolve_user_batch_parallel_limit(
             getattr(user_principal, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
@@ -27950,6 +27958,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                     int(shot.id),
                     user_id,
                     overwrite_existing,
+                    system_api_id,
                 )] = int(shot.id)
                 return True
 
@@ -28409,6 +28418,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_number=shot.shot_id,
                             shot_name=shot.shot_name,
                             asset_type="video",
+                            system_api_id=system_api_id,
                         )
                         _release_db_connection(db, "shot_media_batch_video")
                         asyncio.run(_run_stage_with_retry(
