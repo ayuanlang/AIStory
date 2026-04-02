@@ -287,6 +287,8 @@ const UserAdmin = () => {
         base_model: '',
         retry_group: '',
         retry_price_group: '',
+        explicit_selection: false,
+        strict_provider: false,
         moderation_aes_key: '',
         config: '{}',
         is_active: false,
@@ -1222,6 +1224,16 @@ const UserAdmin = () => {
         return String(cfg?.retry_group || '').trim();
     };
 
+    const getSystemApiExplicitSelection = (row) => {
+        const cfg = getSystemApiConfig(row);
+        return !!cfg?.explicit_selection;
+    };
+
+    const getSystemApiStrictProvider = (row) => {
+        const cfg = getSystemApiConfig(row);
+        return !!cfg?.strict_provider;
+    };
+
     const getSystemApiRetryPriceGroup = (row) => {
         const cfg = getSystemApiConfig(row);
         return String(cfg?.retry_price_group || '').trim();
@@ -1266,6 +1278,19 @@ const UserAdmin = () => {
         const moderationEndpoint = String(systemApiForm.moderation_endpoint || '').trim();
         const moderationUserId = String(systemApiForm.moderation_user_id || '').trim();
         const moderationAesKey = String(systemApiForm.moderation_aes_key || '').trim();
+        
+        if (systemApiForm.explicit_selection) {
+            baseConfig.explicit_selection = true;
+        } else {
+            delete baseConfig.explicit_selection;
+        }
+        
+        if (systemApiForm.strict_provider) {
+            baseConfig.strict_provider = true;
+        } else {
+            delete baseConfig.strict_provider;
+        }
+
         if (retryGroup) {
             baseConfig.retry_group = retryGroup;
         } else {
@@ -2291,6 +2316,8 @@ const UserAdmin = () => {
                 base_model: '',
                 retry_group: '',
                 retry_price_group: '',
+                explicit_selection: false,
+                strict_provider: false,
                 moderation_endpoint: '',
                 moderation_user_id: '',
                 moderation_aes_key: '',
@@ -2346,6 +2373,8 @@ const UserAdmin = () => {
             model: row.model || '',
             base_model: row.base_model || '',
             retry_group: getSystemApiRetryGroup(row),
+            explicit_selection: getSystemApiExplicitSelection(row),
+            strict_provider: getSystemApiStrictProvider(row),
             retry_price_group: getSystemApiRetryPriceGroup(row),
             moderation_endpoint: getSystemApiModerationEndpoint(row),
             moderation_user_id: getSystemApiModerationUserId(row),
@@ -7499,6 +7528,31 @@ const UserAdmin = () => {
                                                     <option value="high">high</option>
                                                 </select>
                                             </div>
+                                            
+                                            <div className="flex items-end pb-2">
+                                                <label className="flex items-center space-x-2 text-sm cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={!!systemApiForm.explicit_selection}
+                                                        onChange={(e) => setSystemApiForm((prev) => ({ ...prev, explicit_selection: e.target.checked }))}
+                                                        className="h-4 w-4 text-cyan-500 rounded bg-black/20 border-gray-600 focus:ring-cyan-500 focus:ring-1"
+                                                    />
+                                                    <span className="text-gray-300">{t('显式选择', 'Explicit Selection')}</span>
+                                                </label>
+                                            </div>
+                                            
+                                            <div className="flex items-end pb-2">
+                                                <label className="flex items-center space-x-2 text-sm cursor-pointer" title={t('严格执行此提供商，若无法连通则直接失败而不使用功能绑定', 'Strict mode avoids falling back to function-binding provider')}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={!!systemApiForm.strict_provider}
+                                                        onChange={(e) => setSystemApiForm((prev) => ({ ...prev, strict_provider: e.target.checked }))}
+                                                        className="h-4 w-4 text-cyan-500 rounded bg-black/20 border-gray-600 focus:ring-cyan-500 focus:ring-1"
+                                                    />
+                                                    <span className="text-gray-300">{t('严格供应商', 'Strict Provider')}</span>
+                                                </label>
+                                            </div>
+
                                             <div className="md:col-span-2">
                                                 <label className="block text-xs uppercase text-gray-400 mb-1">Moderation Endpoint</label>
                                                 <input

@@ -481,12 +481,7 @@ export const extractSceneSubjectRefsFromField = (value, defaultType, sourceField
                 sourceField,
             };
         })
-        .filter((item) => {
-            const name = String(item?.name || '').trim();
-            if (!name) return false;
-            const lower = name.toLowerCase();
-            return lower !== 'none' && lower !== 'n/a' && lower !== '无' && lower !== 'null';
-        });
+        .filter((item) => String(item?.name || '').trim());
 };
 
 export const buildSceneSubjectNameCandidates = (rawName) => {
@@ -1802,22 +1797,3 @@ export const buildEpisodeDisplayLabel = ({ episodeNumber, title, fallbackNumber 
     return normalizedTitle || 'Untitled Episode';
 };
 
-
-export const mergeEntityPoolWithSubjectIndex = (entityPool = [], subjectText = '') => {
-    if (!subjectText || typeof subjectText !== 'string') return [...(entityPool || [])];
-    const pool = [...(entityPool || [])];
-    const subjectNames = splitSceneSubjectNames(subjectText);
-    const existingNames = new Set(pool.map(e => normalizeSubjectKey(e.name || '')));
-    subjectNames.forEach(rawToken => {
-        const parsed = parseTypedSceneSubjectToken(rawToken);
-        const candidates = buildSceneSubjectNameCandidates(parsed.name);
-        const isExisting = candidates.some(c => existingNames.has(normalizeSubjectKey(c)));
-        if (!isExisting) {
-            pool.push({
-                name: parsed.name,
-                type: parsed.type || 'character'
-            });
-        }
-    });
-    return pool;
-};

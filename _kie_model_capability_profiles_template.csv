@@ -1,8 +1,0 @@
-profile_code,profile_name,supported_ratio_field,supported_quality_field,supported_secondary_field,requires_square_only,example_models,notes,is_active
-P1,aspect_ratio+resolution,paths.post.input.aspect_ratio,paths.post.input.resolution,,0,bytedance/v1-pro-text-to-video,优先使用最通用字段组合,1
-P2,aspect_ratio+image_resolution,paths.post.input.aspect_ratio,paths.post.input.image_resolution,,0,bytedance/seedream-v4-text-to-image,图像模型常见组合,1
-P3,size+resolution,paths.post.input.size,paths.post.input.resolution,,0,runway/*,使用size替代aspect_ratio,1
-P4,size+image_resolution,paths.post.input.size,paths.post.input.image_resolution,,0,flux/*,图像模型兼容组合,1
-P5,image_size+image_resolution,,paths.post.input.image_resolution,paths.post.input.image_size,1,legacy-image-model,只支持固定图像尺寸（如square）,1
-P6,aspect_ratio-only,paths.post.input.aspect_ratio,,,0,kling/*,仅支持比例，清晰度按默认档位,1
-P7,resolution-only,,paths.post.input.resolution,,0,sora/some-endpoint,仅支持清晰度，比例按默认值或不下发,1

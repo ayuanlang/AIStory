@@ -21597,6 +21597,14 @@ def _resolve_media_runtime_target(
 
     if not isinstance(runtime_llm_config, dict):
         runtime_llm_config = {}
+    
+    # Check if the resolved configuration enforces explicit or strict overrides
+    cfg_payload_override = (pre_api_cfg or {}).get("config") if isinstance((pre_api_cfg or {}).get("config"), dict) else {}
+    if cfg_payload_override.get("explicit_selection"):
+        user_explicit_selection = True
+    if cfg_payload_override.get("strict_provider"):
+        user_explicit_provider = True
+
     runtime_llm_config["__user_explicit_provider"] = user_explicit_provider
     runtime_llm_config["__user_explicit_model"] = user_explicit_model
     runtime_llm_config["__user_explicit_selection"] = user_explicit_selection

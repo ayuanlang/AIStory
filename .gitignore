@@ -36,3 +36,14 @@ frontend/dist/
 
 # Generated KIE dictionary bundle exports
 _kie_data_dictionary_bundle_export_*.json
+
+# Temporary and generated scripts/data
+_kie_*.csv
+_kie_*.json
+_kie_*.md
+_extract_*.ps1
+_build_*.ps1
+_clean_*.ps1
+temp_*.py
+update_*.py
+validation.py

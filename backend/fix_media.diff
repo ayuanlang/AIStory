@@ -1,0 +1,52 @@
+diff --git a/backend/app/services/media_service.py b/backend/app/services/media_service.py
+index 57147b8..266ddc0 100644
+--- a/backend/app/services/media_service.py
++++ b/backend/app/services/media_service.py
+@@ -3788,6 +3788,17 @@ class MediaGenerationService:
+                 self._repair_invalid_user_config_rows(session, user_id, category=category)
+                 self._repair_invalid_system_config_rows(session, category=category, provider=provider)
+ 
++                use_function_based_routing = False
++                try:
++                    from app.models.all_models import APIRoutingConfig
++                    routing_conf = session.query(APIRoutingConfig).first()     
++                    if routing_conf:
++                        use_function_based_routing = routing_conf.use_function_based_routing
++                except Exception:
++                    pass
++
++                _debug_log(f"API_ROUTING_MODE mode={'new_function_based' if use_function_based_routing else 'old_legacy'} user_id={user_id} category={resolved_category} provider={provider or '<none>'} model={requested_model or '<none>'}") 
++
+                 user_setting = self._get_active_user_setting(session, user_id, resolved_category)
+                 requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
+                 requested_model_value = str(requested_model or "").strip()     
+@@ -3799,6 +3810,20 @@ class MediaGenerationService:
+                 user_setting_id = getattr(user_setting, "id", None) if user_setting else None
+                 user_system_api_id = int(getattr(user_setting, "system_api_id", 0) or 0) if user_setting else 0
+                 user_binding_status = "no_user_setting" if not user_setting else ("no_system_api_id" if user_system_api_id <= 0 else "pending")
++
++                if use_function_based_routing and system_api_id is not None:   
++                    user_system_api_id = int(system_api_id)
++                    selected_user_strategy = "unified_function_api"
++                    user_setting_id = "func_based_" + getattr(category, "name", str(category))
++                    user_binding_status = "function_api_direct_route"
++
++                    # We need to spoof a dummy user_setting so the logic below triggers
++                    class DummyUserSetting:
++                        system_api_id = user_system_api_id
++                        api_strategy = "unified_function_api"
++                        id = user_setting_id
++                    user_setting = DummyUserSetting()
++
+                 user_binding_detail = "<none>"
+                 fallback_debug_cache: Dict[str, Dict[str, Any]] = {}
+ 
+@@ -9236,7 +9261,7 @@ class MediaGenerationService:
+                 preuploaded_refs.append(hosted_ref)
+             resolved_refs = preuploaded_refs
+ 
+-        is_sora2_i2v_model = bool(gen_type == "video")
++        is_sora2_i2v_model = bool(gen_type == "video" and str(model_lower or "").strip().startswith("sora-2") and "image-to-video" in str(model_lower or "").strip())
+ 
+         if is_sora2_i2v_model and resolved_refs:
+             converted_refs: List[str] = []

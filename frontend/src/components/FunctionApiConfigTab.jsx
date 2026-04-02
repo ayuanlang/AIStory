@@ -53,7 +53,7 @@ export default function FunctionApiConfigTab() {
             const existing = prev[funcName] || [];
             return {
                 ...prev,
-                [funcName]: [...existing, { system_api_id: '', priority: 0, is_fallback: true }]
+                [funcName]: [...existing, { system_api_id: '', priority: 0, is_fallback: true, explicit_selection: false, strict_provider: false }]
             };
         });
     };
@@ -86,7 +86,9 @@ export default function FunctionApiConfigTab() {
             const items = configs[funcName].map(item => ({
                 system_api_id: parseInt(item.system_api_id, 10),
                 priority: parseInt(item.priority, 10) || 0,
-                is_fallback: Boolean(item.is_fallback)
+                is_fallback: Boolean(item.is_fallback),
+                explicit_selection: Boolean(item.explicit_selection),
+                strict_provider: Boolean(item.strict_provider)
             })).filter(item => !isNaN(item.system_api_id));
 
             const res = await updateFunctionApiConfig(funcName, { api_settings: items });
@@ -178,16 +180,40 @@ export default function FunctionApiConfigTab() {
                                                     />
                                                 </div>
                                             </div>
-                                            <div className="w-[120px] flex items-center h-8">
-                                                <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={item.is_fallback}
-                                                        onChange={(e) => handleChangeParams(funcName, originalIndex, 'is_fallback', e.target.checked)}
-                                                        className="rounded bg-white/5 border-white/10 text-primary form-checkbox"
-                                                    />
-                                                    自动备用
-                                                </label>
+                                            <div className="flex-1 flex gap-4 pr-4 border-r border-white/10 overflow-x-auto">
+                                                <div className="flex items-center h-8 shrink-0">
+                                                    <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={item.is_fallback}
+                                                            onChange={(e) => handleChangeParams(funcName, originalIndex, 'is_fallback', e.target.checked)}
+                                                            className="rounded bg-white/5 border-white/10 text-primary form-checkbox"
+                                                        />
+                                                        作为兜底
+                                                    </label>
+                                                </div>
+                                                <div className="flex items-center h-8 shrink-0" title="选中时，该API将作为显式指定API，在失败时智能路由将只选择显式允许的模型作为兜底">
+                                                    <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={item.explicit_selection}
+                                                            onChange={(e) => handleChangeParams(funcName, originalIndex, 'explicit_selection', e.target.checked)}
+                                                            className="rounded bg-white/5 border-white/10 text-primary form-checkbox"
+                                                        />
+                                                        首选显式指定
+                                                    </label>
+                                                </div>
+                                                <div className="flex items-center h-8 shrink-0" title="选中时，若该API失败，将不会触发智能模型路由(智能兜底)，任务直接失败">
+                                                    <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={item.strict_provider}
+                                                            onChange={(e) => handleChangeParams(funcName, originalIndex, 'strict_provider', e.target.checked)}
+                                                            className="rounded bg-white/5 border-white/10 text-primary form-checkbox"
+                                                        />
+                                                        严格供应商锁定
+                                                    </label>
+                                                </div>
                                             </div>
                                             <button
                                                 onClick={() => handleRemoveApi(funcName, originalIndex)}

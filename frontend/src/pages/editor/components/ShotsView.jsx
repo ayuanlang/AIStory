@@ -3,7 +3,6 @@ import FunctionApiSelector, { useFunctionApis } from '../../../components/Functi
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
-import { ReferenceManager } from './SceneManager';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
 import ReactMarkdown from 'react-markdown';
@@ -159,7 +158,6 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
 export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3 }) => {
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
-    const functionApiConfigs = useFunctionApis();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const resolvedPromptSubmitLang = useMemo(() => {
@@ -3114,9 +3112,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
             const promptEntityRefs = collectMatchedSubjectImageUrlsFromPrompt({
                 promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(techObj.video_prompt_cn || '').trim()}`,
-                associatedEntities: editingShot?.associated_entities || '',
                 entityPool: entities,
-                includeAssociatedEntities: mode === 'entity_refs',
             });
             techObj.video_ref_image_urls = buildAutoVideoRefList(editingShot, techObj, mode, promptEntityRefs);
             techObj.video_ref_image_urls_manual = false;
@@ -5768,9 +5764,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const effectiveVideoMode = resolveUnifiedVideoMode(tech);
             const promptEntityRefs = collectMatchedSubjectImageUrlsFromPrompt({
                 promptText: `${getShotVideoPromptEn(shotSnapshot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
-                associatedEntities: shotSnapshot?.associated_entities || '',
                 entityPool: resolvedEntities,
-                includeAssociatedEntities: effectiveVideoMode === 'entity_refs',
             });
             const uniqueRefs = Array.isArray(tech.video_ref_image_urls)
                 ? normalizeMediaRefList(tech.video_ref_image_urls)

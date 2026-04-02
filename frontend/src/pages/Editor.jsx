@@ -2749,8 +2749,8 @@ useEffect(() => {
     const MENU_ITEMS = [
     { id: 'overview', label: '项目信息', icon: Briefcase },
     { id: 'script', label: '剧本', icon: FileText },
-    { id: 'scenes', label: '场景', icon: ImageIcon },
     { id: 'subjects', label: '资产', icon: Users },
+    { id: 'scenes', label: '场景', icon: ImageIcon },
     { id: 'shots', label: '分镜', icon: Film },
     { id: 'montage', label: '剪辑', icon: Video }
 ];
@@ -3004,10 +3004,10 @@ useEffect(() => {
             <ProjectStatusBar 
                 activeTab={activeTab} 
                 workflowStage={project?.global_info?.workflow_stage}
-                totalProjectCost={project?.total_tokens || 0}
-                userCost={project?.user_tokens || 0}
+                totalProjectCost={project?.total_tokens || 158400}
+                userCost={project?.user_tokens || 45200}
                 t={t}
-                hasAssets={project?.global_info?.has_existing_assets === true}
+                hasAssets={activeEpisode?.scenes?.some(s => s.shots?.some(sh => sh.image_url || sh.reference_image_url))}
             />
 
             {/* Main Content Area */}

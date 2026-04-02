@@ -1632,6 +1632,8 @@ class MediaGenerationService:
                 resolution_values = self._normalize_str_list(enum_catalog.get("resolution") if isinstance(enum_catalog, dict) else None)
 
             duration_values_raw = getattr(row, "durations_seconds", None)
+            if not duration_values_raw:
+                duration_values_raw = enum_catalog.get("duration") if isinstance(enum_catalog, dict) else None
             duration_values_text = self._normalize_str_list(duration_values_raw)
             duration_values_num: List[int] = []
             for item in duration_values_text:
@@ -1639,15 +1641,16 @@ class MediaGenerationService:
                     duration_values_num.append(int(float(item)))
                 except Exception:
                     continue
-            duration_values_num = sorted(set([x for x in duration_values_num if x > 0]))
-
-            max_duration = None
-            try:
-                max_duration = int(getattr(row, "max_duration", 0) or 0)
-            except Exception:
-                max_duration = None
-            if max_duration is not None and max_duration <= 0:
-                max_duration = None
+                    
+            if len(duration_values_num) == 0:
+                from app.models.billing import SystemAPIBillingRule
+                billing_rules = session.query(SystemAPIBillingRule).filter(SystemAPIBillingRule.system_api_id == sid).all()
+                for rule in billing_rules:
+                    try:
+                        if getattr(rule, "duration_seconds_max", None) is not None and rule.duration_seconds_max > 0:
+                            duration_values_num.append(int(float(rule.duration_seconds_max)))
+                    except Exception:
+                        continue
 
             sound_supported = getattr(row, "sound_supported", None)
             if sound_supported is None:
@@ -3788,6 +3791,17 @@ class MediaGenerationService:
                 self._repair_invalid_user_config_rows(session, user_id, category=category)
                 self._repair_invalid_system_config_rows(session, category=category, provider=provider)
 
+                use_function_based_routing = False
+                try:
+                    from app.models.all_models import APIRoutingConfig
+                    routing_conf = session.query(APIRoutingConfig).first()     
+                    if routing_conf:
+                        use_function_based_routing = routing_conf.use_function_based_routing
+                except Exception:
+                    pass
+
+                _debug_log(f"API_ROUTING_MODE mode={'new_function_based' if use_function_based_routing else 'old_legacy'} user_id={user_id} category={resolved_category} provider={provider or '<none>'} model={requested_model or '<none>'}") 
+
                 user_setting = self._get_active_user_setting(session, user_id, resolved_category)
                 requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
                 requested_model_value = str(requested_model or "").strip()
@@ -3799,6 +3813,20 @@ class MediaGenerationService:
                 user_setting_id = getattr(user_setting, "id", None) if user_setting else None
                 user_system_api_id = int(getattr(user_setting, "system_api_id", 0) or 0) if user_setting else 0
                 user_binding_status = "no_user_setting" if not user_setting else ("no_system_api_id" if user_system_api_id <= 0 else "pending")
+
+                if use_function_based_routing and getattr(self, system_api_id, None) is not None:   
+                    user_system_api_id = int(system_api_id)
+                    selected_user_strategy = "unified_function_api"
+                    user_setting_id = "func_based_" + getattr(category, "name", str(category))
+                    user_binding_status = "function_api_direct_route"
+
+                    # We need to spoof a dummy user_setting so the logic below triggers
+                    class DummyUserSetting:
+                        system_api_id = user_system_api_id
+                        api_strategy = "unified_function_api"
+                        id = user_setting_id
+                    user_setting = DummyUserSetting()
+
                 user_binding_detail = "<none>"
                 fallback_debug_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -4095,6 +4123,13 @@ class MediaGenerationService:
                 "error": self._vendor_failed_message(self._normalize_provider_name((api_config or {}).get("provider"), "Image") or provider, api_config.get("__blocked_reason") or "该系统配置已弃用"),
                 "submit_failed": True,
             }
+
+        # Apply persisted overrides from the resolved model config
+        if api_config and isinstance(api_config.get("config"), dict):
+            if api_config["config"].get("explicit_selection"):
+                explicit_selection = True
+            if api_config["config"].get("strict_provider"):
+                explicit_provider_selected = True
 
         resolved_provider = self._normalize_provider_name((api_config or {}).get("provider"), "Image") if api_config else None
         if resolved_provider:
@@ -9236,7 +9271,7 @@ class MediaGenerationService:
                 preuploaded_refs.append(hosted_ref)
             resolved_refs = preuploaded_refs
 
-        is_sora2_i2v_model = bool(gen_type == "video")
+        is_sora2_i2v_model = bool(gen_type == "video" and str(model_lower or "").strip().startswith("sora-2") and "image-to-video" in str(model_lower or "").strip())
 
         if is_sora2_i2v_model and resolved_refs:
             converted_refs: List[str] = []
