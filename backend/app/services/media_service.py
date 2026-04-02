@@ -1643,7 +1643,7 @@ class MediaGenerationService:
                     continue
                     
             if len(duration_values_num) == 0:
-                from app.models.billing import SystemAPIBillingRule
+                from app.models.all_models import SystemAPIBillingRule
                 billing_rules = session.query(SystemAPIBillingRule).filter(SystemAPIBillingRule.system_api_id == sid).all()
                 for rule in billing_rules:
                     try:
@@ -1651,6 +1651,16 @@ class MediaGenerationService:
                             duration_values_num.append(int(float(rule.duration_seconds_max)))
                     except Exception:
                         continue
+
+            duration_values_num = sorted(set([x for x in duration_values_num if x > 0]))
+
+            max_duration = None
+            try:
+                max_duration = int(getattr(row, "max_duration", 0) or 0)
+            except Exception:
+                max_duration = None
+            if max_duration is not None and max_duration <= 0:
+                max_duration = None
 
             sound_supported = getattr(row, "sound_supported", None)
             if sound_supported is None:
@@ -3766,6 +3776,8 @@ class MediaGenerationService:
         requested_model: Optional[str] = None,
         user_credits: int = 0,
         strict_provider: bool = False,
+        function_name: Optional[str] = None,
+        system_api_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Resolves runtime API configuration by category active user setting -> system provider+model match."""
         defaults = {
@@ -3792,20 +3804,26 @@ class MediaGenerationService:
                 self._repair_invalid_system_config_rows(session, category=category, provider=provider)
 
                 use_function_based_routing = False
+                global_explicit_selection = False
+                global_strict_provider = False
                 try:
                     from app.models.all_models import APIRoutingConfig
-                    routing_conf = session.query(APIRoutingConfig).first()     
+                    routing_conf = session.query(APIRoutingConfig).first()
                     if routing_conf:
                         use_function_based_routing = routing_conf.use_function_based_routing
-                except Exception:
-                    pass
+                        global_explicit_selection = routing_conf.explicit_selection
+                        global_strict_provider = routing_conf.strict_provider
+                except Exception as e:
+                    _debug_log(f"Failed to read APIRoutingConfig, defaulting to legacy routing: {e}")
 
-                _debug_log(f"API_ROUTING_MODE mode={'new_function_based' if use_function_based_routing else 'old_legacy'} user_id={user_id} category={resolved_category} provider={provider or '<none>'} model={requested_model or '<none>'}") 
+                _debug_log(f"API_ROUTING_MODE mode={'new_function_based' if use_function_based_routing else 'old_legacy'} user_id={user_id} category={resolved_category} provider={provider or '<none>'} model={requested_model or '<none>'}")  
 
                 user_setting = self._get_active_user_setting(session, user_id, resolved_category)
                 requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
-                requested_model_value = str(requested_model or "").strip()
+                requested_model_value = str(requested_model or "").strip()      
+                from app.api.settings import get_task_default_system_setting    
                 task_default_row = get_task_default_system_setting(session, resolved_category)
+
                 selected_user_strategy = self._normalize_api_strategy(
                     getattr(user_setting, "api_strategy", None),
                     default=self.USER_API_STRATEGY_SMART_DEFAULT,
@@ -3814,11 +3832,58 @@ class MediaGenerationService:
                 user_system_api_id = int(getattr(user_setting, "system_api_id", 0) or 0) if user_setting else 0
                 user_binding_status = "no_user_setting" if not user_setting else ("no_system_api_id" if user_system_api_id <= 0 else "pending")
 
-                if use_function_based_routing and getattr(self, system_api_id, None) is not None:   
+                func_explicit_args = {}
+
+                if use_function_based_routing and function_name:
+                    try:
+                        from app.models.all_models import FunctionAPIConfig
+                        func_conf = session.query(FunctionAPIConfig).filter(FunctionAPIConfig.function_name == function_name).first()
+                        if func_conf and func_conf.api_settings:
+                            settings = func_conf.api_settings
+                            
+                            # Fallback is handled elsewhere or via resolve_function_apis, 
+                            # but here we identify the TOP priority or explicit selection
+                            # if no specific system_api_id was supplied.
+                            target_setting = None
+                            if system_api_id:
+                                for s in settings:
+                                    if s.get("system_api_id") == system_api_id:
+                                        target_setting = s
+                                        break
+                            else:
+                                # Pick highest priority
+                                sorted_settings = sorted(settings, key=lambda x: x.get('priority', 0), reverse=True)
+                                target_setting = sorted_settings[0] if sorted_settings else None
+
+                            if target_setting and target_setting.get("system_api_id"):
+                                user_system_api_id = int(target_setting.get("system_api_id"))
+                                selected_user_strategy = "unified_function_api"
+                                user_setting_id = "func_based_" + getattr(category, "name", str(category))
+                                user_binding_status = "function_api_direct_route"
+                                
+                                func_explicit_args["explicit_selection"] = target_setting.get("explicit_selection", False) or global_explicit_selection
+                                func_explicit_args["strict_provider"] = target_setting.get("strict_provider", False) or global_strict_provider
+
+                                # We need to spoof a dummy user_setting so the logic below triggers
+                                class DummyUserSetting:
+                                    system_api_id = user_system_api_id
+                                    api_strategy = "unified_function_api"
+                                    id = user_setting_id
+                                user_setting = DummyUserSetting()
+                    except Exception as e:
+                        _debug_log(f"Error querying FunctionAPIConfig for function_name={function_name}: {e}", "warning")
+                
+                # Check for direct system_api_id parameter override (e.g. from frontend dropdowns)
+                elif use_function_based_routing and system_api_id is not None:
                     user_system_api_id = int(system_api_id)
                     selected_user_strategy = "unified_function_api"
                     user_setting_id = "func_based_" + getattr(category, "name", str(category))
                     user_binding_status = "function_api_direct_route"
+
+                    if global_explicit_selection:
+                        func_explicit_args["explicit_selection"] = True
+                    if global_strict_provider:
+                        func_explicit_args["strict_provider"] = True
 
                     # We need to spoof a dummy user_setting so the logic below triggers
                     class DummyUserSetting:
@@ -3956,6 +4021,7 @@ class MediaGenerationService:
                             "__resolved_source": resolved_source,
                             "__resolved_setting_id": system_row.id,
                             "__api_strategy": selected_strategy,
+                            **func_explicit_args,
                         },
                     }
 

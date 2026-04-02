@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData, bindparam, literal
 from sqlalchemy.exc import OperationalError
@@ -9958,7 +9959,11 @@ def get_all_function_api_configs(
                     "system_api_name": sys_api.name,
                     "system_api_model": sys_api.model or "",
                     "priority": item.get("priority", 0),
-                    "is_fallback": item.get("is_fallback", False)
+                    "is_fallback": item.get("is_fallback", False),
+                    "alias": item.get("alias") or sys_api.model or sys_api.name or f"API {sys_api.id}",
+                    "applicable_languages": item.get("applicable_languages", []),
+                    "explicit_selection": item.get("explicit_selection", False),
+                    "strict_provider": item.get("strict_provider", False)
                 })
         valid_settings.sort(key=lambda x: x.get("priority", 0), reverse=True)
         result.append({"function_name": func_name, "api_settings": valid_settings})
@@ -9998,3 +10003,64 @@ def update_function_api_config(
     raise HTTPException(status_code=500, detail="Failed to retrieve updated config")
 
 
+
+class APIRoutingConfigOut(BaseModel):
+    use_function_based_routing: bool
+
+class APIRoutingConfigUpdate(BaseModel):
+    use_function_based_routing: bool
+
+@router.get('/settings/system/api-routing-config', response_model=APIRoutingConfigOut)
+def get_api_routing_config(db: Session = Depends(get_db)):
+    from app.models.all_models import APIRoutingConfig
+    config = db.query(APIRoutingConfig).first()
+    return {'use_function_based_routing': config.use_function_based_routing if config else False}
+
+@router.put('/settings/system/api-routing-config', response_model=APIRoutingConfigOut)
+def update_api_routing_config(
+    payload: APIRoutingConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.all_models import APIRoutingConfig
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail='Only system/admin users can manage routing config')
+    config = db.query(APIRoutingConfig).first()
+    if not config:
+        config = APIRoutingConfig(use_function_based_routing=payload.use_function_based_routing)
+        db.add(config)
+    else:
+        config.use_function_based_routing = payload.use_function_based_routing
+    db.commit()
+    return {'use_function_based_routing': config.use_function_based_routing}
+
+
+class APIRoutingConfigOut(BaseModel):
+    use_function_based_routing: bool
+
+class APIRoutingConfigUpdate(BaseModel):
+    use_function_based_routing: bool
+
+@router.get('/settings/system/api-routing-config', response_model=APIRoutingConfigOut)
+def get_api_routing_config(db: Session = Depends(get_db)):
+    from app.models.all_models import APIRoutingConfig
+    config = db.query(APIRoutingConfig).first()
+    return {'use_function_based_routing': config.use_function_based_routing if config else False}
+
+@router.put('/settings/system/api-routing-config', response_model=APIRoutingConfigOut)
+def update_api_routing_config(
+    payload: APIRoutingConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.all_models import APIRoutingConfig
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail='Only system/admin users can manage routing config')
+    config = db.query(APIRoutingConfig).first()
+    if not config:
+        config = APIRoutingConfig(use_function_based_routing=payload.use_function_based_routing)
+        db.add(config)
+    else:
+        config.use_function_based_routing = payload.use_function_based_routing
+    db.commit()
+    return {'use_function_based_routing': config.use_function_based_routing}

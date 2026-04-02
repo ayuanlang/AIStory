@@ -68,7 +68,7 @@ class OSSStorageService:
         self._credential_cursors: Dict[str, int] = {}
 
     def _urlsafe_b64encode(self, raw: bytes) -> str:
-        return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+        return base64.urlsafe_b64encode(raw).decode("utf-8")
 
     def _is_qiniu_provider(self, pool) -> bool:
         provider = str(getattr(pool, "provider", "") or "").strip().lower()
@@ -159,11 +159,11 @@ class OSSStorageService:
         if isinstance(exc, ClientError):
             try:
                 code = str((((exc.response or {}).get("Error") or {}).get("Code") or "")).strip()
-                if code == "InvalidStorageClass":
+                if code in ("InvalidStorageClass", "NotImplemented"):
                     return True
             except Exception:
                 pass
-        return "InvalidStorageClass" in str(exc)
+        return "InvalidStorageClass" in str(exc) or "Backblaze only supports the" in str(exc)
 
     def _load_json_list(self, value: Any) -> List[Any]:
         if value is None:
@@ -680,7 +680,8 @@ class OSSStorageService:
         for pool in self._get_all_pools(None):
             public_base_url = self._normalize_public_base_url(pool)
             if public_base_url and raw.startswith(f"{public_base_url}/"):
-                return pool, urllib.parse.unquote(raw[len(public_base_url) + 1 :])
+                extracted_key = raw[len(public_base_url) + 1 :].split("?")[0]
+                return pool, urllib.parse.unquote(extracted_key)
 
             endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
             bucket = str(getattr(pool, "bucket", "") or "").strip()
@@ -696,6 +697,23 @@ class OSSStorageService:
     def is_managed_url(self, url: str) -> bool:
         _, key = self._extract_managed_target(url)
         return bool(key)
+
+    def refresh_url(self, url: str) -> str:
+        """Refresh a managed URL if it is a presigned URL or uses Qiniu signed URL, else return it."""
+        pool, key = self._extract_managed_target(url)
+        if not pool or not key:
+            return url
+        
+        try:
+            cred, _ = self._pick_credential(pool)
+            if not cred:
+                return url
+            
+            client = self._build_client(pool, cred)
+            new_url = self._build_public_url(client, pool, key, cred)
+            return new_url or url
+        except Exception:
+            return url
 
     def delete_url(self, url: str) -> bool:
         pool, key = self._extract_managed_target(url)

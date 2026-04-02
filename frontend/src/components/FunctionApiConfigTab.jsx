@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Save, GripVertical } from 'lucide-react';
-import { getFunctionApiConfigs, updateFunctionApiConfig, getSystemSettingsManage } from '../services/api';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, Save, GripVertical, Download, Upload } from 'lucide-react';
+import { getFunctionApiConfigs, updateFunctionApiConfig, getSystemSettingsManage, getApiRoutingConfig, updateApiRoutingConfig } from '../services/api';
 
 const FUNCTION_LABELS = {
     generate_subjects: '生成实体 (角色/道具/环境)',
@@ -12,12 +12,17 @@ const FUNCTION_LABELS = {
 };
 
 export default function FunctionApiConfigTab() {
+    const fileInputRef = useRef(null);
     const [configs, setConfigs] = useState({});
     const [systemApis, setSystemApis] = useState([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState({});
-
-    
+    const [routingConfig, setRoutingConfig] = useState({
+        use_function_based_routing: false,
+        explicit_selection: false,
+        strict_provider: false
+    });
+    const [savingRouting, setSavingRouting] = useState(false);
 
     useEffect(() => {
         fetchData();
@@ -26,11 +31,18 @@ export default function FunctionApiConfigTab() {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [configsData, sysApis] = await Promise.all([
+            const [configsData, sysApis, routingData] = await Promise.all([
                 getFunctionApiConfigs(),
-                getSystemSettingsManage()
+                getSystemSettingsManage(),
+                getApiRoutingConfig()
             ]);
-            
+
+            setRoutingConfig(routingData || {
+                use_function_based_routing: false,
+                explicit_selection: false,
+                strict_provider: false
+            });
+
             const configsMap = {};
             configsData.forEach(c => {
                 configsMap[c.function_name] = c.api_settings || [];
@@ -53,7 +65,7 @@ export default function FunctionApiConfigTab() {
             const existing = prev[funcName] || [];
             return {
                 ...prev,
-                [funcName]: [...existing, { system_api_id: '', priority: 0, is_fallback: true, explicit_selection: false, strict_provider: false }]
+                [funcName]: [...existing, { system_api_id: '', priority: 0, is_fallback: true, alias: '', applicable_languages: null }]
             };
         });
     };
@@ -87,8 +99,8 @@ export default function FunctionApiConfigTab() {
                 system_api_id: parseInt(item.system_api_id, 10),
                 priority: parseInt(item.priority, 10) || 0,
                 is_fallback: Boolean(item.is_fallback),
-                explicit_selection: Boolean(item.explicit_selection),
-                strict_provider: Boolean(item.strict_provider)
+                alias: item.alias || '',
+                applicable_languages: item.applicable_languages || null
             })).filter(item => !isNaN(item.system_api_id));
 
             const res = await updateFunctionApiConfig(funcName, { api_settings: items });
@@ -105,17 +117,154 @@ export default function FunctionApiConfigTab() {
         }
     };
 
+    const handleExport = () => {
+        const dataStr = JSON.stringify(configs, null, 2);
+        const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+        const exportFileDefaultName = 'function_api_configs.json';
+        
+        const linkElement = document.createElement('a');
+        linkElement.setAttribute('href', dataUri);
+        linkElement.setAttribute('download', exportFileDefaultName);
+        linkElement.click();
+    };
+
+    const handleImportClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleImportFileChange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            try {
+                const json = JSON.parse(event.target.result);
+                // Upload each function config
+                for (const funcName of Object.keys(json)) {
+                    await updateFunctionApiConfig(funcName, { api_settings: json[funcName] });
+                }
+                setConfigs(json);
+                alert("导入成功！");
+            } catch (error) {
+                console.error("Error parsing JSON file:", error);
+                alert("导入的文件格式不正确或保存失败！");
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = null; // Reset input
+    };
+
     if (loading) return <div className="text-gray-400 p-4">Loading configurations...</div>;
+
+    const handleSaveRouting = async () => {
+        setSavingRouting(true);
+        try {
+            await updateApiRoutingConfig(routingConfig);
+            alert('全局开关设置保存成功');
+        } catch (error) {
+            console.error('Failed to save routing config', error);
+            alert('保存失败');
+        } finally {
+            setSavingRouting(false);
+        }
+    };
 
     const functionNames = Object.keys(FUNCTION_LABELS);
 
     return (
         <div className="space-y-8 pb-10">
             <div>
-                <h3 className="text-xl font-medium text-white mb-2">功能专属 API 映射设置</h3>
-                <p className="text-gray-400 text-sm mb-6">
-                    在此列表指定各功能执行的 API。支持为一个功能映射多 API （设定优先级）。<br/>当选择 API 失败时，会向同功能下勾选了 "作为备用 API（Fallback）" 的系统按优先级顺序重试。
+                <div className="flex justify-between items-center mb-2">
+                    <h3 className="text-xl font-medium text-white mb-2">功能专属 API 映射设置</h3>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={handleExport}
+                            className="bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg text-sm transition-colors border border-white/10 flex items-center gap-2"
+                        >
+                            <Download size={16} />
+                            导出配置
+                        </button>
+                        <button
+                            onClick={handleImportClick}
+                            className="bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg text-sm transition-colors border border-white/10 flex items-center gap-2"
+                        >
+                            <Upload size={16} />
+                            导入配置
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                style={{ display: 'none' }}
+                                accept=".json"
+                                onChange={handleImportFileChange}
+                            />
+                        </button>
+                    </div>
+                </div>
+                <p className="text-gray-400 text-sm mb-4">
+                    在此列表指定各功能执行的 API。支持为一个功能映射多 API （设 定优先级）。<br/>当选择 API 失败时，会向同功能下勾选了 "作为备用 API（Fallback）" 的系统按优先级顺序重试。
                 </p>
+
+                <div className="bg-[#111114] border border-white/10 rounded-xl p-4 md:p-6 mb-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-lg font-medium text-white/90">全局路由开关设定</h4>
+                        <button
+                            onClick={handleSaveRouting}
+                            disabled={savingRouting}
+                            className="bg-primary/20 hover:bg-primary/30 text-primary px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-primary/20 flex items-center gap-2"
+                        >
+                            <Save size={16} />
+                            {savingRouting ? '保存中...' : '保存全局开关'}
+                        </button>
+                    </div>
+                    <div className="space-y-4">
+                        <label className="flex items-start gap-3 cursor-pointer group">
+                            <div className="mt-0.5">
+                                <input 
+                                    type="checkbox" 
+                                    className="rounded bg-white/5 border-white/10 text-primary form-checkbox w-4 h-4 cursor-pointer"
+                                    checked={routingConfig.use_function_based_routing || false}
+                                    onChange={(e) => setRoutingConfig(prev => ({...prev, use_function_based_routing: e.target.checked}))}
+                                />
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors">启用功能粒度 API 路由</div>
+                                <div className="text-xs text-gray-500 mt-0.5">开启后，系统在执行功能时将优先查找下方定义的功能 API 映射。不开启将走旧版的全局智能选择。</div>
+                            </div>
+                        </label>
+
+                        <label className="flex items-start gap-3 cursor-pointer group">
+                            <div className="mt-0.5">
+                                <input 
+                                    type="checkbox" 
+                                    className="rounded bg-white/5 border-white/10 text-primary form-checkbox w-4 h-4 cursor-pointer"
+                                    checked={routingConfig.explicit_selection || false}
+                                    onChange={(e) => setRoutingConfig(prev => ({...prev, explicit_selection: e.target.checked}))}
+                                />
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors">全局首选显式指定 (Explicit Selection)</div>
+                                <div className="text-xs text-gray-500 mt-0.5">开启后，告诉智能路由：功能专属列表中配置的 API 就是用户的“首选明确指定”。兜底行为仅限于允许“指定失败后容灾”的模型。</div>
+                            </div>
+                        </label>
+                        
+                        <label className="flex items-start gap-3 cursor-pointer group">
+                            <div className="mt-0.5">
+                                <input 
+                                    type="checkbox" 
+                                    className="rounded bg-white/5 border-white/10 text-primary form-checkbox w-4 h-4 cursor-pointer"
+                                    checked={routingConfig.strict_provider || false}
+                                    onChange={(e) => setRoutingConfig(prev => ({...prev, strict_provider: e.target.checked}))}
+                                />
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors">全局严格锁定供应商 (Strict Provider)</div>
+                                <div className="text-xs text-gray-500 mt-0.5">开启后，系统在生成请求失败时<strong>完全不触发</strong>任何随机模型备用兜底，哪怕有模型支持容灾也会直接失败。保证生成的唯一确定性。</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
             </div>
 
             <div className="space-y-6">
@@ -166,6 +315,24 @@ export default function FunctionApiConfigTab() {
                                                         </option>
                                                     )}
                                                 </select>
+                                                <div className="flex gap-2 mt-2">
+                                                    <input
+                                                        type="text"
+                                                        value={item.alias || ''}
+                                                        onChange={(e) => handleChangeParams(funcName, originalIndex, 'alias', e.target.value)}
+                                                        className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
+                                                        placeholder="模型别名 (例如: gpt-4o)"
+                                                    />
+                                                    <select
+                                                        value={item.applicable_languages || ''}
+                                                        onChange={(e) => handleChangeParams(funcName, originalIndex, 'applicable_languages', e.target.value || null)}
+                                                        className="w-[120px] bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
+                                                    >
+                                                        <option value="">--所有语言--</option>
+                                                        <option value="zh">中文</option>
+                                                        <option value="en">英文</option>
+                                                    </select>
+                                                </div>
                                             </div>
                                             <div className="w-[100px]">
                                                 <label className="text-xs text-gray-500 mb-1 block md:hidden">优先级:</label>
@@ -190,28 +357,6 @@ export default function FunctionApiConfigTab() {
                                                             className="rounded bg-white/5 border-white/10 text-primary form-checkbox"
                                                         />
                                                         作为兜底
-                                                    </label>
-                                                </div>
-                                                <div className="flex items-center h-8 shrink-0" title="选中时，该API将作为显式指定API，在失败时智能路由将只选择显式允许的模型作为兜底">
-                                                    <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={item.explicit_selection}
-                                                            onChange={(e) => handleChangeParams(funcName, originalIndex, 'explicit_selection', e.target.checked)}
-                                                            className="rounded bg-white/5 border-white/10 text-primary form-checkbox"
-                                                        />
-                                                        首选显式指定
-                                                    </label>
-                                                </div>
-                                                <div className="flex items-center h-8 shrink-0" title="选中时，若该API失败，将不会触发智能模型路由(智能兜底)，任务直接失败">
-                                                    <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={item.strict_provider}
-                                                            onChange={(e) => handleChangeParams(funcName, originalIndex, 'strict_provider', e.target.checked)}
-                                                            className="rounded bg-white/5 border-white/10 text-primary form-checkbox"
-                                                        />
-                                                        严格供应商锁定
                                                     </label>
                                                 </div>
                                             </div>

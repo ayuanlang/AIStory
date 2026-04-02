@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound, Link as LinkIcon, Copy } from 'lucide-react';
 import { API_URL } from '@/config';
-import { updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getUserPreferences, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
+import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getUserPreferences, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
@@ -329,6 +329,7 @@ const Settings = () => {
     const [isBillingLoading, setIsBillingLoading] = useState(false);
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
     const [systemSettings, setSystemSettings] = useState([]);
+    const [functionApiConfigs, setFunctionApiConfigs] = useState([]);
     const [isSystemSettingsLoading, setIsSystemSettingsLoading] = useState(false);
     const [selectingSystemId, setSelectingSystemId] = useState(null);
     const [selectedSystemCategory, setSelectedSystemCategory] = useState('All');
@@ -681,7 +682,8 @@ const Settings = () => {
     const loadSystemSettingsCatalog = async () => {
         setIsSystemSettingsLoading(true);
         try {
-            const [userRes, systemRes] = await Promise.all([fetchMe(), getSystemSettings()]);
+            const [userRes, systemRes, funcConfigs] = await Promise.all([fetchMe(), getSystemSettings(), getFunctionApiConfigs().catch(()=>[])]);
+            setFunctionApiConfigs(Array.isArray(funcConfigs) ? funcConfigs : []);
             if (import.meta.env.DEV) {
                 const firstGroup = Array.isArray(systemRes) && systemRes.length > 0 ? systemRes[0] : null;
                 const firstModel = firstGroup && Array.isArray(firstGroup.models) && firstGroup.models.length > 0 ? firstGroup.models[0] : null;
@@ -2450,7 +2452,48 @@ const Settings = () => {
                             )}
                         </div>
                     </div>
-                </div>
+                    <div className="mt-8 rounded-xl border border-blue-400/30 bg-blue-500/10 p-4">
+                            <h2 className="text-2xl font-extrabold tracking-wide text-blue-200">{t('功能专属 API 默认激活', 'Function-specific API Default Activation')}</h2>
+                            <p className="text-xs text-blue-100/80 mt-1">{t('选择各功能的默认 API，将保存到你的本地用户设置中。', 'Select default API for each function to save to your local preferences.')}</p>
+                        </div>
+                        <div className="bg-black/20 p-4 sm:p-6 rounded-xl border border-blue-400/20 space-y-4 shadow-sm">
+                            {functionApiConfigs.map(funcConfig => {
+                                const funcName = funcConfig.function_name;
+                                const apiList = funcConfig.api_settings || [];
+                                const storageKey = 'func_api_' + funcName;
+                                const currentVal = Number(localStorage.getItem(storageKey)) || '';
+                                
+                                return (
+                                    <div key={funcName} className="flex flex-col md:flex-row md:items-center justify-between p-3 bg-white/5 border border-white/10 rounded-lg gap-2">
+                                        <div className="text-sm font-medium text-white/90">{funcName}</div>
+                                        <select
+                                            value={currentVal || ''}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                localStorage.setItem(storageKey, val);
+                                                setFunctionApiConfigs([...functionApiConfigs]); // trigger re-render
+                                            }}
+                                            className="bg-[#111114] border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50 min-w-[200px]"
+                                        >
+                                            <option value="">-- {t('系统默认', 'System Default')} --</option>
+                                            {apiList.map((api, idx) => {
+                                                let label = api.alias || (api.system_api_model || api.system_api_name || ('API ID: ' + api.system_api_id));
+                                                if (api.applicable_languages && api.applicable_languages.length > 0) {
+                                                    label += ' (' + api.applicable_languages.join(', ') + ')';
+                                                }
+                                                return (
+                                                    <option key={idx} value={api.system_api_id}>
+                                                        {label}
+                                                    </option>
+                                                );
+                                            })}
+                                        </select>
+                                    </div>
+                                );
+                            })}
+                            {functionApiConfigs.length === 0 && <div className="text-sm text-gray-500">{t('暂无功能 API 配置', 'No function API configs available')}</div>}
+                        </div>
+                    </div>
             ) : null}
         </div>
     )

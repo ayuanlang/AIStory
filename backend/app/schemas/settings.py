@@ -1073,6 +1073,8 @@ class FunctionAPISettingItem(BaseModel):
     system_api_id: int
     priority: int = 0
     is_fallback: bool = False
+    alias: Optional[str] = None
+    applicable_languages: Optional[List[str]] = None
 
 class FunctionAPIConfigUpdate(BaseModel):
     api_settings: List[FunctionAPISettingItem]

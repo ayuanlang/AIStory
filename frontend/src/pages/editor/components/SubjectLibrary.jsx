@@ -1558,7 +1558,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (onLog) onLog(`Analyzing image for subject ${entity.name}...`, "process");
         
         try {
-            const updated = await analyzeEntityImage(entity.id);
+            const updated = await analyzeEntityImage(entity.id, 'subject_image_analysis');
             setSelectedEntity(prev => (prev?.id === updated.id ? updated : prev));
             setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
             setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
@@ -1764,7 +1764,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     });
 
                     try {
-                        const updated = await analyzeEntityImage(entity.id);
+                        const updated = await analyzeEntityImage(entity.id, 'subject_image_analysis');
                         if (shouldStopBatchAnalyze()) {
                             continue;
                         }
@@ -1838,7 +1838,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         };
 
         setStep('analyzing', '正在分析当前图片...', 'Analyzing current image...', 20);
-        const analyzed = await analyzeEntityImage(entity.id);
+        const analyzed = await analyzeEntityImage(entity.id, 'subject_image_analysis');
         if (shouldStop()) {
             throw new Error('__subject_batch_stop__');
         }
@@ -1896,6 +1896,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
         const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+            function_name: 'generate_subjects',
             project_id: projectId,
             episode_id: currentEpisode?.id,
             entity_id: analyzed?.id,
@@ -2754,6 +2755,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             const submitResult = await submitImageGenerationJob(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                function_name: 'generate_subjects',
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
                 entity_id: targetEntityId,
@@ -3079,6 +3081,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 let createdJobId = '';
                 try {
                     const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                        function_name: 'generate_subjects',
                         project_id: projectId,
                         episode_id: currentEpisode?.id,
                         entity_id: entity?.id,
@@ -3381,6 +3384,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 {label} ({stat.generated}/{stat.total})
                             </button>
                         )})}
+                        <div className="flex items-center ml-2 border-l border-white/20 pl-2">
+                            <FunctionApiSelector functionName="generate_subjects" configs={functionApiConfigs} />
+                        </div>
                     </div>
                 </div>
                 <div className="flex items-center gap-4 flex-wrap justify-end">
@@ -3544,7 +3550,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     alt={entity.name}
                                     className="absolute inset-0 object-cover w-full h-full"
                                     loading={entityIndex < 8 ? 'eager' : 'lazy'}
-                                    fetchPriority={entityIndex < 4 ? 'high' : 'auto'}
+                                    fetchpriority={entityIndex < 4 ? 'high' : 'auto'}
                                     fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
                                 />
                             ) : (
@@ -4570,7 +4576,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         </div>
 
                                         <div className="flex justify-end items-center gap-2">
-                                            <FunctionApiSelector functionName="generate_subjects" configs={functionApiConfigs} />
                                             <button
                                                 onClick={handleGenerate}
                                                 disabled={generating || selectedEntityHasRunningImageJob || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}

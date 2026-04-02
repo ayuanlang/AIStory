@@ -7,7 +7,9 @@ export default function ProjectStatusBar({
   totalProjectCost = 0,
   userCost = 0,
   t,
-  hasAssets = false
+  hasAssets = false,
+  lensPreference = '',
+  videoGenPreference = ''
 }) {
   // Mapping active Tab to generalized stages
   const STAGES = useMemo(() => [
@@ -71,6 +73,21 @@ export default function ProjectStatusBar({
                 {isPending && <Circle className="w-2.5 h-2.5 text-muted-foreground/30" />}
                 
                 <span>{stage.label}</span>
+
+                {stage.id === 'storyboard' && (lensPreference || videoGenPreference) && (
+                  <div className="flex items-center space-x-1 ml-1" title={t ? t('项目偏好设置', 'Project Preferences') : '项目偏好设置'}>
+                    {lensPreference && (
+                      <span className="text-[10px] px-1 bg-purple-500/10 text-purple-500 rounded leading-none py-0.5 border border-purple-500/20">
+                        {lensPreference}
+                      </span>
+                    )}
+                    {videoGenPreference && (
+                      <span className="text-[10px] px-1 bg-blue-500/10 text-blue-500 rounded leading-none py-0.5 border border-blue-500/20">
+                        {videoGenPreference}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 {isCurrent && stage.isKeyNode && hasAssets && (
                   <span className="flex items-center text-[10px] ml-1 px-1 bg-amber-500/20 text-amber-500 rounded leading-none py-0.5">

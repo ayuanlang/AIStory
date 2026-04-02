@@ -169,10 +169,15 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         includeAssociatedEntities: !strictPromptOnly,
     });
 
-    const getVideoPromptEntityRefs = () => collectMatchedSubjectImageUrlsFromPrompt({
-        promptText,
-        entityPool: entities,
-    });
+    const getVideoPromptEntityRefs = () => {
+        if (!strictPromptOnly && isVideoRefManager) {
+            return getEntityMatches().map(e => e.image_url).filter(Boolean);
+        }
+        return collectMatchedSubjectImageUrlsFromPrompt({
+            promptText,
+            entityPool: entities,
+        });
+    };
 
     useEffect(() => {
         if (useSequenceLogic || !isVideoRefManager || isVideoManualOverride) return;
@@ -308,117 +313,6 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                 // OR we just rely on the fact that if it's "Start Frame", it should always be there for End Gen context.
              }
         }
-        
-        // FIX FOR REFS (END) NOT UPDATING:
-        // Refs (Video) works because we likely force it or it's using a different path.
-        // Actually, looking at "Refs (Video)" logic above (lines 1190+), if no manual list, it rebuilds completely including `shot.image_url`.
-        // "Refs (End)" logic (line 1175): Only injects `shot.image_url` IF `!activeRefs.includes`.
-        
-        // Critical Issue: `activeRefs` in Auto Mode comes from `getEntityMatches()` (entity images). 
-        // Then we unshift `shot.image_url`.
-        // If `shot.image_url` changes, the component re-renders. 
-        // `activeRefs` is rebuilt. `shot.image_url` is new. It gets pushed.
-        
-        // HOWEVER, if Manual Mode (`end_ref_image_urls` exists):
-        // `activeRefs` = loaded from DB.
-        // If DB has OLD start frame url, and `shot.image_url` is NEW, 
-        // `!activeRefs.includes(shot.image_url)` is TRUE.
-        // So we unshift the NEW url. 
-        // But the OLD url is still there? 
-        // Yes, duplicate if old one is just a string.
-        
-        // User complaint: "Can't realtime update". 
-        // Maybe because `ReferenceManager` is memozied or `shot` prop isn't triggering deep update?
-        // No, `shot` is passed new object.
-        
-        // Let's force ensure Start Frame is present for End Refs, similar to Video Refs logic?
-        // Actually, the issue might be that we only apply Rule #2 in the `else` (Auto Mode) block from my previous edit.
-        // I moved the injection rules INSIDE the `else` block to fix the "Delete" issue.
-        // But this broke the "Realtime Update" for manual mode? 
-        // If I generate a new Start Frame, I enter Manual Mode? No, generating keeps it in whatever mode.
-        // But if I ever saved the list (e.g. by deleting something), I am in Manual Mode.
-        // And in Manual Mode, I explicitly REMOVED the injection logic to support deletion.
-        
-        // Logic Conflict:
-        // 1. User wants to DELETE items (requires Manual Mode where we don't Force-Inject).
-        // 2. User wants REALTIME UPDATE of Start Frame (requires Force-Injection whenever it changes).
-        
-        // Resolution:
-        // We should identify the "Start Frame" in the list and REPLACE it if it changes, rather than blindly injecting.
-        // OR: We only auto-inject into Manual Mode IF the list doesn't contain the *current* start frame.
-        // BUT if user deleted it, we re-inject it? That creates the Zombie bug again.
-        
-        // Correct Approach for "Refs (End)" (Contextual Refs):
-        // The Start Frame is a *Dependency*, not just a suggestion.
-        // For End Frame generation, you almost ALWAYS want the Start Frame.
-        // If the Start Frame updates, the Ref list *should* update to reflect the new reality.
-        
-        // What if we separate "Hard Dependencies" (Start Frame) from "Soft References" (Style/Entities)?
-        // In the UI, we could show Start Frame as a pinned item?
-        
-        // Current quick fix:
-        // Re-enable Injection for Manual Mode but be smarter?
-        // OR: Just move the Rule #2 OUT of the `else` block (make it Global again) but check for *stale* versions?
-        // For End Refs, the "Start Frame" is key.
-        // If I move Rule #2 back out, deleting it becomes impossible because it re-injects.
-        
-        // Maybe we just allow Deleting it -> adds to an "Ignore List"? Too complex.
-        
-        // Let's look at "Refs (Video)".
-        // It has logic: `if (!tech[storageKey]) { ...rebuild... }`
-        // If Manual Mode, it uses `tech[storageKey]`.
-        // Does "Refs (Video)" update start frame in Manual Mode?
-        // If I have manual video refs, and I update start frame, does it update?
-        // If logic is same, it shouldn't.
-        // User says "Refs (Video) works". 
-        // Maybe because they haven't triggered Manual Mode for Video yet?
-        
-        // Let's Apply the "Update Logic" specifically for Start Frame replacement.
-        // If we find an item in `activeRefs` that LOOKS like a start frame (maybe check previous `shot` state? We don't have it).
-        
-        // Alternative:
-        // We assume `shot.image_url` IS the single truth for the Start Frame dependency.
-        // We simply render it as a "System Pinned" reference that cannot be removed? 
-        // No, user wants to remove "Start" from "Refs (Start)" previously.
-        // But for "Refs (End)", Start Frame is external context.
-        
-        // Let's try moving Rule #2 back to Global Scope (apply to Manual too), 
-        // BUT make `ReferenceManager` smart enough to not resurrect it if *explicitly removed* in this session?
-        // Hard to track session.
-        
-        // Let's strictly follow the request: "Refs (End) ... Refs (Video) worked".
-        // Let's see if I can simply enable the injection for Manual Mode ONLY IF it's "Refs (End)" or "Refs (Video)" (for start frame).
-        // And accept that Deleting it might be tricky?
-        // Or better: Allow Deleting, but if a *New* Start Frame is generated, it comes back?
-        // That happens naturally if `shot.image_url` changes value.
-        
-        // Let's try:
-        // Move the Injection Rule for `end_ref_image_urls` + `shot.image_url` OUTSIDE the else block.
-        // To prevent "Cannot Delete" Zombie bug:
-        // The user was likely complaining about "Refs (Start)" (Start Frame generation refs).
-        // "Refs (End)" (End Frame generation refs) *needs* the Start Frame.
-        // The previous Zombie bug report was "Refs (Start) delete button invalid". 
-        // "Refs (Start)" uses `additionalAutoRefs` (Previous Shot End Frame).
-        // It does NOT use `shot.image_url` as a ref (it IS the result).
-        
-        // So:
-        // Rule 1 (Additional Auto Refs - e.g. Prev Shot): Kept inside `else` (Auto only). Fixes "Refs (Start)" delete bug.
-        // Rule 2 (Start Frame for End/Video Refs): Move OUTSIDE `else` (Global). 
-        // This ensures Start Frame always appears in End/Video refs, updating in real-time.
-        // Does this prevent deletion of Start Frame from End Refs? Yes.
-        // Is that acceptable? Usually yes, Start Frame is the anchor for End Frame.
-        // If user wants to generate End Frame *without* Start Frame context... that's rare?
-        // If they really want to, they might struggle. But this fixes the "Update" issue.
-        
-        // Let's move Rule 2 out.
-        
-        // 3. Special Logic for Entity Refs mode: prompt-matched entity images + structural frames
-        if (storageKey === 'video_ref_image_urls') {
-            if (!isLockedManual) {
-                activeRefs = buildAutoVideoRefList(shot, tech, resolvedVideoMode, getVideoPromptEntityRefs());
-            }
-        }
-        
         // Deduplicate
         activeRefs = [...new Set(activeRefs)];
     }
@@ -652,36 +546,32 @@ export const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateS
         // Updated cleaner: Removes whitespace to handle "主视角" vs "主视角 " mismatch
         const cleanForMatch = (str) => (str || '').replace(/[（\(\)）\s]/g, '').toLowerCase();
 
+        // 预处理所有实体，避免在双层循环中重复执行昂贵的正则和字符串操作
+        const parsedEntities = (entities || []).map(e => {
+            const cn = cleanForMatch(e.name);
+            let en = (e.name_en || '').toLowerCase();
+            if (!en && e.description) {
+                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
+                if (enMatch && enMatch[1]) {
+                    en = enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0].trim().toLowerCase();
+                }
+            }
+            const enClean = cleanForMatch(en);
+            return { raw: e, cn, enClean };
+        });
+
         anchors.forEach(rawLoc => {
             const targetName = cleanForMatch(rawLoc);
             if (!targetName) return;
 
-             // Logic extracted from getSceneImages
-            let match = entities.find(e => {
-                const cn = cleanForMatch(e.name);
-                let en = (e.name_en || '').toLowerCase();
-                if (!en && e.description) {
-                    const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                    if (enMatch && enMatch[1]) en = enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0].trim().toLowerCase(); 
-                }
-                const enClean = cleanForMatch(en);
-                return cn === targetName || enClean === targetName;
-            });
-
+            let match = parsedEntities.find(m => m.cn === targetName || m.enClean === targetName);
             if (!match) {
-                 match = entities.find(e => {
-                    const cn = cleanForMatch(e.name);
-                    let en = (e.name_en || '').toLowerCase();
-                    if (!en && e.description) {
-                        const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                        if (enMatch && enMatch[1]) en = enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0].trim().toLowerCase(); 
-                    }
-                    const enClean = cleanForMatch(en);
-                    return (cn && (cn.includes(targetName) || targetName.includes(cn))) ||
-                           (enClean && (enClean.includes(targetName) || targetName.includes(enClean)));
-                 });
+                 match = parsedEntities.find(m => 
+                     (m.cn && (m.cn.includes(targetName) || targetName.includes(m.cn))) ||
+                     (m.enClean && (m.enClean.includes(targetName) || targetName.includes(m.enClean)))
+                 );
             }
-            if (match && match.image_url && !isBrokenSceneImageUrl(match.image_url)) validUrls.push(match.image_url);
+            if (match && match.raw.image_url && !isBrokenSceneImageUrl(match.raw.image_url)) validUrls.push(match.raw.image_url);
         });
 
         // Use Set to remove duplicates
@@ -3020,56 +2910,44 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         }
     };
 
+    const parsedEntitiesForImage = useMemo(() => {
+        const cleanForMatch = (str) => (str || '').replace(/[（\(\)）]/g, '').trim().toLowerCase();
+        return (entities || []).map(e => {
+            const cn = cleanForMatch(e.name);
+            let en = (e.name_en || '').toLowerCase();
+            if (!en && e.description) {
+                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
+                if (enMatch && enMatch[1]) {
+                    en = enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0].trim().toLowerCase();
+                }
+            }
+            const enClean = cleanForMatch(en);
+            return { raw: e, cn, enClean };
+        });
+    }, [entities]);
+
     const getSceneImage = (scene) => {
-        // Use environment_name as requested, cleaning markdown ** and []
-        const sourceText = scene.environment_name || scene.location || '';
+        // Use environment_name as requested, cleaning markdown ** and []       
+        const sourceText = scene.environment_name || scene.location || '';      
         const rawLoc = sourceText.replace(/[\[\]\*]/g, '').trim().toLowerCase();
-        
+
         if (!rawLoc) return null;
-        
+
         const cleanForMatch = (str) => (str || '').replace(/[（\(\)）]/g, '').trim().toLowerCase();
         const targetName = cleanForMatch(rawLoc);
 
         // Try exact match first
-        let match = entities.find(e => {
-            const cn = cleanForMatch(e.name);
-            let en = (e.name_en || '').toLowerCase();
-            
-            // Fallback EN extract
-            if (!en && e.description) {
-                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                if (enMatch && enMatch[1]) en = enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0].trim().toLowerCase(); 
-            }
-            const enClean = cleanForMatch(en);
-
-            const isMatch = cn === targetName || enClean === targetName;
-            
-            return isMatch;
-        });
+        let match = parsedEntitiesForImage.find(m => m.cn === targetName || m.enClean === targetName);
 
         // Try fuzzy match if exact fails
         if (!match) {
-             match = entities.find(e => {
-                const cn = cleanForMatch(e.name);
-                let en = (e.name_en || '').toLowerCase();
-                // Fallback EN extract
-                if (!en && e.description) {
-                    const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                    if (enMatch && enMatch[1]) en = enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0].trim().toLowerCase(); 
-                }
-                const enClean = cleanForMatch(en);
-
-                if (cn && (cn.includes(targetName) || targetName.includes(cn))) {
-                    return true;
-                }
-                if (enClean && (enClean.includes(targetName) || targetName.includes(enClean))) {
-                    return true;
-                }
-                return false;
-             });
+             match = parsedEntitiesForImage.find(m => 
+                 (m.cn && (m.cn.includes(targetName) || targetName.includes(m.cn))) ||
+                 (m.enClean && (m.enClean.includes(targetName) || targetName.includes(m.enClean)))
+             );
         }
 
-        return match ? match.image_url : null;
+        return match ? match.raw.image_url : null;
     };
 
     const finalizeAiShotsGenerationResult = useCallback(async ({ sceneId, result }) => {
@@ -3466,8 +3344,9 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         }
     };
 
-    const handleRegenerateScene = async (superuserPromptData = null) => {
-        if (!editingScene?.id) {
+    const handleRegenerateScene = async (superuserPromptData = null, targetSceneParam = null) => {
+        const sceneToProcess = targetSceneParam || editingScene;
+        if (!sceneToProcess?.id) {
             alert(t('请先保存当前场景。', 'Please save current scene first.'));
             return;
         }
@@ -3475,11 +3354,11 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         const requirements = String(sceneRegenRequirements || '').trim() || defaultSceneRegenRequirement;
 
         if (isSuperuser && !superuserPromptData) {
-            await openSceneRegenPromptModal(editingScene, requirements);
+            await openSceneRegenPromptModal(sceneToProcess, requirements);
             return;
         }
 
-        const label = editingScene.scene_no || editingScene.scene_name || `#${editingScene.id}`;
+        const label = sceneToProcess.scene_no || sceneToProcess.scene_name || `#${sceneToProcess.id}`;
         const confirmed = await confirmUiMessage(
             t(
                 (sceneRegenEntityOnlyMode
@@ -3502,20 +3381,20 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         });
         try {
             // Preflight: scene ID may become stale after list refresh/replacement; resolve latest DB row first.
-            let targetScene = editingScene;
+            let targetScene = sceneToProcess;
             if (activeEpisode?.id) {
                 try {
                     const latestScenes = await fetchScenes(activeEpisode.id);
-                    const byId = (latestScenes || []).find((s) => Number(s?.id) === Number(editingScene?.id));
+                    const byId = (latestScenes || []).find((s) => Number(s?.id) === Number(sceneToProcess?.id));
                     if (byId) {
-                        targetScene = { ...byId, ...editingScene, id: byId.id };
+                        targetScene = { ...byId, ...sceneToProcess, id: byId.id };
                     } else {
-                        const editingSceneNo = String(editingScene?.scene_no || '').trim();
+                        const editingSceneNo = String(sceneToProcess?.scene_no || '').trim();
                         const bySceneNo = editingSceneNo
                             ? (latestScenes || []).find((s) => String(s?.scene_no || '').trim() === editingSceneNo)
                             : null;
                         if (bySceneNo) {
-                            targetScene = { ...bySceneNo, ...editingScene, id: bySceneNo.id };
+                            targetScene = { ...bySceneNo, ...sceneToProcess, id: bySceneNo.id };
                             setEditingScene(targetScene);
                         } else {
                             setScenes((latestScenes || []).map((scene) => ({
@@ -3734,7 +3613,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                             ...scene,
                             original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
                         })));
-                        const stillExists = (latestScenes || []).find((s) => s.id === editingScene?.id);
+                        const stillExists = (latestScenes || []).find((s) => s.id === sceneToProcess?.id);
                         if (!stillExists) {
                             setEditingScene(null);
                         }
@@ -4311,7 +4190,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                                     scene={scene} 
                                     entities={entities} 
                                     subjectGap={sceneSubjectGapMap.get(getSceneSubjectStatusKey(scene)) || null}
-                                    supplementingSubjects={Boolean(sceneSubjectSupplementingMap[getSceneSubjectStatusKey(scene)])}
+                                    supplementingSubjects={Boolean(sceneSubjectSupplementingMap[getSceneSubjectStatusKey(scene)]) || (sceneRegenerating && editingScene?.id === scene.id)}
                                     shotCount={Number(sceneShotCountMap?.[Number(scene?.id || 0)] || 0)}
                                     uiLang={uiLang}
                                     generatingShots={isSceneAiShotsBusy(scene?.id)}
@@ -4320,7 +4199,10 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                                     onClick={() => setEditingScene(scene)} 
                                     onGenerateShots={handleGenerateShots}
                                     onSupplementShots={handleOpenShotSupplementMenu}
-                                    onSupplementSubjects={handleSupplementSceneSubjects}
+                                    onSupplementSubjects={(sceneCandidate) => {
+                                        setEditingScene(sceneCandidate);
+                                        return handleRegenerateScene(null, sceneCandidate);
+                                    }}
                                     onDelete={handleDeleteScene}
                                 />
                             );
@@ -5217,4 +5099,5 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         </div>
     );
 };
+
 

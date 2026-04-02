@@ -267,6 +267,13 @@ async function pollTask(taskId, {
             const res = await api.get(`/tasks/${taskId}`, reqConfig);
             notFoundSince = 0;
             const info = res.data;
+
+            if (!info || typeof info !== 'object') {
+                const err = new Error('Task polling received an invalid response format (not an object). This could indicate a proxy error or large payload truncation.');
+                err.response = { status: 502 }; // Treat as bad gateway to trigger retry below
+                throw err;
+            }
+
             if (info.status === 'completed') return info.result;
             if (info.status === 'failed') {
                 const err = new Error(info.error || 'Task failed');
@@ -291,6 +298,19 @@ async function pollTask(taskId, {
                     continue;
                 }
             }
+            
+            // Tolerate network blips or generic 502/503/504 errors during long polling
+            const isRetriable = !error?.response || [502, 503, 504, 429].includes(Number(error?.response?.status));
+            if (isRetriable) {
+                const now = Date.now();
+                if (!notFoundSince) notFoundSince = now; // reuse this grace period or add another
+                // We'll give network errors a generous 60s tolerance window
+                if ((now - notFoundSince) <= 60000) {
+                    await new Promise(r => setTimeout(r, Math.max(interval, 3000)));
+                    continue;
+                }
+            }
+
             throw error;
     }
   }
@@ -848,8 +868,8 @@ export const streamSystemManagementAgentCommand = async (query, context = {}, hi
     return await streamSSE('/agent/system-management/command/stream', { query, context, history }, callbacks);
 };
 
-export const fetchProjects = async () => {
-    const response = await api.get('/projects/');
+export const fetchProjects = async (skip = 0, limit = 100) => {
+    const response = await api.get('/projects/', { params: { skip, limit } });
     return response.data;
 }
 
@@ -1512,15 +1532,22 @@ const shouldAutoDownloadForRequest = (options = {}) => {
 const resolveMediaDownloadUrl = (url) => {
     const raw = String(url || '').trim();
     if (!raw) return '';
+    if (raw.startsWith('blob:') || raw.startsWith('data:')) return raw;
     if (/^https?:\/\//i.test(raw)) return raw;
-    if (raw.startsWith('/')) {
+
+    let normalizedPath = raw;
+    if (!normalizedPath.includes('/') && /^[A-Za-z0-9_.-]+$/.test(normalizedPath)) {
+        normalizedPath = `/uploads/${normalizedPath}`;
+    }
+
+    if (normalizedPath.startsWith('/')) {
         const prefix = String(BASE_URL || '').trim();
         if (prefix) {
-            return `${prefix}${raw}`;
+            return `${prefix}${normalizedPath}`;
         }
-        return `${window.location.origin}${raw}`;
+        return `${window.location.origin}${normalizedPath}`;
     }
-    return raw;
+    return normalizedPath;
 };
 
 const inferFilenameFromUrl = (url, fallbackName) => {
@@ -1557,7 +1584,9 @@ const isTransientPollingError = (error) => {
     if (status === 408 || status === 409 || status === 429) return true;
     if (status >= 500 && status < 600) return true;
     const code = String(error?.code || '').toUpperCase();
-    return code === 'ECONNABORTED' || code === 'ERR_NETWORK';
+    if (code === 'ECONNABORTED' || code === 'ERR_NETWORK') return true;
+    const msg = String(error?.message || '').toLowerCase();
+    return msg.includes('network error') || msg.includes('failed to fetch');
 };
 
 const buildNoCachePollConfig = (baseURL) => ({
@@ -1997,9 +2026,13 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 }
 
 export const submitImageGenerationJob = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
-    const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
-    const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(options || {}, 'callback_polling')
-        ? options?.callback_polling !== false
+    const effectiveOptions = { ...(options || {}) };
+    if (effectiveOptions.function_name) { 
+        effectiveOptions.system_api_id = Number(localStorage.getItem('func_api_' + effectiveOptions.function_name)) || null; 
+    }
+    const effectiveNegativePrompt = String(negative_prompt ?? effectiveOptions?.negative_prompt ?? '').trim();
+    const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(effectiveOptions || {}, 'callback_polling')
+        ? effectiveOptions?.callback_polling !== false
         : DEFAULT_CALLBACK_POLLING_ENABLED;
     const callbackTicket = callbackPollingEnabled ? createGenerationCallbackTicket('img') : '';
     const callbackUrl = callbackPollingEnabled ? buildGenerationCallbackUrl(callbackTicket) : '';
@@ -2007,7 +2040,7 @@ export const submitImageGenerationJob = async (prompt, provider = null, ref_imag
         prompt,
         provider,
         ref_image_url,
-        ...(options || {}),
+        ...effectiveOptions,
         ...(callbackUrl ? { callback_url: callbackUrl } : {}),
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
     };
@@ -2021,12 +2054,17 @@ export const getImageGenerationJobStatus = async (jobId) => {
 
 export const generateVideo = async (prompt, provider = null, ref_image_url = null, ref_video_urls = null, last_frame_url = null, duration = 5, options = {}, keyframes = [], negative_prompt = null) => {
     const effectiveNegativePrompt = String(negative_prompt ?? options?.negative_prompt ?? '').trim();
-    const {
+    
+    let {
         job_timeout_ms,
         job_poll_interval_ms,
         on_job_created,
         ...requestOptions
     } = options || {};
+
+    if (requestOptions.function_name) {
+        requestOptions.system_api_id = Number(localStorage.getItem('func_api_' + requestOptions.function_name)) || null;
+    }
     const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(options || {}, 'callback_polling')
         ? options?.callback_polling !== false
         : DEFAULT_CALLBACK_POLLING_ENABLED;
@@ -2515,7 +2553,12 @@ export const listKieStandardValuesManage = async (params = {}) => {
     return response.data;
 }
 
+let _cachedKieStandardValueOptions = null;
+let _cachedKieStandardValueOptionsTime = 0;
 export const getKieStandardValueOptions = async (params = {}) => {
+    if (_cachedKieStandardValueOptions && Date.now() - _cachedKieStandardValueOptionsTime < 10 * 60 * 1000) {
+        return _cachedKieStandardValueOptions;
+    }
     const response = await api.get('/settings/system/kie-standard-values/options', {
         params: {
             ...params,
@@ -2526,6 +2569,8 @@ export const getKieStandardValueOptions = async (params = {}) => {
             Pragma: 'no-cache',
         },
     });
+    _cachedKieStandardValueOptions = response.data;
+    _cachedKieStandardValueOptionsTime = Date.now();
     return response.data;
 }
 
@@ -2723,7 +2768,15 @@ export const deleteSetting = async (id) => {
 
 export const analyzeEntityImage = async (entityId, functionName = null, systemApiId = null) => {
     try {
-        const response = await api.post(`/entities/${entityId}/analyze`);
+        let finalApiId = systemApiId;
+        if (!finalApiId && functionName) {
+            finalApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
+        }
+        let url = `/entities/${entityId}/analyze`;
+        if (finalApiId) {
+            url += `?system_api_id=${finalApiId}`;
+        }
+        const response = await api.post(url);
         return response.data;
     } catch (e) {
         console.error(`[API FAIL] analyzeEntityImage failed:`, e);
@@ -2846,6 +2899,10 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
             throw new Error(`AI Scene Analysis submit/poll no response (${submitTimeout}ms): ${detail}`);
         }
         throw new Error(detail || 'Scene analysis failed');
+    }
+
+    if (!data || typeof data !== 'object') {
+        throw new Error('Scene analysis API returned an invalid response format (not an object). The payload may be too large or the request failed.');
     }
 
     const explicitSuccess = typeof data?.success === 'boolean' ? data.success : null;
@@ -3021,6 +3078,17 @@ export const getTransactions = async (limit=100, userId=null) => {
     return runSingleFlight(key, async () => (await api.get(url)).data);
 };
 export const updateUserCredits = async (userId, credits, mode='set') => (await api.post(`/billing/users/${userId}/credits`, { amount: credits, mode })).data;
+
+// -- Routing Config --
+export const getApiRoutingConfig = async () => {
+    const response = await api.get('/settings/system/api-routing-config');
+    return response.data;
+};
+
+export const updateApiRoutingConfig = async (payload) => {
+    const response = await api.put('/settings/system/api-routing-config', payload);
+    return response.data;
+};
 
 // -- Function API Configs --
 export const getFunctionApiConfigs = async () => {

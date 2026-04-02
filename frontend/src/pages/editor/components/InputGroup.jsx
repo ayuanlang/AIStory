@@ -1,9 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle, ChevronDown } from 'lucide-react';
+import { getUiLang, tUI } from '../../../lib/uiLang';
 
 const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const wrapperRef = useRef(null);
+
+    const t = (zh, en) => tUI(getUiLang(), zh, en);
+
+    const getDisplayString = (raw) => {
+        if (!raw || typeof raw !== 'string') return raw;
+        if (raw.includes(' / ')) {
+            const parts = raw.split(' / ');
+            // Provide a general rule to parse "Option / 选项"
+            return t(parts[0].trim(), parts[1]?.trim() || parts[0].trim());
+        }
+        return raw;
+    };
+
+    const displayValue = () => {
+        if (!value) return '';
+        if (!multi) return getDisplayString(value);
+        return value.split(',').map((s) => getDisplayString(s.trim())).join(', ');
+    };
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -27,7 +46,7 @@ const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi
             <div className="relative">
                 <input
                     className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
-                    value={value || ''}
+                    value={displayValue()}
                     onChange={(e) => {
                         onChange(e.target.value);
                         if (list) setIsOpen(true);
@@ -68,7 +87,7 @@ const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi
                                         }
                                     }}
                                 >
-                                    <span>{opt}</span>
+                                    <span>{getDisplayString(opt)}</span>
                                     {selected && <CheckCircle size={14} />}
                                 </div>
                             );

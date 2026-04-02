@@ -1,4 +1,4 @@
-
+﻿
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     api,
@@ -464,8 +464,6 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newGlobalStyle, setNewGlobalStyle] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.global_style));
     const [newLighting, setNewLighting] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.lighting));
     const [newProjectSeed, setNewProjectSeed] = useState('');
-    const [newPlannedCompletionTime, setNewPlannedCompletionTime] = useState('');
-    const [newBudget, setNewBudget] = useState('');
     const [isCreateTechVisualCollapsed, setIsCreateTechVisualCollapsed] = useState(true);
     const [isCreateManagementCollapsed, setIsCreateManagementCollapsed] = useState(true);
     const [projectCreateOptions, setProjectCreateOptions] = useState(PROJECT_CREATE_DEFAULT_OPTIONS);
@@ -475,6 +473,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newAspectRatio, setNewAspectRatio] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
     const [newImageSize, setNewImageSize] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
     const [newVideoSoundEnabled, setNewVideoSoundEnabled] = useState(true);
+    const [newPlannedCompletionTime, setNewPlannedCompletionTime] = useState('');
+    const [newBudget, setNewBudget] = useState('');
     const [isCreateCollaboratorsCollapsed, setIsCreateCollaboratorsCollapsed] = useState(true);
     const [isCreateSceneAnalysisCollapsed, setIsCreateSceneAnalysisCollapsed] = useState(true);
     const [newSceneAnalysisConfig, setNewSceneAnalysisConfig] = useState(createDefaultProjectSceneAnalysisConfig());
@@ -1933,6 +1933,38 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             <span>{t('视频生成默认开启声音', 'Enable sound by default for video generation')}</span>
                                         </label>
 
+                                                                                <div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
+                                            <h4 className="text-sm font-bold text-white mb-4 uppercase tracking-wider flex items-center gap-2">
+                                                <Layers size={16} className="text-primary" />
+                                                {t('项目管理', 'Project Management')}
+                                            </h4>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide text-muted-foreground mb-1.5 uppercase">
+                                                        {t('计划完成时间', 'Planned Completion Time')}
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        value={newPlannedCompletionTime}
+                                                        onChange={e => setNewPlannedCompletionTime(e.target.value)}
+                                                        placeholder={t('例如：2026-12-31', 'e.g., 2026-12-31')}
+                                                        className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm focus:ring-1 focus:ring-primary/50 focus:border-primary/50 outline-none transition-all placeholder:text-white/20"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold tracking-wide text-muted-foreground mb-1.5 uppercase">
+                                                        {t('项目预算', 'Budget')}
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        value={newBudget}
+                                                        onChange={e => setNewBudget(e.target.value)}
+                                                        placeholder={t('例如：100万', 'e.g., 1M')}
+                                                        className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm focus:ring-1 focus:ring-primary/50 focus:border-primary/50 outline-none transition-all placeholder:text-white/20"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
                                         <label className="block text-sm font-semibold tracking-wide text-primary mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
                                         <textarea
                                             className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[84px]"
@@ -2688,3 +2720,8 @@ const SettingsPanel = ({ currentTheme, handleThemeChange, uiLang }) => {
 };
 
 export default ProjectList;
+
+
+
+
+

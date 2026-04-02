@@ -18,6 +18,22 @@ export const getFullUrl = (url) => {
     return url;
 };
 
+export const getThumbUrl = (url) => {
+    if (!url) return '';
+    const raw = String(url).trim();
+    if (raw.startsWith('http') || raw.startsWith('blob:') || raw.startsWith('data:')) return raw;
+    
+    let normalizedPath = raw;
+    if (normalizedPath.startsWith('/uploads/')) {
+        normalizedPath = normalizedPath.replace('/uploads/', '');
+    } else if (normalizedPath.startsWith('/')) {
+        normalizedPath = normalizedPath.slice(1);
+    }
+    const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
+    const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
+    return `${base}/api/v1/assets/thumb/${normalizedPath}`;
+};
+
 export const createInitialFrameTrimState = () => ({
     open: false,
     type: 'start',
@@ -263,24 +279,32 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     }, [eagerLoad, shouldLoad, rawSrc, failed]);
 
     const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
+    const thumbSrc = getThumbUrl(rawSrc);
     if (!resolvedSrc) return fallback || null;
 
     return (
         <div ref={containerRef} className={`relative flex items-center justify-center overflow-hidden bg-[#151515] ${className ? className.replace('object-cover', '').replace('object-contain', '').replace('max-w-full', 'w-full').replace('max-h-full', 'h-full') : ''}`}>
             {!isLoaded && !failed && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
-                    <Loader2 className="w-5 h-5 animate-spin text-white/20" />
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                    <Loader2 className="w-5 h-5 animate-spin text-white/40 drop-shadow-md" />
                 </div>
+            )}
+            {!isLoaded && !failed && shouldLoad && thumbSrc && (
+                <img
+                    src={thumbSrc}
+                    alt={`${alt} thumbnail`}
+                    className={`absolute inset-0 w-full h-full blur-[8px] scale-110 object-cover opacity-60 z-0 transition-opacity duration-300`}
+                />
             )}
             <img
                 src={shouldLoad ? resolvedSrc : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='}
                 alt={alt}
                 className={`absolute inset-0 w-full h-full transition-all duration-700 z-10 ${(className || '').includes('object-contain') ? 'object-contain' : 'object-cover'} ${
-                    isLoaded ? 'opacity-100 blur-0 scale-100 bg-transparent' : 'opacity-0 blur-[10px] scale-110 bg-[#151515]'
+                    isLoaded ? 'opacity-100 blur-0 scale-100 bg-transparent' : 'opacity-0 blur-[10px] scale-110 bg-transparent'
                 }`}
                 loading={imgProps.loading || 'lazy'}
                 decoding={imgProps.decoding || 'async'}
-                fetchPriority={imgProps.fetchPriority || 'low'}
+                fetchpriority={imgProps.fetchPriority || 'low'}
                 onLoad={() => {
                     rememberWarmMediaUrl(rawSrc);
                     setIsLoaded(true);
@@ -1797,3 +1821,5 @@ export const buildEpisodeDisplayLabel = ({ episodeNumber, title, fallbackNumber 
     return normalizedTitle || 'Untitled Episode';
 };
 
+
+export const mergeEntityPoolWithSubjectIndex = (entities, subjectText) => { return entities || []; };

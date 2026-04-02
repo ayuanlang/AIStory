@@ -175,6 +175,13 @@ class ProjectAssetReviewMessage(Base):
     round = relationship("ProjectAssetReviewRound", back_populates="messages")
     sender = relationship("User", back_populates="asset_review_messages")
 
+class APIRoutingConfig(Base):
+    __tablename__ = "api_routing_configs"
+    id = Column(Integer, primary_key=True, index=True)
+    use_function_based_routing = Column(Boolean, default=False)
+    explicit_selection = Column(Boolean, default=False)
+    strict_provider = Column(Boolean, default=False)
+
 class Episode(Base):
     __tablename__ = "episodes"
     id = Column(Integer, primary_key=True, index=True)

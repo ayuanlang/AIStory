@@ -4164,7 +4164,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         def _extract_entities_from_json_candidates(text: str) -> Dict[str, List[Dict[str, Any]]]:
             payload: Dict[str, List[Dict[str, Any]]] = {
-                "characters": [],
+                "characters": [], "covers": [],
                 "props": [],
                 "environments": [],
             }
@@ -4195,7 +4195,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     continue
                 if not isinstance(obj, dict):
                     continue
-                for section in ("characters", "props", "environments"):
+                for section in ("characters", "props", "environments", "covers"):
                     items = obj.get(section)
                     if isinstance(items, list):
                         payload[section].extend([x for x in items if isinstance(x, dict)])
@@ -4207,7 +4207,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             entities_payload = _extract_entities_from_json_candidates(text)
 
             json_subjects: List[str] = []
-            for section in ("characters", "props", "environments"):
+            for section in ("characters", "props", "environments", "covers"):
                 for item in entities_payload.get(section, []):
                     for raw_name in (item.get("name"), item.get("name_en")):
                         normalized = _normalize_subject_name(raw_name or "")
@@ -4254,7 +4254,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             warnings: List[str] = []
             mismatches: List[Dict[str, Any]] = []
 
-            for section in ("characters", "props", "environments"):
+            for section in ("characters", "props", "environments", "covers"):
                 rules = syntax_rules.get(section) if isinstance(syntax_rules, dict) else None
                 if not isinstance(rules, dict):
                     continue
@@ -4292,12 +4292,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     for it in preview
                 ])
                 warnings.append(
-                    "Prompt template syntax warning: generation_prompt_cn/en must match fixed template markers for characters/props/environments. "
+                    "Prompt template syntax warning: generation_prompt_cn/en must match fixed template markers for characters/props/environments/covers. "
                     f"Examples: {summary}"
                 )
 
             return {
-                "checked_sections": ["characters", "props", "environments"],
+                "checked_sections": ["characters", "props", "environments", "covers"],
                 "mismatch_count": len(mismatches),
                 "mismatches": mismatches,
                 "warning_codes": warning_codes,
@@ -4368,7 +4368,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             system_instruction += (
                 "\n\n"
                 "# Output Hard Constraint (Negative Prompt)\n"
-                "In Part 2 JSON, every entity item (characters / props / environments) MUST include key \"negative_prompt_en\". "
+                "In Part 2 JSON, every entity item (characters / props / environments / covers) MUST include key \"negative_prompt_en\". "
                 "Each negative_prompt_en must be English-only, style-aware, and aligned to that entity's generation_prompt_en. "
                 "For live-action realism, explicitly exclude plastic/waxy/CGI look and other realism-breaking artifacts."
             )
@@ -4623,7 +4623,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     project_id_for_inventory = int(episode_for_inventory.project_id)
 
             inventory = {
-                "characters": [],
+                "characters": [], "covers": [],
                 "props": [],
                 "environments": [],
             }
@@ -4689,6 +4689,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     return "prop"
                 if t in {"environment", "environments", "env", "场景", "环境"}:
                     return "environment"
+                if t in {"cover", "covers", "封面", "封面海报"}:
+                    return "cover"
                 return ""
 
             def _format_subject_ref(name: str, normalized_type: str) -> str:
@@ -4701,6 +4703,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     return f"PROP:[{clean_name}]"
                 if normalized_type == "environment":
                     return f"ENV:[{clean_name}]"
+                if normalized_type == "cover":
+                    return f"COVER:[{clean_name}]"
                 return f"SUBJECT:[{clean_name}]"
 
             normalized_assets = []
@@ -5194,7 +5198,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Extract subjects_json from LLM output so frontend can use pre-parsed
         # clean JSON instead of re-parsing the raw markdown with heuristic regex.
         subjects_json = _extract_subjects_json_from_text(result_content)
-        if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments")):
+        if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
             cleaned_for_json = sanitize_llm_markdown_output(result_content)
             subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
         response_payload["subjects_json"] = subjects_json
@@ -6075,6 +6079,7 @@ class ProjectOut(BaseModel):
     seed_initialized: Optional[bool] = False
     missing_basic_fields: Optional[List[str]] = None
     has_missing_basic_info: Optional[bool] = False
+    share_count: Optional[int] = 0
     
     class Config:
         from_attributes = True
@@ -8369,7 +8374,7 @@ async def generate_project_story_dna_global(
         f"Extra Notes: {req.extra_notes or ''}\n"
     )
 
-    llm_config = agent_service.get_active_llm_config(current_user.id)
+    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     provider = llm_config.get("provider") if llm_config else None
@@ -8832,6 +8837,8 @@ def import_project_story_generator_global_package(
 
 class AnalyzeNovelRequest(BaseModel):
     novel_text: str
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
 
 
 @router.post("/projects/{project_id}/story_generator/analyze_novel", response_model=Dict[str, Any])
@@ -8860,7 +8867,10 @@ async def analyze_project_novel_to_story_generator_fields(
 
     user_prompt = f"Project Title: {project.title}\n\nNovel/Script Text:\n{novel_text}"
 
-    llm_config = agent_service.get_active_llm_config(current_user.id)
+    function_name = getattr(req, "function_name", None) if req else None
+    system_api_id = getattr(req, "system_api_id", None) if req else None
+
+    llm_config = agent_service.get_active_llm_config(current_user.id, system_api_id=system_api_id, function_name=function_name)
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     provider = llm_config.get("provider") if llm_config else None
@@ -9007,25 +9017,83 @@ def read_projects(
             for row in session.query(ProjectShare.project_id).filter(ProjectShare.user_id == current_user.id).all()
         ]
         result = (
-            session.query(Project)
+            session.query(Project.id, Project, func.count(ProjectShare.id).label("share_count"))
+            .outerjoin(ProjectShare, Project.id == ProjectShare.project_id)
             .filter(
                 or_(
                     Project.owner_id == current_user.id,
                     Project.id.in_(shared_project_ids),
                 )
             )
+            .group_by(Project.id)
             .order_by(Project.created_at.desc(), Project.id.desc())
             .offset(skip)
             .limit(limit)
             .all()
         )
-        for p in result:
-            p.cover_image = get_project_cover_image(session, p.id)
+
+        if not result:
+            return []
+        
+        # Batch preload cover images for the retrieved projects
+        p_ids = [row[0] for row in result]
+        
+        poster_map, shot_map, entity_map = {}, {}, {}
+        # Poster entities
+        posters = session.query(Entity.project_id, Entity.image_url).filter(
+            Entity.project_id.in_(p_ids),
+            Entity.name == "封面海报",
+            Entity.image_url != None,
+            Entity.image_url != ""
+        ).all()
+        for p_id, image_url in posters:
+            poster_map[p_id] = image_url
+            
+        # First valid shot images (optimized using first() equivalent query or just aggregating)
+        # To avoid complex joins, we just fetch all and take the first one found
+        shots = session.query(Shot.project_id, Shot.image_url).filter(
+            Shot.project_id.in_(p_ids),
+            Shot.image_url != None,
+            Shot.image_url != ""
+        ).order_by(Shot.id.asc()).all()
+        for p_id, image_url in shots:
+            if p_id not in shot_map:
+                shot_map[p_id] = image_url
+                
+        # First valid entities
+        entities = session.query(Entity.project_id, Entity.image_url).filter(
+            Entity.project_id.in_(p_ids),
+            Entity.image_url != None,
+            Entity.image_url != ""
+        ).order_by(Entity.id.asc()).all()
+        for p_id, image_url in entities:
+            if p_id not in entity_map:
+                entity_map[p_id] = image_url
+
+        ret = []
+        for row in result:
+            p = row[1]
+            p.share_count = row[2]
+            
+            # Determine cover image
+            cover_image = poster_map.get(p.id)
+            if not cover_image and isinstance(p.global_info, dict):
+                configured_cover = str(p.global_info.get("cover_image") or p.global_info.get("coverImage") or "").strip()
+                if configured_cover:
+                    cover_image = configured_cover
+            if not cover_image:
+                cover_image = shot_map.get(p.id)
+            if not cover_image:
+                cover_image = entity_map.get(p.id)
+                
+            p.cover_image = cover_image
             _attach_project_flags(p, current_user)
             if p.global_info:
                 p.aspectRatio = p.global_info.get('aspectRatio')
             p.description = (p.global_info or {}).get("notes")
-        return result
+            ret.append(p)
+            
+        return ret
 
     try:
         return _query_with(db)
@@ -9483,6 +9551,8 @@ def update_episode(
 
 class CharacterProfileGenerateRequest(BaseModel):
     name: str
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
     identity: Optional[str] = None
     body_features: Optional[str] = None
     style_tags: Optional[List[str]] = []
@@ -9681,7 +9751,7 @@ async def generate_project_character_profile(
         "- Do/Don't (hard constraints): ...\n"
     )
 
-    llm_config = agent_service.get_active_llm_config(current_user.id)
+    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -10088,7 +10158,7 @@ async def generate_episode_character_profile(
         "- Do/Don't (hard constraints): ...\n"
     )
 
-    llm_config = agent_service.get_active_llm_config(current_user.id)
+    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -10289,7 +10359,7 @@ async def generate_episode_story_dna(
         f"Extra Notes: {req.extra_notes or ''}\n"
     )
 
-    llm_config = agent_service.get_active_llm_config(current_user.id)
+    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -10515,7 +10585,7 @@ async def generate_episode_scenes_from_story(
         f"Episode Story DNA (if any):\n{episode_md}\n"
     )
 
-    llm_config = agent_service.get_active_llm_config(current_user.id)
+    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -11099,7 +11169,7 @@ async def generate_project_episode_scripts_from_global_framework(
 
     _persist_run_status(run_status)
 
-    llm_config = agent_service.get_active_llm_config(current_user.id)
+    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     provider = llm_config.get("provider") if llm_config else None
@@ -11606,7 +11676,7 @@ class SceneRegenerateRequest(BaseModel):
 def _build_project_subject_inventory(db: Session, project_id: int, limit_per_type: int = 120) -> Dict[str, List[Dict[str, str]]]:
     """Build canonical project subject inventory for prompt-time reuse and recognition."""
     inventory: Dict[str, List[Dict[str, str]]] = {
-        "characters": [],
+        "characters": [], "covers": [],
         "props": [],
         "environments": [],
     }
@@ -11619,7 +11689,8 @@ def _build_project_subject_inventory(db: Session, project_id: int, limit_per_typ
         bucket = (
             "characters" if normalized_type == "character"
             else "props" if normalized_type == "prop"
-            else "environments"
+            else "environments" if normalized_type == "environment"
+            else "covers"
         )
 
         name = str(getattr(ent, "name", None) or "").strip()
@@ -11816,7 +11887,7 @@ def _normalize_subject_entity_type(raw_type: Any) -> str:
 
 def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
     payload: Dict[str, List[Dict[str, Any]]] = {
-        "characters": [],
+        "characters": [], "covers": [],
         "props": [],
         "environments": [],
     }
@@ -11979,7 +12050,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         if not isinstance(parsed, dict):
             continue
 
-        for section in ("characters", "props", "environments"):
+        for section in ("characters", "props", "environments", "covers"):
             items = parsed.get(section)
             if not isinstance(items, list):
                 continue
@@ -11993,7 +12064,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                 normalized_items.append(normalized)
             payload[section].extend(normalized_items)
 
-        if any(len(payload.get(k) or []) > 0 for k in ("characters", "props", "environments")):
+        if any(len(payload.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
             return payload
 
     return payload
@@ -12212,7 +12283,7 @@ async def regenerate_scene(
             "Environment generation prompts must remain clean-plate, no-human prompts: no over-shoulder wording, no shoulder silhouettes, no human reflections, no human shadows, no role labels, and no CHAR references inside environment prompts.\n"
             "Output must be import-first and parser-safe: do NOT output explanations, bullets, validation notes, or code fences.\n"
             "The final output must contain exactly 2 parts only: first exactly 1 markdown scene row patch table, then exactly 1 SUBJECTS_JSON object.\n"
-            "SUBJECTS_JSON must be exactly one valid JSON object with top-level keys characters, props, environments, and all three keys must always exist even when empty.\n"
+            "SUBJECTS_JSON must be exactly one valid JSON object with top-level keys characters, props, environments, covers, and all keys must always exist even when empty.\n"
             "For each entity item, use only the field contract defined by scene_regenerate.txt and scene_analysis.txt; if an identifier is included, only subject_no may appear as an extra import field.\n"
             "Missing optional strings must use empty string, missing arrays must use empty array, and you must not output null, undefined, metadata wrappers, or parser-hint fields.\n"
             "Return exactly 1 scene row patch in markdown table format plus one SUBJECTS_JSON object for missing entities only.\n"
@@ -12239,7 +12310,7 @@ async def regenerate_scene(
             "Environment generation prompts must remain clean-plate, no-human prompts: no over-shoulder wording, no shoulder silhouettes, no human reflections, no human shadows, no role labels, and no CHAR references inside environment prompts.\n"
             "Output must be import-first and parser-safe: do NOT output explanations, bullets, validation notes, or code fences.\n"
             "The final output must contain exactly 2 parts only: markdown scene row patch table(s) first, then exactly 1 SUBJECTS_JSON object.\n"
-            "SUBJECTS_JSON must be exactly one valid JSON object with top-level keys characters, props, environments, and all three keys must always exist even when empty.\n"
+            "SUBJECTS_JSON must be exactly one valid JSON object with top-level keys characters, props, environments, covers, and all keys must always exist even when empty.\n"
             "For each entity item, use only the field contract defined by scene_regenerate.txt and scene_analysis.txt; if an identifier is included, only subject_no may appear as an extra import field.\n"
             "Missing optional strings must use empty string, missing arrays must use empty array, and you must not output null, undefined, metadata wrappers, or parser-hint fields.\n"
             f"Return 1 to {safe_max_scenes} regenerated scene rows in markdown table format plus one SUBJECTS_JSON object for missing entities only."
@@ -12267,7 +12338,7 @@ async def regenerate_scene(
     system_instruction = f"{system_instruction}{existing_subjects_system_guard}"
 
     logger.info(
-        "[regenerate_scene] entity injection scene_id=%s project_id=%s counts: characters=%s props=%s environments=%s",
+        "[regenerate_scene] entity injection scene_id=%s project_id=%s counts: characters=%s props=%s environments=%s covers=%s",
         scene_id,
         project.id,
         len(existing_subject_inventory.get("characters") or []),
@@ -12304,7 +12375,7 @@ async def regenerate_scene(
         "- Use Project Context + Current Scene + Original Script Grounding + Current Scene Subject Seeds + System-level Subjects Inventory together.\n"
         "- Original Script Grounding is the primary truth source for checking whether the current scene is missing characters, missing key actions, missing location anchors, or has major core scene info / visual-guidance errors.\n"
         "- You may ignore minor wording differences that do not affect plot understanding or visual staging.\n"
-        "- Follow scene_analysis extraction principles for characters / props / environments.\n"
+        "- Follow scene_analysis extraction principles for characters / props / environments / covers.\n"
         "- scene_analysis.txt is the final authority for subject/entity prompt rules; interpret scene_regenerate.txt and runtime instructions so they stay aligned with scene_analysis.txt.\n"
         "- Follow the full Chinese subject-sync rules in scene_regenerate.txt; if this runtime summary is shorter, the file rules still apply in full.\n"
         "- Prioritize User Supplement Requirements over the old scene wording when deciding what is missing.\n"
@@ -12313,7 +12384,7 @@ async def regenerate_scene(
         "- Existing entities are immutable references: MUST NOT be rewritten, renamed, redefined, or replaced.\n"
         "- Reuse subject_ref tokens and keep anchor semantics consistent for recognition continuity.\n"
         "- They can be referenced/reused directly, but MUST NOT be regenerated as new entities.\n"
-        "- MUST supplement complete missing subjects required by the current scene from scene content + user requirements, and return JSON with keys: characters, props, environments.\n"
+        "- MUST supplement complete missing subjects required by the current scene from scene content + user requirements, and return JSON with keys: characters, props, environments, covers.\n"
         "- Subject extraction MUST NOT depend on whether the subject already has an image or image_url. Even subjects with no image asset yet MUST still be extracted and returned when they are required by the scene.\n"
         "- Every returned subject item must include import-usable names and description: name + name_en + description_cn are mandatory content fields. Missing image assets are allowed; missing names/descriptions are not.\n"
         "- Hidden required entities must be completed when the action semantics require them; do not omit source containers, receivers, or scene-required support objects merely because they were implicit in the text.\n"
@@ -12327,7 +12398,7 @@ async def regenerate_scene(
         "- Keep existing subject names stable; do not duplicate existing names in SUBJECTS_JSON.\n"
         "- If no missing entity exists for a category, return an empty array for that category.\n\n"
         "- Output must be parser-safe and directly importable: no explanations, no bullets outside the requested structure, no code fences, no metadata wrapper objects.\n"
-        "- SUBJECTS_JSON top-level keys must be exactly characters, props, environments, and all 3 keys must always exist.\n"
+        "- SUBJECTS_JSON top-level keys must be exactly characters, props, environments, covers, and all keys must always exist.\n"
         "- Each entity item may use only the prompt-defined import fields; if an identifier is included, only subject_no may be added as an extra import field.\n"
         "- Missing optional strings must use empty string, missing arrays must use empty array, and null/undefined are forbidden.\n\n"
         "Required Output Format:\n"
@@ -12349,10 +12420,23 @@ async def regenerate_scene(
         "[Existing Entity Reuse Guard - High Priority]" in system_instruction,
     )
 
-    llm_config = agent_service.get_active_llm_config(current_user.id)
+    current_user_id = current_user.id
+    episode_id = episode.id
+    project_id = project.id
+
+    old_scene_no = str(db_scene.scene_no or db_scene.id)
+    fallback_original_script = str(db_scene.original_script_text or "").strip()
+    fallback_scene_name = db_scene.scene_name
+    fallback_duration = db_scene.equivalent_duration
+    fallback_core_info = db_scene.core_scene_info
+    fallback_env_name = db_scene.environment_name
+    fallback_linked_chars = db_scene.linked_characters
+    fallback_key_props = db_scene.key_props
+
+    llm_config = agent_service.get_active_llm_config(current_user_id)
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
-    billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+    billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
     _release_db_connection(db, "regenerate_scene_llm_call")
     resp = await llm_service.generate_content_with_fallback(user_prompt, system_instruction, llm_config)
@@ -12366,19 +12450,10 @@ async def regenerate_scene(
         raise HTTPException(status_code=502, detail="Failed to parse regenerated scene markdown table")
 
     subjects_json = _extract_subjects_json_from_text(raw)
-    if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments")):
+    if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
         subjects_json = _extract_subjects_json_from_text(cleaned)
 
     parsed_rows = parsed_rows[:safe_max_scenes]
-
-    old_scene_no = str(db_scene.scene_no or db_scene.id)
-    fallback_original_script = str(db_scene.original_script_text or "").strip()
-    fallback_scene_name = db_scene.scene_name
-    fallback_duration = db_scene.equivalent_duration
-    fallback_core_info = db_scene.core_scene_info
-    fallback_env_name = db_scene.environment_name
-    fallback_linked_chars = db_scene.linked_characters
-    fallback_key_props = db_scene.key_props
 
     created_scenes: List[Scene] = []
     try:
@@ -12387,21 +12462,25 @@ async def regenerate_scene(
             if not isinstance(preferred_row, dict):
                 preferred_row = {}
 
-            db_scene.scene_name = str(preferred_row.get("scene_name") or "").strip() or fallback_scene_name
-            db_scene.original_script_text = str(preferred_row.get("original_script_text") or "").strip() or fallback_original_script
-            db_scene.equivalent_duration = str(preferred_row.get("equivalent_duration") or "").strip() or fallback_duration
-            db_scene.core_scene_info = str(preferred_row.get("core_scene_info") or "").strip() or fallback_core_info
-            db_scene.environment_name = str(preferred_row.get("environment_name") or "").strip() or fallback_env_name
-            db_scene.linked_characters = str(preferred_row.get("linked_characters") or "").strip() or fallback_linked_chars
-            db_scene.key_props = str(preferred_row.get("key_props") or "").strip() or fallback_key_props
-
-            db.add(db_scene)
-            db.commit()
-            created_scenes = [db_scene]
+            db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
+            if db_scene:
+                db_scene.scene_name = str(preferred_row.get("scene_name") or "").strip() or fallback_scene_name
+                db_scene.original_script_text = str(preferred_row.get("original_script_text") or "").strip() or fallback_original_script
+                db_scene.equivalent_duration = str(preferred_row.get("equivalent_duration") or "").strip() or fallback_duration
+                db_scene.core_scene_info = str(preferred_row.get("core_scene_info") or "").strip() or fallback_core_info
+                db_scene.environment_name = str(preferred_row.get("environment_name") or "").strip() or fallback_env_name
+                db_scene.linked_characters = str(preferred_row.get("linked_characters") or "").strip() or fallback_linked_chars
+                db_scene.key_props = str(preferred_row.get("key_props") or "").strip() or fallback_key_props
+    
+                db.add(db_scene)
+                db.commit()
+                created_scenes = [db_scene]
         else:
             db.query(Shot).filter(Shot.scene_id == scene_id).delete(synchronize_session=False)
-            db.delete(db_scene)
-            db.flush()
+            db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
+            if db_scene:
+                db.delete(db_scene)
+                db.flush()
 
             total_new = len(parsed_rows)
             for idx, row in enumerate(parsed_rows, start=1):
@@ -12415,7 +12494,7 @@ async def regenerate_scene(
                     original_script_text = f"Scene regenerated from {old_scene_no}"
 
                 new_scene = Scene(
-                    episode_id=episode.id,
+                    episode_id=episode_id,
                     scene_no=next_scene_no,
                     scene_name=str(row.get("scene_name") or "").strip() or fallback_scene_name,
                     original_script_text=original_script_text,
@@ -12451,12 +12530,12 @@ async def regenerate_scene(
             details["input_tokens"] = details.get("prompt_tokens", 0)
         if "completion_tokens" in details and "output_tokens" not in details:
             details["output_tokens"] = details.get("completion_tokens", 0)
-    billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, details)
+    billing_service.deduct_credits(db, current_user_id, "llm_chat", provider, model, details)
 
     return {
         "replaced_scene_id": scene_id,
-        "episode_id": episode.id,
-        "project_id": project.id,
+        "episode_id": episode_id,
+        "project_id": project_id,
         "entity_only_mode": entity_only_mode,
         "scene_changes_applied": not entity_only_mode,
         "generated_scene_count": len(created_scenes),
@@ -12739,6 +12818,8 @@ class AIShotGenRequest(BaseModel):
     system_prompt: Optional[str] = None
     shot_generation_mode: Optional[str] = None
     shot_generation_features: Optional[Dict[str, Any]] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
 
 
 class AIShotRegenerateRequest(BaseModel):
@@ -12747,6 +12828,8 @@ class AIShotRegenerateRequest(BaseModel):
     prompt_file: Optional[str] = "shot_generator.txt"
     shot_generation_mode: Optional[str] = None
     shot_generation_features: Optional[Dict[str, Any]] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
 
 
 class ShotGenerationRoutePreviewRequest(BaseModel):
@@ -13130,8 +13213,10 @@ def _build_shot_prompts(
                 subject_ref = f"CHAR:[@{ent.name}]"
             elif normalized_type == "prop":
                 subject_ref = f"PROP:[{ent.name}]"
-            else:
+            elif normalized_type == "environment":
                 subject_ref = f"ENV:[{ent.name}]"
+            else:
+                subject_ref = f"COVER:[{ent.name}]"
             
             # 0. Anchor Description (Critical for AI Visualization)
             if ent.anchor_description:
@@ -13474,6 +13559,8 @@ class AnalysisContent(BaseModel):
 
 class SceneAiShotsBatchStartRequest(BaseModel):
     scene_ids: Optional[List[int]] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
 
 
 SCENE_AI_SHOTS_BATCH_STATUS_KEY = "scene_ai_shots_batch_status"
@@ -13576,7 +13663,7 @@ def _build_scene_ai_shots_batch_status_response(status_payload: Dict[str, Any]) 
     return response_payload
 
 
-def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int) -> Dict[str, Any]:
+def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int, function_name: Optional[str] = None, system_api_id: Optional[int] = None) -> Dict[str, Any]:
     item_db = SessionLocal()
     try:
         scene = item_db.query(Scene).filter(Scene.id == scene_id, Scene.episode_id == episode_id).first()
@@ -13589,7 +13676,7 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int)
         _release_db_connection(item_db, "scene_ai_shots_batch_item")
         generated = asyncio.run(
             asyncio.wait_for(
-                ai_generate_shots(scene_id=scene_id, req=None, db=item_db, current_user=user_principal),
+                ai_generate_shots(scene_id=scene_id, req=AIShotGenRequest(function_name=function_name, system_api_id=system_api_id), db=item_db, current_user=user_principal),
                 timeout=SCENE_AI_SHOTS_BATCH_PER_SCENE_TIMEOUT_SEC,
             )
         )
@@ -13628,7 +13715,7 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int)
         item_db.close()
 
 
-def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id: int, batch_max_concurrency: int) -> None:
+def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id: int, batch_max_concurrency: int, function_name: Optional[str] = None, system_api_id: Optional[int] = None) -> None:
     try:
         with SessionLocal() as init_db:
             episode = init_db.query(Episode).filter(Episode.id == episode_id).first()
@@ -13706,7 +13793,7 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
                 return False
             sid = scene_ids[next_scene_index]
             next_scene_index += 1
-            active_future_map[executor.submit(_run_scene_ai_shots_batch_item, sid, episode_id, user_id)] = sid
+            active_future_map[executor.submit(_run_scene_ai_shots_batch_item, sid, episode_id, user_id, function_name, system_api_id)] = sid
             return True
 
         max_workers = max(1, min(effective_batch_max_concurrency, total or 1))
@@ -13967,7 +14054,7 @@ def start_scene_ai_shots_batch(
 
     worker = threading.Thread(
         target=_run_scene_ai_shots_batch_job,
-        args=(episode_id, scene_ids, current_user.id, batch_max_concurrency),
+        args=(episode_id, scene_ids, current_user.id, batch_max_concurrency, getattr(req, "function_name", None), getattr(req, "system_api_id", None)),
         daemon=True,
     )
     worker.start()
@@ -14113,10 +14200,14 @@ async def ai_generate_shots(
         logger.info(f"[ai_generate_shots] user_input_len={len(user_input)}")
 
         # 4. Call LLM
-        llm_config = agent_service.get_active_llm_config(current_user_id)
+        function_name = getattr(req, "function_name", None) if req else None
+        system_api_id = getattr(req, "system_api_id", None) if req else None
+
+        llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)
         if not llm_config:
             logger.error(f"[ai_generate_shots] missing_llm_config scene_id={scene_id} user_id={current_user_id}")
             raise HTTPException(status_code=400, detail="No active LLM config")
+            
         llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
         
         # Billing (Reserve for token pricing)
@@ -14412,9 +14503,13 @@ async def ai_regenerate_shots(
         except FileNotFoundError:
             raise HTTPException(status_code=500, detail=f"Prompt file '{prompt_filename}' could not be loaded.")
 
-        llm_config = agent_service.get_active_llm_config(current_user_id)
+        function_name = getattr(req, "function_name", None) if req else None
+        system_api_id = getattr(req, "system_api_id", None) if req else None
+
+        llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)
         if not llm_config:
             raise HTTPException(status_code=400, detail="No active LLM config")
+
         llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
 
         provider = llm_config.get("provider")
@@ -15691,6 +15786,8 @@ def update_entity(
 
 class SoraCharacterGenRequest(BaseModel):
     main_image_url: Optional[str] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
     ref_image_urls: List[str] = []
     ref_video_urls: List[str] = []
     user_prompt: Optional[str] = None
@@ -17468,6 +17565,39 @@ def get_unreferenced_asset_ids(
         "generated_assets": generated_assets_count,
     }
 
+import imageio
+from PIL import Image
+from fastapi.responses import FileResponse, Response
+
+@router.get("/assets/thumb/{filename:path}")
+def get_asset_thumbnail(filename: str):
+    file_path = os.path.join(settings.UPLOAD_DIR, filename)
+    if not os.path.exists(file_path):
+        return Response(status_code=404)
+        
+    thumb_dir = os.path.join(settings.UPLOAD_DIR, ".thumbs")
+    os.makedirs(thumb_dir, exist_ok=True)
+    safe_name = filename.replace("/", "_").replace("\\", "_") + ".jpg"
+    thumb_path = os.path.join(thumb_dir, safe_name)
+    
+    if not os.path.exists(thumb_path):
+        try:
+            if file_path.lower().endswith((".mp4", ".mov", ".avi", ".webm")):
+                reader = imageio.get_reader(file_path)
+                frame = reader.get_data(0)
+                img = Image.fromarray(frame)
+                reader.close()
+            else:
+                img = Image.open(file_path)
+                
+            img.thumbnail((128, 128), Image.Resampling.LANCZOS)
+            img.convert("RGB").save(thumb_path, format="JPEG", optimize=True, quality=40)
+        except Exception as e:
+            logger.error(f"Failed to generate thumbnail for {filename}: {e}")
+            return FileResponse(file_path)
+            
+    return FileResponse(thumb_path)
+
 @router.get("/assets/", response_model=List[dict])
 def get_assets(
     type: Optional[str] = None,
@@ -17658,7 +17788,7 @@ def get_assets(
         results.append({
             "id": a.id,
             "type": a.type,
-            "url": a.url,
+            "url": oss_storage_service.refresh_url(a.url) if oss_storage_service.is_enabled(db) else a.url,
             "filename": a.filename,
             "meta_info": meta,
             "remark": a.remark,
@@ -17692,7 +17822,7 @@ def create_asset_url(
     return {
         "id": asset.id,
         "type": asset.type,
-        "url": asset.url,
+        "url": oss_storage_service.refresh_url(asset.url) if oss_storage_service.is_enabled(db) else asset.url,
         "meta_info": asset.meta_info,
         "remark": asset.remark,
         "created_at": asset.created_at
@@ -17727,7 +17857,7 @@ def upload_asset(
             idempotency_key=normalized_idempotency_key,
         )
         if existing_asset:
-            return _serialize_asset_row(existing_asset)
+            return _serialize_asset_row(existing_asset, db)
 
     # Ensure upload directory
     upload_dir = settings.UPLOAD_DIR
@@ -17856,7 +17986,7 @@ def upload_asset(
     db.commit()
     db.refresh(asset)
 
-    return _serialize_asset_row(asset)
+    return _serialize_asset_row(asset, db)
 
 
 @router.delete("/assets/{asset_id}")
@@ -17941,16 +18071,15 @@ def update_asset(
          
     db.commit()
     db.refresh(asset)
-    
+
     return {
         "id": asset.id,
         "type": asset.type,
-        "url": asset.url,
+        "url": oss_storage_service.refresh_url(asset.url) if oss_storage_service.is_enabled(db) else asset.url,
         "meta_info": asset.meta_info,
         "remark": asset.remark,
         "created_at": asset.created_at
     }
-
 
 @router.post("/assets/rebind-shot-media", response_model=dict)
 def rebind_shot_media_from_assets(
@@ -19464,6 +19593,8 @@ class GenerationRequest(BaseModel):
 
 class VideoGenerationRequest(BaseModel):
     prompt: str
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
     negative_prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -19500,6 +19631,8 @@ class VideoGenerationRequest(BaseModel):
 
 class VoiceGenerationRequest(BaseModel):
     prompt: str
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
     negative_prompt: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -20645,11 +20778,11 @@ def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
     return text
 
 
-def _serialize_asset_row(asset: Asset) -> Dict[str, Any]:
+def _serialize_asset_row(asset: Asset, db: Session = None) -> Dict[str, Any]:
     return {
         "id": asset.id,
         "type": asset.type,
-        "url": asset.url,
+        "url": oss_storage_service.refresh_url(asset.url) if oss_storage_service.is_enabled(db) else asset.url,
         "filename": asset.filename,
         "meta_info": asset.meta_info,
         "remark": asset.remark,
@@ -20748,10 +20881,10 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
             fname = os.path.basename(parsed_url_path)
             file_path = os.path.join(settings.UPLOAD_DIR, fname)
             
-        lower_url = str(url or "").lower()
-        is_image = lower_url.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
-        is_video = lower_url.endswith((".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"))
-        is_audio = lower_url.endswith((".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"))
+        lower_path = parsed_url_path.lower()
+        is_image = lower_path.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
+        is_video = lower_path.endswith((".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"))
+        is_audio = lower_path.endswith((".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"))
 
         meta = {}
         # Copy known fields
@@ -20959,9 +21092,24 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
         if existing_asset:
             return existing_asset
 
+        is_image_inferred = is_image
+        is_video_inferred = is_video
+        is_audio_inferred = is_audio
+        if not is_image and not is_video and not is_audio:
+            # Fallback based on metadata provider/model if possible
+            provider_str = str(meta.get("provider", "")).lower()
+            model_str = str(meta.get("model", "")).lower()
+            if "video" in model_str or "video" in provider_str or any(k in provider_str for k in ("luma", "runway", "kling", "minimax")):
+                is_video_inferred = True
+            elif "audio" in model_str or "tts" in model_str or "voice" in model_str:
+                is_audio_inferred = True
+            else:
+                # Default to image if the extension and metadata are unknown
+                is_image_inferred = True
+
         asset = Asset(
             user_id=user_id,
-            type=("image" if is_image else ("audio" if is_audio else "video")),
+            type=("image" if is_image_inferred else ("audio" if is_audio_inferred else "video")),
             url=url,
             filename=fname,
             meta_info=meta,
@@ -21570,6 +21718,8 @@ def _resolve_media_runtime_target(
     category: str,
     user_id: int,
     user_credits: int,
+    function_name: Optional[str] = None,
+    system_api_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     runtime_llm_config = _build_runtime_llm_config(provider, model, media_type=media_type)
     pre_api_cfg: Dict[str, Any] = {}
@@ -21586,6 +21736,8 @@ def _resolve_media_runtime_target(
             requested_model=model,
             user_credits=user_credits,
             strict_provider=strict_provider,
+            function_name=function_name,
+            system_api_id=system_api_id,
         ) or {}
 
         resolved_provider = str((pre_api_cfg or {}).get("provider") or "").strip()
@@ -21597,14 +21749,6 @@ def _resolve_media_runtime_target(
 
     if not isinstance(runtime_llm_config, dict):
         runtime_llm_config = {}
-    
-    # Check if the resolved configuration enforces explicit or strict overrides
-    cfg_payload_override = (pre_api_cfg or {}).get("config") if isinstance((pre_api_cfg or {}).get("config"), dict) else {}
-    if cfg_payload_override.get("explicit_selection"):
-        user_explicit_selection = True
-    if cfg_payload_override.get("strict_provider"):
-        user_explicit_provider = True
-
     runtime_llm_config["__user_explicit_provider"] = user_explicit_provider
     runtime_llm_config["__user_explicit_model"] = user_explicit_model
     runtime_llm_config["__user_explicit_selection"] = user_explicit_selection
@@ -21648,6 +21792,8 @@ async def _run_generate_image(
         category="Image",
         user_id=current_user.id,
         user_credits=(current_user.credits or 0),
+        function_name=getattr(req, "function_name", None),
+        system_api_id=getattr(req, "system_api_id", None),
     )
     runtime_llm_config = dict(runtime_target.get("runtime_llm_config") or {})
     pre_api_cfg = runtime_target.get("pre_api_cfg") or {}
@@ -23537,6 +23683,8 @@ async def generate_voice_endpoint(
         category="Voice",
         user_id=current_user.id,
         user_credits=(current_user.credits or 0),
+        function_name=getattr(req, "function_name", None),
+        system_api_id=getattr(req, "system_api_id", None),
     )
     runtime_llm_config = dict(runtime_target.get("runtime_llm_config") or {})
     pre_api_cfg = runtime_target.get("pre_api_cfg") or {}
@@ -24021,6 +24169,8 @@ async def _run_generate_video(
         category="Video",
         user_id=current_user.id,
         user_credits=(current_user.credits or 0),
+        function_name=getattr(req, "function_name", None),
+        system_api_id=getattr(req, "system_api_id", None),
     )
     runtime_llm_config = dict(runtime_target.get("runtime_llm_config") or {})
     pre_api_cfg = runtime_target.get("pre_api_cfg") or {}
@@ -28937,6 +29087,8 @@ async def analyze_asset_image(
 @router.post("/entities/{entity_id}/analyze")
 async def analyze_entity_image(
     entity_id: int,
+    system_api_id: Optional[int] = Query(None),
+    feature_name: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -28959,7 +29111,12 @@ async def analyze_entity_image(
     logger.info(f"Entity found: {entity.name}, Image: {entity.image_url}")
 
     # 2. Get Vision Tool Config
-    api_setting = get_effective_api_setting(db, current_user, category="Vision")
+    api_setting = None
+    if system_api_id:
+        api_setting = db.query(SystemAPISetting).filter(SystemAPISetting.id == system_api_id).first()
+
+    if not api_setting:
+        api_setting = get_effective_api_setting(db, current_user, category="Vision")
     if not api_setting:
          api_setting = get_effective_api_setting(db, current_user, category="LLM")
     

@@ -1379,7 +1379,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
 
         setIsAnalyzingNovel(true);
         try {
-            const analyzed = await analyzeProjectNovel(id, { novel_text: text });
+            const analyzed = await analyzeProjectNovel(id, { novel_text: text, function_name: 'script_analysis' });
             const mergedStoryInput = {
                 ...globalStoryInput,
                 background: analyzed?.background || '',
@@ -1708,6 +1708,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                 body_features: canonBody || '',
                 style_tags,
                 extra_notes: canonExtra || '',
+                function_name: 'generate_subjects',
             });
             setProject(updated);
             if (updated?.global_info) {
@@ -2033,6 +2034,27 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                                 {formatManagedUserHint(info.project_reviewer_users, t)}
                             </div>
                         </div>
+                    </div>
+                </div>
+                )}
+
+                {/* Project Management */}
+                {mode === 'overview' && (
+                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6">
+                    <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('项目管理', 'Project Management')}</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <InputGroup idPrefix={prefix} 
+                            label={t('计划完成时间', 'Planned Completion Time')} 
+                            value={info.planned_completion_time} 
+                            onChange={v => updateField('planned_completion_time', v)} 
+                            placeholder={t('例如：2026-12-31', 'e.g., 2026-12-31')} 
+                        />
+                        <InputGroup idPrefix={prefix} 
+                            label={t('项目预算', 'Budget')} 
+                            value={info.budget} 
+                            onChange={v => updateField('budget', v)} 
+                            placeholder={t('例如：100万', 'e.g., 1M')} 
+                        />
                     </div>
                 </div>
                 )}

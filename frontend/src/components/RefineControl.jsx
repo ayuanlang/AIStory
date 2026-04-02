@@ -10,17 +10,23 @@ const getFullUrl = (url) => {
     const raw = String(url || '').trim();
     if (!raw) return '';
     if (raw.startsWith('http') || raw.startsWith('blob:') || raw.startsWith('data:')) return raw;
-    if (raw.startsWith('/')) {
+    
+    let normalizedPath = raw;
+    if (!normalizedPath.includes('/') && /^[A-Za-z0-9_.-]+$/.test(normalizedPath)) {
+        normalizedPath = `/uploads/${normalizedPath}`;
+    }
+    
+    if (normalizedPath.startsWith('/')) {
         const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
         const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
-        return `${base}${raw}`;
+        return `${base}${normalizedPath}`;
     }
-    if (raw.startsWith('uploads/')) {
+    if (normalizedPath.startsWith('uploads/')) {
         const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
         const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
-        return `${base}/${raw}`;
+        return `${base}/${normalizedPath}`;
     }
-    return raw;
+    return normalizedPath;
 };
 
 const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = null, onImageUpdate = null, projectId = null, shotId = null, assetType = null, featureInjector = null, onPickMedia = null }) => {

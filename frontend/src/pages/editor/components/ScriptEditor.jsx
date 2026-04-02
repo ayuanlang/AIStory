@@ -414,7 +414,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const normalized = stable.toLowerCase();
         if (
             normalized.includes('场景分析结果不可用')
-            || normalized.includes('请直接重新执行剧本分析')
+            || normalized.includes('请直接重新执行 ai 场景分析')
             || normalized.includes('please directly rerun ai scene analysis')
         ) {
             return t(
@@ -4750,7 +4750,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (isAnalyzing) return;
         const generatedContent = String(llmRawResultContent || llmResultContent || '').trim();
         if (!generatedContent) {
-            alert(t('请先完成第一次剧本分析，再执行“修正生成结果”。', 'Please finish the first Script Analysis before running "Refine Generated Result".'));
+            alert(t('请先完成第一次 AI 场景分析，再执行“修正生成结果”。', 'Please finish the first AI Scene Analysis before running "Refine Generated Result".'));
             return;
         }
 
@@ -5108,7 +5108,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </>
                                 ) : (
                                     <>
-                                        <Wand2 className="w-4 h-4" /> {t('剧本分析', 'Script Analysis')}
+                                        <Wand2 className="w-4 h-4" /> {t('AI 场景分析', 'AI Scene Analysis')}
                                     </>
                                 )}
                             </button>
@@ -5117,7 +5117,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     onClick={handleStopAnalysisTask}
                                     disabled={isStoppingAnalysisTask}
                                     className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/20 hover:bg-red-500/30 text-red-100 border-red-400/40'}`}
-                                    title={t('手动停止当前剧本分析任务', 'Stop the current script analysis task')}
+                                    title={t('手动停止当前 AI 场景分析任务', 'Stop the current AI scene analysis task')}
                                 >
                                     {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
                                     {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止分析', 'Stop Analysis')}
@@ -5159,7 +5159,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2 font-semibold">
                             {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4" /> : <Loader2 className="w-4 h-4 animate-spin" />}
-                            <span>{t('剧本分析状态', 'Script Analysis Status')}</span>
+                            <span>{t('AI 场景分析状态', 'AI Scene Analysis Status')}</span>
                         </div>
                         {!isAnalyzing && (
                             <button

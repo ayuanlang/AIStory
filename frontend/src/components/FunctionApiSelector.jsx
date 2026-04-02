@@ -53,9 +53,7 @@ const FunctionApiSelector = ({ functionName, configs, className = '' }) => {
             >
                 <option value="" disabled>Select API...</option>
                 {apiList.map(api => (
-                    <option key={api.system_api_id} value={api.system_api_id}>
-                        {api.system_api_name} {api.is_fallback ? '(备用)' : ''}
-                    </option>
+                    <option key={api.system_api_id} value={api.system_api_id}>{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)} {api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}{api.is_fallback ? " (备用)" : ""}</option>
                 ))}
             </select>
         </div>

@@ -1774,7 +1774,7 @@ Output ONLY the JSON object now."""
 
         return {}
 
-    def get_active_llm_config(self, user_id: int = 1, category: str = "LLM") -> Dict[str, Any]:
+    def get_active_llm_config(self, user_id: int = 1, category: str = "LLM", system_api_id: Optional[int] = None, function_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Retrieves active API configuration by category by matching
         active user api_settings.system_api_id -> system_api_settings.
@@ -1793,6 +1793,8 @@ Output ONLY the JSON object now."""
                 requested_model=None,
                 user_credits=0,
                 strict_provider=False,
+                system_api_id=system_api_id,
+                function_name=function_name,
             ) or {}
 
             if (

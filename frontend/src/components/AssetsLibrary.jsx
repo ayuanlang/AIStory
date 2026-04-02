@@ -12,23 +12,30 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
 import { confirmUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
+import { SafeImage, getThumbUrl } from '../pages/editor/editorHelpers';
 
 // Helper to construct full URL if relative
 const getFullUrl = (url) => {
     const raw = String(url || '').trim();
     if (!raw) return '';
     if (raw.startsWith('http') || raw.startsWith('blob:') || raw.startsWith('data:')) return raw;
-    if (raw.startsWith('/')) {
+    
+    let normalizedPath = raw;
+    if (!normalizedPath.includes('/') && /^[A-Za-z0-9_.-]+$/.test(normalizedPath)) {
+        normalizedPath = `/uploads/${normalizedPath}`;
+    }
+    
+    if (normalizedPath.startsWith('/')) {
         const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
         const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
-        return `${base}${raw}`;
+        return `${base}${normalizedPath}`;
     }
-    if (raw.startsWith('uploads/')) {
+    if (normalizedPath.startsWith('uploads/')) {
         const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
         const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
-        return `${base}/${raw}`;
+        return `${base}/${normalizedPath}`;
     }
-    return raw;
+    return normalizedPath;
 };
 
 // Helper to normalize asset types
@@ -453,30 +460,35 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
                     <span className="text-[10px] uppercase font-bold opacity-50">{t('资源不存在', 'Not Found')}</span>
                 </div>
             ) : category === 'image' ? (
-                <img 
-                    src={isNearViewport ? getFullUrl(asset.url) : GRID_MEDIA_PLACEHOLDER_SRC}
+                <SafeImage 
+                    src={asset.url}
                     className="w-full h-full object-cover bg-black/20" 
                     alt="asset" 
-                    loading="lazy"
-                    decoding="async"
                     onError={() => setIsError(true)}
                 />
             ) : (
-                <div className="relative w-full h-full bg-black">
+                <div className="relative w-full h-full bg-[#151515]">
+                    {!isPlaying && (
+                        <div className="absolute inset-0 w-full h-full z-0">
+                            <SafeImage 
+                                src={asset.url}
+                                className="w-full h-full object-cover" 
+                                alt="video thumb" 
+                            />
+                        </div>
+                    )}
                     <video 
                         ref={videoRef}
                         src={isNearViewport ? getFullUrl(asset.url) : undefined}
-                        className={`w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-70'}`}
-                        preload={isPlaying ? 'metadata' : 'none'}
+                        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 z-10 ${isPlaying ? 'opacity-100' : 'opacity-0'}`} 
+                        preload="none"
                         muted
                         loop
                         playsInline
                         onError={() => setIsError(true)}
                     />
-                    <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-opacity duration-300 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
-                        <div className="bg-black/50 p-3 rounded-full backdrop-blur-sm">
-                            <Video className="w-6 h-6 text-white" />
-                        </div>
+                    <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-opacity z-20 duration-300 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
+                        <Video className="w-6 h-6 text-white" />
                     </div>
                 </div>
             )}

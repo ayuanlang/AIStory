@@ -3,6 +3,7 @@ import FunctionApiSelector, { useFunctionApis } from '../../../components/Functi
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
+import { ReferenceManager } from './SceneManager';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
 import ReactMarkdown from 'react-markdown';
@@ -157,6 +158,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
 export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3 }) => {
+    const functionApiConfigs = useFunctionApis();
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
@@ -2859,7 +2861,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             onLog?.(t('正在联合生成首尾帧两宫格...', 'Generating joint start/end diptych...'), 'info');
 
-            const res = await generateImage(finalPrompt, null, combinedRefs.length > 0 ? combinedRefs : null, {
+            const res = await generateImage(finalPrompt, null, combinedRefs.length > 0 ? combinedRefs : null, { function_name: 'generate_shot_images',
                 project_id: projectId,
                 episode_id: activeEpisode?.id,
                 shot_id: targetShotId,
@@ -3004,7 +3006,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 onLog?.(t('正在联合生成首尾帧两宫格...', 'Generating joint start/end diptych...'), 'info');
             }
 
-            const res = await generateImage(finalPrompt, null, combinedRefs.length > 0 ? combinedRefs : null, {
+            const res = await generateImage(finalPrompt, null, combinedRefs.length > 0 ? combinedRefs : null, { function_name: 'generate_shot_images',
                 project_id: projectId,
                 episode_id: activeEpisode?.id,
                 shot_id: targetShotId,
@@ -3106,15 +3108,64 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             techObj.video_mode_unified = mode;
             if (mode === 'entity_refs') {
                 techObj.video_ref_submit_mode = 'entity_refs';
+                
+                // Clear original auto/manual images and replace with Associated Entities images
+                const cleanName = (s) => String(s || '').replace(/[\[\]【】"''“”‘’]/g, '').replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '').replace(/^@+/, '').trim();
+                const normalizeForMatch = (s) => cleanName(s).replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+                const rawNames = (editingShot.associated_entities || '').split(/[,，]/);
+                const names = rawNames.map(cleanName).filter(Boolean);
+                const normalizedNames = names.map(normalizeForMatch).filter(Boolean);
+                
+                const matches = entities.filter(e => normalizedNames.some(n => {
+                    const cn = normalizeForMatch(e.name || '');
+                    let en = normalizeForMatch(e.name_en || '');
+                    if (!en && e.description) {
+                        const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
+                        if (enMatch && enMatch[1]) {
+                            const complexEn = enMatch[1].trim();
+                            en = normalizeForMatch(complexEn.split(/(?:\s+role:|\s+archetype:|\s+appearance:|\n|,)/)[0]); 
+                        }
+                    }
+                    if (cn === n || en === n) return true;
+                    if (cn && (cn.includes(n) || n.includes(cn))) return true;
+                    if (en && (en.includes(n) || n.includes(en))) return true;
+                    return false;
+                }));
+
+                let envMatches = [];
+                const currentScene = scenes.find(s => s.id == editingShot.scene_id);
+                if (currentScene) {
+                    const rawLoc = cleanName((currentScene.location || currentScene.environment_name || '').replace(/[\[\]]/g, ''));
+                    const rawLocNorm = normalizeForMatch(rawLoc);
+                    if (rawLocNorm) {
+                        const envs = entities.filter(e => {
+                            const cn = normalizeForMatch(e.name || '');
+                            let en = normalizeForMatch(e.name_en || '');
+                            if (!en && e.description) {
+                                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
+                                if (enMatch && enMatch[1]) en = normalizeForMatch(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]); 
+                            }
+                            if (cn && (cn.includes(rawLocNorm) || rawLocNorm.includes(cn))) return true;
+                            if (en && (en.includes(rawLocNorm) || rawLocNorm.includes(en))) return true;
+                            return false;
+                        });
+                        envMatches = envs.filter(env => !matches.find(m => m.id === env.id));
+                    }
+                }
+
+                const allMatches = [...matches, ...envMatches];
+                const entityImages = allMatches.map(e => e.image_url).filter(Boolean);
+                techObj.video_ref_image_urls = Array.from(new Set(entityImages));
+
             } else {
                 techObj.video_gen_mode = mode;
                 techObj.video_ref_submit_mode = 'auto';
+                const promptEntityRefs = collectMatchedSubjectImageUrlsFromPrompt({
+                    promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(techObj.video_prompt_cn || '').trim()}`,
+                    entityPool: entities,
+                });
+                techObj.video_ref_image_urls = buildAutoVideoRefList(editingShot, techObj, mode, promptEntityRefs);
             }
-            const promptEntityRefs = collectMatchedSubjectImageUrlsFromPrompt({
-                promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(techObj.video_prompt_cn || '').trim()}`,
-                entityPool: entities,
-            });
-            techObj.video_ref_image_urls = buildAutoVideoRefList(editingShot, techObj, mode, promptEntityRefs);
             techObj.video_ref_image_urls_manual = false;
             techObj.video_ref_image_urls_user_edited = false;
         });
@@ -3205,7 +3256,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
          onLog?.(`Generating shots for Scene ${sceneId}...`, 'info');
          try {
              // Now returns { content: [], timestamp }
-             const result = await generateSceneShots(sceneId, { 
+             const result = await generateSceneShots(sceneId, { function_name: 'generate_shot_images', 
                  user_prompt: data.user_prompt,
                  system_prompt: data.system_prompt 
              });
@@ -4908,7 +4959,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
             
             // Generate
-            const res = await generateImage(fullPrompt, null, null, {
+            const res = await generateImage(fullPrompt, null, null, { function_name: 'generate_shot_images',
                 project_id: projectId,
                 episode_id: activeEpisode?.id,
                 shot_id: editingShot.id,
@@ -5166,7 +5217,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
                 const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
 
-                const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
+                const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, { function_name: 'generate_shot_images',
                     project_id: projectId,
                     episode_id: activeEpisode?.id,
                     shot_id: targetShotId,
@@ -5275,7 +5326,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
                 const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
 
-                const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, { function_name: 'generate_shot_images',
                     project_id: projectId,
                     episode_id: activeEpisode?.id,
                     shot_id: targetShotId,
@@ -5819,7 +5870,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             let videoTaskPromise = null;
             try {
-                videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiRefVideoUrls, apiLastFrameUrl, durParam, {
+                videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiRefVideoUrls, apiLastFrameUrl, durParam, { function_name: 'generate_videos',
                     project_id: projectId,
                     shot_id: targetShotId,
                     shot_number: shotSnapshot.shot_id,
@@ -6102,7 +6153,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const startRefs = resolveShotStartFrameRefs(workingShot, rawStartPrompt, resolvedEntities);
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(startSubmitPrompt) });
                 const finalStartPrompt = isManualStart ? startSubmitPrompt : (startSubmitPrompt + globalCtx);
-                const startResult = await generateImage(finalStartPrompt, null, startRefs.length > 0 ? startRefs : null, {
+                const startResult = await generateImage(finalStartPrompt, null, startRefs.length > 0 ? startRefs : null, { function_name: 'generate_shot_images',
                     project_id: projectId,
                     episode_id: activeEpisode?.id,
                     shot_id: stableShotId,
@@ -6145,7 +6196,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     const endRefs = getEndFrameVisibleRefs({ ...workingShot, image_url: startUrl || workingShot.image_url }, rawEndPrompt, resolvedEntities);
                     const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(endSubmitPrompt) });
                     const finalEndPrompt = isManualEnd ? endSubmitPrompt : (endSubmitPrompt + globalCtx);
-                    const endResult = await generateImage(finalEndPrompt, null, endRefs.length > 0 ? endRefs : null, {
+                    const endResult = await generateImage(finalEndPrompt, null, endRefs.length > 0 ? endRefs : null, { function_name: 'generate_shot_images',
                         project_id: projectId,
                         episode_id: activeEpisode?.id,
                         shot_id: stableShotId,
@@ -7835,7 +7886,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
                                             storageKey="video_ref_image_urls"
-                                            strictPromptOnly={true}
+                                            strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}
                                         />
                                     </div>
                                 </div>
@@ -8793,7 +8844,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     }
                                                                     setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(v) });
                                                                 }} type="video" />
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
                                                                 <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
                                                                     <div className="flex items-center justify-between gap-2">
                                                                         <div>
