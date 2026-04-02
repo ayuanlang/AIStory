@@ -324,8 +324,8 @@ export default function FunctionApiConfigTab() {
                                                         placeholder="模型别名 (例如: gpt-4o)"
                                                     />
                                                     <select
-                                                        value={item.applicable_languages || ''}
-                                                        onChange={(e) => handleChangeParams(funcName, originalIndex, 'applicable_languages', e.target.value || null)}
+                                                        value={Array.isArray(item.applicable_languages) ? (item.applicable_languages[0] || '') : (item.applicable_languages || '')}
+                                                        onChange={(e) => handleChangeParams(funcName, originalIndex, 'applicable_languages', e.target.value ? [e.target.value] : null)}
                                                         className="w-[120px] bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
                                                     >
                                                         <option value="">--所有语言--</option>
