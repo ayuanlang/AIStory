@@ -64,7 +64,8 @@ import {
     ChevronsLeft,
     ChevronsRight,
     Info,
-    ChevronDown
+    ChevronDown,
+    Layers
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';

@@ -17118,8 +17118,8 @@ class SystemLogActionIn(BaseModel):
 
 @router.post("/system/logs/action")
 def create_system_log_action(
-    payload: SystemLogActionIn,
     request: Request,
+    payload: SystemLogActionIn = Body(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

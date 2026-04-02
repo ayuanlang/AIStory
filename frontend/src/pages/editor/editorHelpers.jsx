@@ -773,7 +773,7 @@ export const LazyHoverVideo = ({
     mediaClassName = 'w-full h-full object-cover',
     playOnHover = false,
     resetOnLeave = false,
-    preload = 'none',
+    preload = 'auto',
     ...videoProps
 }) => {
     const containerRef = useRef(null);
@@ -804,7 +804,6 @@ export const LazyHoverVideo = ({
                 entries.forEach((entry) => {
                     if (entry.isIntersecting) {
                         setShouldLoad(true);
-            setIsVideoLoaded(true);
                     }
                 });
             },
@@ -822,7 +821,6 @@ export const LazyHoverVideo = ({
         if (!playOnHover) return;
         if (!shouldLoad) {
             setShouldLoad(true);
-            setIsVideoLoaded(true);
             return;
         }
         const video = videoRef.current;
