@@ -8,6 +8,26 @@ export const api = axios.create({
   timeout: 600000, // 10 minutes timeout for long LLM generation tasks
 });
 
+// Automatically clean up absolute localhost urls from the backend when running in production
+api.interceptors.response.use((response) => {
+    if (response.data && typeof response.data === 'object') {
+        const isProd = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+        if (isProd) {
+            try {
+                let str = JSON.stringify(response.data);
+                if (str.includes('localhost:') || str.includes('127.0.0.1:')) {
+                    // Replace "http://localhost:8000/uploads" with "/uploads", etc.
+                    str = str.replace(/https?:\/\/(localhost|127\.0\.0\.1):\d+/g, '');
+                    response.data = JSON.parse(str);
+                }
+            } catch (e) {
+                console.warn('Failed to sanitize localhost URLs from response', e);
+            }
+        }
+    }
+    return response;
+});
+
 const isRenderHost = (hostname) => /\.onrender\.com$/i.test(String(hostname || '').trim());
 
 const isSameOriginRenderApiMiss = (error) => {
