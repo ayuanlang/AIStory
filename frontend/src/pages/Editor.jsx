@@ -217,6 +217,16 @@ const Editor = ({
     // Global Logging Context
     const { addLog } = useLog();
 
+    const loadProjectData = async () => {
+        if (!id) return;
+        try {
+            const p = await fetchProject(id);
+            if (p) setProject(p);
+        } catch (e) {
+            console.error("Failed to load project data", e);
+        }
+    };
+
     const evalWorkflowStageTimerRef = useRef(null);
 
     const checkWorkflowStageDebounced = useCallback((force = false) => {
