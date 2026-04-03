@@ -524,6 +524,24 @@ class OSSStorageService:
         if not content:
             return None
 
+        # Replace random generated filename with a content hash based filename
+        # to prevent uploading the same file multiple times with different UUIDs
+        content_hash = hashlib.md5(content).hexdigest()
+        ext = os.path.splitext(filename)[1]
+        if not ext:
+            ext = mimetypes.guess_extension(content_type or "") or ".bin"
+            if ext == ".jpe":
+                ext = ".jpg"
+        
+        prefix_match = ""
+        if filename.startswith("gen_"):
+            prefix_match = "gen_"
+        elif filename.startswith("rh-upload-"):
+            prefix_match = "rh-upload-"
+        
+        if prefix_match or category == "generated":
+            filename = f"{prefix_match}{content_hash[:16]}{ext}"
+
         filename = self._normalize_filename(filename, content_type)
         candidate_pools = self._get_active_pools(None)
         if not candidate_pools:
@@ -572,6 +590,30 @@ class OSSStorageService:
                     getattr(cred, "label", None),
                     extra.get("StorageClass"),
                 )
+
+                # Check if object already exists
+                try:
+                    client.head_object(Bucket=pool.bucket, Key=key)
+                    _visible_info(
+                        "[OSSUploadSkipped] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=already_exists",
+                        getattr(pool, "provider", None),
+                        getattr(pool, "provider_alias", None),
+                        getattr(pool, "id", None),
+                        getattr(pool, "bucket", None),
+                        key,
+                    )
+                    url = self._build_public_url(client, pool, key, cred)
+                    if url:
+                        return {
+                            "key": key,
+                            "url": url,
+                            "provider": getattr(pool, "provider", None),
+                        }
+                except ClientError as ce:
+                    # 404 Not Found means we need to upload
+                    if ce.response['Error']['Code'] != '404':
+                        logger.warning("OSS head_object warning | key=%s err=%s", key, ce)
+
                 try:
                     client.put_object(**extra)
                 except Exception as first_exc:

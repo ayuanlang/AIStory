@@ -6858,6 +6858,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 mode,
                 shot_ids: targetShotIds,
                 overwrite_existing: false,
+                system_api_id: mode === 'videos' ? (Number(localStorage.getItem('func_api_generate_videos')) || undefined) : undefined,
             });
             shotBatchStartupGuardUntilRef.current = Date.now() + 12000;
             shotBatchBootstrapUntilRef.current = Date.now() + 15000;

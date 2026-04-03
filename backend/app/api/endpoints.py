@@ -2354,11 +2354,11 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
     callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
 
     updates: Dict[str, Any] = {}
-    if callback_result_url and callback_result_url != current_result_url and not (current_has_stable_result and callback_has_ephemeral_result):
+    if callback_result_url and callback_result_url != current_result_url and not current_has_stable_result:
         updates["result"] = result
-    elif callback_result_url and current_has_stable_result and callback_has_ephemeral_result:
+    elif callback_result_url and current_has_stable_result:
         logger.info(
-            "[ImageJob] ignored callback temporary result url because stable result already exists | job_id=%s callback_ticket=%s current_result_url=%s callback_result_url=%s",
+            "[ImageJob] ignored callback result url because stable result already exists | job_id=%s callback_ticket=%s current_result_url=%s callback_result_url=%s",
             job_id,
             callback_ticket,
             current_result_url,
@@ -2370,7 +2370,7 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
         if not job.get("finished_at"):
             updates["finished_at"] = now_bj_iso()
 
-    if normalized_status == "succeeded":
+    if normalized_status == "succeeded" and (not current_has_stable_result or "result" in updates):
         candidate_result = result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
         if candidate_result:
             effective_job = dict(job)
@@ -2561,11 +2561,11 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
 
     updates: Dict[str, Any] = {}
-    if callback_result_url and callback_result_url != current_result_url and not (current_has_stable_result and callback_has_ephemeral_result):
+    if callback_result_url and callback_result_url != current_result_url and not current_has_stable_result:
         updates["result"] = result
-    elif callback_result_url and current_has_stable_result and callback_has_ephemeral_result:
+    elif callback_result_url and current_has_stable_result:
         logger.info(
-            "[VideoJob] ignored callback temporary result url because stable result already exists | job_id=%s callback_ticket=%s current_result_url=%s callback_result_url=%s",
+            "[VideoJob] ignored callback result url because stable result already exists | job_id=%s callback_ticket=%s current_result_url=%s callback_result_url=%s",
             job_id,
             callback_ticket,
             current_result_url,
@@ -23233,19 +23233,22 @@ def get_generate_image_job_status(
     with IMAGE_JOB_LOCK:
         job = dict(IMAGE_JOB_STORE.get(job_id) or {})
 
-    if not job:
+    status = str(job.get("status") or "").strip().lower()
+    if not job or status in {"queued", "running"}:
         file_job = _read_image_job_file(job_id)
         if file_job:
-            with IMAGE_JOB_LOCK:
-                _prune_image_jobs_locked()
-                IMAGE_JOB_STORE[job_id] = dict(file_job)
-            job = dict(file_job)
-            logger.info(
-                "[ImageJob] recovered from shared file store | job_id=%s status=%s user_id=%s",
-                job_id,
-                job.get("status"),
-                job.get("user_id"),
-            )
+            file_status = str(file_job.get("status") or "").strip().lower()
+            if not job or file_status != status or ("result" in file_job and "result" not in job):
+                with IMAGE_JOB_LOCK:
+                    _prune_image_jobs_locked()
+                    IMAGE_JOB_STORE[job_id] = dict(file_job)
+                job = dict(file_job)
+                logger.info(
+                    "[ImageJob] synced from shared file store | job_id=%s status=%s user_id=%s",
+                    job_id,
+                    job.get("status"),
+                    job.get("user_id"),
+                )
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -25612,19 +25615,22 @@ def get_generate_video_job_status(
     with VIDEO_JOB_LOCK:
         job = dict(VIDEO_JOB_STORE.get(job_id) or {})
 
-    if not job:
+    status = str(job.get("status") or "").strip().lower()
+    if not job or status in {"queued", "running"}:
         file_job = _read_video_job_file(job_id)
         if file_job:
-            with VIDEO_JOB_LOCK:
-                _prune_video_jobs_locked()
-                VIDEO_JOB_STORE[job_id] = dict(file_job)
-            job = dict(file_job)
-            logger.info(
-                "[VideoJob] recovered from shared file store | job_id=%s status=%s user_id=%s",
-                job_id,
-                job.get("status"),
-                job.get("user_id"),
-            )
+            file_status = str(file_job.get("status") or "").strip().lower()
+            if not job or file_status != status or ("result" in file_job and "result" not in job):
+                with VIDEO_JOB_LOCK:
+                    _prune_video_jobs_locked()
+                    VIDEO_JOB_STORE[job_id] = dict(file_job)
+                job = dict(file_job)
+                logger.info(
+                    "[VideoJob] synced from shared file store | job_id=%s status=%s user_id=%s",
+                    job_id,
+                    job.get("status"),
+                    job.get("user_id"),
+                )
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
