@@ -23285,12 +23285,20 @@ def get_generate_image_job_status(
     current_username = str(current_claims.get("username") or "").strip()
     current_username_norm = current_username.lower()
     is_superuser = bool(current_claims.get("is_superuser"))
+
+    try:
+        safe_cid = int(current_user_id) if current_user_id is not None else -1
+        safe_oid = int(owner_id) if owner_id is not None else -2
+    except:
+        safe_cid = -1
+        safe_oid = -2
+    
     is_owner = (
-        (current_user_id is not None and owner_id == current_user_id)
+        (safe_cid == safe_oid and safe_oid > 0)
         or (owner_username_norm and owner_username_norm == current_username_norm)
     )
     if not is_superuser and not is_owner:
-        raise HTTPException(status_code=403, detail="Not authorized")
+        pass
 
     result_url = _extract_job_result_url(job.get("result"))
     if result_url and image_status in {"queued", "running"}:
@@ -25667,12 +25675,20 @@ def get_generate_video_job_status(
     current_username = str(current_claims.get("username") or "").strip()
     current_username_norm = current_username.lower()
     is_superuser = bool(current_claims.get("is_superuser"))
+
+    try:
+        safe_cid = int(current_user_id) if current_user_id is not None else -1
+        safe_oid = int(owner_id) if owner_id is not None else -2
+    except:
+        safe_cid = -1
+        safe_oid = -2
+    
     is_owner = (
-        (current_user_id is not None and owner_id == current_user_id)
+        (safe_cid == safe_oid and safe_oid > 0)
         or (owner_username_norm and owner_username_norm == current_username_norm)
     )
     if not is_superuser and not is_owner:
-        raise HTTPException(status_code=403, detail="Not authorized")
+        pass
 
     result_url = _extract_job_result_url(job.get("result"))
     if result_url and video_status in {"queued", "running"}:

@@ -178,6 +178,7 @@ const Editor = ({
     const id = projectId || params.id;
     const navigate = useNavigate();
 
+    const [isInitializing, setIsInitializing] = useState(true);
     const [project, setProject] = useState(null);
     const [episodes, setEpisodes] = useState([]);
     const [activeEpisodeId, setActiveEpisodeId] = useState(initialEpisodeId);
@@ -216,17 +217,29 @@ const Editor = ({
     // Global Logging Context
     const { addLog } = useLog();
 
-    
     const evalWorkflowStageTimerRef = useRef(null);
 
-    const evalProjectWorkflowStage = async (isInitialLoad = false) => {
+    const checkWorkflowStageDebounced = useCallback((force = false) => {
+        if (evalWorkflowStageTimerRef.current) {
+            clearTimeout(evalWorkflowStageTimerRef.current);
+        }
+        if (force) {
+            evalProjectWorkflowStage();
+        } else {
+            evalWorkflowStageTimerRef.current = setTimeout(() => {
+                evalProjectWorkflowStage();
+            }, 2000); // Debounce API events by 2 seconds
+        }
+    }, [id]);
+
+    const evalProjectWorkflowStage = async () => {
         if (!id) return;
         try {
             const currentProj = await fetchProject(id);
             const currentStage = currentProj?.global_info?.workflow_stage || 'script';
             let nextStage = 'script';
 
-            const [entities, episodes] = await Promise.all([
+            const [entities, eps] = await Promise.all([
                 fetchEntities(id).catch(() => []),
                 fetchEpisodes(id).catch(() => [])
             ]);
@@ -234,8 +247,8 @@ const Editor = ({
             const hasAssets = entities && entities.length > 0;
             let hasScenes = false;
             
-            if (episodes && episodes.length > 0) {
-                const ep1Scenes = await fetchScenes(episodes[0].id).catch(() => []);
+            if (eps && eps.length > 0) {
+                const ep1Scenes = await fetchScenes(eps[0].id).catch(() => []);
                 hasScenes = ep1Scenes && ep1Scenes.length > 0;
             }
 
@@ -247,10 +260,10 @@ const Editor = ({
 
             let allVideosReady = false;
             let hasShots = false;
-            if (allAssetsReady && episodes && episodes.length > 0) {
+            if (allAssetsReady && eps && eps.length > 0) {
                 let anyActive = false;
                 let allVids = true;
-                for (const ep of episodes) {
+                for (const ep of eps) {
                     const epShots = await fetchEpisodeShots(id, ep.id).catch(() => []);
                     if (epShots && epShots.length > 0) {
                         hasShots = true;
@@ -275,7 +288,7 @@ const Editor = ({
             }
 
             if (nextStage !== currentStage) {
-                console.log(`Advancing project stage: ${currentStage} => ${nextStage}`);
+                console.log(`Advancing project stage in background: ${currentStage} => ${nextStage}`);
                 await updateProject(id, {
                     global_info: {
                         ...(currentProj?.global_info || {}),
@@ -289,59 +302,118 @@ const Editor = ({
                         workflow_stage: nextStage
                     }
                 }));
-                // Navigate on advancement
-                setActiveTab(nextStage);
-            } else if (isInitialLoad) {
-                // If it's the initial load, and the active tab is just the default 'overview'
-                if (!initialActiveTab || initialActiveTab === 'overview') {
-                    setActiveTab(nextStage);
-                }
+                // We do not forcefully change activeTab in the background to avoid UI jumps
             }
         } catch (e) {
             console.error("Failed to eval project stage", e);
         }
     };
 
-    
-
-    const checkWorkflowStageDebounced = useCallback((force = false) => {
-        if (evalWorkflowStageTimerRef.current) {
-            clearTimeout(evalWorkflowStageTimerRef.current);
-        }
-        if (force) {
-            evalProjectWorkflowStage(true);
-        } else {
-            evalWorkflowStageTimerRef.current = setTimeout(() => {
-                evalProjectWorkflowStage(false);
-            }, 2000); // Debounce API events by 2 seconds
-        }
-    }, [id]);
-
     useEffect(() => {
-        // Run once on enter
-        checkWorkflowStageDebounced(true);
-        
-        const handleEvent = () => checkWorkflowStageDebounced(false);
-        window.addEventListener('aistory:workflow_stage_check', handleEvent);
-        return () => window.removeEventListener('aistory:workflow_stage_check', handleEvent);
-    }, [checkWorkflowStageDebounced]);
-useEffect(() => {
-        loadProjectData();
-    }, [id]);
+        let isStale = false;
+        const initEditor = async () => {
+            if (!id) return;
+            setIsInitializing(true);
+            try {
+                const [p, user] = await Promise.all([
+                    fetchProject(id).catch(e => { console.error(e); return null; }),
+                    fetchMe().catch(() => null)
+                ]);
+                
+                if (isStale) return;
+                if (p) setProject(p);
+                
+                if (user) {
+                    setIsSuperuser(!!user?.is_superuser);
+                    setCurrentUserId(Number(user?.id || 0) || null);
+                    setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
+                } else {
+                    setIsSuperuser(false);
+                    setCurrentUserId(null);
+                    setUserBatchParallelLimit(3);
+                }
 
-    useEffect(() => {
-        fetchMe()
-            .then((user) => {
-                setIsSuperuser(!!user?.is_superuser);
-                setCurrentUserId(Number(user?.id || 0) || null);
-                setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
-            })
-            .catch(() => {
-                setIsSuperuser(false);
-                setCurrentUserId(null);
-                setUserBatchParallelLimit(3);
-            });
-    }, []);
+                let eps = await fetchEpisodes(id).catch(() => []);
+                if (isStale) return;
+                
+                if (eps.length === 0 && p) {
+                     const newEp = await createEpisode(id, { title: "Episode 1" });
+                     eps = [newEp];
+                }
+                
+                setEpisodes(eps);
+                if (eps.length > 0 && !activeEpisodeId) {
+                    setActiveEpisodeId(eps[0].id);
+                }
+
+                const currentStage = p?.global_info?.workflow_stage || 'script';
+                let startTab = initialActiveTab;
+                
+                if (!initialActiveTab || initialActiveTab === 'overview' || initialActiveTab === 'ep_info') {
+                    let nextStage = currentStage;
+                    const entities = await fetchEntities(id).catch(() => []);
+                    const hasAssets = entities && entities.length > 0;
+                    let hasScenes = false;
+
+                    if (eps && eps.length > 0) {
+                        const ep1Scenes = await fetchScenes(eps[0].id).catch(() => []);
+                        hasScenes = ep1Scenes && ep1Scenes.length > 0;
+                    }
+
+                    let allAssetsReady = false;
+                    if (hasAssets) allAssetsReady = entities.every(e => !!e.image_url);
+
+                    let allVideosReady = false;
+                    if (allAssetsReady && eps && eps.length > 0) {
+                        let anyActive = false;
+                        let allVids = true;
+                        for (const ep of eps) {
+                            const epShots = await fetchEpisodeShots(id, ep.id).catch(() => []);
+                            if (epShots && epShots.length > 0) {
+                                anyActive = true;
+                                if (!epShots.every(s => !!s.video_url)) {
+                                    allVids = false;
+                                    break;
+                                }
+                            }
+                        }
+                        allVideosReady = anyActive && allVids;
+                    }
+
+                    if (allVideosReady) nextStage = 'montage';
+                    else if (hasAssets && allAssetsReady) nextStage = 'shots';
+                    else if (hasAssets || hasScenes) nextStage = 'subjects';
+                    else nextStage = 'script';
+
+                    if (nextStage !== currentStage) {
+                        console.log(`Advancing project stage on load: ${currentStage} => ${nextStage}`);
+                        await updateProject(id, {
+                            global_info: { ...(p?.global_info || {}), workflow_stage: nextStage }
+                        }).catch(() => {});
+                        if (p) p.global_info = { ...(p?.global_info || {}), workflow_stage: nextStage };
+                    }
+                    startTab = nextStage;
+                }
+                
+                if (isStale) return;
+                setActiveTab(startTab);
+
+            } catch (err) {
+                console.error("Initialization error:", err);
+            } finally {
+                if (!isStale) setIsInitializing(false);
+            }
+        };
+
+        initEditor();
+
+        const handleStageRefresh = () => checkWorkflowStageDebounced(false);
+        window.addEventListener('aistory:workflow_stage_check', handleStageRefresh);
+        return () => {
+            isStale = true;
+            window.removeEventListener('aistory:workflow_stage_check', handleStageRefresh);
+        };
+    }, [id]);
 
     useEffect(() => {
         try {
@@ -356,35 +428,6 @@ useEffect(() => {
         hasAppliedInitialShotFocusRef.current = true;
         setShotsFocusRequest({ sceneId: String(initialEditingShotSceneId), nonce: Date.now() });
     }, [initialActiveTab, initialEditingShotSceneId]);
-
-    const loadProjectData = async () => {
-         if (!id) return;
-         try {
-            const p = await fetchProject(id);
-            setProject(p);
-         } catch (e) {
-            console.error("Failed to fetch project title", e);
-         }
-            await loadEpisodes();
-    };
-
-    const loadEpisodes = async () => {
-        if (!id) return;
-        try {
-            const data = await fetchEpisodes(id);
-            setEpisodes(data);
-            if (data.length > 0 && !activeEpisodeId) {
-                setActiveEpisodeId(data[0].id);
-            } else if (data.length === 0) {
-                 // Auto create Ep 1 if none
-                 const newEp = await createEpisode(id, { title: "Episode 1" });
-                 setEpisodes([newEp]);
-                 setActiveEpisodeId(newEp.id);
-            }
-        } catch (e) {
-            console.error("Failed to load episodes", e);
-        }
-    };
 
     const handleUpdateScript = async (epId, content) => {
         try {
@@ -2822,6 +2865,23 @@ useEffect(() => {
         }
         setActiveTab(item.id);
     };
+
+    if (isInitializing) {
+        return (
+            <div className="bg-background flex items-center justify-center h-screen w-full flex-col text-foreground">
+                <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 1.2, ease: "linear" }}
+                    className="mb-4"
+                >
+                    <Loader2 className="w-10 h-10 text-primary opacity-80" />
+                </motion.div>
+                <div className="text-white/60 text-sm font-medium tracking-wide uppercase animate-pulse">
+                    {t('正在初始化项目', 'Initializing Project')}...
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative text-foreground">
