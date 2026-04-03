@@ -16,8 +16,8 @@ const backendProxyTimeoutMs = Number.isFinite(backendProxyTimeoutMsRaw)
   ? Math.max(30000, Math.min(1800000, Math.floor(backendProxyTimeoutMsRaw)))
   : 610000;
 
-const createScopedProxy = (scopePath) => createProxyMiddleware({
-  target: `${backendTarget}${scopePath}`,
+const createScopedProxy = () => createProxyMiddleware({
+  target: backendTarget,
   changeOrigin: true,
   xfwd: true,
   secure: true,
@@ -30,8 +30,8 @@ const createScopedProxy = (scopePath) => createProxyMiddleware({
 
 app.disable('x-powered-by');
 
-app.use('/api', createScopedProxy('/api'));
-app.use('/uploads', createScopedProxy('/uploads'));
+app.use('/api', createScopedProxy());
+app.use('/uploads', createScopedProxy());
 
 app.use(express.static(distDir, {
   etag: true,
