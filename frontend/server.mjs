@@ -17,7 +17,7 @@ const backendProxyTimeoutMs = Number.isFinite(backendProxyTimeoutMsRaw)
   : 610000;
 
 const createScopedProxy = (scopePath) => createProxyMiddleware({
-  pathFilter: scopePath,
+  pathFilter: (pathname) => pathname.startsWith(scopePath),
   target: backendTarget,
   changeOrigin: true,
   xfwd: true,
