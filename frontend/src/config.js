@@ -1,32 +1,19 @@
-// Resolve API base URL with safe production fallback.
-// Priority:
-// 1) VITE_API_BASE_URL (explicit override)
-// 2) Render frontend: prefer same-origin Node proxy, fallback to direct backend only if enabled
-// 3) Local/dev: same-origin
+// Resolve API base URL.
+// Since the frontend proxy is bypassed, we always enforce the direct backend URL on render.
 const RAW_BASE_URL = String(import.meta?.env?.VITE_API_BASE_URL || '').trim();
-const PREFER_DIRECT_BACKEND = String(import.meta?.env?.VITE_PREFER_DIRECT_BACKEND || '0') === '1';
-const isRenderFrontend = typeof window !== 'undefined' && /\.onrender\.com$/i.test(window.location.hostname || '');
+const isRenderFrontend = typeof window !== 'undefined' && /\.onrender\.com$/i.test(window.location.hostname || '');        
 const RENDER_BACKEND_FALLBACK = 'https://aistory-backend-xggg.onrender.com';
 
 let resolvedBaseUrl = '';
-let resolvedFallbackBaseUrl = '';
-if (RAW_BASE_URL) {
-	resolvedBaseUrl = RAW_BASE_URL;
-} else if (isRenderFrontend) {
-	if (PREFER_DIRECT_BACKEND) {
-		resolvedBaseUrl = RENDER_BACKEND_FALLBACK;
-		resolvedFallbackBaseUrl = '';
-	} else {
-		resolvedBaseUrl = '';
-		resolvedFallbackBaseUrl = RENDER_BACKEND_FALLBACK;
-	}
+if (isRenderFrontend) {
+        resolvedBaseUrl = RENDER_BACKEND_FALLBACK;
+} else if (RAW_BASE_URL) {
+        resolvedBaseUrl = RAW_BASE_URL;
 }
 
 export const BASE_URL = resolvedBaseUrl;
-export const FALLBACK_BASE_URL = resolvedFallbackBaseUrl;
-// For media assets (e.g. /uploads/*), prefer a backend-capable base URL.
-// On Render frontend with same-origin API proxy mode, BASE_URL may be empty while
-// assets are still served by the backend service host.
-export const ASSET_BASE_URL = BASE_URL || FALLBACK_BASE_URL || '';
+export const FALLBACK_BASE_URL = RENDER_BACKEND_FALLBACK;
+// For media assets (e.g. /uploads/*), use the backend host heavily.
+export const ASSET_BASE_URL = BASE_URL || FALLBACK_BASE_URL;
 export const API_URL = `${BASE_URL}/api/v1`;
-export const FALLBACK_API_URL = FALLBACK_BASE_URL ? `${FALLBACK_BASE_URL}/api/v1` : '';
+export const FALLBACK_API_URL = `${FALLBACK_BASE_URL}/api/v1`;
