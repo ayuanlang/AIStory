@@ -16,23 +16,19 @@ const backendProxyTimeoutMs = Number.isFinite(backendProxyTimeoutMsRaw)
   ? Math.max(30000, Math.min(1800000, Math.floor(backendProxyTimeoutMsRaw)))
   : 610000;
 
-const createScopedProxy = (scopePath) => createProxyMiddleware({
-  pathFilter: (pathname) => pathname.startsWith(scopePath),
+// We bind to root and let pathFilter handle prefix matching and preserve original URL prefix
+app.use(createProxyMiddleware({
+  pathFilter: ['/api/**', '/uploads/**'],
   target: backendTarget,
   changeOrigin: true,
   xfwd: true,
   secure: true,
   proxyTimeout: backendProxyTimeoutMs,
   timeout: backendProxyTimeoutMs,
-  onProxyReq(proxyReq) {
-    proxyReq.setHeader('X-Forwarded-Host', 'aistory-frontend.onrender.com');
+  onProxyReq(proxyReq, req) {
+    proxyReq.setHeader('X-Forwarded-Host', 'aistory-frontend.onrender.com');    
   },
-});
-
-app.disable('x-powered-by');
-
-app.use(createScopedProxy('/api'));
-app.use(createScopedProxy('/uploads'));
+}));
 
 app.use(express.static(distDir, {
   etag: true,

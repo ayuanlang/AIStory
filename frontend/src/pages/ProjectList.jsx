@@ -28,8 +28,9 @@ import {
     getKieStandardValueOptions,
     submitImageGenerationJob,
     getImageGenerationJobStatus,
+    fetchMe as fetchMeApi,
 } from '../services/api';
-import { BASE_URL } from '../config';
+import { BASE_URL, ASSET_BASE_URL } from '../config';
 import Editor from './Editor';
 import SettingsPage from './Settings';
 import AssetsLibrary from '../components/AssetsLibrary';
@@ -544,11 +545,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     
     useEffect(() => {
         // Fetch User Info to check admin status
-        const fetchMe = async () => {
+        const loadMe = async () => {
              try {
-                const res = await api.get('/users/me');
-                if (res.data) {
-                    setCurrentUser(res.data);
+                const data = await fetchMeApi();
+                if (data) {
+                    setCurrentUser(data);
                 }
              } catch(e) {
                  console.error("Failed to fetch user info", e);
@@ -560,10 +561,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 setCurrentUser(updated);
                 return;
             }
-            fetchMe();
+            loadMe();
         };
 
-        fetchMe();
+        loadMe();
         window.addEventListener(USER_PROFILE_UPDATED_EVENT, handleProfileUpdated);
         return () => {
             window.removeEventListener(USER_PROFILE_UPDATED_EVENT, handleProfileUpdated);
@@ -2047,7 +2048,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                        {/* Cover Image or Fallback */}
                                                        {p.cover_image && (
                                                            <img 
-                                                               src={p.cover_image.startsWith('http') ? p.cover_image : `${(BASE_URL || 'http://localhost:8000')}${p.cover_image}`} 
+                                                               src={p.cover_image.startsWith('http') ? p.cover_image : `${ASSET_BASE_URL}${p.cover_image}`} 
                                                                alt={p.title} 
                                                                className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 z-10"
                                                                onError={(e) => { e.target.style.display = 'none'; }}
