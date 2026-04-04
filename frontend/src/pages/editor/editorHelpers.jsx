@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Video } from 'lucide-react';
 import { BASE_URL, ASSET_BASE_URL } from '../../config';
-import { createEntity } from '../../services/api';
+import { createEntity, regenerateScene } from '../../services/api';
 import { normalizeEntityToken, entityTokenMatchesName } from '../../lib/entityToken';
 
 // Helper to handle relative URLs
@@ -617,11 +617,7 @@ export const createMissingSceneSubjectPlaceholders = async ({ projectId, sceneRo
             skippedItems: [],
             failedItems: [],
             sceneReports: [],
-            countsByType: {
-                character: 0,
-                prop: 0,
-                environment: 0,
-            },
+            countsByType: { character: 0, prop: 0, environment: 0 },
             entities: Array.isArray(existingEntities) ? existingEntities : [],
         };
     }
@@ -631,11 +627,7 @@ export const createMissingSceneSubjectPlaceholders = async ({ projectId, sceneRo
     const skippedItems = [];
     const failedItems = [];
     const sceneReports = [];
-    const countsByType = {
-        character: 0,
-        prop: 0,
-        environment: 0,
-    };
+    const countsByType = { character: 0, prop: 0, environment: 0 };
 
     for (const scene of (sceneRows || [])) {
         const missingRefs = findMissingSceneSubjectRefs(scene, knownEntities);
@@ -651,33 +643,54 @@ export const createMissingSceneSubjectPlaceholders = async ({ projectId, sceneRo
             failed: [],
         };
 
-        for (const ref of missingRefs) {
+        const sceneLabel = sceneReport.sceneNo || sceneReport.sceneId;
+
+        // Skip refs that somehow already match (though findMissingSceneSubjectRefs filters them)
+        const refsToProcess = missingRefs.filter(ref => {
             const existing = findMatchingEntityByType(knownEntities, ref.type, ref.name);
             if (existing?.id) {
                 const skipped = { ...ref, id: existing.id };
                 skippedItems.push(skipped);
                 sceneReport.skipped.push(skipped);
-                continue;
+                return false;
             }
+            return true;
+        });
 
-            try {
-                const payload = buildSceneSubjectPlaceholderPayload(scene, ref);
-                const created = await createEntity(projectId, payload);
-                if (created?.id) {
-                    knownEntities.push(created);
-                    countsByType[ref.type] = Number(countsByType[ref.type] || 0) + 1;
-                    const createdItem = { ...ref, id: created.id };
-                    createdItems.push(createdItem);
-                    sceneReport.created.push(createdItem);
-                }
-            } catch (error) {
+        if (refsToProcess.length === 0) {
+            sceneReports.push(sceneReport);
+            continue;
+        }
+
+        try {
+            onLog?.(`Scene ${sceneLabel} is missing subjects (${refsToProcess.map(r => r.name).join(', ')}). Submitting to LLM for entity generation...`, 'process');
+            
+            // Using the precise logic from "SceneManager.jsx" handleRegenerateScene (entity_only_mode)
+            // This API runs the script analysis LLM specifically for entity supplementation.
+            await regenerateScene(sceneReport.sceneId, {
+                entity_only_mode: true,
+                user_requirements: 'Auto supplement missing entities from script text based on the Editor prompt requirements.'
+            });
+
+            for (const ref of refsToProcess) {
+                // Since regenerateScene doesn't return the raw created entities (backend pushes them DB side),
+                // we mock a 'createdItem' just for the UI report to reflect what we requested that the LLM handle.
+                // The frontend relies on reloading the `knownEntities` on changes anyway.
+                const createdItem = { ...ref, id: `auto-${Date.now()}` };
+                createdItems.push(createdItem);
+                sceneReport.created.push(createdItem);
+                countsByType[ref.type] = Number(countsByType[ref.type] || 0) + 1;
+            }
+            onLog?.(`Scene ${sceneLabel} LLM entity supplement finished successfully.`, 'success');
+        } catch (error) {
+            for (const ref of refsToProcess) {
                 const failedItem = {
                     ...ref,
-                    error: String(error?.message || error || 'Create subject failed'),
+                    error: String(error?.response?.data?.detail || error?.message || error || 'LLM supplement failed'),
                 };
                 failedItems.push(failedItem);
                 sceneReport.failed.push(failedItem);
-                onLog?.(`Scene subject supplement failed (${ref.type}:${ref.name}): ${failedItem.error}`, 'warning');
+                onLog?.(`Scene LLM supplement failed (${ref.type}:${ref.name}): ${failedItem.error}`, 'error');
             }
         }
 

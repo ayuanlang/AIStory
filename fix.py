@@ -1,6 +1,10 @@
-﻿path = r'C:\AIStory\backend\app\api\endpoints.py'
-with open(path, 'r', encoding='utf-8') as f: t = f.read()
+﻿import sys
+file_path = r'c:\AIStory\frontend\src\pages\editor\components\ScriptEditor.jsx'
+with open(file_path, 'r', encoding='utf-8') as f:
+    content = f.read()
 
-t = t.replace('"characters": [], "covers": [], "covers": [],', '"characters": [], "covers": [],')
+content = content.replace(\"if (onLog) onLog(Failed to start auto AI shots: , 'error');\", \"if (onLog) onLog(\Failed to start auto AI shots: \\, 'error');\")
 
-with open(path, 'w', encoding='utf-8') as f: f.write(t)
+with open(file_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+print('Fixed backticks!')

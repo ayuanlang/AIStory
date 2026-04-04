@@ -3461,43 +3461,43 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             if (resultUrl) {
                                 const currentShot = (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
                                     || (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null);
-                                if (isJointDiptych) {
-                                    await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
-                                } else if (stableKind === 'start') {
-                                    const nextData = { image_url: resultUrl };
-                                    try {
+                                    
+                                try {
+                                    if (isJointDiptych) {
+                                        await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
+                                    } else if (stableKind === 'start') {
+                                        const nextData = { image_url: resultUrl };
                                         await onUpdateShot(stableShotId, nextData);
-                                    } catch (persistErr) {
-                                        console.warn('Resume image job save failed:', persistErr);
-                                    }
-                                    setEditingShot((prev) => (prev && String(prev.id) === stableShotId ? { ...prev, ...nextData } : prev));
-                                } else {
-                                    let tech = {};
-                                    try {
-                                        tech = JSON.parse(currentShot?.technical_notes || '{}');
-                                    } catch {
-                                        tech = {};
-                                    }
-                                    tech.end_frame_url = resultUrl;
-                                    tech.video_gen_mode = 'start_end';
-                                    const nextData = { technical_notes: JSON.stringify(tech) };
-                                    try {
+                                        setEditingShot((prev) => (prev && String(prev.id) === stableShotId ? { ...prev, ...nextData } : prev));
+                                    } else {
+                                        let tech = {};
+                                        try {
+                                            tech = JSON.parse(currentShot?.technical_notes || '{}');
+                                        } catch {
+                                            tech = {};
+                                        }
+                                        tech.end_frame_url = resultUrl;
+                                        tech.video_gen_mode = 'start_end';
+                                        const nextData = { technical_notes: JSON.stringify(tech) };
                                         await onUpdateShot(stableShotId, nextData);
-                                    } catch (persistErr) {
-                                        console.warn('Resume image job save failed:', persistErr);
+                                        setEditingShot((prev) => {
+                                            if (!prev || String(prev.id) !== stableShotId) return prev;
+                                            return { ...prev, ...nextData };
+                                        });
                                     }
-                                    setEditingShot((prev) => {
-                                        if (!prev || String(prev.id) !== stableShotId) return prev;
-                                        return { ...prev, ...nextData };
+                                    onLog?.(isJointDiptych
+                                        ? `Recovered joint start/end generation completed for shot ${stableShotId}.`
+                                        : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation completed for shot ${stableShotId}.`, 'success');
+                                    refreshShotAssetsMeta();
+                                    Promise.resolve(refreshShots()).catch((refreshErr) => {
+                                        console.warn('Refresh shots after recovered image job failed:', refreshErr);
                                     });
+                                } catch (applyErr) {
+                                    console.error('Failed to apply recovered image job result:', applyErr);
+                                    onLog?.(isJointDiptych
+                                        ? `Failed to apply recovered joint start/end result for shot ${stableShotId}: ${applyErr.message}`
+                                        : `Failed to apply recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} result for shot ${stableShotId}: ${applyErr.message}`, 'error');
                                 }
-                                onLog?.(isJointDiptych
-                                    ? `Recovered joint start/end generation completed for shot ${stableShotId}.`
-                                    : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation completed for shot ${stableShotId}.`, 'success');
-                                refreshShotAssetsMeta();
-                                Promise.resolve(refreshShots()).catch((refreshErr) => {
-                                    console.warn('Refresh shots after recovered image job failed:', refreshErr);
-                                });
                             }
                             break;
                         }
@@ -3676,7 +3676,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             }
 
                             if (resultUrl || phase === 'succeeded' || phase === 'completed') {
-                                const serverBoundVideoUrl = resultUrl || await probeShotVideoUrl(stableShotId);
+                                const serverBoundVideoUrl = resultUrl;
                                 if (serverBoundVideoUrl) {
                                     const newData = { video_url: serverBoundVideoUrl };
                                     try {
@@ -3696,7 +3696,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             }
 
                             if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
-                                const serverBoundVideoUrl = resultUrl || await probeShotVideoUrl(stableShotId);
+                                const serverBoundVideoUrl = resultUrl;
                                 if (serverBoundVideoUrl) {
                                     const newData = { video_url: serverBoundVideoUrl };
                                     try {

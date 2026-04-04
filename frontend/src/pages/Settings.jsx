@@ -2478,8 +2478,14 @@ const Settings = () => {
                                             <option value="">-- {t('系统默认', 'System Default')} --</option>
                                             {apiList.map((api, idx) => {
                                                 let label = api.alias || (api.system_api_model || api.system_api_name || ('API ID: ' + api.system_api_id));
+                                                if (api.provider_alias) {
+                                                    label = `[${api.provider_alias}] ` + label;
+                                                }
                                                 if (api.applicable_languages && api.applicable_languages.length > 0) {
                                                     label += ' (' + api.applicable_languages.join(', ') + ')';
+                                                }
+                                                if (api.is_fallback) {
+                                                    label += ' (备用)';
                                                 }
                                                 return (
                                                     <option key={idx} value={api.system_api_id}>

@@ -176,7 +176,7 @@ export const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', p
             watchdog = window.setTimeout(() => {
                 alert(t('导入处理中，请稍候（大文本可能需要更久）。', 'Import is in progress, please wait (large text may take longer).'));
             }, 2500);
-            await onImport(text, importType);
+            await onImport(text, importType, { autoSupplementSceneSubjects: true });
         } catch (e) {
             alert(t('导入失败：', 'Import failed: ') + (e?.message || e));
         } finally {

@@ -1284,11 +1284,8 @@ const Editor = ({
         text = (typeof text === 'string') ? text : String(text || '');
         const requestedImportType = String(importType || 'auto');
         const effectiveImportType = shouldForceAutoImportForAnalysisBundle(text) ? 'auto' : requestedImportType;
-        const autoSupplementSceneSubjects = false;
+        const autoSupplementSceneSubjects = Boolean(importOptions?.autoSupplementSceneSubjects);
         const suppressAlerts = Boolean(importOptions?.suppressAlerts);
-        if (importOptions?.autoSupplementSceneSubjects === true) {
-            addLog('Import option autoSupplementSceneSubjects=true was ignored: auto supplement is disabled and now requires manual confirmation.', 'warning');
-        }
         // Allow modal loading state to paint before heavy parsing/import logic starts.
         await new Promise(resolve => setTimeout(resolve, 0));
         addLog(`Starting Import Analysis (${effectiveImportType})...`, "process");

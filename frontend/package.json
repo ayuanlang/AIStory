@@ -14,7 +14,7 @@
     "clsx": "^2.1.0",
     "express": "^4.21.2",
     "framer-motion": "^11.0.0",
-    "http-proxy-middleware": "^3.0.3",
+    "http-proxy-middleware": "^3.0.2",
     "lucide-react": "^0.330.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

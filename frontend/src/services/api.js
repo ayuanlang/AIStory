@@ -256,8 +256,8 @@ const ensureReviewRoutesAvailable = () => {
 // pollTask() polls GET /tasks/{task_id} until completed or failed.
 
 const LLM_POLL_INTERVAL = 2500;   // ms between polls
-const LLM_POLL_TIMEOUT  = 600000; // 10 min max wait
-const LLM_TASK_NOT_FOUND_GRACE_MS = 12000; // tolerate short eventual-consistency lag
+const LLM_POLL_TIMEOUT  = 900000; // 15 min max wait
+const LLM_TASK_NOT_FOUND_GRACE_MS = 25000; // tolerate short eventual-consistency lag
 
 const isTaskNotFoundPollingError = (error) => {
         const status = Number(error?.response?.status || 0);
@@ -324,8 +324,8 @@ async function pollTask(taskId, {
             if (isRetriable) {
                 const now = Date.now();
                 if (!notFoundSince) notFoundSince = now; // reuse this grace period or add another
-                // We'll give network errors a generous 60s tolerance window
-                if ((now - notFoundSince) <= 60000) {
+                // We'll give network errors a generous 360s tolerance window
+                if ((now - notFoundSince) <= 360000) {
                     await new Promise(r => setTimeout(r, Math.max(interval, 3000)));
                     continue;
                 }

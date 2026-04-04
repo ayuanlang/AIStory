@@ -9933,10 +9933,14 @@ def get_all_function_api_configs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    from app.models.all_models import ProviderKeyPool
     configs = db.query(FunctionAPIConfig).all()
     
     all_system_apis = db.query(SystemAPISetting).filter(SystemAPISetting.deprecated == False).all()
     api_map = {api.id: api for api in all_system_apis}
+
+    pools = db.query(ProviderKeyPool).all()
+    pool_alias_map = {pool.provider: pool.provider_alias for pool in pools if pool.provider_alias}
     
     result = []
     supported_functions = [
@@ -9954,6 +9958,7 @@ def get_all_function_api_configs(
             api_id = item.get("system_api_id")
             if api_id in api_map:
                 sys_api = api_map[api_id]
+                provider_alias = pool_alias_map.get(sys_api.provider) or sys_api.provider or ""
                 valid_settings.append({
                     "system_api_id": sys_api.id,
                     "system_api_name": sys_api.name,
@@ -9961,6 +9966,7 @@ def get_all_function_api_configs(
                     "priority": item.get("priority", 0),
                     "is_fallback": item.get("is_fallback", False),
                     "alias": item.get("alias") or sys_api.model or sys_api.name or f"API {sys_api.id}",
+                    "provider_alias": provider_alias,
                     "applicable_languages": item.get("applicable_languages", []),
                     "explicit_selection": item.get("explicit_selection", False),
                     "strict_provider": item.get("strict_provider", False)

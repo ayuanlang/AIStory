@@ -2178,7 +2178,7 @@ class MediaGenerationService:
                 return True
             if endpoint or runtime_activation:
                 return True
-            if resolved_provider in {"apiyi", "n1n"}:
+            if resolved_provider in {"apiyi", "n1n", "aiclub"}:
                 return False
 
         return True
@@ -2465,9 +2465,9 @@ class MediaGenerationService:
         if cat in {"llm", "vision", "tools", "digitalhuman", "music"}:
             return bool(normalized)
         if cat == "image":
-              return normalized in {"doubao", "grsai", "kie", "tencent", "stability", "runninghub", "apiyi", "n1n"}
+              return normalized in {"doubao", "grsai", "kie", "tencent", "stability", "runninghub", "apiyi", "n1n", "aiclub"}
         if cat == "video":
-            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi", "zlhub"}
+            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi", "zlhub", "aiclub"}
         if cat == "voice":
               return normalized in {"kie", "runninghub"}
         return bool(normalized)
@@ -3159,6 +3159,16 @@ class MediaGenerationService:
                         negative_prompt=negative_prompt,
                         image_size=normalized_image_size,
                     )
+                if effective_provider == "aiclub":
+                    return await self._handle_aiclub_generation(
+                        "image",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                        image_size=normalized_image_size,
+                    )
                 if effective_provider == "runninghub":
                     return await self._handle_runninghub_generation(
                         "image",
@@ -3223,6 +3233,17 @@ class MediaGenerationService:
                     return await self._handle_runninghub_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if effective_provider == "apiyi":
                     return await self._handle_apiyi_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
+                if effective_provider == "aiclub":
+                    return await self._handle_aiclub_generation(
                         "video",
                         prompt,
                         active_config,
@@ -6087,7 +6108,8 @@ class MediaGenerationService:
                 payload_obj["enablePromptExpansion"] = True
 
         raw_callback_url = str(
-            tool_conf.get("webhookUrl")
+            tool_conf.get("_provider_callback_url")
+            or tool_conf.get("webhookUrl")
             or tool_conf.get("webHook")
             or tool_conf.get("webhook")
             or tool_conf.get("callBackUrl")
@@ -6095,7 +6117,7 @@ class MediaGenerationService:
             or tool_conf.get("callbackUrl")
             or ""
         ).strip()
-        callback_ticket = f"runninghub-{gen_type}"
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"runninghub-{gen_type}"
         callback_tool_conf = dict(tool_conf or {})
         if raw_callback_url:
             callback_tool_conf.setdefault("webhookUrl", raw_callback_url)
@@ -6330,8 +6352,18 @@ class MediaGenerationService:
         base_url = str(config.get("base_url") or "https://api.apiyi.com").strip().rstrip("/")
         endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "").strip()
         model = str(config.get("model") or "").strip()
+        
+        provider_key = str(provider_name).strip().lower()
         if not endpoint:
-            return {"error": f"{provider_name} endpoint missing from system configuration", "submit_failed": True}
+            if provider_key == "aiclub":
+                if gen_type == "image":
+                    endpoint = "/v1/images/generations"
+                elif gen_type == "video":
+                    endpoint = "/v1/videos"
+                else:
+                    return {"error": f"{provider_name} generation type not supported by default endpoint injection", "submit_failed": True}
+            else:
+                return {"error": f"{provider_name} endpoint missing from system configuration", "submit_failed": True}
 
         submit_url = endpoint if re.match(r"^https?://", endpoint, flags=re.IGNORECASE) else f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
 
@@ -6489,6 +6521,195 @@ class MediaGenerationService:
             return await self._submit_and_poll_video(submit_url, payload, api_key, f"{str(provider_name).lower()}_video", extra_metadata=base_metadata)
 
         return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}
+
+    async def _handle_aiclub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+        provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "aiclub")
+        api_key = str(config.get("api_key") or "").strip()
+        if not api_key:
+            return {"error": f"No {provider_name} API Key", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        base_url = str(config.get("base_url") or "https://aiclub.zimaocloud.com/model/openApi").strip().rstrip("/")
+        model = str(config.get("model") or "nanoBanana").strip()
+        
+        # Depending on base_url format (some might be just domain, some might include path)
+        if "/model/openApi" in base_url and not base_url.endswith("/v1"):
+            pass
+        elif base_url.endswith("/v1"):
+            base_url = base_url[:-3].rstrip("/") # remove /v1
+
+        model_lower = model.lower()
+        if "gemini" in model_lower:
+            route_group = "nanoBanana"
+            submit_url = f"{base_url}/{route_group}/v1/{model}"
+            poll_base = f"{base_url}/{route_group}/v1"
+        elif "veo" in model_lower and gen_type == "video":
+            submit_url = f"{base_url}/veo/v1/video"
+            poll_base = f"{base_url}/veo/v1"
+        elif "kling" in model_lower and gen_type == "video":
+            path = "image2video" if (ref_image or last_frame_url) else "text2video"
+            submit_url = f"{base_url}/kling/v1/videos/{path}"
+            poll_base = f"{base_url}/kling/v1"
+        elif "hailuo" in model_lower and gen_type == "video":
+            path = "image2video" if (ref_image or last_frame_url) else "text2video"
+            submit_url = f"{base_url}/hailuo/v1/videos/{path}"
+            poll_base = f"{base_url}/hailuo/v1"
+        elif "vidu" in model_lower and gen_type == "video":
+            path = "image2video" if (ref_image or last_frame_url) else "text2video"
+            submit_url = f"{base_url}/vidu/v1/videos/{path}"
+            poll_base = f"{base_url}/vidu/v1"
+        elif "sora" in model_lower and gen_type == "video":
+            submit_url = f"{base_url}/sora/v1/video"
+            poll_base = f"{base_url}/sora/v1"
+        elif "jimeng" in model_lower and gen_type == "video":
+            submit_url = f"{base_url}/jimeng/v1/video"
+            poll_base = f"{base_url}/jimeng/v1"
+        else:
+            submit_url = f"{base_url}/{model}/v1/"
+            poll_base = f"{base_url}/{model}/v1"
+
+        if "veo" in model_lower and gen_type == "video":
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "negativePrompt": negative_prompt or "",
+                "aspectRatio": str(aspect_ratio or "9:16").strip(),
+                "durationSeconds": str(duration or 6),
+                "resolution": "720p",
+                "generateAudio": False,
+                "personGeneration": "allow_adult"
+            }
+            if ref_image:
+                payload["image"] = {"imageUrl": ref_image}
+            if last_frame_url:
+                payload["lastFrame"] = {"imageUrl": last_frame_url}
+        elif any(k in model_lower for k in ["kling", "hailuo", "vidu", "sora", "jimeng"]) and gen_type == "video":
+            payload = {
+                "model": model,
+                "prompt": prompt,
+            }
+            if negative_prompt:
+                payload["negative_prompt"] = negative_prompt
+                
+            # For endpoints needing reference images
+            if ref_image:
+                payload["image_url"] = ref_image
+            if last_frame_url:
+                payload["last_frame_url"] = last_frame_url
+        else:
+            payload = {
+                "prompt": self._merge_negative_prompt(prompt, negative_prompt)
+            }
+            if gen_type == "image":
+                payload["type"] = "TEXTTOIAMGE"
+                size_map = {
+                    "16:9": "16:9",
+                    "9:16": "9:16",
+                    "1:1": "1:1",
+                    "4:3": "4:3",
+                    "3:4": "3:4"
+                }
+                ar_key = str(aspect_ratio or "").strip()
+                payload["image_size"] = size_map.get(ar_key, "9:16")
+                payload["resolution"] = "2K"
+            elif gen_type == "video":
+                payload["type"] = "TEXTTOVIDEO"
+            
+        base_metadata = {
+            "provider": provider_name,
+            "model": model,
+            "prompt": prompt,
+            "submit_url": submit_url,
+        }
+
+        with open("c:/AIStory/backend/aiclub_debug.log", "a", encoding="utf-8") as _df:
+            _df.write(f"[AICLUB DEBUG] provider={provider_name} model={model} gen_type={gen_type} submit_url={submit_url} payload={payload}\n")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        
+        try:
+            resp = await asyncio.to_thread(requests.post, submit_url, json=payload, headers=headers, timeout=(15, 60), verify=False)
+            data = resp.json() if resp.text else {}
+            if resp.status_code not in [200, 201]:
+                return {"error": f"Submission Failed {resp.status_code}", "details": data, "submit_failed": True}
+        except Exception as e:
+            return {"error": f"Submission Exception: {e}", "submit_failed": True}
+
+        if isinstance(data, dict):
+            if "url" in data:
+                return {"url": data["url"], "metadata": base_metadata}
+            elif "data" in data and isinstance(data["data"], dict) and "url" in data["data"]:
+                return {"url": data["data"]["url"], "metadata": base_metadata}
+
+        task_id = None
+        if isinstance(data, dict):
+            task_id = data.get("id") or data.get("task_id") or data.get("taskId")
+            if not task_id and "data" in data and isinstance(data["data"], dict):
+                inner = data["data"]
+                task_id = inner.get("taskId") or inner.get("task_id") or inner.get("id")
+
+        if not task_id:
+            return {"error": f"No Task ID or URL returned: {data}", "submit_failed": True}
+
+        poll_url = f"{poll_base}/tasks/{task_id}"
+
+        for attempt in range(150):
+            await asyncio.sleep(2)
+            try:
+                poll_resp = await asyncio.to_thread(requests.get, poll_url, headers=headers, timeout=30, verify=False)
+                if poll_resp.status_code in [200, 201] and poll_resp.text:
+                    polled_data = poll_resp.json()
+                    status_val = None
+                    result_url = None
+                    
+                    if isinstance(polled_data, dict):
+                        inner = polled_data.get("data", {}) if isinstance(polled_data.get("data"), dict) else {}
+                        info = inner.get("info", {}) if isinstance(inner.get("info"), dict) else {}
+                        status_val = polled_data.get("status") or inner.get("status") or inner.get("taskStatus") or info.get("status") or polled_data.get("state")
+                        print(f"[AIClub Polling] attempt={attempt} url={poll_url} data={polled_data}")
+                        
+                        url_candidates = [
+                            polled_data.get("url"), inner.get("url"), info.get("url"),
+                            inner.get("resultUrl"), polled_data.get("resultUrl"), info.get("resultUrl"),
+                            inner.get("videoUrl"), polled_data.get("videoUrl"), info.get("videoUrl"),
+                            inner.get("imageUrl"), polled_data.get("imageUrl"), info.get("imageUrl"),
+                            polled_data.get("image_url"), inner.get("image_url"), info.get("image_url"),
+                            polled_data.get("video_url"), inner.get("video_url"), info.get("video_url"),
+                            info.get("resultImageUrl"), info.get("resultVideoUrl")
+                        ]
+                        result_url = next((u for u in url_candidates if isinstance(u, str) and u), None)
+                        
+                        if not result_url:
+                            for coll in ["images", "videos", "results", "video_url"]:
+                                items = inner.get(coll) or polled_data.get(coll) or info.get(coll) or []
+                                if isinstance(items, list) and items:
+                                    first = items[0]
+                                    if isinstance(first, dict):
+                                        result_url = first.get("url") or first.get("imageUrl") or first.get("videoUrl") or first.get("resultUrl")
+                                    elif isinstance(first, str):
+                                        result_url = first
+                                    if result_url: break
+                                    
+                        if result_url and not status_val:
+                            # For endpoints where no explicit success status is given, presence of URL indicates success
+                            status_val = "SUCCESS"
+
+                        if str(status_val).upper() in ["SUCCESS", "SUCCESSFUL", "COMPLETED", "200"]:
+                            if result_url: return {"url": result_url, "metadata": base_metadata}
+                            else: return {"error": f"No URL inside SUCCESS response: {polled_data}", "submit_failed": False}
+
+                        if str(status_val).upper() in ["FAILED", "ERROR", "CANCELED", "CANCELLED"]:
+                            err_msg = inner.get("reason") or inner.get("error") or polled_data.get("message") or "Unknown error"
+                            return {"error": f"Generation failed: {err_msg}", "details": polled_data, "submit_failed": False}
+
+            except Exception as pe:
+                if attempt == 149: return {"error": f"Polling Exception: {pe}", "submit_failed": False}
+                
+        return {"error": "Polling Timeout", "submit_failed": False}
 
     def _extract_zlhub_task_id(self, value: Any) -> Optional[str]:
         if value is None:

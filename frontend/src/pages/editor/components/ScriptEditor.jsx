@@ -2390,11 +2390,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
             });
 
-            const sceneSupplementReport = await handleSupplementSceneSubjects(
-                scene,
-                { missing: currentMissing },
-                { silent: true }
-            );
+            const sceneSupplementReport = await createMissingSceneSubjectPlaceholders({
+                projectId,
+                sceneRows: [scene],
+                existingEntities: latestEntityPool,
+                onLog,
+            });
 
             if (sceneSupplementReport) {
                 supplementReport.createdItems.push(...(Array.isArray(sceneSupplementReport.createdItems) ? sceneSupplementReport.createdItems : []));
@@ -5255,41 +5256,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     )}
 
                     {analysisUiReport && analysisUiReport.status !== 'running' && (
-                        <div className="rounded-lg border border-white/15 bg-black/20 p-3 text-xs space-y-1.5">
-                            <div className="font-semibold text-white/90">{t('分析报告', 'Analysis Report')}</div>
-                            <div>
-                                {t('实体生成', 'Entity Generation')}: {t('已生成', 'Generated')}
-                                {` ${analysisUiReport.importReport?.importedSubjectCounts?.character || 0} ${t('个角色', 'characters')},`}
-                                {` ${analysisUiReport.importReport?.importedSubjectCounts?.environment || 0} ${t('个场景', 'environments')},`}
-                                {` ${analysisUiReport.importReport?.importedSubjectCounts?.prop || 0} ${t('个道具', 'props')}。`}
+                        <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm space-y-3 mb-2">
+                            <div className="font-bold text-white/90 text-base flex items-center gap-2">
+                                <CheckCircle className="w-5 h-5 text-emerald-400" /> {t('剧本分析与导入完成！', 'Analysis & Import Completed!')}
                             </div>
-                            <div>
-                                {t('导入后场景检查', 'Post-import Scene Check')}: {t('已检查', 'Checked')}
-                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount || 0} ${t('个场景', 'scenes')},`}
-                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingSceneCount || 0} ${t('个场景存在缺失', 'scenes had gaps')},`}
-                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount || 0} ${t('个缺失项', 'missing items')},`}
-                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.createdItems?.length || 0} ${t('个已补充', 'supplemented')},`}
-                                {` ${analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.failedItems?.length || 0} ${t('个补充失败', 'supplement failed')}。`}
-                            </div>
-                            <div>
-                                {t('一致性检查', 'Consistency Check')}: {
-                                    subjectConsistencyReport
-                                        ? (subjectConsistencyReport.ok ? t('已通过，可继续使用。', 'Passed, ready to use.') : t('有告警，请先核对后再继续。', 'Warnings found, please review before continuing.'))
-                                        : t('已完成基础检查。', 'Basic check completed.')
-                                }
-                            </div>
-                            <div className="text-[11px] text-white/75 pt-1 space-y-1">
+                            <div className="text-white/80 space-y-2 bg-black/20 p-3 rounded-md border border-white/5">
                                 <div>
-                                    {t('若仅缺少少量不重要资产（尤其过程性道具），一般可先忽略并继续制作。', 'If only a few low-priority assets are missing (especially transitional props), you can usually ignore them and continue.')}
+                                    <span className="font-medium">✨ {t('新登场资产', 'New Assets')}:</span> {t('为您提炼了', 'Generated')}
+                                    <span className="text-purple-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.character || 0} </span>{t('位角色', 'characters')}、
+                                    <span className="text-emerald-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.environment || 0} </span>{t('个场景', 'environments')}、
+                                    <span className="text-amber-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.prop || 0} </span>{t('个道具', 'props')}。
                                 </div>
                                 <div>
-                                    {t('若缺失资产较多，建议换模型重新生成，推荐 G1-Gemini2.5 Pro（可在设置菜单选择，非必须，也可继续使用系统默认）。', 'If many assets are missing, try regenerating with another model. Recommended: G1-Gemini2.5 Pro (set in Settings, optional; system default is also fine).')}
+                                    <span className="font-medium">🔍 {t('镜头画面搭建', 'Scene Construction')}:</span> {t('核对了', 'Checked')}
+                                    <span className="text-white font-semibold"> {analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount || 0} </span>{t('个镜头', 'shots')}。
+                                    {analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount > 0 ? (
+                                        <span className="ml-1 break-all">
+                                            {t('其中', 'Among them,')} <span className="text-red-300">{analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount}</span> {t('个画面细节原本是缺失的，系统已自动帮您生成填补了', 'missing visual details were automatically generated and filled:')} <span className="text-emerald-300">{analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.createdItems?.length || 0}</span> {t('个实体', 'entities')}。
+                                        </span>
+                                    ) : (
+                                        <span className="ml-1 text-emerald-300/90">{t('所有画面元素完整，随时可以直接生成画面。', 'All visual elements are complete and ready for generation.')}</span>
+                                    )}
                                 </div>
                                 <div>
-                                    {t('也可以在“补充说明”里强调要修改的内容，然后点击“修正生成结果”重新生成，可复用之前成果。', 'You can also emphasize required fixes in Attention Notes, then click "Refine Generated Result" to regenerate while reusing previous output.')}
+                                    <span className="font-medium">💡 {t('逻辑连贯性', 'Logic Check')}:</span> {
+                                        subjectConsistencyReport
+                                            ? (subjectConsistencyReport.ok ? <span className="text-emerald-400">{t('逻辑清晰，可以直接推进到下一环节（分镜生成）。', 'Logic is clear, ready to proceed to shot generation.')}</span> : <span className="text-amber-400">{t('发现部分实体可能存在指代不清，建议稍作人工核对。', 'Found some ambiguous entities, quick manual review recommended.')}</span>)
+                                            : <span className="text-emerald-400">{t('基础逻辑检查通过。', 'Basic logic check passed.')}</span>
+                                    }
+                                </div>
+                            </div>
+                            <div className="text-xs text-white/60 space-y-1 pt-1">
+                                <div>
+                                    * {t('如果提示有极少数过渡性道具生成失败，您可以直接忽略，不影响视频生成的大局。', 'If a few minor transitional props failed to generate, you can safely ignore them.')}
                                 </div>
                                 <div>
-                                    {t('你可以前往“角色资产与场景”查看分析结果；若没有结果，可在“剧本”页点击“手工导入模型分析结果”。', 'You can review the results in "Character Assets & Scenes". If they are missing, use "Manual Import Model Analysis Result" on the Script page.')}
+                                    * {t('如果不满意，也可以在刚才的“补充说明”写清要求，点击下方的“修改并重跑分析”。', 'Not satisfied? Add notes below and click "Refine" to try again.')}
                                 </div>
                             </div>
                         </div>

@@ -1,14 +1,11 @@
-﻿
-const fs = require("fs");
-let code = fs.readFileSync("frontend/src/pages/editor/components/ScriptEditor.jsx", "utf8");
+﻿const fs = require('fs');
+const file = 'c:\\AIStory\\frontend\\src\\pages\\editor\\components\\ScriptEditor.jsx';
+let content = fs.readFileSync(file, 'utf8');
 
-code = code.replace(
-    /                                  \}\)\}\r?\n                              <\/button>\r?\n                              \{isAnalyzing && \(/g,
-    `                                  )}
-                              </button>
-                          </div>
-                              {isAnalyzing && (`
-);
+const anchor = 'if (importReport && typeof importReport === \\'object\\') {\\n                importReport = {\\n                    ...importReport,\\n                    sceneSubjectPostImportReport: postImportSceneSubjectReport,\\n                };\\n            }';
 
-fs.writeFileSync("frontend/src/pages/editor/components/ScriptEditor.jsx", code, "utf8");
+const replacement = anchor + '\\n\\n            // Check if autoGenerateShots is enabled and scenes were imported\\n            if (autoGenerateShots && importReport?.scenes?.length > 0) {\\n                try {\\n                    importReport.fromAutoGenerateShots = true;\\n                } catch (e) {}\\n            }\\n';
 
+content = content.replace(anchor, replacement);
+fs.writeFileSync(file, content);
+console.log('Done!');

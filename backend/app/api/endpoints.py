@@ -360,7 +360,7 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
-_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "180")))
+_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "360")))
 _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(30, int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "300") or 300))
 _ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP = max(2, min(32, int(os.getenv("ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP", "12") or 12)))
 _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP = max(20000, int(os.getenv("ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP", "120000") or 120000))
@@ -418,11 +418,23 @@ def _build_analyze_scene_dedup_key(user_id: int, request: AnalyzeSceneRequest) -
 
 
 def _prune_recent_analyze_scene_tasks_locked(now_ts: float) -> None:
-    stale_keys = [
-        key
-        for key, payload in _ANALYZE_SCENE_RECENT_TASKS.items()
-        if (now_ts - float((payload or {}).get("ts") or 0.0)) > _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS
-    ]
+    stale_keys = []
+    for key, payload in _ANALYZE_SCENE_RECENT_TASKS.items():
+        existing_task_id = str((payload or {}).get("task_id") or "").strip()
+        task_ts = float((payload or {}).get("ts") or 0.0)
+        
+        info = {}
+        status = ""
+        if existing_task_id:
+            info = _get_task_status(existing_task_id) or {}
+            status = str(info.get("status") or "").strip().lower()
+            
+        if (now_ts - task_ts) > _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS:
+            # Task not running and not successfully completed recently. 
+            # If it's failed, canceled, or expired from task manager, we can prune it.
+            if status not in {"pending", "running", "completed"}:
+                stale_keys.append(key)
+                
     for key in stale_keys:
         _ANALYZE_SCENE_RECENT_TASKS.pop(key, None)
 
@@ -9050,22 +9062,35 @@ def read_projects(
             poster_map[p_id] = image_url
             
         # First valid shot images (optimized using first() equivalent query or just aggregating)
-        # To avoid complex joins, we just fetch all and take the first one found
-        shots = session.query(Shot.project_id, Shot.image_url).filter(
+        shot_subq = session.query(
+            Shot.project_id,
+            func.min(Shot.id).label("min_img_shot_id")
+        ).filter(
             Shot.project_id.in_(p_ids),
             Shot.image_url != None,
             Shot.image_url != ""
-        ).order_by(Shot.id.asc()).all()
+        ).group_by(Shot.project_id).subquery()
+
+        shots = session.query(Shot.project_id, Shot.image_url).join(
+            shot_subq, (Shot.id == shot_subq.c.min_img_shot_id)
+        ).all()
         for p_id, image_url in shots:
             if p_id not in shot_map:
                 shot_map[p_id] = image_url
                 
         # First valid entities
-        entities = session.query(Entity.project_id, Entity.image_url).filter(
+        entity_subq = session.query(
+            Entity.project_id,
+            func.min(Entity.id).label("min_img_entity_id")
+        ).filter(
             Entity.project_id.in_(p_ids),
             Entity.image_url != None,
             Entity.image_url != ""
-        ).order_by(Entity.id.asc()).all()
+        ).group_by(Entity.project_id).subquery()
+
+        entities = session.query(Entity.project_id, Entity.image_url).join(
+            entity_subq, (Entity.id == entity_subq.c.min_img_entity_id)
+        ).all()
         for p_id, image_url in entities:
             if p_id not in entity_map:
                 entity_map[p_id] = image_url
