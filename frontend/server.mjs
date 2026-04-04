@@ -16,9 +16,7 @@ const backendProxyTimeoutMs = Number.isFinite(backendProxyTimeoutMsRaw)
   ? Math.max(30000, Math.min(1800000, Math.floor(backendProxyTimeoutMsRaw)))
   : 610000;
 
-// We bind to root and let pathFilter handle prefix matching and preserve original URL prefix
-app.use(createProxyMiddleware({
-  pathFilter: ['/api/**', '/uploads/**'],
+const proxyMiddleware = createProxyMiddleware({
   target: backendTarget,
   changeOrigin: true,
   xfwd: true,
@@ -28,7 +26,17 @@ app.use(createProxyMiddleware({
   onProxyReq(proxyReq, req) {
     proxyReq.setHeader('X-Forwarded-Host', 'aistory-frontend.onrender.com');    
   },
-}));
+});
+
+app.disable('x-powered-by');
+
+// Delegate path routing to Express directly with plain JS
+app.use((req, res, next) => {
+  if (req.url.startsWith('/api') || req.url.startsWith('/uploads')) {
+    return proxyMiddleware(req, res, next);
+  }
+  next();
+});
 
 app.use(express.static(distDir, {
   etag: true,
