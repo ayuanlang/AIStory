@@ -4488,7 +4488,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('AI 收到您的要求，正为您深度推演分镜结构。此过程涉及海量结构重塑与多维推理，可能需要 1~2 分钟，您可以喝口咖啡稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('AI 收到您的要求，正为您深度推演分镜结构。此过程涉及海量结构重塑与多维推理，可能需要 3~4 分钟，您可以喝口咖啡稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
@@ -4849,7 +4849,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('AI 收到您的要求，正为您深度推演分镜结构。此过程涉及海量结构重塑与多维推理，可能需要 1~2 分钟，您可以喝口咖啡稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('AI 收到您的要求，正为您深度推演分镜结构。此过程涉及海量结构重塑与多维推理，可能需要 3~4 分钟，您可以喝口咖啡稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
@@ -5271,6 +5271,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             ? (subjectConsistencyReport.ok ? <span className="text-emerald-400">{t('逻辑清晰，可以直接推进到下一环节（分镜生成）。', 'Logic is clear, ready to proceed to shot generation.')}</span> : <span className="text-amber-400">{t('发现部分实体可能存在指代不清，建议稍作人工核对。', 'Found some ambiguous entities, quick manual review recommended.')}</span>)
                                             : <span className="text-emerald-400">{t('基础逻辑检查通过。', 'Basic logic check passed.')}</span>
                                     }
+                                </div>
+                                <div>
+                                    <span className="font-medium">⏱️ {t('运行时长', 'Duration')}:</span> <span className="text-blue-300 font-semibold">{formatDurationMs(analysisUiReport.durationMs || analysisUiReport?.phaseTimings?.totalMs)}</span>
                                 </div>
                             </div>
                             <div className="text-xs text-white/60 space-y-1 pt-1">
