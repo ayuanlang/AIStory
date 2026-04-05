@@ -1943,9 +1943,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         await updateEntity(analyzed.id, { image_url: resolvedAssetUrl });
         const updatedEntity = { ...analyzed, image_url: resolvedAssetUrl };
-        setViewingEntity(prev => (prev?.id === updatedEntity.id ? updatedEntity : prev));
-        setEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
-        setAllEntities(prev => prev.map(e => e.id === updatedEntity.id ? updatedEntity : e));
+        applySubjectEntityImageLocally(analyzed.id, resolvedAssetUrl);
 
         setStep('done', '重构完成', 'Refactor completed', 100);
         return updatedEntity;
@@ -3150,14 +3148,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         );
                     } else if (settledTask.value?.imageUrl) {
                         urlMap.set(entity.id, settledTask.value.imageUrl);
-                        const updatedEnt = settledTask.value.updatedEnt;
-                        setAllEntities(prev => prev.map(e => e.id === entity.id ? updatedEnt : e));
-                        setEntities(prev => (prev.some(p => p.id === entity.id)
-                            ? prev.map(e => e.id === entity.id ? updatedEnt : e)
-                            : prev));
-                        if (viewingEntity && viewingEntity.id === entity.id) {
-                            setViewingEntity(updatedEnt);
-                        }
+                        applySubjectEntityImageLocally(entity.id, settledTask.value.imageUrl);
                         clearLocalSubjectImageJobState(entity.id);
                     }
                 } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
