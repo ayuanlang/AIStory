@@ -2776,7 +2776,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                                     className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isAnalyzingNovel || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                     title={t('用 LLM 分析导入文本并自动填充故事生成字段', 'Analyze imported text with LLM and auto-fill Story Generator fields')}
                                 >
-                                    {isAnalyzingNovel ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}</> : <><Upload className="w-4 h-4" /> {t('分析并填充', 'Analyze & Fill')}</>}
+                                    {isAnalyzingNovel ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('AI正在为您深度拆解剧本...', 'Analyzing...')}</> : <><Upload className="w-4 h-4" /> {t('分析并填充', 'Analyze & Fill')}</>}
                                 </button>
                             </div>
                         </div>
