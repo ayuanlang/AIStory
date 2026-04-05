@@ -4488,7 +4488,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('AI 收到您的要求，正为您深度推演分镜结构，此过程包含数万 Token 推理解析，可能需要 1~2 分钟，敬请稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('AI 收到您的要求，正为您深度推演分镜结构。此过程涉及海量结构重塑与多维推理，可能需要 1~2 分钟，您可以喝口咖啡稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
@@ -4849,7 +4849,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('AI 收到您的要求，正为您深度推演分镜结构，此过程包含数万 Token 推理解析，可能需要 1~2 分钟，敬请稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('AI 收到您的要求，正为您深度推演分镜结构。此过程涉及海量结构重塑与多维推理，可能需要 1~2 分钟，您可以喝口咖啡稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
