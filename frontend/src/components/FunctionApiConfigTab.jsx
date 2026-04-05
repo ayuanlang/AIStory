@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, Save, GripVertical, Download, Upload } from 'lucide-react';
 import { getFunctionApiConfigs, updateFunctionApiConfig, getSystemSettingsManage, getApiRoutingConfig, updateApiRoutingConfig } from '../services/api';
 
 const FUNCTION_LABELS = {
-    generate_subjects: '生成实体 (角色/道具/环境)',
+    generate_subjects: '文生文 (角色/道具/环境文本)',
+generate_subjects_t2i: '文生图 (角色/道具/环境)',
+generate_subjects_i2i: '图生图 (角色/道具/环境)',
     generate_cover: '生成封面',
     generate_shot_images: '生成分镜图片',
     generate_videos: '生成视频',

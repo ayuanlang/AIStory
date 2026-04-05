@@ -6080,7 +6080,10 @@ class MediaGenerationService:
                 else:
                     payload_obj["bgm"] = True
             else:
-                if _pick_tool_value("generateAudio") is not None:
+                if "seedance" in endpoint_lower or "seedance" in model_lower:
+                    av = _pick_tool_value("generateAudio") or _pick_tool_value("audio") or _pick_tool_value("sound")
+                    payload_obj["generateAudio"] = "true" if _normalize_bool(av, False) else "false"
+                elif _pick_tool_value("generateAudio") is not None:
                     payload_obj["generateAudio"] = _normalize_bool(_pick_tool_value("generateAudio"), False)
                 elif _pick_tool_value("audio") is not None:
                     payload_obj["audio"] = _normalize_bool(_pick_tool_value("audio"), False)
@@ -6294,7 +6297,8 @@ class MediaGenerationService:
             _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
-            _set_if_present(payload, "cameraFixed", _pick_tool_value("cameraFixed"))
+            camera_fixed = _pick_tool_value("cameraFixed")
+            payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false" if "seedance" in str(config.get("model", "")).lower() else _normalize_bool(camera_fixed, False)
             _set_audio_flags(payload)
         elif "start-end-to-video" in endpoint_lower or "start-to-end" in endpoint_lower:
             first_image = image_refs[0] if image_refs else None
@@ -6320,6 +6324,10 @@ class MediaGenerationService:
             _set_if_present(payload, "resolution", normalized_video_resolution)
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
+            
+            camera_fixed = _pick_tool_value("cameraFixed")
+            payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false" if "seedance" in str(config.get("model", "")).lower() else _normalize_bool(camera_fixed, False)
+                    
             _set_audio_flags(payload)
         else:
             first_image = image_refs[0] if image_refs else None
@@ -6335,10 +6343,15 @@ class MediaGenerationService:
             
             if resolved_last_frame and "/rhart-video-" in endpoint_lower:
                 payload["lastImageUrl"] = resolved_last_frame
+            
             payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
             _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "movementAmplitude", movement_amplitude)
+            
+            camera_fixed = _pick_tool_value("cameraFixed")
+            payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false" if "seedance" in str(config.get("model", "")).lower() else _normalize_bool(camera_fixed, False)
+                    
             _set_audio_flags(payload)
 
         _set_runninghub_prompt_expansion_flag(payload)
@@ -8275,9 +8288,12 @@ class MediaGenerationService:
                                 field_match = re.search(r"field\s+'([^']+)'", submit_error_message, re.IGNORECASE)
                                 if field_match:
                                     field_name = field_match.group(1).strip()
-                                    if field_name in ["generateAudio", "bgm", "audio", "sound"]:
+                                    if field_name in ["generateAudio", "bgm", "audio", "sound", "cameraFixed"]:
                                         _debug_log(f"[{log_tag}] RunningHub missing field '{field_name}' detected '{submit_error_message}', automatically assigning False...", "warning")
-                                        payload[field_name] = False
+                                        if field_name in ["generateAudio", "cameraFixed"] and ("seedance" in submit_url.lower() or "seedance" in str(payload.get("model", "")).lower()):
+                                            payload[field_name] = "false"
+                                        else:
+                                            payload[field_name] = False
                                         await asyncio.sleep(min(2 * (submit_attempt + 1), 5))
                                         continue
                     except Exception:

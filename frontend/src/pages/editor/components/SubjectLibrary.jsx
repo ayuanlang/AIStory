@@ -1898,7 +1898,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
         const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-            function_name: 'generate_subjects',
+            function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
             project_id: projectId,
             episode_id: currentEpisode?.id,
             entity_id: analyzed?.id,
@@ -2702,7 +2702,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             const submitResult = await submitImageGenerationJob(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                function_name: 'generate_subjects',
+                function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
                 entity_id: targetEntityId,
@@ -3028,7 +3028,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 let createdJobId = '';
                 try {
                     const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                        function_name: 'generate_subjects',
+                        function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
                         project_id: projectId,
                         episode_id: currentEpisode?.id,
                         entity_id: entity?.id,
@@ -3325,7 +3325,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             </button>
                         )})}
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2">
-                            <FunctionApiSelector functionName="generate_subjects" configs={functionApiConfigs} />
+                            <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("文生图模型: ", "T2I Model: ")} /><FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("图生图模型: ", "I2I Model: ")} />
                         </div>
                     </div>
                 </div>

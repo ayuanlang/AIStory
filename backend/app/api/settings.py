@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+﻿from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData, bindparam, literal
@@ -9944,7 +9944,7 @@ def get_all_function_api_configs(
     
     result = []
     supported_functions = [
-        "generate_subjects", "generate_cover", "generate_shot_images",
+        "generate_subjects", "generate_subjects_t2i", "generate_subjects_i2i", "generate_cover", "generate_shot_images",
         "generate_videos", "script_analysis", "subject_image_analysis"
     ]
     
@@ -9984,7 +9984,7 @@ def update_function_api_config(
     current_user: User = Depends(get_current_user)
 ):
     supported_functions = [
-        "generate_subjects", "generate_cover", "generate_shot_images",
+        "generate_subjects", "generate_subjects_t2i", "generate_subjects_i2i", "generate_cover", "generate_shot_images",
         "generate_videos", "script_analysis", "subject_image_analysis"
     ]
     if function_name not in supported_functions:

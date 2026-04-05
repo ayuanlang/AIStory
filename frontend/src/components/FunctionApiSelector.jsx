@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { getFunctionApiConfigs } from '../services/api';
 
 export const useFunctionApis = () => {
@@ -20,7 +20,7 @@ export const useFunctionApis = () => {
     return configs;
 };
 
-const FunctionApiSelector = ({ functionName, configs, className = '' }) => {
+const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '' }) => {
     const apiList = configs?.[functionName] || [];
     const storageKey = 'func_api_' + functionName;
     const [value, setValue] = useState(Number(localStorage.getItem(storageKey)) || '');
@@ -44,7 +44,7 @@ const FunctionApiSelector = ({ functionName, configs, className = '' }) => {
 
     return (
         <div className={`flex items-center gap-2 ${className}`}>
-            <span className="text-xs text-white/50 whitespace-nowrap">API:</span>
+            <span className="text-xs text-white/50 whitespace-nowrap">{label}</span>
             <select
                 value={value || ''}
                 onChange={(e) => handleChange(Number(e.target.value))}

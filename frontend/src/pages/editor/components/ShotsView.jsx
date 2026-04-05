@@ -1193,6 +1193,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             clearPendingJointDiptychImageJob(stableShotId);
             setShotGeneratingState(stableShotId, 'start', false);
             setShotGeneratingState(stableShotId, 'end', false);
+            setShotGeneratingState(stableShotId, 'cropping', false);
         } else {
             clearPendingImageJob(stableShotId, stableKind);
             setShotGeneratingState(stableShotId, stableKind, false);
@@ -1259,6 +1260,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         clearPendingJointDiptychImageJob(stableShotId);
         setShotGeneratingState(stableShotId, 'start', false);
         setShotGeneratingState(stableShotId, 'end', false);
+        setShotGeneratingState(stableShotId, 'cropping', false);
     }, [clearPendingJointDiptychImageJob, setShotGeneratingState]);
 
     const clearLocalShotBatchUiState = useCallback((sceneIdOverride) => {
@@ -1687,7 +1689,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         [showNotification, t]
     );
     const hasActiveGeneration = useMemo(
-        () => Object.values(generatingStateByShot || {}).some(s => !!(s?.start || s?.end || s?.video)),
+        () => Object.values(generatingStateByShot || {}).some(s => !!(s?.start || s?.end || s?.video || s?.cropping)),
         [generatingStateByShot]
     );
 
@@ -2899,7 +2901,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
             clearPendingJointDiptychImageJob(targetShotId);
             if (abortGenerationRef.current) return;
-            await applyJointShotDiptychResult({
+            setShotGeneratingState(targetShotId, 'cropping', true);
+await applyJointShotDiptychResult({
                 shotRecord: {
                     ...shotSnapshot,
                     start_frame: rawStartPrompt,
@@ -2921,6 +2924,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             clearPendingJointDiptychImageJob(targetShotId);
             setShotGeneratingState(targetShotId, 'start', false);
             setShotGeneratingState(targetShotId, 'end', false);
+      setShotGeneratingState(targetShotId, 'cropping', false);
         }
     };
 
@@ -3043,7 +3047,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 throw new Error('No composite image URL returned');
             }
             clearPendingJointDiptychImageJob(targetShotId);
-            const nextData = await applyJointShotDiptychResult({
+            const nextData = setShotGeneratingState(targetShotId, 'cropping', true);
+await applyJointShotDiptychResult({
                 shotRecord: {
                     ...stableShot,
                     start_frame: rawStartPrompt,
@@ -3462,6 +3467,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 clearPendingJointDiptychImageJob(stableShotId);
                                 setShotGeneratingState(stableShotId, 'start', false);
                                 setShotGeneratingState(stableShotId, 'end', false);
+    setShotGeneratingState(stableShotId, 'cropping', false);
                             } else {
                                 clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, stableKind, false);
@@ -3473,7 +3479,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     
                                 try {
                                     if (isJointDiptych) {
-                                        await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
+                                        setShotGeneratingState(targetShotId, 'cropping', true);
+await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
                                     } else if (stableKind === 'start') {
                                         const nextData = { image_url: resultUrl };
                                         await onUpdateShot(stableShotId, nextData);
@@ -3516,6 +3523,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 clearPendingJointDiptychImageJob(stableShotId);
                                 setShotGeneratingState(stableShotId, 'start', false);
                                 setShotGeneratingState(stableShotId, 'end', false);
+    setShotGeneratingState(stableShotId, 'cropping', false);
                             } else {
                                 clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, stableKind, false);
@@ -3535,6 +3543,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 clearPendingJointDiptychImageJob(stableShotId);
                                 setShotGeneratingState(stableShotId, 'start', false);
                                 setShotGeneratingState(stableShotId, 'end', false);
+    setShotGeneratingState(stableShotId, 'cropping', false);
                             } else {
                                 clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, stableKind, false);
@@ -5407,6 +5416,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (isJointDiptych) {
             setShotGeneratingState(stableShotId, 'start', false);
             setShotGeneratingState(stableShotId, 'end', false);
+    setShotGeneratingState(stableShotId, 'cropping', false);
         } else {
             setShotGeneratingState(stableShotId, stableKind, false);
         }
@@ -6252,6 +6262,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             clearPendingImageJob(stableShotId, 'end');
             setShotGeneratingState(stableShotId, 'start', false);
             setShotGeneratingState(stableShotId, 'end', false);
+    setShotGeneratingState(stableShotId, 'cropping', false);
         }
     }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
 
@@ -7039,7 +7050,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         {hasActiveGeneration && (
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30 flex items-center gap-1">
                                 <Loader2 className="w-3 h-3 animate-spin" />
-                                {t('生成中', 'Generating')}
+                                {Object.values(generatingStateByShot || {}).some((s) => s?.cropping) ? t('处理图片中', 'Processing Image') : t('生成中', 'Generating')}
                             </span>
                         )}
                     </h2>
@@ -7215,6 +7226,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         {sortedShots.map((shot, idx) => {
                             const shotState = generatingStateByShot[String(shot.id)] || { start: false, end: false, video: false };
                             const isGeneratingThisShot = !!(shotState.start || shotState.end || shotState.video);
+const isCroppingThisShot = !!(shotState.cropping);
                             const shotCardPromptPreview = getShotCardPromptPreview(shot);
                             return (
                             <div 
@@ -7268,10 +7280,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     <div className="absolute bottom-2 right-2 bg-primary text-black px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none">
                                         {shot.duration || '0s'}
                                     </div>
-                                    {isGeneratingThisShot && (
+                                    {(isGeneratingThisShot || isCroppingThisShot) && (
                                         <div className="absolute bottom-2 left-2 bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none flex items-center gap-1">
                                             <Loader2 className="w-3 h-3 animate-spin" />
-                                            {t('生成中', 'Generating')}
+                                            {isCroppingThisShot ? t('处理图片中', 'Processing Image') : t('生成中', 'Generating')}
                                         </div>
                                     )}
                                 </div>

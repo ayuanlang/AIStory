@@ -191,8 +191,8 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
         Global_Style: "",
         tech_params: {
             visual_standard: {
-                horizontal_resolution: "1080",
-                vertical_resolution: "1920",
+                horizontal_resolution: "720",
+                vertical_resolution: "1280",
                 frame_rate: "24",
                 aspect_ratio: "9:16",
                 quality: "超高 / Ultra High",

@@ -1,4 +1,4 @@
-
+﻿
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.session import Base
@@ -430,6 +430,7 @@ class FunctionAPIConfig(Base):
     每一个特定的功能对应一条记录。
     支持的功能：
       generate_subjects      (生成实体：角色、道具、环境、不含封面)
+generate_subjects_t2i  (文生图：角色、道具、环境、不含封面)`ngenerate_subjects_i2i  (图生图：角色、道具、环境、不含封面)
       generate_cover         (生成封面)
       generate_shot_images   (生成分镜图片)
       generate_videos        (生成视频)
