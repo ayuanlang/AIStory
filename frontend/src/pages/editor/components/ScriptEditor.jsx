@@ -318,7 +318,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (prevPhase === 'completed' || prevPhase === 'warning' || prevPhase === 'failed') return prev;
                 return {
                     phase: 'completed',
-                    message: prevMessage || t('分析与导入已完成。', 'Analysis and import completed.'),
+                    message: prevMessage || t('深度拆解与自动构建已完美收官！请移步工作台检阅分镜详情。', 'Analysis and import completed.'),
                 };
             }
 
@@ -346,13 +346,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const normalized = String(code || '').trim();
         if (!normalized) return '';
         if (normalized === 'ANALYSIS_OUTPUT_TRUNCATED') {
-            return t('AI Scene Analysis 的最后一段输出在长度上限处停止，当前结果未通过完整性校验。', 'The final AI Scene Analysis segment stopped at the length limit, and the result did not pass integrity checks.');
+            return t('AI Script Analysis 的最后一段输出在长度上限处停止，当前结果未通过完整性校验。', 'The final AI Script Analysis segment stopped at the length limit, and the result did not pass integrity checks.');
         }
         if (normalized === 'ANALYSIS_OUTPUT_CONTINUED') {
-            return t('AI Scene Analysis 曾因长度上限分段，系统已自动续写；是否最终完整以结果校验为准。', 'AI Scene Analysis hit a length limit and auto-continuation was applied; final completeness depends on integrity checks.');
+            return t('AI Script Analysis 曾因长度上限分段，系统已自动续写；是否最终完整以结果校验为准。', 'AI Script Analysis hit a length limit and auto-continuation was applied; final completeness depends on integrity checks.');
         }
         if (normalized === 'ANALYSIS_JSON_INVALID') {
-            return t('AI Scene Analysis 检测到结构片段损坏。', 'AI Scene Analysis detected invalid structured fragments.');
+            return t('AI Script Analysis 检测到结构片段损坏。', 'AI Script Analysis detected invalid structured fragments.');
         }
         if (normalized === 'ANALYSIS_SUBJECTS_UNVERIFIED') {
             return '';
@@ -361,7 +361,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return '';
         }
         if (normalized === 'ANALYSIS_LLM_CALL_FAILED_RETRIED') {
-            return t('场景分析过程中出现过 LLM 调用失败，系统已自动重试/回退模型继续执行。请关注分析结果与告警详情。', 'LLM call failures occurred during scene analysis; the system retried/fallback to continue. Please review result details and warnings.');
+            return t('剧本分析过程中出现过 LLM 调用失败，系统已自动重试/回退模型继续执行。请关注分析结果与告警详情。', 'LLM call failures occurred during scene analysis; the system retried/fallback to continue. Please review result details and warnings.');
         }
         return '';
     }, [t]);
@@ -409,17 +409,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const localizeAnalysisFailureMessage = useCallback((rawMessage) => {
         const stable = String(rawMessage || '').trim();
         if (!stable) {
-            return t('场景分析返回告警：结果需要人工复核，但已允许继续加载。', 'Scene analysis returned warnings: the result needs manual review, but loading can continue.');
+            return t('剧本分析返回告警：结果需要人工复核，但已允许继续加载。', 'Scene analysis returned warnings: the result needs manual review, but loading can continue.');
         }
 
         const normalized = stable.toLowerCase();
         if (
-            normalized.includes('场景分析结果不可用')
-            || normalized.includes('请直接重新执行 ai 场景分析')
-            || normalized.includes('please directly rerun ai scene analysis')
+            normalized.includes('剧本分析结果不可用')
+            || normalized.includes('请直接重新执行 ai 剧本分析')
+            || normalized.includes('please directly rerun AI script analysis')
         ) {
             return t(
-                '场景分析返回告警：结果需要人工复核，但不再阻断原文、Markdown 与 JSON 的加载。',
+                '剧本分析返回告警：结果需要人工复核，但不再阻断原文、Markdown 与 JSON 的加载。',
                 'Scene analysis returned warnings: the result needs manual review, but no longer blocks loading raw text, markdown, or JSON.'
             );
         }
@@ -429,7 +429,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('missing required sections')
         ) {
             return t(
-                '场景分析返回告警：本次返回缺少部分必要结构段，请人工复核；系统仍会继续加载已返回的原文、Markdown 与 JSON。',
+                '剧本分析返回告警：本次返回缺少部分必要结构段，请人工复核；系统仍会继续加载已返回的原文、Markdown 与 JSON。',
                 'Scene analysis returned warnings: some required sections are missing. Please review manually; the system will still load returned raw text, markdown, and JSON.'
             );
         }
@@ -438,7 +438,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('truncated')
         ) {
             return t(
-                '场景分析返回告警：续写后结果仍可能不完整，请人工复核；系统将继续加载已返回内容。',
+                '剧本分析返回告警：续写后结果仍可能不完整，请人工复核；系统将继续加载已返回内容。',
                 'Scene analysis returned warnings: the result may still be incomplete after continuation. Please review manually; the system will continue loading returned content.'
             );
         }
@@ -448,7 +448,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('json 不完整')
         ) {
             return t(
-                '场景分析返回告警：本次返回的部分结构片段损坏，请人工复核；系统会尽可能继续解析并加载可用内容。',
+                '剧本分析返回告警：本次返回的部分结构片段损坏，请人工复核；系统会尽可能继续解析并加载可用内容。',
                 'Scene analysis returned warnings: some structured fragments are invalid. Please review manually; the system will keep parsing and loading usable content where possible.'
             );
         }
@@ -1276,7 +1276,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const supplementMode = `\n\n[Issue-driven Supplement Mode - Mandatory]\n` +
             `Use the provided text as the current generated analysis draft (NOT original screenplay).\n` +
             `You MUST patch missing entities/structure/problems according to the issue list below.\n` +
-            `Comprehensively audit missing content and entities using [Last Generated Analysis Output] plus the three optional sections ([Subject Check Result], [Core Coverage Check Result], [Episode 1 AI Scene Analysis Attention Notes]); prioritize explicitly identified gaps and regenerate the output parts accordingly.\n` +
+            `Comprehensively audit missing content and entities using [Last Generated Analysis Output] plus the three optional sections ([Subject Check Result], [Core Coverage Check Result], [Episode 1 AI Script Analysis Attention Notes]); prioritize explicitly identified gaps and regenerate the output parts accordingly.\n` +
             `Do NOT output explanations, apologies, or meta commentary.\n` +
             `Return a fully corrected final output in the required scene_analysis format.\n` +
             `Issue List:\n${issueBlock}`;
@@ -1415,7 +1415,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if (subject) sections.push('[Subject Check Result]\n' + subject);
         if (core) sections.push('[Core Coverage Check Result]\n' + core);
-        if (notes) sections.push('[Episode 1 AI Scene Analysis Attention Notes]\n' + notes);
+        if (notes) sections.push('[Episode 1 AI Script Analysis Attention Notes]\n' + notes);
 
         return sections.join('\n\n');
     };
@@ -1587,7 +1587,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             running: true,
             action: 'subject_consistency',
             progress: 35,
-            message: t('正在检查 Subject 一致性...', 'Checking subject consistency...'),
+            message: t('即将完成！正在为您进行最终的实体逻辑校验与角色一致性排查...', 'Checking subject consistency...'),
         });
         try {
             const report = runSubjectConsistencyCheck();
@@ -1630,7 +1630,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const alertMessage = [
             t(
-                '本次场景分析返回的 subjects JSON 可能不完整。系统已继续导入可解析内容，请立即人工复核。',
+                '本次剧本分析返回的 subjects JSON 可能不完整。系统已继续导入可解析内容，请立即人工复核。',
                 'The subjects JSON returned by this scene analysis may be incomplete. The system imported the parseable content, but manual review is required.'
             ),
             ...uniqueReasons.map((line) => `- ${line}`),
@@ -1731,7 +1731,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             running: true,
             action: 'import_entities',
             progress: 20,
-            message: t('正在导入实体...', 'Importing entities...'),
+            message: t('素材同步：正在为您分选核心角色与场景，自动并入当前项目素材引擎...', 'Importing entities...'),
         });
         try {
             const ok = await doImportText(JSON.stringify(payload, null, 2), 'json');
@@ -2078,7 +2078,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const handlePostCheckRerunAnalysis = async () => {
         setPendingSwitchAfterPostChecks(false);
         setPostAnalysisCheckModal({ open: false, status: 'idle', message: '', guidance: [] });
-        if (onLog) onLog('Post-check action: rerun AI Scene Analysis.', 'info');
+        if (onLog) onLog('Post-check action: rerun AI Script Analysis.', 'info');
         await handleAnalysisClick();
     };
 
@@ -2114,8 +2114,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!passedSubject) {
             guidance.push(
                 t(
-                    'Subject 一致性未通过：说明角色/道具/环境索引可能不完整或不一致，建议重新执行 AI Scene Analysis。',
-                    'Subject consistency failed: subject index/entities may be incomplete or inconsistent; rerun AI Scene Analysis is recommended.'
+                    'Subject 一致性未通过：说明角色/道具/环境索引可能不完整或不一致，建议重新执行 AI Script Analysis。',
+                    'Subject consistency failed: subject index/entities may be incomplete or inconsistent; rerun AI Script Analysis is recommended.'
                 )
             );
         }
@@ -2299,7 +2299,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatus({
             phase: 'importing',
-            message: t('LLM 已返回，正在自动导入...', 'LLM response received, auto-importing...'),
+            message: t('推演完成：已成功获取 AI 的导演级解析框架，正在为您结构化导入至工作台...', 'LLM response received, auto-importing...'),
         });
 
         if (onLog) onLog('Auto-importing analysis result...', 'process');
@@ -2340,7 +2340,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatus({
             phase: 'checking_scene_subjects',
-            message: t('场景与 subjects 导入完成，正在逐个场景检查实体缺失...', 'Scenes and subjects imported. Checking each scene for missing entities...'),
+            message: t('主体信息同步完毕！AI 正在查漏补缺，智能扫描并修复各分镜画面的上下文元素...', 'Scenes and subjects imported. Checking each scene for missing entities...'),
         });
 
         const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
@@ -3048,7 +3048,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!taskId) {
             setAnalysisFlowStatus({
                 phase: 'warning',
-                message: t('未检测到可停止的分析任务。', 'No running analysis task found to stop.'),
+                message: t('当前没有正在运行的分镜推演任务需要被终止。', 'No running analysis task found to stop.'),
             });
             return;
         }
@@ -3060,7 +3060,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             clearAnalysisTaskMarker(activeEpisode.id);
             setAnalysisFlowStatus({
                 phase: 'warning',
-                message: t('已请求停止当前场景分析任务。', 'Stop requested for the current scene analysis task.'),
+                message: t('已请求停止当前剧本分析任务。', 'Stop requested for the current scene analysis task.'),
             });
             if (onLog) onLog(`Scene analysis stop requested: task_id=${taskId}`, 'warning');
         } catch (e) {
@@ -3146,7 +3146,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             if (recoveredText) {
                 if (onLog) {
-                    onLog('Recovered AI Scene Analysis result from episode storage while async task polling was delayed.', 'warning');
+                    onLog('Recovered AI Script Analysis result from episode storage while async task polling was delayed.', 'warning');
                 }
                 return {
                     success: true,
@@ -3162,12 +3162,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         if (!settled) {
-            throw new Error('AI Scene Analysis timed out while waiting for async task result (resume deadline reached).');
+            throw new Error('AI Script Analysis timed out while waiting for async task result (resume deadline reached).');
         }
         await analyzePromise;
         if (resolvedError) throw resolvedError;
         if (settled) return resolvedValue;
-        throw new Error('AI Scene Analysis timed out while waiting for async task result.');
+        throw new Error('AI Script Analysis timed out while waiting for async task result.');
     }, [onLog, t, waitForEpisodeAnalysisResultUpdate]);
 
     const resumeAnalysisFromTaskMarker = useCallback(async (marker) => {
@@ -3206,7 +3206,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisStopRequestedRef.current = false;
         setAnalysisFlowStatus({
             phase: 'analyzing',
-            message: t('检测到进行中的分析任务，正在恢复监听...', 'Detected an in-progress analysis task, reconnecting...'),
+            message: t('业务恢复：识别到您正在进行中的AI分镜进度，正在为您恢复现场...', 'Detected an in-progress analysis task, reconnecting...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -4429,7 +4429,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (latestScript === savedScript) return;
 
         try {
-            if (onLog) onLog('Auto-saving script before AI Scene Analysis...', 'process');
+            if (onLog) onLog('Auto-saving script before AI Script Analysis...', 'process');
             await onUpdateScript(activeEpisode.id, latestScript);
             if (onLog) onLog('Script auto-saved before analysis.', 'success');
         } catch (saveError) {
@@ -4440,7 +4440,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
         if (analysisRunInFlightRef.current) {
-            if (onLog) onLog('Skipped duplicate AI Scene Analysis submit while another analysis run is already active.', 'warning');
+            if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
         analysisRunInFlightRef.current = true;
@@ -4450,7 +4450,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
             phase: 'autosaving',
-            message: t('正在自动保存剧本...', 'Auto-saving script...'),
+            message: t('护航：正在为您实时安全上链剧本进度...', 'Auto-saving script...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -4462,7 +4462,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             warning: '',
             error: '',
         });
-        if (onLog) onLog("Starting AI Scene Analysis...", "start");
+        if (onLog) onLog("Starting AI Script Analysis...", "start");
 
         let llmReturned = false;
         let runtimeMeta = null;
@@ -4488,7 +4488,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('已提交 LLM，正在等待返回。提交阶段超时约 300s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('AI 收到您的要求，正为您深度推演分镜结构，此过程包含数万 Token 推理解析，可能需要 1~2 分钟，敬请稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
@@ -4554,7 +4554,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const uniqueWarnings = [...new Set(integrityWarnings.map(w => String(w || '').trim()).filter(Boolean))];
                 if (uniqueWarnings.length > 0) {
                     const warningText = uniqueWarnings.join('\n- ');
-                    if (onLog) onLog(`AI Scene Analysis warning:\n- ${warningText}`, 'warning');
+                    if (onLog) onLog(`AI Script Analysis warning:\n- ${warningText}`, 'warning');
                     if (displayWarnings.length > 0) {
                         showAnalysisWarningStatus(displayWarnings);
                     }
@@ -4584,7 +4584,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
                 phase: 'importing',
-                message: t('正在导入 Markdown 与 JSON 到工作区...', 'Importing Markdown and JSON into workspace...'),
+                message: t('重构完成：正在帮您解包为结构化工作流并推送到画板...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
                 importReport = await runAutoImportAndSwitchToScenes(analyzedText, {
@@ -4752,7 +4752,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (isAnalyzing) return;
         const generatedContent = String(llmRawResultContent || llmResultContent || '').trim();
         if (!generatedContent) {
-            alert(t('请先完成第一次 AI 场景分析，再执行“修正生成结果”。', 'Please finish the first AI Scene Analysis before running "Refine Generated Result".'));
+            alert(t('请先完成第一次 AI 剧本分析，再执行“修正生成结果”。', 'Please finish the first AI Script Analysis before running "Refine Generated Result".'));
             return;
         }
 
@@ -4803,7 +4803,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (analysisRunInFlightRef.current) {
-            if (onLog) onLog('Skipped duplicate advanced AI Scene Analysis submit while another analysis run is already active.', 'warning');
+            if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
         analysisRunInFlightRef.current = true;
@@ -4814,7 +4814,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
             phase: 'autosaving',
-            message: t('正在自动保存剧本...', 'Auto-saving script...'),
+            message: t('护航：正在为您实时安全上链剧本进度...', 'Auto-saving script...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -4849,7 +4849,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('已提交 LLM，正在等待返回。提交阶段超时约 300s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('AI 收到您的要求，正为您深度推演分镜结构，此过程包含数万 Token 推理解析，可能需要 1~2 分钟，敬请稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
@@ -4907,7 +4907,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const uniqueWarnings = [...new Set(integrityWarnings.map(w => String(w || '').trim()).filter(Boolean))];
                 if (uniqueWarnings.length > 0) {
                     const warningText = uniqueWarnings.join('\n- ');
-                    if (onLog) onLog(`AI Scene Analysis warning:\n- ${warningText}`, 'warning');
+                    if (onLog) onLog(`AI Script Analysis warning:\n- ${warningText}`, 'warning');
                     if (displayWarnings.length > 0) {
                         showAnalysisWarningStatus(displayWarnings);
                     }
@@ -4937,7 +4937,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
                 phase: 'importing',
-                message: t('正在导入 Markdown 与 JSON 到工作区...', 'Importing Markdown and JSON into workspace...'),
+                message: t('重构完成：正在帮您解包为结构化工作流并推送到画板...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
                 importReport = await runAutoImportAndSwitchToScenes(analyzedText || "", {
@@ -5099,11 +5099,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             >
                                 {isAnalyzing ? (
                                     <>
-                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}
+                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('AI正在为您深度拆解剧本...', 'Analyzing...')}
                                     </>
                                 ) : (
                                     <>
-                                        <Wand2 className="w-4 h-4" /> {t('AI 场景分析', 'AI Scene Analysis')}
+                                        <Wand2 className="w-4 h-4" /> {t('AI 剧本分析', 'AI Script Analysis')}
                                     </>
                                 )}
                             </button>
@@ -5112,7 +5112,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     onClick={handleStopAnalysisTask}
                                     disabled={isStoppingAnalysisTask}
                                     className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/20 hover:bg-red-500/30 text-red-100 border-red-400/40'}`}
-                                    title={t('手动停止当前 AI 场景分析任务', 'Stop the current AI scene analysis task')}
+                                    title={t('手动停止当前 AI 剧本分析任务', 'Stop the current AI script analysis task')}
                                 >
                                     {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
                                     {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止分析', 'Stop Analysis')}
@@ -5147,7 +5147,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2 font-semibold">
                             {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4" /> : <Loader2 className="w-4 h-4 animate-spin" />}
-                            <span>{t('AI 场景分析状态', 'AI Scene Analysis Status')}</span>
+                            <span>{t('AI 剧本分析状态', 'AI Script Analysis Status')}</span>
                         </div>
                         {!isAnalyzing && (
                             <button
@@ -5303,9 +5303,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                             {isEpisodeOnePage && (
                                 <div className="border-t border-white/10 px-6 py-4 bg-black/10">
-                                    <div className="text-xs font-semibold uppercase text-muted-foreground">Episode 1 · AI Scene Analysis 补充说明（可为空）</div>
+                                    <div className="text-xs font-semibold uppercase text-muted-foreground">Episode 1 · AI Script Analysis 补充说明（可为空）</div>
                                     <div className="text-[11px] text-muted-foreground mt-1 mb-2">
-                                        该项可为空。补充要求通常用于特别强调资产生成或关键执行要求；点击 AI Scene Analysis 时会作为高优先级约束注入。
+                                        该项可为空。补充要求通常用于特别强调资产生成或关键执行要求；点击 AI Script Analysis 时会作为高优先级约束注入。
                                     </div>
                                     <textarea
                                         value={analysisAttentionNotes}
@@ -5687,7 +5687,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ) : (
                                     <Info className="w-5 h-5 text-sky-300" />
                                 )}
-                                {t('AI Scene Analysis Subject 检查结果', 'AI Scene Analysis Subject Check Result')}
+                                {t('AI Script Analysis Subject 检查结果', 'AI Script Analysis Subject Check Result')}
                             </h3>
                             <button
                                 onClick={closePostAnalysisCheckModal}
@@ -5731,7 +5731,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <button
                                     onClick={handlePostCheckRerunAnalysis}
                                     className="px-4 py-2 rounded-lg text-sm font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-500/30"
-                                    title={t('建议重跑 AI Scene Analysis', 'Recommended: rerun AI Scene Analysis')}
+                                    title={t('建议重跑 AI Script Analysis', 'Recommended: rerun AI Script Analysis')}
                                 >
                                     {t('重跑分析', 'Rerun Analysis')}
                                 </button>
