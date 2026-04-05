@@ -3648,7 +3648,7 @@ async def get_prompt_content(filename: str, current_user: User = Depends(get_cur
 
     if normalized.startswith("skills/"):
         skill_id = normalized.split("/", 1)[1].strip()
-        if skill_id:
+        if skill_id and "/" not in skill_id and not skill_id.endswith(('.md', '.txt', '.json')):
             return await get_prompt_skill_detail(skill_id, current_user)
 
     debug_info = _build_prompt_resolution_debug(filename)
@@ -17548,7 +17548,27 @@ def get_unreferenced_asset_ids(
 
 import imageio
 from PIL import Image
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
+import httpx
+
+@router.get("/assets/proxy")
+async def proxy_asset(url: str):
+    """Proxy an external asset request to avoid CORS issues on frontend canvas processing."""
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid URL scheme")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, follow_redirects=True, timeout=30.0)
+            resp.raise_for_status()
+            
+            headers = {}
+            if "content-type" in resp.headers:
+                headers["Content-Type"] = resp.headers["content-type"]
+            
+            return Response(content=resp.content, status_code=resp.status_code, headers=headers)
+    except Exception as e:
+        logger.error(f"Failed to proxy asset {url}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to proxy asset: {e}")
 
 @router.get("/assets/thumb/{filename:path}")
 def get_asset_thumbnail(filename: str):

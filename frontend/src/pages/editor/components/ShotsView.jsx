@@ -2664,7 +2664,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const diptychPlan = buildShotDiptychPlan(preferredAspectRatio);
             const exportSize = resolveShotPanelExportResolution(diptychPlan.targetAspectRatio, preferredImageSize);
 
-            const compositeResp = await fetch(getFullUrl(stableCompositeUrl));
+            const directUrl = getFullUrl(stableCompositeUrl);
+            const isLocalOrigin = directUrl.startsWith(window.location.origin) || directUrl.startsWith('blob:') || directUrl.startsWith('data:');
+            // Use backend proxy for external URLs to bypass CORS restrictions during Canvas processing
+            const fetchUrl = isLocalOrigin 
+                ? directUrl 
+                : getFullUrl(`/api/v1/assets/proxy?url=${encodeURIComponent(directUrl)}`);
+
+            const compositeResp = await fetch(fetchUrl);
             if (!compositeResp.ok) {
                 throw new Error(`Failed to download composite image (${compositeResp.status})`);
             }
