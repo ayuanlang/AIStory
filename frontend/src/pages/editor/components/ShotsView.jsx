@@ -2751,6 +2751,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 throw new Error('Failed to upload split start/end frame assets');
             }
 
+            try {
+                const preloadUrl = (url) => new Promise((resolve) => {
+                    if (!url) return resolve();
+                    const img = new Image();
+                    img.onload = () => {
+                        if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(url);
+                        resolve();
+                    };
+                    img.onerror = resolve;
+                    img.src = getFullUrl(url);
+                });
+                await Promise.all([preloadUrl(startUrl), preloadUrl(endUrl)]);
+            } catch (e) {
+                console.warn('Failed to preload split frames, continuing...', e);
+            }
+
             let techNotes = {};
             try {
                 techNotes = JSON.parse(latestShot?.technical_notes || '{}');
@@ -3482,6 +3498,17 @@ await applyJointShotDiptychResult({
                                         setShotGeneratingState(targetShotId, 'cropping', true);
 await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
                                     } else if (stableKind === 'start') {
+                                        try {
+                                            await new Promise((resolve) => {
+                                                const img = new Image();
+                                                img.onload = () => {
+                                                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(resultUrl);
+                                                    resolve();
+                                                };
+                                                img.onerror = resolve;
+                                                img.src = getFullUrl(resultUrl);
+                                            });
+                                        } catch (e) {}
                                         const nextData = { image_url: resultUrl };
                                         await onUpdateShot(stableShotId, nextData);
                                         setEditingShot((prev) => (prev && String(prev.id) === stableShotId ? { ...prev, ...nextData } : prev));
