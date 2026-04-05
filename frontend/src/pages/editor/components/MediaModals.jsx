@@ -308,6 +308,8 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [filterScope, setFilterScope] = useState('project_subjects'); // 'project_subjects', 'project', 'subject', 'shot', 'type'
     const [filterType, setFilterType] = useState('all');
     const [filterValue, setFilterValue] = useState('');
+    const [filterFrameType, setFilterFrameType] = useState('all');
+    const [availableShots, setAvailableShots] = useState([]);
     const [assetsViewportHeight, setAssetsViewportHeight] = useState(0);
     const [assetsViewportWidth, setAssetsViewportWidth] = useState(0);
     const [assetsScrollTop, setAssetsScrollTop] = useState(0);
@@ -383,7 +385,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (isOpen && tab === 'assets') {
             loadAssets();
         }
-    }, [isOpen, tab, filterScope, filterType, filterValue]);
+    }, [isOpen, tab, filterScope, filterType, filterValue, filterFrameType]);
 
     useEffect(() => {
         if (!isOpen || tab !== 'assets') return;
@@ -414,7 +416,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         setAssetsScrollTop(0);
         const viewport = assetsViewportRef.current;
         if (viewport) viewport.scrollTop = 0;
-    }, [filterScope, filterType, filterValue, tab, isOpen]);
+    }, [filterScope, filterType, filterValue, filterFrameType, tab, isOpen]);
 
     const loadAssets = () => {
         setLoading(true);
@@ -452,6 +454,19 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 });
             } else if (requireAnyEntity) {
                 res = res.filter(a => !!a.meta_info?.entity_id);
+            }
+
+            // Frame Type filtering
+            if (filterScope === 'shot' && filterFrameType !== 'all') {
+                res = res.filter(a => {
+                    const ft = String(a.meta_info?.frame_type || a.meta_info?.asset_type || '').toLowerCase();
+                    const isStartEnd = ft.includes('start') || ft.includes('end') || ft.includes('first') || ft.includes('last');
+                    const isKeyframe = ft.includes('key');
+                    
+                    if (filterFrameType === 'start_end') return isStartEnd;
+                    if (filterFrameType === 'keyframe') return isKeyframe;
+                    return true;
+                });
             }
 
             setAssets(res);
@@ -550,14 +565,25 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         )}
 
                         {filterScope === 'shot' && (
-                             <select 
-                                value={filterValue}
-                                onChange={(e) => setFilterValue(e.target.value)}
-                                className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
-                            >
-                                <option value="">{t('选择镜头...', 'Select Shot...')}</option>
-                                {availableShots.map(s => <option key={s.id} value={s.id}>{s.shot_id} - {s.shot_name || t('未命名', 'Untitled')}</option>)}
-                            </select>
+                            <>
+                                 <select 
+                                    value={filterValue}
+                                    onChange={(e) => setFilterValue(e.target.value)}
+                                    className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
+                                >
+                                    <option value="">{t('选择镜头...', 'Select Shot...')}</option>
+                                    {availableShots.map(s => <option key={s.id} value={s.id}>{s.shot_id} - {s.shot_name || t('未命名', 'Untitled')}</option>)}
+                                </select>
+                                <select
+                                    value={filterFrameType}
+                                    onChange={(e) => setFilterFrameType(e.target.value)}
+                                    className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
+                                >
+                                    <option value="all">{t('全部帧', 'All Frames')}</option>
+                                    <option value="start_end">{t('首尾帧', 'Start/End Frames')}</option>
+                                    <option value="keyframe">{t('关键帧', 'Keyframes')}</option>
+                                </select>
+                            </>
                         )}
 
                         <select 
@@ -675,6 +701,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                             <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('来源镜头', 'Source Shot')}</label>
                                             <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1">
                                                 {availableShots.find(s => s.id === Number(selectedAsset.meta_info.shot_id))?.shot_id || `Shot #${selectedAsset.meta_info.shot_id}`}
+                                                {selectedAsset.meta_info.frame_type || selectedAsset.meta_info.asset_type ? ` - ${selectedAsset.meta_info.frame_type || selectedAsset.meta_info.asset_type}` : ''}
                                             </div>
                                         </div>
                                     )}
