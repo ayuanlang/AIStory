@@ -157,14 +157,34 @@ import { MediaDetailModal, AssetHoverMetaOverlay, MediaPickerModal } from './edi
 import { ReferenceManager, SceneCard } from './editor/components/SceneManager';
 import { ImportModal } from './editor/components/ImportModal';
 
+// Safe lazy loading wrapper that forces a reload if a chunk fails to load
+const lazyWithRetry = (componentImport) =>
+  React.lazy(async () => {
+    const pageHasAlreadyBeenForceRefreshed = JSON.parse(
+      window.sessionStorage.getItem('page-has-been-force-refreshed') || 'false'
+    );
+
+    try {
+      const component = await componentImport();
+      window.sessionStorage.setItem('page-has-been-force-refreshed', 'false');
+      return component;
+    } catch (error) {
+      if (!pageHasAlreadyBeenForceRefreshed) {
+        window.sessionStorage.setItem('page-has-been-force-refreshed', 'true');
+        return window.location.reload();
+      }
+      throw error;
+    }
+  });
+
 // Lazy loaded heavy components
-const ProjectOverview = React.lazy(() => import('./editor/components/ProjectOverview').then(m => ({ default: m.ProjectOverview })));
-const EpisodeInfo = React.lazy(() => import('./editor/components/EpisodeInfo').then(m => ({ default: m.EpisodeInfo })));
-const ScriptEditor = React.lazy(() => import('./editor/components/ScriptEditor').then(m => ({ default: m.ScriptEditor })));
-const SceneManager = React.lazy(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
-const SubjectLibrary = React.lazy(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
-const ShotsView = React.lazy(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
-const VideoStudio = React.lazy(() => import('../components/VideoStudio'));
+const ProjectOverview = lazyWithRetry(() => import('./editor/components/ProjectOverview').then(m => ({ default: m.ProjectOverview })));
+const EpisodeInfo = lazyWithRetry(() => import('./editor/components/EpisodeInfo').then(m => ({ default: m.EpisodeInfo })));
+const ScriptEditor = lazyWithRetry(() => import('./editor/components/ScriptEditor').then(m => ({ default: m.ScriptEditor })));
+const SceneManager = lazyWithRetry(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
+const SubjectLibrary = lazyWithRetry(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
+const ShotsView = lazyWithRetry(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
+const VideoStudio = lazyWithRetry(() => import('../components/VideoStudio'));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 
