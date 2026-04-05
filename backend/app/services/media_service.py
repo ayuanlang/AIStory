@@ -8249,13 +8249,28 @@ class MediaGenerationService:
                         if not task_id:
                             submit_error_message = str(data.get("errorMessage") or "").strip()
                             if "is not in the allowed options" in submit_error_message and "allowed values:" in submit_error_message:
-                                match = re.search(r"allowed values:\s*([\d, ]+)", submit_error_message)
-                                if match:
-                                    first_val = match.group(1).split(",")[0].strip()
-                                    _debug_log(f"[{log_tag}] RunningHub duration mismatch detected '{submit_error_message}', retrying with '{first_val}'...", "warning")
-                                    payload["duration"] = first_val
-                                    await asyncio.sleep(min(2 * (submit_attempt + 1), 5))
-                                    continue
+                                field_match = re.search(r"field\s+'([^']+)'", submit_error_message, re.IGNORECASE)
+                                field_name = field_match.group(1).strip() if field_match else "duration"
+                                val_match = re.search(r"allowed values:\s*(.*)", submit_error_message, re.IGNORECASE)
+                                if val_match:
+                                    allowed_vals = [x.strip() for x in val_match.group(1).split(",") if x.strip()]
+                                    if allowed_vals:
+                                        target_val = allowed_vals[-1] # Fallback to latest
+                                        if field_name == "resolution" and payload.get("resolution"):
+                                            req_res = str(payload.get("resolution")).lower()
+                                            if "1080" in req_res:
+                                                target_val = next((v for v in allowed_vals if "1080" in v), target_val)
+                                            elif "720" in req_res:
+                                                target_val = next((v for v in allowed_vals if "720" in v), target_val)
+                                            elif "480" in req_res:
+                                                target_val = next((v for v in allowed_vals if "480" in v), target_val)
+                                        elif field_name == "duration":
+                                            target_val = allowed_vals[0]
+
+                                        _debug_log(f"[{log_tag}] RunningHub field '{field_name}' mismatch detected '{submit_error_message}', retrying with '{target_val}'...", "warning")
+                                        payload[field_name] = target_val
+                                        await asyncio.sleep(min(2 * (submit_attempt + 1), 5))
+                                        continue
                     except Exception:
                         pass
                     break
