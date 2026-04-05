@@ -2667,9 +2667,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const directUrl = getFullUrl(stableCompositeUrl);
             const isLocalOrigin = directUrl.startsWith(window.location.origin) || directUrl.startsWith('blob:') || directUrl.startsWith('data:');
             // Use backend proxy for external URLs to bypass CORS restrictions during Canvas processing
+            // MUST use API_URL instead of getFullUrl here to hit current environment's backend proxy,
+            // otherwise ASSET_BASE_URL resolution will incorrectly point to remote staging server on local dev.
             const fetchUrl = isLocalOrigin 
                 ? directUrl 
-                : getFullUrl(`/api/v1/assets/proxy?url=${encodeURIComponent(directUrl)}`);
+                : `${API_URL}/assets/proxy?url=${encodeURIComponent(directUrl)}`;
 
             const compositeResp = await fetch(fetchUrl);
             if (!compositeResp.ok) {
