@@ -9493,7 +9493,8 @@ def read_episodes(
     # Verify access
     _require_project_access(db, project_id, current_user)
     
-    return db.query(Episode).filter(Episode.project_id == project_id).all()
+    from sqlalchemy.orm import selectinload
+    return db.query(Episode).options(selectinload(Episode.script_segments)).filter(Episode.project_id == project_id).all()
 
 @router.put("/episodes/{episode_id}/segments", response_model=List[ScriptSegmentOut])
 def update_episode_segments(

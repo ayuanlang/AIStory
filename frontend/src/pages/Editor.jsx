@@ -277,7 +277,7 @@ const Editor = ({
                 let anyActive = false;
                 let allVids = true;
                 for (const ep of eps) {
-                    const epShots = await fetchEpisodeShots(id, ep.id).catch(() => []);
+                    const epShots = await fetchEpisodeShots(ep.id, { compact: true }).catch(() => []);
                     if (epShots && epShots.length > 0) {
                         hasShots = true;
                         anyActive = true;

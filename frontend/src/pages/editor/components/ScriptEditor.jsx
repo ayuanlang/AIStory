@@ -5268,7 +5268,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <span className="font-medium">💡 {t('逻辑连贯性', 'Logic Check')}:</span> {
                                         subjectConsistencyReport
-                                            ? (subjectConsistencyReport.ok ? <span className="text-emerald-400">{t('逻辑清晰，可以直接推进到下一环节（分镜生成）。', 'Logic is clear, ready to proceed to shot generation.')}</span> : <span className="text-amber-400">{t('发现部分实体可能存在指代不清，建议稍作人工核对。', 'Found some ambiguous entities, quick manual review recommended.')}</span>)
+                                            ? (subjectConsistencyReport.ok ? (
+                                                <span className="text-emerald-400">
+                                                    {t('逻辑清晰，可以推进到下一环节（建立资产）。', 'Logic is clear, ready to proceed to establish assets.')}
+                                                    {project?.global_info?.has_existing_assets && (
+                                                        <span className="ml-1 text-emerald-300">
+                                                            {t('已勾选自有资产，您可以直接去资产库上传图片。', 'Existing assets selected. You can directly upload images in the asset library.')}
+                                                        </span>
+                                                    )}
+                                                </span>
+                                            ) : <span className="text-amber-400">{t('发现部分实体可能存在指代不清，建议稍作人工核对。', 'Found some ambiguous entities, quick manual review recommended.')}</span>)
                                             : <span className="text-emerald-400">{t('基础逻辑检查通过。', 'Basic logic check passed.')}</span>
                                     }
                                 </div>
