@@ -1884,18 +1884,26 @@ class LLMService:
         return self._extract_text_from_response(data)
 
     async def _raw_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
-        # Ensure base_url ends with correct chat endpoint if not specific
+        original_base_url = base_url
         if not base_url:
             base_url = "https://api.openai.com/v1"  # Default to OpenAI if not set
 
         resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
+        
+        if not original_base_url and provider == "apiyi":
+            base_url = "https://api.apiyi.com"
+            
         if provider == "kie" and resolved_category == "LLM":
             return await self._raw_kie_llm_request_full(base_url, api_key, model, messages, extra_config)
         if provider == "grsai" and resolved_category == "LLM":
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
         configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
+        
+        if configured_endpoint and not configured_endpoint.startswith("http"):
+            configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
+
         if configured_endpoint and resolved_category == "LLM":
             endpoint_lower = configured_endpoint.lower()
             if "/chat/completions" in endpoint_lower:
@@ -2282,17 +2290,24 @@ class LLMService:
             {"type": "token", "content": "..."}   – text delta
             {"type": "done",  "usage": {...}}      – stream finished
         """
+        original_base_url = base_url
         if not base_url:
             base_url = "https://api.openai.com/v1"
 
         resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
 
+        if not original_base_url and provider == "apiyi":
+            base_url = "https://api.apiyi.com"
+
         if provider == "grsai" and resolved_category == "LLM":
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
         # ── Build URL (same logic as _raw_llm_request_full) ──
         configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
+        if configured_endpoint and not configured_endpoint.startswith("http"):
+            configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
+        
         if provider == "kie" and resolved_category == "LLM":
             _, resolved_model, url = self._resolve_kie_llm_url(base_url, model)
         elif configured_endpoint and resolved_category == "LLM":

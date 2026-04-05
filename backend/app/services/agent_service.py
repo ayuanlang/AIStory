@@ -2548,7 +2548,12 @@ Output ONLY the JSON object now."""
         if not bool(getattr(user, "is_superuser", False)):
             raise PermissionError("Only superuser can use system management agent")
 
-        llm_config = self.get_active_llm_config(user_id=user.id, category="LLM")
+        llm_config = self.get_active_llm_config(
+            user_id=user.id,
+            category="LLM",
+            function_name=getattr(request, "function_name", "system_agent"),
+            system_api_id=getattr(request, "system_api_id", None)
+        )
         if not llm_config or not llm_config.get("api_key"):
             raise ValueError("No active LLM API config found. Please check your LLM settings.")
 
@@ -2867,7 +2872,13 @@ Output ONLY the JSON object now."""
         project_id = request.project_id or request.context.get("project_id") or request.context.get("projectId")
 
         # Run synchronous DB work in a thread so it doesn't block the event loop
-        llm_config = await _asyncio.to_thread(self.get_active_llm_config, user_id=user_id, category="LLM")
+        llm_config = await _asyncio.to_thread(
+            self.get_active_llm_config,
+            user_id=user_id,
+            category="LLM",
+            function_name=getattr(request, "function_name", "agent"),
+            system_api_id=getattr(request, "system_api_id", None)
+        )
 
         # Inject user's active API settings into context using a short-lived session
         # so streaming requests don't pin a pooled DB connection.
@@ -2999,7 +3010,13 @@ Output ONLY the JSON object now."""
             yield {"type": "error", "message": "Only superuser can use system management agent"}
             return
 
-        llm_config = await _asyncio.to_thread(self.get_active_llm_config, user_id=user.id, category="LLM")
+        llm_config = await _asyncio.to_thread(
+            self.get_active_llm_config,
+            user_id=user.id,
+            category="LLM",
+            function_name=getattr(request, "function_name", "system_agent"),
+            system_api_id=getattr(request, "system_api_id", None)
+        )
         if not llm_config or not llm_config.get("api_key"):
             yield {"type": "error", "message": "No active LLM API config found."}
             return
@@ -3335,7 +3352,12 @@ Output ONLY the JSON object now."""
         project_id = request.project_id or request.context.get("project_id") or request.context.get("projectId")
         
         # Resolve LLM Config from user's active setting (falls back to system default).
-        llm_config = self.get_active_llm_config(user_id=user_id, category="LLM")
+        llm_config = self.get_active_llm_config(
+            user_id=user_id,
+            category="LLM",
+            function_name=getattr(request, "function_name", "agent"),
+            system_api_id=getattr(request, "system_api_id", None)
+        )
 
         # Inject user's active API settings into context for the LLM
         try:

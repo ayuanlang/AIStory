@@ -124,6 +124,7 @@ import {
     PROJECT_EP_TONE_OPTIONS,
     PROJECT_EP_LIGHTING_OPTIONS,
     PROJECT_EP_QUALITY_OPTIONS,
+    PROJECT_EP_CREATIVITY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
     PROJECT_SCENE_ANALYSIS_REGION_OPTIONS,
     PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS,
@@ -463,14 +464,14 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
                             list={PROJECT_EP_TYPE_OPTIONS} 
                         />
                         <InputGroup idPrefix={prefix}
-                            label={t('语言', 'Language')} 
-                            value={data.language} 
-                            onChange={v => updateField('language', v)} 
-                            list={PROJECT_EP_LANGUAGE_OPTIONS} 
+                            label={t('语言', 'Language')}
+                            value={data.language}
+                            onChange={v => updateField('language', v)}
+                            list={PROJECT_EP_LANGUAGE_OPTIONS}
                         />
+                         <InputGroup idPrefix={prefix} label={t('创作力', 'Creativity')} value={data.creativity} onChange={v => updateField('creativity', v)} list={PROJECT_EP_CREATIVITY_OPTIONS} />
                     </div>
-                    
-                    <InputGroup idPrefix={prefix}
+<InputGroup idPrefix={prefix}
                         label={t('全局风格', 'Global Style')} 
                         value={data.Global_Style} 
                         onChange={v => updateField('Global_Style', v)} 

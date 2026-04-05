@@ -155,6 +155,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
 export const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', project, activeEpisodeId = null, uiLang = 'zh' }) => {
+    const functionApiConfigs = useFunctionApis();
     const [text, setText] = useState('');
     const [importType, setImportType] = useState(defaultType); // auto, json, script, scene, shot
     const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -190,12 +191,14 @@ export const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', p
         setIsAnalyzing(true);
         try {
             const token = localStorage.getItem('token');
-            const body = { 
-                text: text,
-                project_id: projectId,
-                prompt_file: "scene_analysis.txt",
-                include_negative_prompt: true,
-            };
+            const body = {
+                  text: text,
+                  project_id: projectId,
+                  prompt_file: "scene_analysis.txt",
+                  include_negative_prompt: true,
+                  function_name: "script_analysis",
+                  system_api_id: Number(localStorage.getItem('func_api_script_analysis')) || null,
+              };
             if (project?.global_info) {
                 body.project_metadata = project.global_info;
             }
@@ -269,17 +272,20 @@ export const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', p
                     onChange={(e) => setText(e.target.value)}
                     placeholder={t('在此粘贴剧本或数据...', 'Paste script or data here...')}
                 />
-                <div className="flex justify-between gap-2 shrink-0">
-                    <button 
-                        onClick={handleAIAnalysis}
+                <div className="flex justify-between gap-2 shrink-0 items-center">
+                      <div className="flex items-center gap-2">
+                          <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} />
+                          <button
+                              onClick={handleAIAnalysis}
                         disabled={!text.trim() || isAnalyzing}
                         className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 border border-purple-500/30 text-purple-200 hover:bg-purple-500/20 transition-all ${isAnalyzing ? 'opacity-50' : ''}`}
                     >
                         <Sparkles className={`w-3 h-3 ${isAnalyzing ? 'animate-spin' : ''}`} />
                         {isAnalyzing ? t('正在分析场景...', 'Analyzing Scene...') : t('剧本分析', 'Script Analysis')}
-                    </button>
-                    
-                    <div className="flex gap-2">
+                          </button>
+                      </div>
+
+                      <div className="flex gap-2 items-center">
                         <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:bg-white/5">{t('取消', 'Cancel')}</button>
                         <button 
                             onClick={handleImportClick} 

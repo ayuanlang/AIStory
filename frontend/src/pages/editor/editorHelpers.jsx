@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Video } from 'lucide-react';
 import { BASE_URL, ASSET_BASE_URL } from '../../config';
-import { createEntity, regenerateScene } from '../../services/api';
+import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
 import { normalizeEntityToken, entityTokenMatchesName } from '../../lib/entityToken';
 
 // Helper to handle relative URLs
@@ -505,7 +505,15 @@ export const extractSceneSubjectRefsFromField = (value, defaultType, sourceField
                 sourceField,
             };
         })
-        .filter((item) => String(item?.name || '').trim());
+        .filter((item) => {
+            const name = String(item?.name || '').trim();
+            if (!name) return false;
+            const lowerName = name.toLowerCase();
+            if (lowerName === 'none' || lowerName === 'null' || lowerName === '无' || lowerName === 'nil' || lowerName === 'not applicable') {
+                return false;
+            }
+            return true;
+        });
 };
 
 export const buildSceneSubjectNameCandidates = (rawName) => {
@@ -628,6 +636,10 @@ export const createMissingSceneSubjectPlaceholders = async ({ projectId, sceneRo
     const failedItems = [];
     const sceneReports = [];
     const countsByType = { character: 0, prop: 0, environment: 0 };
+    
+    // We collect all the requested scenes that have missing refs so we just submit one batch request.
+    const pendingScenes = [];
+    const allRefsToProcess = [];
 
     for (const scene of (sceneRows || [])) {
         const missingRefs = findMissingSceneSubjectRefs(scene, knownEntities);
@@ -643,9 +655,6 @@ export const createMissingSceneSubjectPlaceholders = async ({ projectId, sceneRo
             failed: [],
         };
 
-        const sceneLabel = sceneReport.sceneNo || sceneReport.sceneId;
-
-        // Skip refs that somehow already match (though findMissingSceneSubjectRefs filters them)
         const refsToProcess = missingRefs.filter(ref => {
             const existing = findMatchingEntityByType(knownEntities, ref.type, ref.name);
             if (existing?.id) {
@@ -657,44 +666,63 @@ export const createMissingSceneSubjectPlaceholders = async ({ projectId, sceneRo
             return true;
         });
 
-        if (refsToProcess.length === 0) {
-            sceneReports.push(sceneReport);
-            continue;
+        if (refsToProcess.length > 0) {
+            if (sceneReport.sceneId) {
+                pendingScenes.push(sceneReport.sceneId);
+            }
+            for (const r of refsToProcess) {
+                // simple dedup within the pending array
+                const key = `${r.type}::${r.name}`;
+                if (!allRefsToProcess.some(existing => `${existing.type}::${existing.name}` === key)) {
+                    allRefsToProcess.push(r);
+                }
+            }
         }
+        sceneReports.push(sceneReport);
+    }
 
+    if (pendingScenes.length > 0) {
         try {
-            onLog?.(`Scene ${sceneLabel} is missing subjects (${refsToProcess.map(r => r.name).join(', ')}). Submitting to LLM for entity generation...`, 'process');
-            
-            // Using the precise logic from "SceneManager.jsx" handleRegenerateScene (entity_only_mode)
-            // This API runs the script analysis LLM specifically for entity supplementation.
-            await regenerateScene(sceneReport.sceneId, {
-                entity_only_mode: true,
+            onLog?.(`Multiple scenes are missing subjects. Submitting batch request to LLM to recover entities...`, 'process');
+            const res = await batchSupplementMissingEntities(projectId, {
+                scene_ids: pendingScenes,
                 user_requirements: 'Auto supplement missing entities from script text based on the Editor prompt requirements.'
             });
+            
+            const addedCount = res?.added_count || {};
+            const subjectsJson = res?.subjects_json || {};
 
-            for (const ref of refsToProcess) {
-                // Since regenerateScene doesn't return the raw created entities (backend pushes them DB side),
-                // we mock a 'createdItem' just for the UI report to reflect what we requested that the LLM handle.
-                // The frontend relies on reloading the `knownEntities` on changes anyway.
+            for (const ref of allRefsToProcess) {
+                // Mocks
                 const createdItem = { ...ref, id: `auto-${Date.now()}` };
                 createdItems.push(createdItem);
-                sceneReport.created.push(createdItem);
                 countsByType[ref.type] = Number(countsByType[ref.type] || 0) + 1;
+                // Add to report
+                for (const sr of sceneReports) {
+                    if (sr.missing.some(m => m.name === ref.name && m.type === ref.type)) {
+                        sr.created.push(createdItem);
+                    }
+                }
             }
-            onLog?.(`Scene ${sceneLabel} LLM entity supplement finished successfully.`, 'success');
+            if (addedCount.characters || addedCount.props || addedCount.environments) {
+                 onLog?.(`LLM entity batch supplement finished successfully. Generated and inserted to DB.`, 'success');
+            } else {
+                 onLog?.(`LLM entity batch supplement finished, but no items inserted or returned.`, 'warning');
+            }
         } catch (error) {
-            for (const ref of refsToProcess) {
-                const failedItem = {
-                    ...ref,
-                    error: String(error?.response?.data?.detail || error?.message || error || 'LLM supplement failed'),
-                };
+            const errStr = String(error?.response?.data?.detail || error?.message || error || 'LLM supplement failed');
+            onLog?.(`Scene LLM batch supplement failed: ${errStr}`, 'error');
+            
+            for (const ref of allRefsToProcess) {
+                const failedItem = { ...ref, error: errStr };
                 failedItems.push(failedItem);
-                sceneReport.failed.push(failedItem);
-                onLog?.(`Scene LLM supplement failed (${ref.type}:${ref.name}): ${failedItem.error}`, 'error');
+                for (const sr of sceneReports) {
+                    if (sr.missing.some(m => m.name === ref.name && m.type === ref.type)) {
+                        sr.failed.push(failedItem);
+                    }
+                }
             }
         }
-
-        sceneReports.push(sceneReport);
     }
 
     return {

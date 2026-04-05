@@ -107,7 +107,6 @@ import {
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
-import VideoStudio from '../components/VideoStudio';
 import InputGroup from './editor/components/InputGroup';
 import MarkdownCell from './editor/components/MarkdownCell';
 import {
@@ -154,14 +153,18 @@ import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from './editor/editorConstants';
-import { ProjectOverview } from './editor/components/ProjectOverview';
-import { EpisodeInfo } from './editor/components/EpisodeInfo';
-import { ScriptEditor } from './editor/components/ScriptEditor';
 import { MediaDetailModal, AssetHoverMetaOverlay, MediaPickerModal } from './editor/components/MediaModals';
-import { ReferenceManager, SceneCard, SceneManager } from './editor/components/SceneManager';
-import { SubjectLibrary } from './editor/components/SubjectLibrary';
-import { ShotsView } from './editor/components/ShotsView';
+import { ReferenceManager, SceneCard } from './editor/components/SceneManager';
 import { ImportModal } from './editor/components/ImportModal';
+
+// Lazy loaded heavy components
+const ProjectOverview = React.lazy(() => import('./editor/components/ProjectOverview').then(m => ({ default: m.ProjectOverview })));
+const EpisodeInfo = React.lazy(() => import('./editor/components/EpisodeInfo').then(m => ({ default: m.EpisodeInfo })));
+const ScriptEditor = React.lazy(() => import('./editor/components/ScriptEditor').then(m => ({ default: m.ScriptEditor })));
+const SceneManager = React.lazy(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
+const SubjectLibrary = React.lazy(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
+const ShotsView = React.lazy(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
+const VideoStudio = React.lazy(() => import('../components/VideoStudio'));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 
@@ -357,52 +360,11 @@ const Editor = ({
                 }
 
                 const currentStage = p?.global_info?.workflow_stage || 'script';
-                let startTab = initialActiveTab;
+                let startTab = initialActiveTab || 'overview';
                 
                 if (!initialActiveTab || initialActiveTab === 'overview' || initialActiveTab === 'ep_info') {
-                    let nextStage = currentStage;
-                    const entities = await fetchEntities(id).catch(() => []);
-                    const hasAssets = entities && entities.length > 0;
-                    let hasScenes = false;
-
-                    if (eps && eps.length > 0) {
-                        const ep1Scenes = await fetchScenes(eps[0].id).catch(() => []);
-                        hasScenes = ep1Scenes && ep1Scenes.length > 0;
-                    }
-
-                    let allAssetsReady = false;
-                    if (hasAssets) allAssetsReady = entities.every(e => !!e.image_url);
-
-                    let allVideosReady = false;
-                    if (allAssetsReady && eps && eps.length > 0) {
-                        let anyActive = false;
-                        let allVids = true;
-                        for (const ep of eps) {
-                            const epShots = await fetchEpisodeShots(id, ep.id).catch(() => []);
-                            if (epShots && epShots.length > 0) {
-                                anyActive = true;
-                                if (!epShots.every(s => !!s.video_url)) {
-                                    allVids = false;
-                                    break;
-                                }
-                            }
-                        }
-                        allVideosReady = anyActive && allVids;
-                    }
-
-                    if (allVideosReady) nextStage = 'montage';
-                    else if (hasAssets && allAssetsReady) nextStage = 'shots';
-                    else if (hasAssets || hasScenes) nextStage = 'subjects';
-                    else nextStage = 'script';
-
-                    if (nextStage !== currentStage) {
-                        console.log(`Advancing project stage on load: ${currentStage} => ${nextStage}`);
-                        await updateProject(id, {
-                            global_info: { ...(p?.global_info || {}), workflow_stage: nextStage }
-                        }).catch(() => {});
-                        if (p) p.global_info = { ...(p?.global_info || {}), workflow_stage: nextStage };
-                    }
-                    startTab = nextStage;
+                    // Start tab defaults to the currently saved stage without heavy recalculation
+                    startTab = currentStage;
                 }
                 
                 if (isStale) return;
@@ -2076,13 +2038,18 @@ const Editor = ({
                                     id: null,
                                 });
 
-                                const match = existingScenes.find(s => String(s.scene_no) === String(scData.scene_no));
+                                const currentSceneNo = String(scData.scene_no || '').trim();
+                                const currentSceneName = String(scData.scene_name || '').trim();
+                                const match = existingScenes.find(s => 
+                                    String(s.scene_no || '').trim() === currentSceneNo && 
+                                    String(s.scene_name || '').trim() === currentSceneName
+                                );
+
                                 if (match) {
-                                    await updateScene(match.id, scData); 
+                                    // Skip duplicate scene imports
                                     currentSceneDbId = match.id;
                                     importedSceneRows[importedSceneRows.length - 1].id = match.id;
-                                    importStats.scenesUpdated += 1;
-                                    addLog(`Updated Scene ${scData.scene_no}`, "success");
+                                    addLog(`Skipped updating existing Scene ${scData.scene_no} (duplicate imports not allowed)`, "warning");
                                 } else {
                                     const newScene = await createScene(activeEpisodeId, scData);
                                     currentSceneDbId = newScene.id;
@@ -3083,54 +3050,56 @@ const Editor = ({
             <div className="flex-1 overflow-hidden relative bg-background">
                 <div className="h-full overflow-y-auto custom-scrollbar p-0">
                     <div className="animate-in fade-in duration-300 min-h-full">
-                        {activeTab === 'overview' && (
-                            <>
+                        <React.Suspense fallback={<div className="flex-1 flex items-center justify-center h-[50vh]"><Loader2 className="h-8 w-8 text-primary animate-spin" /></div>}>
+                            {activeTab === 'overview' && (
+                                <>
+                                    <ProjectOverview
+                                        id={id}
+                                        key={refreshKey}
+                                        episodes={episodes}
+                                        uiLang={uiLang}
+                                        mode="overview"
+                                        onProjectUpdate={loadProjectData}
+                                        onJumpToEpisode={(episodeId) => {
+                                            setActiveEpisodeId(episodeId);
+                                            setActiveTab('script');
+                                        }}
+                                    />
+                                    <EpisodeInfo
+                                        episode={activeEpisode}
+                                        onUpdate={handleUpdateEpisodeInfo}
+                                        project={project}
+                                        projectId={id}
+                                        uiLang={uiLang}
+                                        mergedSimplified={true}
+                                    />
+                                </>
+                            )}
+                            {activeTab === 'generator' && (
                                 <ProjectOverview
                                     id={id}
-                                    key={refreshKey}
+                                    key={`generator-${refreshKey}`}
                                     episodes={episodes}
                                     uiLang={uiLang}
-                                    mode="overview"
+                                    mode="generator"
                                     onProjectUpdate={loadProjectData}
                                     onJumpToEpisode={(episodeId) => {
                                         setActiveEpisodeId(episodeId);
                                         setActiveTab('script');
                                     }}
                                 />
-                                <EpisodeInfo
-                                    episode={activeEpisode}
-                                    onUpdate={handleUpdateEpisodeInfo}
-                                    project={project}
-                                    projectId={id}
-                                    uiLang={uiLang}
-                                    mergedSimplified={true}
-                                />
-                            </>
-                        )}
-                        {activeTab === 'generator' && (
-                            <ProjectOverview
-                                id={id}
-                                key={`generator-${refreshKey}`}
-                                episodes={episodes}
-                                uiLang={uiLang}
-                                mode="generator"
-                                onProjectUpdate={loadProjectData}
-                                onJumpToEpisode={(episodeId) => {
-                                    setActiveEpisodeId(episodeId);
-                                    setActiveTab('script');
-                                }}
-                            />
-                        )}
-                        {activeTab === 'script' && <ScriptEditor key={`script-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
-                        {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${tabResetKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} />}
-                        {activeTab === 'scenes' && <SceneManager key={`scenes-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
-                            if (sceneId) {
-                                setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
-                            }
-                            setActiveTab('shots');
-                        }} uiLang={uiLang} />}
-                        {activeTab === 'shots' && <ShotsView key={`shots-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
-                        {activeTab === 'montage' && <VideoStudio key={`montage-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
+                            )}
+                            {activeTab === 'script' && <ScriptEditor key={`script-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
+                            {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${tabResetKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} />}
+                            {activeTab === 'scenes' && <SceneManager key={`scenes-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
+                                if (sceneId) {
+                                    setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
+                                }
+                                setActiveTab('shots');
+                            }} uiLang={uiLang} />}
+                            {activeTab === 'shots' && <ShotsView key={`shots-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
+                            {activeTab === 'montage' && <VideoStudio key={`montage-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
+                        </React.Suspense>
                     </div>
                 </div>
             </div>

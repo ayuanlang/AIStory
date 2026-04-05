@@ -4,6 +4,7 @@ import {
     api,
     fetchProjects,
     createProject,
+    createEpisode,
     updateProject,
     getSettings,
     updateSetting,
@@ -69,7 +70,7 @@ import {
     Layers
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 import {
@@ -94,6 +95,7 @@ import {
     PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_DEFAULTS,
     PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS,
+    PROJECT_EP_CREATIVITY_OPTIONS,
 } from './editor/projectOptionConfig';
 
 const cinematicImages = [
@@ -132,6 +134,7 @@ const PROJECT_CREATE_DEFAULT_OPTIONS = {
     lens_preference: [...PROJECT_EP_LENS_PREFERENCE_OPTIONS],
     broadcast_safety_level: [...PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS],
     video_generation_preference: [...PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS],
+    creativity: [...PROJECT_EP_CREATIVITY_OPTIONS],
     resolution: [...PROJECT_EP_RESOLUTION_OPTIONS],
     color_tone: [...PROJECT_EP_TONE_OPTIONS],
     global_style: [...PROJECT_EP_GLOBAL_STYLE_OPTIONS],
@@ -251,6 +254,7 @@ const normalizeProjectCreateOptions = (payload) => {
     const lensPreference = uniqueNonEmptyStrings(safe.lens_preference);
     const broadcastSafetyLevel = uniqueNonEmptyStrings(safe.broadcast_safety_level);
     const videoGenerationPreference = uniqueNonEmptyStrings(safe.video_generation_preference);
+    const creativity = uniqueNonEmptyStrings(safe.creativity);
     const resolution = uniqueNonEmptyStrings(safe.resolution);
     const colorTone = uniqueNonEmptyStrings(safe.color_tone);
     const globalStyle = uniqueNonEmptyStrings(safe.global_style);
@@ -266,6 +270,7 @@ const normalizeProjectCreateOptions = (payload) => {
         lens_preference: lensPreference.length ? lensPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference],
         broadcast_safety_level: broadcastSafetyLevel.length ? broadcastSafetyLevel : [...PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level],
         video_generation_preference: videoGenerationPreference.length ? videoGenerationPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference],
+        creativity: creativity.length ? creativity : [...PROJECT_CREATE_DEFAULT_OPTIONS.creativity],
         resolution: resolution.length ? resolution : [...PROJECT_CREATE_DEFAULT_OPTIONS.resolution],
         color_tone: colorTone.length ? colorTone : [...PROJECT_CREATE_DEFAULT_OPTIONS.color_tone],
         global_style: globalStyle.length ? globalStyle : [...PROJECT_CREATE_DEFAULT_OPTIONS.global_style],
@@ -466,6 +471,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newLensPreference, setNewLensPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference));
     const [newBroadcastSafetyLevel, setNewBroadcastSafetyLevel] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level));
     const [newVideoGenerationPreference, setNewVideoGenerationPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference));
+    const [newCreativity, setNewCreativity] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.creativity));
+    const [newScriptText, setNewScriptText] = useState('');
     const [newResolution, setNewResolution] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.resolution));
     const [newColorTone, setNewColorTone] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.color_tone));
     const [newGlobalStyle, setNewGlobalStyle] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.global_style));
@@ -664,6 +671,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 setNewColorTone((prev) => (normalized.color_tone.includes(prev) ? prev : pickPreferredOrFirst(normalized.color_tone)));
                 setNewGlobalStyle((prev) => (normalized.global_style.includes(prev) ? prev : pickPreferredOrFirst(normalized.global_style)));
                 setNewLighting((prev) => (normalized.lighting.includes(prev) ? prev : pickPreferredOrFirst(normalized.lighting)));
+                setNewCreativity((prev) => (normalized.creativity.includes(prev) ? prev : pickPreferredOrFirst(normalized.creativity)));
             } catch (error) {
                 console.error('Failed to load project-create dictionary options', error);
             }
@@ -781,6 +789,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         setNewLensPreference(pickPreferredOrFirst(projectCreateOptions.lens_preference));
         setNewBroadcastSafetyLevel(pickPreferredOrFirst(projectCreateOptions.broadcast_safety_level));
         setNewVideoGenerationPreference(pickPreferredOrFirst(projectCreateOptions.video_generation_preference));
+        setNewCreativity(pickPreferredOrFirst(projectCreateOptions.creativity));
+        setNewScriptText('');
         setNewResolution(pickPreferredOrFirst(projectCreateOptions.resolution));
         setNewColorTone(pickPreferredOrFirst(projectCreateOptions.color_tone));
         setNewGlobalStyle(pickPreferredOrFirst(projectCreateOptions.global_style));
@@ -802,7 +812,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         const description = String(newDescription || '');
         const shareUsers = parseUserListInput(newShareUsers);
         const reviewerUsers = parseUserListInput(newReviewerUsers);
-        await createProject({
+        const newProject = await createProject({
             title,
             description,
             share_users: shareUsers,
@@ -815,7 +825,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 era: String(newEra || '').trim(),
                 lens_preference: String(newLensPreference || '').trim(),
                 broadcast_safety_level: String(newBroadcastSafetyLevel || '').trim(),
-                video_generation_preference: String(newVideoGenerationPreference || '').trim(),
+                creativity: String(newCreativity || '').trim(),
                 notes: description,
                 tech_params: {
                     visual_standard: {
@@ -829,13 +839,14 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                         sound: Boolean(newVideoSoundEnabled),
                     },
                 },
-                
+
                 management_collaboration: {
                     planned_completion_time: String(newPlannedCompletionTime || '').trim(),
                     budget: String(newBudget || '').trim(),
                 },
                 project_generation_defaults: {
                     sound: Boolean(newVideoSoundEnabled),
+                    video_generation_preference: String(newVideoGenerationPreference || '').trim(),
                 },
                 aspect_ratio: String(newAspectRatio || '').trim(),
                 image_size: String(newImageSize || '').trim(),
@@ -845,9 +856,23 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 ),
             },
         });
+        
+        let targetProjectId = newProject?.id;
+        
+        if (targetProjectId && newScriptText.trim()) {
+            await createEpisode(targetProjectId, {
+                title: typeof t === 'function' ? t('第 1 集', 'Episode 1') : 'Episode 1',
+                script_content: newScriptText.trim()
+            });
+        }
+        
         resetCreateProjectForm();
         setIsCreating(false);
         loadProjects();
+        
+        if (targetProjectId && newScriptText.trim()) {
+            setSelectedProjectId(targetProjectId);
+        }
     };
 
     const handleLogout = () => {
@@ -1888,58 +1913,86 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('类型', 'Type')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newType} onChange={(e) => setNewType(e.target.value)}>
-                                                    {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newType}
+                                                                onChange={(e) => setNewType(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('语言', 'Language')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)}>
-                                                    {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newLanguage}
+                                                                onChange={(e) => setNewLanguage(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('基础定位', 'Base Positioning')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newBasePositioning} onChange={(e) => setNewBasePositioning(e.target.value)}>
-                                                    {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newBasePositioning}
+                                                                onChange={(e) => setNewBasePositioning(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('画幅比例', 'Aspect Ratio')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newAspectRatio} onChange={(e) => setNewAspectRatio(e.target.value)}>
-                                                    {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newAspectRatio}
+                                                                onChange={(e) => setNewAspectRatio(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
                                             </div>
-                                            <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
-                                                    {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
-                                            </div>
+                                            
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('时代设定', 'Era')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newEra} onChange={(e) => setNewEra(e.target.value)}>
-                                                    {projectCreateOptions.era.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newEra}
+                                                                onChange={(e) => setNewEra(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.era.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('镜头偏好', 'Lens Preference')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newLensPreference} onChange={(e) => setNewLensPreference(e.target.value)}>
-                                                    {projectCreateOptions.lens_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newLensPreference}
+                                                                onChange={(e) => setNewLensPreference(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.lens_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('播出安全级', 'Broadcast Safety Level')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newBroadcastSafetyLevel} onChange={(e) => setNewBroadcastSafetyLevel(e.target.value)}>
-                                                    {projectCreateOptions.broadcast_safety_level.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newBroadcastSafetyLevel}
+                                                                onChange={(e) => setNewBroadcastSafetyLevel(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.broadcast_safety_level.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
                                             </div>
-                                            <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('视频生成偏好', 'Video Gen Preference')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg" value={newVideoGenerationPreference} onChange={(e) => setNewVideoGenerationPreference(e.target.value)}>
-                                                    {projectCreateOptions.video_generation_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
-                                            </div>
+                                                            <div>
+                                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('创作力', 'Creativity')}</label>
+                                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newCreativity}
+                                                                onChange={(e) => setNewCreativity(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.creativity.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
+                                                            </div>
+                                            
                                         </div>
 
                                         <label className="flex items-center gap-2 text-sm mt-1 mb-1 cursor-pointer select-none">
@@ -1952,12 +2005,60 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             <span>{t('视频生成默认开启声音', 'Enable sound by default for video generation')}</span>
                                         </label>
 
-                                                                                <div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
-                                            <h4 className="text-sm font-bold text-white mb-4 uppercase tracking-wider flex items-center gap-2">
-                                                <Layers size={16} className="text-primary" />
-                                                {t('项目管理', 'Project Management')}
-                                            </h4>
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                                                                                        <label className="block text-sm font-semibold tracking-wide text-primary mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
+                                        <textarea
+                                            className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[84px]"
+                                            value={newDescription}
+                                            onChange={e => setNewDescription(e.target.value)}
+                                            placeholder={t('可留空。用于记录项目背景、目标或备注', 'Can be left empty. Add context, goals, or notes for this project')}
+                                        />
+                                        <label className="block text-sm font-semibold tracking-wide text-primary mt-4 mb-2">{t('剧本内容（可选）', 'Script Content (Optional)')}</label>
+                                        <textarea
+                                            className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[120px]"
+                                            value={newScriptText}
+                                            onChange={e => setNewScriptText(e.target.value)}
+                                            placeholder={t('输入剧本内容，创建项目后将自动生成第一集并导入此内容', 'Enter script content...')}
+                                        />
+
+                                        <div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
+                                            <button onClick={() => setIsCreateCollaboratorsCollapsed(!isCreateCollaboratorsCollapsed)} className="w-full flex items-center justify-between mb-4">
+                                                <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                                                    <User size={16} className="text-primary" />
+                                                    {t('协作区域', 'Collaboration')}
+                                                </h4>
+                                                <ChevronDown className={`w-5 h-5 transition-transform ${!isCreateCollaboratorsCollapsed ? 'rotate-180' : ''}`} />
+                                            </button>
+                                            
+                                            <AnimatePresence>
+                                                {!isCreateCollaboratorsCollapsed && (
+                                                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                                                        <div>
+                                                            <label className="block text-xs font-semibold tracking-wide text-muted-foreground mb-1.5 uppercase">{t('分享给 (逗号分隔用户名)', 'Share To (comma separated usernames)')}</label>
+                                                            <input type="text" value={newShareUsers} onChange={e => setNewShareUsers(e.target.value)} className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm transition-all focus:ring-1 focus:ring-primary/50 outline-none" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-semibold tracking-wide text-muted-foreground mb-1.5 uppercase">{t('审核人 (逗号分隔)', 'Reviewers (comma separated)')}</label>
+                                                            <input type="text" value={newReviewerUsers} onChange={e => setNewReviewerUsers(e.target.value)} className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm transition-all focus:ring-1 focus:ring-primary/50 outline-none" />
+                                                        </div>
+                                                    </div>
+                                                </motion.div>
+                                                )}
+                                            </AnimatePresence>
+                                        </div>
+                                        
+                                        <div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
+                                            <button onClick={() => setIsCreateManagementCollapsed(!isCreateManagementCollapsed)} className="w-full flex items-center justify-between mb-4">
+                                                <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                                                    <Layers size={16} className="text-primary" />
+                                                    {t('项目管理', 'Project Management')}
+                                                </h4>
+                                                <ChevronDown className={`w-5 h-5 transition-transform ${!isCreateManagementCollapsed ? 'rotate-180' : ''}`} />
+                                            </button>
+                                            <AnimatePresence>
+                                                {!isCreateManagementCollapsed && (
+                                                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                                 <div>
                                                     <label className="block text-xs font-semibold tracking-wide text-muted-foreground mb-1.5 uppercase">
                                                         {t('计划完成时间', 'Planned Completion Time')}
@@ -1983,14 +2084,49 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                     />
                                                 </div>
                                             </div>
+                                                </motion.div>
+                                                )}
+                                            </AnimatePresence>
                                         </div>
-                                        <label className="block text-sm font-semibold tracking-wide text-primary mt-4 mb-2">{t('项目描述（可选）', 'Project Description (Optional)')}</label>
-                                        <textarea
-                                            className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none resize-y min-h-[84px]"
-                                            value={newDescription}
-                                            onChange={e => setNewDescription(e.target.value)}
-                                            placeholder={t('可留空。用于记录项目背景、目标或备注', 'Can be left empty. Add context, goals, or notes for this project')}
-                                        />
+<div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
+                                            <button onClick={() => setIsCreateTechVisualCollapsed(!isCreateTechVisualCollapsed)} className="w-full flex items-center justify-between">
+                                                <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                                                    <Settings size={16} className="text-primary" />
+                                                    {t('技术参数', 'Technical Parameters')}
+                                                </h4>
+                                                <ChevronDown className={`w-5 h-5 transition-transform ${!isCreateTechVisualCollapsed ? 'rotate-180' : ''}`} />
+                                            </button>
+                                            
+                                            <AnimatePresence>
+                                                {!isCreateTechVisualCollapsed && (
+                                                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
+                                                            <div>
+                                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
+                                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newImageSize}
+                                                                onChange={(e) => setNewImageSize(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
+                                                            </div>
+
+                                                            <div>
+                                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('视频生成偏好', 'Video Gen Preference')}</label>
+                                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newVideoGenerationPreference}
+                                                                onChange={(e) => setNewVideoGenerationPreference(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.video_generation_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
+                                                            </div>
+                                                        </div>
+                                                    </motion.div>
+                                                )}
+                                            </AnimatePresence>
+                                        </div>
 
 
                                     </motion.div>

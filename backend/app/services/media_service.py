@@ -3839,7 +3839,11 @@ class MediaGenerationService:
 
                 _debug_log(f"API_ROUTING_MODE mode={'new_function_based' if use_function_based_routing else 'old_legacy'} user_id={user_id} category={resolved_category} provider={provider or '<none>'} model={requested_model or '<none>'}")  
 
-                user_setting = self._get_active_user_setting(session, user_id, resolved_category)
+                if use_function_based_routing:
+                    user_setting = None
+                else:
+                    user_setting = self._get_active_user_setting(session, user_id, resolved_category)
+                
                 requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
                 requested_model_value = str(requested_model or "").strip()      
                 from app.api.settings import get_task_default_system_setting    
@@ -3895,7 +3899,7 @@ class MediaGenerationService:
                         _debug_log(f"Error querying FunctionAPIConfig for function_name={function_name}: {e}", "warning")
                 
                 # Check for direct system_api_id parameter override (e.g. from frontend dropdowns)
-                elif use_function_based_routing and system_api_id is not None:
+                elif system_api_id is not None:
                     user_system_api_id = int(system_api_id)
                     selected_user_strategy = "unified_function_api"
                     user_setting_id = "func_based_" + getattr(category, "name", str(category))

@@ -411,6 +411,8 @@ def _build_analyze_scene_dedup_key(user_id: int, request: AnalyzeSceneRequest) -
         "analysis_attention_notes": getattr(request, "analysis_attention_notes", None),
         "reuse_subject_assets": getattr(request, "reuse_subject_assets", None),
         "include_negative_prompt": getattr(request, "include_negative_prompt", True),
+        "function_name": getattr(request, "function_name", None),
+        "system_api_id": getattr(request, "system_api_id", None),
     }
     stable_payload = _normalize_analyze_scene_dedup_payload(payload)
     stable_json = json.dumps(stable_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -4773,7 +4775,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         ]
 
         # Resolve LLM config from user's active setting (api_key/base_url always from system_api_settings).
-        config = agent_service.get_active_llm_config(current_user_id, category="LLM")
+        config = agent_service.get_active_llm_config(
+            user_id=current_user_id, 
+            category="LLM",
+            system_api_id=getattr(request, "system_api_id", None),
+            function_name=getattr(request, "function_name", None),
+        )
         if not config or not config.get("api_key"):
              raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
         config = _inject_user_advanced_llm_preferences(config, current_user)
@@ -17132,76 +17139,6 @@ def reset_password(request: Request, payload: ResetPasswordRequest, db: Session 
 
 from app.models.all_models import SystemLog
 
-class SystemLogActionIn(BaseModel):
-    action: str = "MENU_CLICK"
-    menu_key: Optional[str] = None
-    menu_label: Optional[str] = None
-    page: Optional[str] = None
-    result: Optional[str] = None
-    details: Optional[str] = None
-
-
-@router.post("/system/logs/action")
-def create_system_log_action(
-    request: Request,
-    payload: SystemLogActionIn = Body(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    action = (payload.action or "MENU_CLICK").strip()[:128]
-    menu_key = (payload.menu_key or "").strip()
-    menu_label = (payload.menu_label or "").strip()
-    page = (payload.page or "").strip()
-    result = (payload.result or "").strip()
-    extra_details = (payload.details or "").strip()
-
-    details_parts = []
-    if menu_key:
-        details_parts.append(f"menu_key={menu_key}")
-    if menu_label:
-        details_parts.append(f"menu_label={menu_label}")
-    if page:
-        details_parts.append(f"page={page}")
-    if result:
-        details_parts.append(f"result={result}")
-    if extra_details:
-        details_parts.append(extra_details)
-
-    details = " | ".join(details_parts) if details_parts else None
-    ip_address = request.client.host if request and request.client else None
-
-    log_action(
-        db,
-        user_id=current_user.id,
-        user_name=current_user.username,
-        action=action,
-        details=details,
-        ip_address=ip_address,
-    )
-
-    return {"ok": True}
-
-@router.get("/system/logs", response_model=List[SystemLogOut])
-def get_system_logs(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get system logs. Requires superuser, system-designated account, or legacy admin usernames.
-    """
-    username = str(getattr(current_user, "username", "") or "").strip().lower()
-    is_admin = bool(
-        getattr(current_user, "is_superuser", False)
-        or getattr(current_user, "is_system", False)
-        or username in {"system", "admin"}
-    )
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Not authorized to view system logs")
-    
-    logs = db.query(SystemLog).order_by(SystemLog.timestamp.desc()).offset(skip).limit(limit).all()
-    return logs
 
 
 class RuntimeLogFileOut(BaseModel):
@@ -17263,6 +17200,10 @@ def list_runtime_log_files(
 def view_runtime_log_file(
     filename: str = "app_info.log",
     tail_lines: int = 300,
+    user_name: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    start_time: Optional[str] = Query(None),
+    end_time: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user)
 ):
     if not current_user.is_superuser:
@@ -17283,9 +17224,23 @@ def view_runtime_log_file(
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="log file not found")
 
+    user_name_lower = user_name.lower() if user_name else None
+    action_lower = action.lower() if action else None
+
     line_buffer = deque(maxlen=capped_tail)
     with target.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
+            if user_name_lower and user_name_lower not in line.lower():
+                continue
+            if action_lower and action_lower not in line.lower():
+                continue
+            if start_time or end_time:
+                ts = line[:19]
+                if len(ts) == 19 and ts[4] == '-' and ts[7] == '-':
+                    if start_time and ts < start_time:
+                        continue
+                    if end_time and ts > end_time:
+                        continue
             line_buffer.append(line)
 
     stat = target.stat()
@@ -29890,3 +29845,6 @@ def apply_entity_analysis(
 
 
 
+@router.post("/analyze_scene/stream")
+async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return await analyze_scene(request=request, current_user=current_user, db=db, async_mode="0", is_stream=True)

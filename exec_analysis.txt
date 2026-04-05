@@ -1,0 +1,360 @@
+const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
+        if (analysisRunInFlightRef.current) {
+            if (onLog) onLog('Skipped duplicate AI Scene Analysis submit while another analysis run is already active.', 'warning');
+            return;
+        }
+        analysisRunInFlightRef.current = true;
+        const startedAt = Date.now();
+        analysisStopRequestedRef.current = false;
+        setIsAnalyzing(true);
+        setActiveAnalysisTaskId('');
+        setAnalysisFlowStatus({
+            phase: 'autosaving',
+            message: t('正在自动保存剧本...', 'Auto-saving script...'),
+        });
+        setAnalysisUiReport({
+            status: 'running',
+            startedAt,
+            durationMs: 0,
+            phaseTimings: null,
+            importReport: null,
+            runtimeMeta: null,
+            warning: '',
+            error: '',
+        });
+        if (onLog) onLog("Starting AI Scene Analysis...", "start");
+
+        let llmReturned = false;
+        let runtimeMeta = null;
+        let importReport = null;
+        let postImportSceneSubjectReport = null;
+        let importWarningMessage = '';
+        const phaseMarks = {
+            submitStartedAt: startedAt,
+            analyzeStartedAt: 0,
+            llmReturnedAt: 0,
+            importStartedAt: 0,
+            importFinishedAt: 0,
+            persistStartedAt: 0,
+            persistFinishedAt: 0,
+            completedAt: 0,
+        };
+
+        try {
+            await autoSaveScriptBeforeAnalysis();
+
+            // Include project metadata if available, unless skipped (baked in)
+            const metadata = skipMetadata ? null : (project?.global_info || null);
+
+            setAnalysisFlowStatus({
+                phase: 'analyzing',
+                message: t('已提交 LLM，正在等待返回。提交阶段超时约 300s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+            });
+            phaseMarks.analyzeStartedAt = Date.now();
+            
+            const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
+            const result = await awaitAnalyzeSceneWithRecovery(
+                () => analyzeScene(
+                    content,
+                    customSystemPrompt,
+                    metadata,
+                    activeEpisode?.id || null,
+                    analysisAttentionNotes,
+                    selectedReuseSubjectAssets,
+                    {
+                        onTaskCreated: (taskId) => {
+                            setActiveAnalysisTaskId(String(taskId || '').trim());
+                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt });
+                        },
+                    },
+                    projectId
+                ),
+                { startedAt, baselineText: baselineAnalysisText }
+            );
+            const analyzedText = extractAnalysisTextFromResult(result);
+            llmReturned = true;
+            phaseMarks.llmReturnedAt = Date.now();
+            setAnalysisFlowStatus({
+                phase: 'processing_output_workspace',
+                message: t('LLM 已返回：正在保存原始返回并填写分析输出工作区（Output Workspace）...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
+            });
+            setAnalysisFlowStatus({
+                phase: 'processing_output_workspace',
+                message: t('LLM 已返回：正在保存原始返回并填写分析输出工作区（Output Workspace）...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
+            });
+
+            if (result && result.meta) {
+                try {
+                    const m = result.meta;
+                    const usage = m.usage || {};
+                    if (onLog) onLog(
+                        `AI Analysis meta: sys_chars=${m.system_prompt_chars} user_chars=${m.user_prompt_chars} ` +
+                        `est_in=${m.est_input_tokens ?? ''} est_out=${m.est_output_tokens ?? ''} ` +
+                        `max_tokens=${m.config_max_tokens_effective ?? m.config_max_tokens ?? ''} ` +
+                        `finish=${m.finish_reason ?? ''} output_chars=${m.output_chars ?? ''} ` +
+                        `episode_id=${m.request_episode_id ?? ''} saved=${m.saved_to_episode ?? ''} ` +
+                        `usage_prompt=${usage.prompt_tokens ?? usage.input_tokens ?? ''} ` +
+                        `usage_completion=${usage.completion_tokens ?? usage.output_tokens ?? ''} ` +
+                        `usage_total=${usage.total_tokens ?? ''}`,
+                        "info"
+                    );
+                } catch (e) {
+                    // ignore meta logging errors
+                }
+                runtimeMeta = extractAnalysisRuntimeMeta(result.meta);
+                setAnalysisRuntimeMeta(runtimeMeta);
+            } else {
+                runtimeMeta = null;
+                setAnalysisRuntimeMeta(null);
+            }
+
+            const integrityWarnings = collectAnalysisWarnings(result);
+            const displayWarnings = collectAnalysisWarnings(result, { includeLogOnly: false });
+            if (integrityWarnings.length > 0) {
+                const uniqueWarnings = [...new Set(integrityWarnings.map(w => String(w || '').trim()).filter(Boolean))];
+                if (uniqueWarnings.length > 0) {
+                    const warningText = uniqueWarnings.join('\n- ');
+                    if (onLog) onLog(`AI Scene Analysis warning:\n- ${warningText}`, 'warning');
+                    if (displayWarnings.length > 0) {
+                        showAnalysisWarningStatus(displayWarnings);
+                    }
+                }
+            }
+
+            setLlmRawResultContent(analyzedText);
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText));
+            lastLoadedAnalysisRef.current = analyzedText;
+
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            phaseMarks.persistStartedAt = Date.now();
+            try {
+                if (!savedByBackend) {
+                    if (onLog) onLog('Saving raw LLM output to episode analysis field...', 'process');
+                    await persistLlmResultContent(analyzedText);
+                } else {
+                    if (onLog) onLog('LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
+                    await refreshAnalysisFromDB();
+                }
+            } catch (persistErr) {
+                if (onLog) onLog(`Raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+            } finally {
+                phaseMarks.persistFinishedAt = Date.now();
+            }
+            
+            phaseMarks.importStartedAt = Date.now();
+            setAnalysisFlowStatus({
+                phase: 'importing',
+                message: t('正在导入 Markdown 与 JSON 到工作区...', 'Importing Markdown and JSON into workspace...'),
+            });
+            try {
+                importReport = await runAutoImportAndSwitchToScenes(analyzedText, {
+                    switchToScenes: false,
+                    importOptions: {
+                        autoSupplementSceneSubjects: false,
+                        suppressAlerts: true,
+                        subjectsJson: result?.subjects_json || null,
+                    },
+                });
+                if (!importReport) {
+                    importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
+                    setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+                }
+            } catch (importErr) {
+                importWarningMessage = t(
+                    `自动导入失败：${importErr?.message || importErr}`,
+                    `Auto-import failed: ${importErr?.message || importErr}`
+                );
+                if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
+                setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+            } finally {
+                phaseMarks.importFinishedAt = Date.now();
+            }
+            importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
+            maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
+
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport);
+            if (importReport && typeof importReport === 'object') {
+                importReport = {
+                    ...importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                };
+            }
+
+            let firstPassReport = null;
+            try {
+                firstPassReport = runSubjectConsistencyCheck(analyzedText || '', { silent: true, persist: true });
+                if (firstPassReport && !firstPassReport.ok) {
+                    setAnalysisFlowStatus({
+                        phase: 'warning',
+                        message: t('实体一致性检查告警：请查看提示后继续。', 'Entity consistency warning: review the message and continue.'),
+                    });
+                    setTimeout(() => {
+                        setAnalysisFlowStatus(prev => (prev?.phase === 'warning' ? { phase: 'idle', message: '' } : prev));
+                    }, 5000);
+                }
+            } catch (consistencyErr) {
+                firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
+                setSubjectConsistencyReport(firstPassReport);
+                if (onLog) onLog(`Subject consistency check warning: ${consistencyErr?.message || consistencyErr}`, 'warning');
+            }
+
+            firstPassReport = firstPassReport || buildSubjectConsistencyReport(analyzedText || '');
+            const followupIssues = await persistFirstPassIssuesToAttentionNotes(
+                firstPassReport,
+                integrityWarnings,
+                importWarningMessage ? [importWarningMessage] : []
+            );
+            if (followupIssues.length > 0) {
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('首轮检测到问题，已写入补充说明。请点击“修正生成结果”。', 'First-pass issues were saved to attention notes. Click "Refine Generated Result" for a second pass.'),
+                });
+                if (onLog) onLog(`First-pass issues detected (${followupIssues.length}). Waiting for manual supplement submit.`, 'warning');
+            }
+
+            setPendingSwitchAfterPostChecks(false);
+            phaseMarks.completedAt = Date.now();
+            const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
+            setAnalysisUiReport({
+                status: 'completed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings,
+                importReport,
+                runtimeMeta,
+                warning: importWarningMessage,
+                error: '',
+            });
+
+            const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+            const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+            const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: postImportMissingItems > 0
+                    ? (
+                        postImportSupplementFailed > 0
+                            ? t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充成功 ${postImportSupplementCreated} 项、失败 ${postImportSupplementFailed} 项、跳过 ${postImportSupplementSkipped} 项。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                            : t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充 ${postImportSupplementCreated} 项（跳过 ${postImportSupplementSkipped} 项）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                    )
+                    : t('分析完成：未检测到实体缺失，流程已结束。', 'Analysis completed: no missing entities detected, workflow finished.'),
+            });
+
+            if (onLog) onLog("AI Analysis applied and saved.", "success");
+            setShowAnalysisModal(false);
+        } catch (e) {
+            console.error(e);
+            const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
+            phaseMarks.completedAt = Date.now();
+            const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
+            if (canceled) {
+                if (onLog) onLog('Analysis task canceled by user.', 'warning');
+            } else {
+                if (onLog) onLog(`Analysis Failed: ${friendlyAnalysisError}`, "error");
+            }
+            setAnalysisFlowStatus(
+                canceled
+                    ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
+                    : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
+            );
+            setAnalysisUiReport({
+                status: canceled ? 'warning' : 'failed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings,
+                importReport: canceled ? importReport : null,
+                runtimeMeta,
+                warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
+                error: canceled ? '' : friendlyAnalysisError,
+            });
+            if (!canceled) {
+                alert(`Analysis failed: ${friendlyAnalysisError}`);
+            }
+        } finally {
+            clearAnalysisTaskMarker(activeEpisode?.id);
+            setIsAnalyzing(false);
+            setActiveAnalysisTaskId('');
+            analysisStopRequestedRef.current = false;
+            analysisRunInFlightRef.current = false;
+        }
+    };
+
+    const handleSaveAnalysisAttentionNotes = async () => {
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
+        setIsSavingAnalysisAttentionNotes(true);
+        try {
+            const mergedEpisodeInfo = {
+                ...(activeEpisode?.episode_info || {}),
+                analysis_attention_notes: analysisAttentionNotes || '',
+            };
+            await onUpdateEpisodeInfo(activeEpisode.id, { episode_info: mergedEpisodeInfo });
+            if (onLog) onLog('Episode 1 analysis attention notes saved.', 'success');
+        } catch (e) {
+            console.error(e);
+            if (onLog) onLog(`Failed to save analysis attention notes: ${e.message}`, 'error');
+        } finally {
+            setIsSavingAnalysisAttentionNotes(false);
+        }
+    };
+
+    const saveAnalysisAttentionNotesValue = async (nextNotes) => {
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
+        const mergedEpisodeInfo = {
+            ...(activeEpisode?.episode_info || {}),
+            analysis_attention_notes: String(nextNotes || '').trim(),
+        };
+        await onUpdateEpisodeInfo(activeEpisode.id, { episode_info: mergedEpisodeInfo });
+    };
+
+    const handleSupplementSubmitClick = async () => {
+        if (isAnalyzing) return;
+        const generatedContent = String(llmRawResultContent || llmResultContent || '').trim();
+        if (!generatedContent) {
+            alert(t('请先完成第一次 AI 场景分析，再执行“修正生成结果”。', 'Please finish the first AI Scene Analysis before running "Refine Generated Result".'));
+            return;
+        }
+
+        let basePromptForSupplement = '';
+        try {
+            const promptRes = await fetchPrompt('scene_analysis.txt');
+            basePromptForSupplement = String(promptRes?.content || '').trim();
+        } catch {
+            basePromptForSupplement = '';
+        }
+
+        // Always include original scene-analysis system prompt for second-pass supplement submit.
+        // Fallback order: fetched prompt -> current systemPrompt editor content.
+        if (!basePromptForSupplement) {
+            basePromptForSupplement = String(systemPrompt || '').trim();
+        }
+
+        const currentReport = buildSubjectConsistencyReport(generatedContent);
+        const followupIssues = collectFollowupIssues(currentReport, [], []);
+        const supplementPrompt = buildIssueDrivenSupplementPrompt(basePromptForSupplement, followupIssues);
+
+        const supplementInput = buildSupplementSubmissionInput({
+            generatedContent,
+            subjectCheckText: subjectConsistencyResultText,
+            coreCoverageText: coreCoverageResultText,
+            attentionNotes: analysisAttentionNotes,
+        });
+
+        // Keep supplement submit behavior aligned with primary scene analysis:
+        // superuser previews/edits prompt first, then manually runs submission.
+        if (isSuperuser) {
+            setAnalysisUiReport(null);
+            setAnalysisFlowStatus({ phase: 'idle', message: '' });
+            setSystemPrompt(supplementPrompt);
+            setUserPrompt(supplementInput);
+            setShowAnalysisModal(true);
+            if (onLog) onLog('Superuser supplement submit: prompt preview opened before submission.', 'info');
+            return;
+        }
+
+        if (onLog) onLog('Manual supplement submit started (input=generated analysis output).', 'start');
+        await executeAnalysis(supplementInput, supplementPrompt, false);
+    };
+
+    

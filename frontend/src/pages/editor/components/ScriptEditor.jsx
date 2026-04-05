@@ -155,6 +155,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onLog, onImportText, onSwitchToScenes, uiLang = 'zh' }) => {
+    const functionApiConfigs = useFunctionApis('script_analysis');
     const navigate = useNavigate();
     const [segments, setSegments] = useState([]);
     const [showMerged, setShowMerged] = useState(false);
@@ -5087,16 +5088,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </span>
                 </h2>
                 <div className="flex items-center gap-2">
-                    {segments.length > 0 && (
-                        <button 
-                            onClick={() => setIsRawMode(!isRawMode)} 
-                            className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20"
-                        >
-                            {isRawMode ? t('切换到表格视图', 'Switch to Table View') : t('编辑原始文本', 'Edit Raw Text')}
-                        </button>
-                    )}
                     {isRawMode && (
                         <>
+                            <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} />
                             <button 
                                 onClick={handleAnalysisClick} 
                                 disabled={isAnalyzing}
@@ -5137,13 +5131,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </button>
                     )}
                     <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90">{t('保存修改', 'Save Changes')}</button>
-                    <button
-                        onClick={() => doImportText(llmRawResultContent || llmResultContent || '', 'auto')}
-                        className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20"
-                        title={t('按 LLM 原始返回结果导入', 'Import from LLM raw response')}
-                    >
-                        {t('手工导入模型分析结果', 'Manual Import Model Analysis Result')}
-                    </button>
                 </div>
             </div>
 
@@ -5401,6 +5388,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     )}
                 </div>
 
+                {isSuperuser && (
                 <div className="border-t border-white/10 bg-black/10 shrink-0">
                     <div className="px-6 py-3 border-b border-white/10">
                         <div className="text-sm text-primary uppercase font-extrabold tracking-wide">{t('分析输出工作区（Output Workspace）', 'Analysis Output Workspace')}</div>
@@ -5647,6 +5635,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                     </div>
                 </div>
+                )}
+
 
             </div>
 

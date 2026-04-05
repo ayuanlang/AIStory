@@ -1,0 +1,1506 @@
+async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
+    """
+    Submits raw script text to LLM for Scene/Beat analysis using a specific prompt template.
+    Returns the raw analysis result (Markdown/JSON).
+    """
+    if async_mode == "1":
+        dedup_key = _build_analyze_scene_dedup_key(current_user.id, request)
+        now_ts = time.time()
+        reused_task_id = ""
+        reused_status = ""
+
+        with _ANALYZE_SCENE_RECENT_TASKS_LOCK:
+            _prune_recent_analyze_scene_tasks_locked(now_ts)
+            existing = _ANALYZE_SCENE_RECENT_TASKS.get(dedup_key) or {}
+            existing_task_id = str(existing.get("task_id") or "").strip()
+            if existing_task_id:
+                info = _get_task_status(existing_task_id, user_id=current_user.id) or {}
+                status = str(info.get("status") or "").strip().lower()
+                if status in {"pending", "running", "completed"}:
+                    reused_task_id = existing_task_id
+                    reused_status = status
+                else:
+                    _ANALYZE_SCENE_RECENT_TASKS.pop(dedup_key, None)
+
+        if reused_task_id:
+            logger.warning(
+                "[analyze_scene] deduplicated async submit user_id=%s episode_id=%s task_id=%s status=%s window_s=%s",
+                current_user.id,
+                getattr(request, "episode_id", None),
+                reused_task_id,
+                reused_status,
+                _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS,
+            )
+            return JSONResponse({
+                "task_id": reused_task_id,
+                "async": True,
+                "deduplicated": True,
+                "status": reused_status,
+            })
+
+        tid = _submit_async(analyze_scene, user_id=current_user.id, kind="analyze_scene",
+                            request=request, async_mode="0")
+        with _ANALYZE_SCENE_RECENT_TASKS_LOCK:
+            _prune_recent_analyze_scene_tasks_locked(now_ts)
+            _ANALYZE_SCENE_RECENT_TASKS[dedup_key] = {
+                "task_id": tid,
+                "ts": now_ts,
+                "episode_id": getattr(request, "episode_id", None),
+            }
+        return JSONResponse({"task_id": tid, "async": True})
+    logger.info("Received analyze_scene request")
+    try:
+        logger.info(f"[analyze_scene] request.episode_id={getattr(request, 'episode_id', None)}")
+    except Exception:
+        pass
+    if request.project_metadata:
+        try:
+            keys = list(request.project_metadata.keys())
+        except Exception:
+            keys = []
+        logger.info(f"Project Metadata received (keys only): {keys}")
+    else:
+        logger.info("No Project Metadata received")
+
+    try:
+        # Cache user primitives before releasing DB session for long LLM calls.
+        current_user_id = int(getattr(current_user, "id", 0) or 0)
+        current_user_is_superuser = bool(getattr(current_user, "is_superuser", False))
+
+        def _is_length_finish_reason(reason: Any) -> bool:
+            r = str(reason or "").strip().lower().replace("-", "_")
+            return r in {
+                "length",
+                "max_tokens",
+                "max_token",
+                "max_output_tokens",
+                "output_token_limit",
+                "token_limit",
+            }
+
+        def _estimate_tokens(text: str) -> int:
+            if not text:
+                return 0
+            # Heuristic: ~4 bytes per token (good enough for debug)
+            return (len(text.encode("utf-8")) + 3) // 4
+
+        def _merge_usage(total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str, Any]:
+            total = dict(total or {})
+            part = dict(part or {})
+
+            def _add(key: str, value: Any):
+                if value is None:
+                    return
+                try:
+                    iv = int(value)
+                except Exception:
+                    return
+                total[key] = int(total.get(key) or 0) + iv
+
+            # Common OpenAI-style keys
+            _add("prompt_tokens", part.get("prompt_tokens"))
+            _add("completion_tokens", part.get("completion_tokens"))
+            _add("total_tokens", part.get("total_tokens"))
+            # Some providers use input/output naming
+            _add("input_tokens", part.get("input_tokens"))
+            _add("output_tokens", part.get("output_tokens"))
+
+            # Preserve provider-specific extra usage fields if they are scalar and not already present
+            for k, v in part.items():
+                if k in total:
+                    continue
+                if isinstance(v, (int, float, str)):
+                    total[k] = v
+            return total
+
+        def _detect_scene_output_sections(output_text: str) -> Dict[str, Any]:
+            text = str(output_text or "")
+            checks = {
+                "part_1": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Part\s*1\b"),
+                "subject_index": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Subject\s*Index\b"),
+                "part_2": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Part\s*2\b"),
+                "final_consistency_report": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Final\s+Consistency\s+Report\b"),
+            }
+            found_sections: Dict[str, bool] = {k: bool(p.search(text)) for k, p in checks.items()}
+            missing_sections = [k for k, present in found_sections.items() if not present]
+            return {
+                "found_sections": found_sections,
+                "missing_sections": missing_sections,
+                "structure_incomplete": bool(missing_sections),
+            }
+
+        def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
+            text = (output_text or "").strip()
+            segment_list = segments or []
+            had_length_finish = any(_is_length_finish_reason(seg.get("finish_reason")) for seg in segment_list)
+            ended_with_length = _is_length_finish_reason(final_finish_reason)
+            section_meta = _detect_scene_output_sections(text)
+            missing_sections = section_meta.get("missing_sections") or []
+            structure_incomplete = bool(section_meta.get("structure_incomplete"))
+
+            json_candidate = ""
+            json_expected = False
+            explicit_json_response = False
+            parseable_json_block_count = 0
+
+            if text.startswith("```"):
+                lowered = text.lower()
+                if "```json" in lowered or ("```" in lowered and ("{" in text or "[" in text)):
+                    json_expected = True
+                    fence_start = text.find("\n")
+                    fence_end = text.rfind("```")
+                    if fence_start != -1 and fence_end != -1 and fence_end > fence_start:
+                        json_candidate = text[fence_start + 1:fence_end].strip()
+
+            if not json_candidate:
+                if text.startswith("{") or text.startswith("["):
+                    json_expected = True
+                    explicit_json_response = True
+                    json_candidate = text
+                else:
+                    first_obj = text.find("{")
+                    last_obj = text.rfind("}")
+                    first_arr = text.find("[")
+                    last_arr = text.rfind("]")
+                    if first_obj != -1 and last_obj > first_obj:
+                        json_expected = True
+                        json_candidate = text[first_obj:last_obj + 1].strip()
+                    elif first_arr != -1 and last_arr > first_arr:
+                        json_expected = True
+                        json_candidate = text[first_arr:last_arr + 1].strip()
+
+            # Non-blocking fallback: count parseable fenced JSON blocks in mixed markdown outputs.
+            try:
+                fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+                for m in fence_re.finditer(text):
+                    candidate = str(m.group(1) or "").strip()
+                    if not candidate:
+                        continue
+                    try:
+                        json.loads(candidate)
+                        parseable_json_block_count += 1
+                    except Exception:
+                        continue
+            except Exception:
+                parseable_json_block_count = 0
+
+            json_valid = None
+            json_error = None
+            if json_expected:
+                try:
+                    json.loads(json_candidate)
+                    json_valid = True
+                except Exception as parse_error:
+                    json_valid = False
+                    json_error = str(parse_error)
+
+            truncation_suspected = bool(
+                ended_with_length
+                or (had_length_finish and json_expected and json_valid is False)
+                or structure_incomplete
+            )
+
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            if ended_with_length:
+                warning_codes.append("ANALYSIS_OUTPUT_TRUNCATED")
+                warnings.append("Analysis output may be incomplete because the response hit a length limit.")
+            elif had_length_finish:
+                warning_codes.append("ANALYSIS_OUTPUT_CONTINUED")
+                warnings.append("Analysis response was split by length limits and auto-continuation was applied.")
+
+            # Only flag JSON invalid for explicit pure-JSON responses.
+            # Mixed markdown + partial JSON should stay non-blocking.
+            should_flag_json_invalid = bool(json_expected and json_valid is False and explicit_json_response)
+            if should_flag_json_invalid:
+                warning_codes.append("ANALYSIS_JSON_INVALID")
+                warnings.append("Analysis returned invalid or incomplete JSON. Please review before applying.")
+
+            if structure_incomplete:
+                warning_codes.append("ANALYSIS_STRUCTURE_INCOMPLETE")
+                warnings.append(
+                    "Analysis output is missing required sections: "
+                    + ", ".join([str(x) for x in missing_sections])
+                    + "."
+                )
+
+            return {
+                "truncation_detected": had_length_finish,
+                "truncation_suspected": truncation_suspected,
+                "ended_with_length": ended_with_length,
+                "json_expected": json_expected,
+                "json_valid": json_valid,
+                "json_error": json_error,
+                "explicit_json_response": explicit_json_response,
+                "parseable_json_block_count": parseable_json_block_count,
+                "found_sections": section_meta.get("found_sections") or {},
+                "missing_sections": missing_sections,
+                "structure_incomplete": structure_incomplete,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
+        def _normalize_subject_name(value: Any) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            text = re.sub(r"^(?:CHAR|PROP|ENV)\s*:\s*", "", text, flags=re.IGNORECASE)
+            text = text.strip()
+            if text.startswith("[") and text.endswith("]"):
+                text = text[1:-1].strip()
+            text = text.lstrip("@").strip()
+            text = re.sub(
+                r"[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)+",
+                lambda match: re.sub(r"[_-]+", " ", match.group(0)),
+                text,
+            )
+            text = re.sub(r"\s+", " ", text)
+            return text
+
+        def _normalize_subject_compare_key(value: Any) -> str:
+            stable = _normalize_subject_name(value)
+            if not stable:
+                return ""
+            # Insert spaces for camelCase/PascalCase boundaries before compact compare.
+            stable = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", stable)
+            stable = normalize_entity_token(stable)
+            # Treat spaces/underscores/hyphens as equivalent for EN names.
+            stable = re.sub(r"[\s_\-]+", "", stable)
+            # Remove remaining punctuation/noise while keeping CJK/letters/digits.
+            stable = re.sub(r"[^\w\u4e00-\u9fff]", "", stable)
+            return stable
+
+        def _extract_subjects_from_analysis_text(text: str) -> List[str]:
+            raw = str(text or "")
+            if not raw:
+                return []
+            patterns = [
+                re.compile(r"CHAR\s*:\s*\[@([^\]]+)\]", re.IGNORECASE),
+                re.compile(r"PROP\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
+                re.compile(r"ENV\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
+            ]
+            found: List[str] = []
+            seen = set()
+            for pattern in patterns:
+                for m in pattern.finditer(raw):
+                    normalized = _normalize_subject_name(m.group(1))
+                    key = _normalize_subject_compare_key(normalized)
+                    if normalized and key not in seen:
+                        seen.add(key)
+                        found.append(normalized)
+            return found
+
+        def _extract_entities_from_json_candidates(text: str) -> Dict[str, List[Dict[str, Any]]]:
+            payload: Dict[str, List[Dict[str, Any]]] = {
+                "characters": [], "covers": [],
+                "props": [],
+                "environments": [],
+            }
+            raw = str(text or "")
+            if not raw:
+                return payload
+
+            candidates: List[str] = []
+            fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+            for m in fence_re.finditer(raw):
+                candidate = str(m.group(1) or "").strip()
+                if candidate:
+                    candidates.append(candidate)
+
+            trimmed = raw.strip()
+            if trimmed.startswith("{") and trimmed.endswith("}"):
+                candidates.append(trimmed)
+
+            seen_candidate = set()
+            for candidate in candidates:
+                key = candidate[:2000]
+                if key in seen_candidate:
+                    continue
+                seen_candidate.add(key)
+                try:
+                    obj = json.loads(candidate)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                for section in ("characters", "props", "environments", "covers"):
+                    items = obj.get(section)
+                    if isinstance(items, list):
+                        payload[section].extend([x for x in items if isinstance(x, dict)])
+
+            return payload
+
+        def _detect_subject_consistency_warnings(text: str) -> Dict[str, Any]:
+            markdown_subjects = _extract_subjects_from_analysis_text(text)
+            entities_payload = _extract_entities_from_json_candidates(text)
+
+            json_subjects: List[str] = []
+            for section in ("characters", "props", "environments", "covers"):
+                for item in entities_payload.get(section, []):
+                    for raw_name in (item.get("name"), item.get("name_en")):
+                        normalized = _normalize_subject_name(raw_name or "")
+                        if normalized:
+                            json_subjects.append(normalized)
+
+            markdown_set = {}
+            for s in markdown_subjects:
+                key = _normalize_subject_compare_key(s)
+                if key and key not in markdown_set:
+                    markdown_set[key] = s
+
+            json_set = {}
+            for s in json_subjects:
+                key = _normalize_subject_compare_key(s)
+                if key and key not in json_set:
+                    json_set[key] = s
+
+            missing = [display for key, display in markdown_set.items() if key not in json_set]
+
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            if len(markdown_set) > 0 and len(json_set) == 0:
+                warning_codes.append("ANALYSIS_SUBJECTS_UNVERIFIED")
+                warnings.append("Subject consistency warning: could not be fully verified from JSON sections; continue loading and review manually.")
+            elif len(missing) > 0:
+                warning_codes.append("ANALYSIS_SUBJECTS_INCOMPLETE")
+                warnings.append(
+                    "Subject consistency warning: some subjects found in scene text are missing in entity JSON. "
+                    + f"Missing: {', '.join(missing[:20])}"
+                )
+
+            return {
+                "markdown_subject_count": len(markdown_set),
+                "json_subject_count": len(json_set),
+                "missing_subjects": missing,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
+        def _detect_prompt_template_syntax_warnings(text: str, syntax_rules: Dict[str, Any]) -> Dict[str, Any]:
+            entities_payload = _extract_entities_from_json_candidates(text)
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            mismatches: List[Dict[str, Any]] = []
+
+            for section in ("characters", "props", "environments", "covers"):
+                rules = syntax_rules.get(section) if isinstance(syntax_rules, dict) else None
+                if not isinstance(rules, dict):
+                    continue
+                en_required = [str(x).strip() for x in (rules.get("en_required") or []) if str(x).strip()]
+                cn_required = [str(x).strip() for x in (rules.get("cn_required") or []) if str(x).strip()]
+                items = entities_payload.get(section) or []
+                if not isinstance(items, list):
+                    continue
+
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or item.get("name_en") or "").strip() or "(unnamed)"
+                    prompt_en = str(item.get("generation_prompt_en") or "")
+                    prompt_cn = str(item.get("generation_prompt_cn") or "")
+
+                    missing_en = [m for m in en_required if m not in prompt_en]
+                    missing_cn = [m for m in cn_required if m not in prompt_cn]
+
+                    if not prompt_en.strip() or not prompt_cn.strip() or missing_en or missing_cn:
+                        mismatches.append({
+                            "section": section,
+                            "name": name,
+                            "missing_en_markers": missing_en,
+                            "missing_cn_markers": missing_cn,
+                            "missing_generation_prompt_en": not bool(prompt_en.strip()),
+                            "missing_generation_prompt_cn": not bool(prompt_cn.strip()),
+                        })
+
+            if mismatches:
+                warning_codes.append("ANALYSIS_PROMPT_TEMPLATE_MISMATCH")
+                preview = mismatches[:8]
+                summary = "; ".join([
+                    f"{it.get('section')}:{it.get('name')}"
+                    for it in preview
+                ])
+                warnings.append(
+                    "Prompt template syntax warning: generation_prompt_cn/en must match fixed template markers for characters/props/environments/covers. "
+                    f"Examples: {summary}"
+                )
+
+            return {
+                "checked_sections": ["characters", "props", "environments", "covers"],
+                "mismatch_count": len(mismatches),
+                "mismatches": mismatches,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
+        requested_scene_analysis_mode = str(getattr(request, "scene_analysis_mode", "") or "").strip() or None
+        effective_scene_analysis_mode = requested_scene_analysis_mode
+        if not effective_scene_analysis_mode:
+            try:
+                effective_scene_analysis_mode = str(get_scene_analysis_system_config(db).get("default_mode") or "").strip() or None
+            except Exception as scene_analysis_cfg_err:
+                logger.warning("[analyze_scene] failed to read system scene analysis mode, fallback to request/default: %s", scene_analysis_cfg_err)
+
+        feature_bundle: Dict[str, Any] = {}
+        try:
+            feature_bundle = resolve_scene_analysis_feature_bundle(
+                project_metadata=request.project_metadata,
+                explicit_features=getattr(request, "scene_analysis_features", None),
+                script_text=getattr(request, "text", None),
+                mode=effective_scene_analysis_mode,
+            )
+        except Exception as feature_bundle_err:
+            logger.warning("[analyze_scene] failed to resolve scene analysis feature stack: %s", feature_bundle_err)
+            feature_bundle = {}
+
+        # Load the prompt template or use provided system_prompt
+        system_instruction = ""
+        template_signature: Dict[str, Any] = {}
+        
+        if request.system_prompt:
+            system_instruction = request.system_prompt
+            template_signature = {
+                "template_source": "inline_system_prompt",
+                "template_version": "inline@v1",
+                "template_hash_sha256": hashlib.sha256(str(system_instruction or "").encode("utf-8")).hexdigest(),
+            }
+        else:
+            prompt_filename = request.prompt_file or "scene_analysis.txt"
+            if feature_bundle.get("enabled") and not request.prompt_file:
+                prompt_filename = str(feature_bundle.get("base_prompt_file") or "scene_analysis_routed_base.txt")
+            try:
+                system_instruction = _resolve_prompt_text(prompt_filename)
+            except FileNotFoundError:
+                logger.error("Scene analysis prompt not found: %s", prompt_filename)
+                raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
+            template_signature = {
+                "template_source": f"prompt_file:{prompt_filename}",
+                "template_version": "prompt_file@v1",
+                "template_hash_sha256": hashlib.sha256(str(system_instruction or "").encode("utf-8")).hexdigest(),
+            }
+
+        if feature_bundle.get("enabled"):
+            system_instruction = render_scene_analysis_routed_prompt(system_instruction, feature_bundle)
+            logger.info(
+                "Rendered routed scene analysis prompt with explicit slots: requested_mode=%s effective_mode=%s base_prompt=%s slots=%s skills=%s features=%s combos=%s",
+                requested_scene_analysis_mode,
+                feature_bundle.get("mode"),
+                feature_bundle.get("base_prompt_file") or request.prompt_file or "scene_analysis.txt",
+                sorted((feature_bundle.get("slot_blocks") or {}).keys()),
+                [item.get("skill_id") for item in (feature_bundle.get("selected_skills") or [])],
+                feature_bundle.get("normalized_features") or {},
+                [item.get("skill_id") for item in (feature_bundle.get("combo_matches") or [])],
+            )
+
+        include_negative_prompt = getattr(request, "include_negative_prompt", True)
+        if include_negative_prompt:
+            system_instruction += (
+                "\n\n"
+                "# Output Hard Constraint (Negative Prompt)\n"
+                "In Part 2 JSON, every entity item (characters / props / environments / covers) MUST include key \"negative_prompt_en\". "
+                "Each negative_prompt_en must be English-only, style-aware, and aligned to that entity's generation_prompt_en. "
+                "For live-action realism, explicitly exclude plastic/waxy/CGI look and other realism-breaking artifacts."
+            )
+
+        system_instruction += (
+            "\n\n"
+            "# Output Hard Constraint (English Naming)\n"
+            "For every entity JSON item, name_en MUST use natural English word spacing. "
+            "Use readable Title Case phrases like 'Demon Slayer Captain' or 'Harbor Office Front Mid Night', "
+            "and avoid 'DemonSlayerCaptain', 'Demon_Slayer_Captain', 'demon-slayer-captain', or 'HarborOffice_Front_Mid_Night'."
+        )
+
+        # Inject authoritative character canon (if provided via episode_id)
+        try:
+            ep_id = getattr(request, "episode_id", None)
+            if ep_id:
+                episode = db.query(Episode).filter(Episode.id == ep_id).first()
+                if episode:
+                    # Prefer project-level canon (Overview) and merge episode-specific overrides.
+                    project_profiles = []
+                    try:
+                        project = db.query(Project).filter(Project.id == episode.project_id).first()
+                        if project and isinstance(project.global_info, dict):
+                            project_profiles = project.global_info.get("character_profiles") or []
+                    except Exception:
+                        project_profiles = []
+
+                    episode_profiles = episode.character_profiles or []
+
+                    merged_profiles: List[Dict[str, Any]] = []
+                    by_name: Dict[str, int] = {}
+
+                    def _add_profile(p: Any) -> None:
+                        if not isinstance(p, dict):
+                            return
+                        nm = (p.get("name") or "").strip()
+                        if not nm:
+                            return
+                        if nm in by_name:
+                            merged_profiles[by_name[nm]] = p
+                        else:
+                            by_name[nm] = len(merged_profiles)
+                            merged_profiles.append(p)
+
+                    for p in (project_profiles or []):
+                        _add_profile(p)
+                    for p in (episode_profiles or []):
+                        _add_profile(p)
+
+                    canon_blocks = []
+                    for p in merged_profiles:
+                        if not isinstance(p, dict):
+                            continue
+                        nm = (p.get("name") or "").strip()
+                        if not nm:
+                            continue
+                        md = (p.get("description_md") or "").strip()
+                        if md:
+                            canon_blocks.append(md)
+                        else:
+                            canon_blocks.append(f"### {nm} (Canonical)\n- Identity: {p.get('identity') or ''}\n- Body Features: {p.get('body_features') or ''}\n- Style Tags: {', '.join(p.get('style_tags') or [])}\n")
+
+                    canon_text = "\n\n".join(canon_blocks).strip()
+                    if canon_text:
+                        # Keep the injection bounded to avoid blowing prompt size.
+                        canon_text = canon_text[:8000]
+                        system_instruction += (
+                            "\n\n"
+                            "# Character Canon (Authoritative)\n"
+                            "The following character profiles are AUTHORITATIVE for this script. "
+                            "You MUST use them as the single source of truth for character identity and appearance, "
+                            "and IGNORE conflicting character descriptions found elsewhere in the script.\n\n"
+                            + canon_text
+                        )
+        except Exception as e:
+            logger.warning(f"[analyze_scene] failed to inject character canon: {e}")
+        
+        # Prepare user content with optional project metadata
+        user_content = f"Script to Analyze:\n\n{request.text}"
+        
+        if request.project_metadata:
+            metadata = request.project_metadata if isinstance(request.project_metadata, dict) else {}
+
+            def _norm_key(key: Any) -> str:
+                return str(key or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+            metadata_norm = {
+                _norm_key(k): v for k, v in metadata.items()
+            }
+
+            def _clean_str(value: Any) -> str:
+                text = str(value or "").strip()
+                return text
+
+            def _pick(*keys: str) -> str:
+                for key in keys:
+                    value = None
+                    if key in metadata:
+                        value = metadata.get(key)
+                    else:
+                        nk = _norm_key(key)
+                        if nk in metadata_norm:
+                            value = metadata_norm.get(nk)
+                    if value is not None:
+                        value = _clean_str(value)
+                        if value:
+                            return value
+                return ""
+
+            def _pick_arr(*keys: str) -> List[str]:
+                for key in keys:
+                    value = None
+                    if key in metadata:
+                        value = metadata.get(key)
+                    else:
+                        nk = _norm_key(key)
+                        if nk in metadata_norm:
+                            value = metadata_norm.get(nk)
+                    if value is None:
+                        continue
+                    if isinstance(value, list):
+                        normalized = [str(v or "").strip() for v in value]
+                        normalized = [v for v in normalized if v]
+                        if normalized:
+                            return normalized
+                    elif isinstance(value, str):
+                        parts = [p.strip() for p in re.split(r"[,，;；\n]", value) if p and p.strip()]
+                        if parts:
+                            return parts
+                return []
+
+            visual_standard = {}
+            tech_params = metadata.get("tech_params") if "tech_params" in metadata else metadata_norm.get("tech_params")
+            if isinstance(tech_params, dict):
+                visual_standard = tech_params.get("visual_standard") or tech_params.get("visual standard") or {}
+            if not isinstance(visual_standard, dict):
+                visual_standard = {}
+
+            visual_norm = {
+                _norm_key(k): v for k, v in visual_standard.items()
+            }
+
+            def _pick_visual(*keys: str) -> str:
+                for key in keys:
+                    value = None
+                    if key in visual_standard:
+                        value = visual_standard.get(key)
+                    else:
+                        nk = _norm_key(key)
+                        if nk in visual_norm:
+                            value = visual_norm.get(nk)
+                    if value is not None:
+                        value = _clean_str(value)
+                        if value:
+                            return value
+                for key in keys:
+                    value = None
+                    if key in metadata:
+                        value = metadata.get(key)
+                    else:
+                        nk = _norm_key(key)
+                        if nk in metadata_norm:
+                            value = metadata_norm.get(nk)
+                    if value is not None:
+                        value = _clean_str(value)
+                        if value:
+                            return value
+                return ""
+
+            project_language = _pick("language", "project_language")
+            borrowed_films = _pick_arr("borrowed_films", "borrowedFilms", "reference_films")
+
+            meta_parts = [
+                "Project Context (prepend and treat as high-priority constraints):",
+                "[Basic Info]",
+            ]
+            if _pick("script_title", "title"):
+                meta_parts.append(f"Title: {_pick('script_title', 'title')}")
+            if _pick("series_episode", "episode"):
+                meta_parts.append(f"Episode: {_pick('series_episode', 'episode')}")
+            if _pick("type"):
+                meta_parts.append(f"Type: {_pick('type')}")
+            if _pick("base_positioning"):
+                meta_parts.append(f"Base Positioning: {_pick('base_positioning')}")
+            if project_language:
+                meta_parts.append(f"Language: {project_language}")
+                if any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
+                    meta_parts.append("Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.")
+                    meta_parts.append("Subject Naming Rule (EN): Use spaces between English words in name_en and keep it as a readable Title Case phrase (e.g., 'Demon Slayer Captain', 'Harbor Office Front Mid Night'). Do NOT use snake_case, kebab-case, camelCase, or concatenated forms like 'DemonSlayerCaptain' or 'HarborOffice_Front_Mid_Night'.")
+                    meta_parts.append("Subject Prompt Rule: Every subject JSON item must include BOTH generation_prompt_cn and generation_prompt_en, and the two prompts must be semantically aligned.")
+            else:
+                meta_parts.append("Language: (empty)")
+                meta_parts.append("Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.")
+
+            meta_parts.append("[Technical & Visual Parameters]")
+            if _pick_visual("aspect_ratio"):
+                meta_parts.append(f"Aspect Ratio: {_pick_visual('aspect_ratio')}")
+            if _pick_visual("image_size"):
+                meta_parts.append(f"Image Size: {_pick_visual('image_size')}")
+            if _pick_visual("horizontal_resolution"):
+                meta_parts.append(f"Horizontal Resolution: {_pick_visual('horizontal_resolution')}")
+            if _pick_visual("vertical_resolution"):
+                meta_parts.append(f"Vertical Resolution: {_pick_visual('vertical_resolution')}")
+            if _pick_visual("frame_rate"):
+                meta_parts.append(f"Frame Rate: {_pick_visual('frame_rate')}")
+            if _pick_visual("quality"):
+                meta_parts.append(f"Quality: {_pick_visual('quality')}")
+            if _pick("Global_Style"):
+                meta_parts.append(f"Global Style: {_pick('Global_Style')}")
+            if borrowed_films:
+                meta_parts.append(f"Borrowed Films: {', '.join(borrowed_films)}")
+            if _pick("tone"):
+                meta_parts.append(f"Tone: {_pick('tone')}")
+            if _pick("lighting"):
+                meta_parts.append(f"Lighting: {_pick('lighting')}")
+
+            meta_parts.append("Use this project context as first-class constraints before analyzing the script.")
+
+            meta_str = "\n".join(meta_parts)
+            user_content = f"{meta_str}\n\n{user_content}"
+            logger.info(
+                "Injected Project Context into Prompt (summary): lines=%s chars=%s tokens_est=%s",
+                len(meta_parts),
+                len(meta_str),
+                _estimate_tokens(meta_str),
+            )
+
+        # Inject project entity inventory as system-level subject baseline for recognizability.
+        try:
+            project_id_for_inventory = None
+            direct_project_id = getattr(request, "project_id", None)
+            try:
+                direct_project_id = int(direct_project_id) if direct_project_id is not None else None
+            except Exception:
+                direct_project_id = None
+
+            if direct_project_id:
+                try:
+                    _require_project_access(db, direct_project_id, current_user)
+                    project_id_for_inventory = direct_project_id
+                except HTTPException as access_err:
+                    logger.warning(
+                        "[analyze_scene] ignored direct project_id for subject inventory injection: project_id=%s detail=%s",
+                        direct_project_id,
+                        getattr(access_err, "detail", None),
+                    )
+
+            ep_id_for_inventory = getattr(request, "episode_id", None)
+            if not project_id_for_inventory and ep_id_for_inventory:
+                episode_for_inventory = db.query(Episode).filter(Episode.id == ep_id_for_inventory).first()
+                if episode_for_inventory:
+                    project_id_for_inventory = int(episode_for_inventory.project_id)
+
+            inventory = {
+                "characters": [], "covers": [],
+                "props": [],
+                "environments": [],
+            }
+            inventory_source = "empty_fallback"
+            if project_id_for_inventory:
+                inventory = _build_project_subject_inventory(db, project_id_for_inventory, limit_per_type=80)
+                inventory_source = f"project:{project_id_for_inventory}"
+
+            inventory_block = _format_project_subject_inventory_block(inventory)
+            inventory_system_guard = (
+                "\n\n"
+                "[Existing Subjects Reuse Guard - High Priority]\n"
+                "The injected System-level Subjects Inventory contains authoritative existing reusable subjects for this project.\n"
+                "You MUST reuse these existing subjects first whenever they match the script.\n"
+                "Do NOT rename, redefine, replace, overwrite, or regenerate them as new entities.\n"
+                "When names and descriptions are provided, treat both as canonical recognition anchors.\n"
+                "Only create a new subject when the script clearly requires an entity that is not already present in the inventory.\n"
+                "If the injected inventory is empty, you must still treat it as an explicit empty baseline rather than as a missing section.\n"
+                "If you output entity JSON, existing inventory subjects must be reused by reference and MUST NOT be duplicated as newly generated entities."
+            )
+            system_instruction = f"{system_instruction}{inventory_system_guard}"
+            inventory_guidance = (
+                "System-level subject reuse rules:\n"
+                "- Treat the above inventory as authoritative identifiers for this project.\n"
+                "- This inventory block is always present, even when all categories are empty.\n"
+                "- Prefer reusing listed subject_ref names directly in Scene Subjects and Part 2 outputs.\n"
+                "- Preserve anchor semantics when generating/repairing character, prop, and environment subjects.\n"
+                "- Use both the provided names and descriptions/anchors as recognition baselines.\n"
+                "- Do not duplicate existing inventory subjects in newly generated entity outputs."
+            )
+            user_content = f"{inventory_block}\n\n{inventory_guidance}\n\n{user_content}"
+            logger.info(
+                "Injected system-level subject inventory into analyze_scene prompt: source=%s chars=%s props=%s envs=%s",
+                inventory_source,
+                len(inventory.get("characters") or []),
+                len(inventory.get("props") or []),
+                len(inventory.get("environments") or []),
+            )
+        except Exception as inventory_inject_err:
+            logger.warning("[analyze_scene] failed to inject system-level subject inventory: %s", inventory_inject_err)
+
+        attention_notes = (getattr(request, "analysis_attention_notes", None) or "").strip()
+        if attention_notes:
+            attention_block = (
+                "Regeneration Attention Notes (High Priority):\n"
+                "When regenerating AI Scene Analysis, you MUST prioritize and satisfy these constraints:\n"
+                f"{attention_notes}"
+            )
+            user_content = f"{attention_block}\n\n{user_content}"
+            logger.info(
+                "Injected analysis attention notes into prompt: chars=%s tokens_est=%s",
+                len(attention_notes),
+                _estimate_tokens(attention_notes),
+            )
+
+        reuse_subject_assets = getattr(request, "reuse_subject_assets", None) or []
+        if isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
+            def _normalize_subject_type(raw_type: Any) -> str:
+                t = str(raw_type or "").strip().lower()
+                if t in {"character", "characters", "char", "人物", "角色"}:
+                    return "character"
+                if t in {"prop", "props", "道具", "物件"}:
+                    return "prop"
+                if t in {"environment", "environments", "env", "场景", "环境"}:
+                    return "environment"
+                if t in {"cover", "covers", "封面", "封面海报"}:
+                    return "cover"
+                return ""
+
+            def _format_subject_ref(name: str, normalized_type: str) -> str:
+                clean_name = _normalize_subject_name(name)
+                if not clean_name:
+                    return ""
+                if normalized_type == "character":
+                    return f"CHAR:[@{clean_name}]"
+                if normalized_type == "prop":
+                    return f"PROP:[{clean_name}]"
+                if normalized_type == "environment":
+                    return f"ENV:[{clean_name}]"
+                if normalized_type == "cover":
+                    return f"COVER:[{clean_name}]"
+                return f"SUBJECT:[{clean_name}]"
+
+            normalized_assets = []
+            for item in reuse_subject_assets:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                asset_type = str(item.get("type") or "").strip()
+                normalized_type = _normalize_subject_type(asset_type)
+                description = str(item.get("description") or "").strip()
+                anchor_description = str(item.get("anchor_description") or "").strip()
+                normalized_assets.append({
+                    "name": name,
+                    "type": asset_type,
+                    "normalized_type": normalized_type,
+                    "subject_ref": _format_subject_ref(name, normalized_type),
+                    "description": description,
+                    "anchor_description": anchor_description,
+                })
+
+            if normalized_assets:
+                lines = [
+                    "Reusable Subject Assets (High Priority):",
+                    "The following assets are MUST-REUSE subjects for this analysis.",
+                    "Do NOT regenerate or rename them. Keep their identity and anchor traits consistent.",
+                    "When referencing these assets in Scene Subjects / Beats / JSON, use canonical syntax: CHAR:[@Name], PROP:[Name], ENV:[Name].",
+                ]
+                for asset in normalized_assets:
+                    detail_parts = []
+                    if asset.get("type"):
+                        detail_parts.append(f"type={asset['type']}")
+                    if asset.get("description"):
+                        detail_parts.append(f"description={asset['description']}")
+                    if asset.get("anchor_description"):
+                        detail_parts.append(f"anchors={asset['anchor_description']}")
+                    details = " | ".join(detail_parts)
+                    subject_ref = str(asset.get("subject_ref") or "").strip() or f"SUBJECT:[{asset['name']}]"
+                    lines.append(f"- {subject_ref} (name={asset['name']}) {details}".strip())
+
+                reuse_block = "\n".join(lines)
+                user_content = f"{reuse_block}\n\n{user_content}"
+                logger.info(
+                    "Injected reusable subject assets into prompt: count=%s tokens_est=%s",
+                    len(normalized_assets),
+                    _estimate_tokens(reuse_block),
+                )
+
+        # Construct messages
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_content}
+        ]
+
+        # Resolve LLM config from user's active setting (api_key/base_url always from system_api_settings).
+        config = agent_service.get_active_llm_config(
+            current_user_id,
+            category="LLM",
+            function_name=getattr(request, "function_name", "analyze_scene"),
+            system_api_id=getattr(request, "system_api_id", None)
+        )
+        if not config or not config.get("api_key"):
+             raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
+        config = _inject_user_advanced_llm_preferences(config, current_user)
+
+        # --- Debug / Truncation tracing ---
+        debug_meta: Dict[str, Any] = {
+            "stage": "pre_llm",
+            "request_episode_id": getattr(request, "episode_id", None),
+            "provider": (config or {}).get("provider"),
+            "model": (config or {}).get("model"),
+            "system_prompt_chars": len(system_instruction or ""),
+            "user_prompt_chars": len(user_content or ""),
+            "request_text_chars": len((request.text or "")),
+            "system_prompt_tokens_est": _estimate_tokens(system_instruction or ""),
+            "user_prompt_tokens_est": _estimate_tokens(user_content or ""),
+        }
+        if template_signature:
+            debug_meta.update(template_signature)
+
+        # Billing (task_type = analysis)
+        provider = (config or {}).get("provider")
+        model = (config or {}).get("model")
+        reservation_tx = None
+        if billing_service.is_token_pricing(db, "analysis", provider, model):
+            est = billing_service.estimate_input_output_tokens_from_messages(messages, output_ratio=1.5)
+            debug_meta.update({
+                "est_input_tokens": est.get("input_tokens", 0),
+                "est_output_tokens": est.get("output_tokens", 0),
+                "est_total_tokens": est.get("total_tokens", 0),
+            })
+            reserve_details = {
+                "item": "scene_analysis",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": 1.5,
+                "system_prompt_len": len(system_instruction or ""),
+                "user_prompt_len": len(user_content or ""),
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            }
+            reservation_tx = billing_service.reserve_credits(db, current_user_id, "analysis", provider, model, reserve_details)
+        else:
+            billing_service.check_balance(db, current_user_id, "analysis", provider, model)
+
+        # Record max token config for diagnostics only.
+        cfg_obj = (config or {}).get("config") or {}
+        if not isinstance(cfg_obj, dict):
+            cfg_obj = {}
+
+        def _to_int(value: Any) -> int:
+            try:
+                parsed = int(value)
+                return parsed if parsed > 0 else 0
+            except Exception:
+                return 0
+
+        requested_cap = (
+            _to_int(cfg_obj.get("max_tokens"))
+            or _to_int(cfg_obj.get("max_completion_tokens"))
+            or _to_int(cfg_obj.get("max_output_tokens"))
+        )
+
+        # KIE call hardening for scene analysis:
+        # 1) Remove mutually-exclusive/irrelevant options that can degrade long-form outputs.
+        # 2) Do not force max token cap; let provider/model defaults apply unless user set one.
+        provider_name = str((config or {}).get("provider") or "").strip().lower()
+        kie_removed_conflict_keys: List[str] = []
+        kie_output_cap_forced = False
+        kie_output_cap_source = "provider_default"
+        if provider_name == "kie":
+            for key in ("tools", "tool_choice", "response_format"):
+                if key in cfg_obj:
+                    cfg_obj.pop(key, None)
+                    kie_removed_conflict_keys.append(key)
+
+            # Scene analysis expects strict final-format output, not thought traces.
+            if "include_thoughts" in cfg_obj:
+                cfg_obj["include_thoughts"] = False
+
+            # Do not force an output cap for KIE scene analysis.
+            # Leave max token policy to the upstream model/provider unless user explicitly set one.
+            kie_output_cap_forced = False
+            if requested_cap > 0:
+                kie_output_cap_source = "user_configured"
+
+        if (config or {}).get("config") is not cfg_obj:
+            config["config"] = cfg_obj
+
+        debug_meta["config_max_tokens"] = cfg_obj.get("max_tokens")
+        debug_meta["config_max_completion_tokens"] = cfg_obj.get("max_completion_tokens")
+        # analyze_scene already implements endpoint-level continuation logic.
+        # Disable generic llm_service auto-continuation here to avoid nested loops.
+        cfg_obj["auto_continue_on_length"] = False
+        debug_meta["config_max_tokens_effective"] = (
+            _to_int(cfg_obj.get("max_tokens"))
+            or _to_int(cfg_obj.get("max_completion_tokens"))
+            or _to_int(cfg_obj.get("max_output_tokens"))
+            or None
+        )
+        debug_meta["requested_output_cap_tokens"] = requested_cap
+        debug_meta["default_output_cap_applied"] = False
+        debug_meta["local_output_cap_removed"] = False
+        debug_meta["kie_removed_conflict_keys"] = kie_removed_conflict_keys
+        debug_meta["kie_output_cap_forced"] = kie_output_cap_forced
+        debug_meta["kie_output_cap_source"] = kie_output_cap_source
+        if provider_name == "kie" and (kie_removed_conflict_keys or kie_output_cap_forced):
+            logger.warning(
+                "[analyze_scene][kie_call_hardening] removed_keys=%s forced_cap=%s effective_max_tokens=%s",
+                kie_removed_conflict_keys,
+                kie_output_cap_forced,
+                debug_meta.get("config_max_tokens_effective"),
+            )
+        elif provider_name == "kie":
+            logger.info(
+                "[analyze_scene][kie_call_hardening] removed_keys=%s forced_cap=%s cap_source=%s effective_max_tokens=%s",
+                kie_removed_conflict_keys,
+                kie_output_cap_forced,
+                kie_output_cap_source,
+                debug_meta.get("config_max_tokens_effective"),
+            )
+
+        logger.info(f"Analyzing scene for user {current_user_id} with model {config.get('model')}")
+        # Auto-continue if provider truncates (finish_reason=length).
+        # Important: keep continuation prompts small (do NOT send the entire prior output back)
+        # to avoid blowing up prompt size / hitting context window.
+        # Token cap is controlled by provider/model config; local continuation only keeps a high safety ceiling.
+        requested_max_segments = max(1, _to_int(cfg_obj.get("continuation_max_segments")) or 12)
+        max_segments = min(_ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP, requested_max_segments)
+        tail_chars = 1600
+        continuation_instruction_tpl = (
+            "Continue exactly where you left off, immediately after the following suffix. "
+            "Do NOT repeat any of the suffix text. "
+            "Return ONLY the continuation in the same format as before.\n\n"
+            "SUFFIX (do not repeat):\n{suffix}"
+        )
+        continuation_instruction_incomplete_tpl = (
+            "Your previous response ended before all required sections were completed. "
+            "Continue exactly from the end of the existing response. "
+            "Do NOT rewrite or repeat completed content. "
+            "You MUST complete these missing sections: {missing_sections}. "
+            "Return ONLY the continuation text in the same format.\n\n"
+            "SUFFIX (do not repeat):\n{suffix}"
+        )
+
+        result_parts: List[str] = []
+        segments_meta: List[Dict[str, Any]] = []
+        usage_total: Dict[str, Any] = {}
+        resolved_llm_routing: Dict[str, Any] = {}
+        finish_reason = None
+        continuation_stopped_by_max_segments = False
+        output_char_cap_reached = False
+        continuation_reason_counts: Dict[str, int] = {}
+        continuation_by_structure = 0
+        provider_limit_hints: List[str] = []
+        llm_fallback_warnings: List[str] = []
+
+        def _dedupe_overlap(existing: str, incoming: str) -> str:
+            if not existing or not incoming:
+                return incoming
+            # If model repeats the suffix, strip common overlaps.
+            candidates = [
+                existing[-200:],
+                existing[-400:],
+                existing[-800:],
+            ]
+            for c in candidates:
+                if c and incoming.startswith(c):
+                    return incoming[len(c):]
+            # Some models wrap with whitespace/newlines; try trimmed
+            inc_l = incoming.lstrip()
+            for c in candidates:
+                if c and inc_l.startswith(c):
+                    return inc_l[len(c):]
+            return incoming
+
+        current_messages = list(messages)
+        system_only_messages = []
+        try:
+            if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+                system_only_messages = [messages[0]]
+        except Exception:
+            system_only_messages = []
+
+        _release_db_connection(db, "analyze_scene_llm_call")
+
+        for seg_idx in range(1, max_segments + 1):
+            llm_resp = await _await_analyze_scene_segment(current_messages, config)
+            current_routing = _extract_llm_routing_metadata(llm_resp)
+            if current_routing:
+                resolved_llm_routing = current_routing
+            raw_part = llm_resp.get("raw_content")
+            if not isinstance(raw_part, str):
+                raw_part = llm_resp.get("content", "") or ""
+            part_usage = llm_resp.get("usage", {}) or {}
+            part_finish = llm_resp.get("finish_reason")
+            part_limit_hints = llm_resp.get("token_limit_hints", []) or []
+            part_extraction_diag = llm_resp.get("extraction_diagnostics", {}) or {}
+            part_fallback_warnings = llm_resp.get("fallback_warnings", []) or []
+            if isinstance(part_limit_hints, list):
+                for hint in part_limit_hints:
+                    hint_text = str(hint or "").strip()
+                    if hint_text and hint_text not in provider_limit_hints:
+                        provider_limit_hints.append(hint_text)
+            if isinstance(part_fallback_warnings, list):
+                for warn in part_fallback_warnings:
+                    warn_text = str(warn or "").strip()
+                    if warn_text and warn_text not in llm_fallback_warnings:
+                        llm_fallback_warnings.append(warn_text)
+
+            usage_total = _merge_usage(usage_total, part_usage)
+            finish_reason = part_finish
+
+            existing = "".join(result_parts)
+            part_content = _dedupe_overlap(existing, raw_part)
+            result_parts.append(part_content)
+            segments_meta.append({
+                "index": seg_idx,
+                "finish_reason": part_finish,
+                "output_chars": len(raw_part),
+                "output_tokens_est": _estimate_tokens(raw_part),
+                "deduped_chars": len(part_content),
+                "usage": part_usage,
+                "token_limit_hints": part_limit_hints,
+                "extraction_diagnostics": part_extraction_diag,
+            })
+
+            accumulated = "".join(result_parts)
+            if len(accumulated) >= _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP:
+                output_char_cap_reached = True
+                finish_reason = part_finish or finish_reason or "safety_output_cap"
+                logger.warning(
+                    "[analyze_scene] safety_output_cap_reached episode_id=%s provider=%s model=%s chars=%s cap=%s segments=%s",
+                    getattr(request, "episode_id", None),
+                    (config or {}).get("provider"),
+                    (config or {}).get("model"),
+                    len(accumulated),
+                    _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
+                    len(segments_meta or []),
+                )
+                break
+            section_meta = _detect_scene_output_sections(accumulated)
+            missing_sections = [str(x) for x in (section_meta.get("missing_sections") or []) if str(x)]
+            continue_due_to_length = _is_length_finish_reason(part_finish)
+            continue_due_to_structure = (
+                not continue_due_to_length
+                and bool(missing_sections)
+                and seg_idx < max_segments
+                and continuation_by_structure < 3
+                and bool(accumulated.strip())
+            )
+
+            # Stop if not truncated.
+            if not continue_due_to_length and not continue_due_to_structure:
+                break
+
+            # Stop if provider returned nothing new.
+            if not raw_part.strip():
+                break
+
+            # Ask for continuation; include only a short suffix of the accumulated output.
+            suffix = accumulated[-tail_chars:] if len(accumulated) > tail_chars else accumulated
+            continuation_reason = "length"
+            if continue_due_to_structure:
+                continuation_by_structure += 1
+                continuation_reason = "missing_required_sections"
+                continuation_instruction = continuation_instruction_incomplete_tpl.format(
+                    missing_sections=", ".join(missing_sections),
+                    suffix=suffix,
+                )
+            else:
+                continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
+
+            continuation_reason_counts[continuation_reason] = int(continuation_reason_counts.get(continuation_reason) or 0) + 1
+
+            # Continuation does not require re-sending the whole script; keep only system + tail.
+            base_for_continue = system_only_messages or list(messages)
+            current_messages = list(base_for_continue) + [
+                {"role": "assistant", "content": suffix},
+                {"role": "user", "content": continuation_instruction},
+            ]
+
+        if finish_reason is not None and _is_length_finish_reason(finish_reason) and len(segments_meta) >= max_segments:
+            continuation_stopped_by_max_segments = True
+
+        result_content = "".join(result_parts)
+        usage = usage_total
+        integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
+
+        raw_total_chars = 0
+        dedup_total_chars = 0
+        try:
+            raw_total_chars = sum(int(seg.get("output_chars") or 0) for seg in (segments_meta or []))
+            dedup_total_chars = sum(int(seg.get("deduped_chars") or 0) for seg in (segments_meta or []))
+        except Exception:
+            raw_total_chars = 0
+            dedup_total_chars = 0
+
+        logger.info(
+            "[analyze_scene] llm_output_length episode_id=%s provider=%s model=%s segments=%s finish_reason=%s output_chars=%s raw_total_chars=%s dedup_total_chars=%s",
+            getattr(request, "episode_id", None),
+            (config or {}).get("provider"),
+            (config or {}).get("model"),
+            len(segments_meta or []),
+            finish_reason,
+            len(result_content or ""),
+            raw_total_chars,
+            dedup_total_chars,
+        )
+
+        completion_tokens_val = usage.get("completion_tokens")
+        if completion_tokens_val is None:
+            completion_tokens_val = usage.get("output_tokens")
+        output_cap_reached_suspected = False
+        try:
+            req_cap = int(debug_meta.get("requested_output_cap_tokens") or 0)
+            comp_val = int(completion_tokens_val or 0)
+            if req_cap > 0 and comp_val > 0 and comp_val >= int(req_cap * 0.98):
+                output_cap_reached_suspected = True
+        except Exception:
+            output_cap_reached_suspected = False
+
+        debug_meta.update({
+            "stage": "post_llm",
+            "finish_reason": finish_reason,
+            "output_chars": len(result_content or ""),
+            "output_tokens_est": _estimate_tokens(result_content or ""),
+            "completion_tokens": completion_tokens_val,
+            "output_cap_reached_suspected": output_cap_reached_suspected,
+            "usage": usage,
+            "segments": segments_meta,
+            "max_segments": max_segments,
+            "requested_max_segments": requested_max_segments,
+            "segment_timeout_seconds": _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
+            "output_char_hard_cap": _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
+            "output_char_cap_reached": output_char_cap_reached,
+            "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,
+            "continuation_reason_counts": continuation_reason_counts,
+            "continuation_by_structure": continuation_by_structure,
+            "provider_limit_hints": provider_limit_hints,
+            "llm_fallback_warnings": llm_fallback_warnings,
+            "integrity": integrity_meta,
+        })
+
+        if integrity_meta.get("truncation_suspected") or continuation_stopped_by_max_segments:
+            logger.warning(
+                "[analyze_scene] final_output_incomplete episode_id=%s provider=%s model=%s ended_with_length=%s truncation_detected=%s structure_incomplete=%s missing_sections=%s continuation_stopped_by_max_segments=%s warning_codes=%s",
+                getattr(request, "episode_id", None),
+                (config or {}).get("provider"),
+                (config or {}).get("model"),
+                integrity_meta.get("ended_with_length"),
+                integrity_meta.get("truncation_detected"),
+                integrity_meta.get("structure_incomplete"),
+                integrity_meta.get("missing_sections") or [],
+                continuation_stopped_by_max_segments,
+                integrity_meta.get("warning_codes") or [],
+            )
+        elif integrity_meta.get("truncation_detected"):
+            logger.info(
+                "[analyze_scene] length_limited_segments_resolved episode_id=%s provider=%s model=%s segments=%s warning_codes=%s",
+                getattr(request, "episode_id", None),
+                (config or {}).get("provider"),
+                (config or {}).get("model"),
+                len(segments_meta or []),
+                integrity_meta.get("warning_codes") or [],
+            )
+
+        # Persist result to DB if caller provided episode_id.
+        saved_to_episode = False
+        if getattr(request, "episode_id", None):
+            episode_id = request.episode_id
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if episode and not current_user_is_superuser:
+                auth_user = db.query(User).filter(User.id == current_user_id).first()
+                if not auth_user:
+                    raise HTTPException(status_code=401, detail="User not found")
+                _require_project_access(db, episode.project_id, auth_user)
+            if not episode:
+                raise HTTPException(status_code=404, detail="Episode not found")
+            episode.ai_scene_analysis_result = result_content
+            saved_to_episode = True
+            debug_meta["saved_to_episode"] = True
+            debug_meta["saved_episode_id"] = episode_id
+            try:
+                db.flush()
+            except Exception:
+                db.rollback()
+                raise
+            logger.info(
+                "[analyze_scene] Saved ai_scene_analysis_result to episode_id=%s chars=%s",
+                episode_id,
+                len(result_content or ""),
+            )
+        else:
+            debug_meta["saved_to_episode"] = False
+        
+        # Billing finalize (commit happens inside billing service; will persist episode update if set above)
+        if reservation_tx:
+            actual_details = {"item": "scene_analysis"}
+            if usage:
+                actual_details.update(usage)
+            _apply_llm_routing_to_billing_details(actual_details, resolved_llm_routing)
+            # Normalize common usage keys
+            if "prompt_tokens" in actual_details and "input_tokens" not in actual_details:
+                actual_details["input_tokens"] = actual_details.get("prompt_tokens", 0)
+            if "completion_tokens" in actual_details and "output_tokens" not in actual_details:
+                actual_details["output_tokens"] = actual_details.get("completion_tokens", 0)
+            billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), actual_details)
+        else:
+            details = {"item": "scene_analysis"}
+            if usage:
+                details.update(usage)
+            _apply_llm_routing_to_billing_details(details, resolved_llm_routing)
+            # Normalize usage keys for token-based calculation if provider returns OpenAI-style usage
+            if "prompt_tokens" in details and "input_tokens" not in details:
+                details["input_tokens"] = details.get("prompt_tokens", 0)
+            if "completion_tokens" in details and "output_tokens" not in details:
+                details["output_tokens"] = details.get("completion_tokens", 0)
+            billing_service.deduct_credits(db, current_user_id, "analysis", provider, model, details)
+
+        # Ensure episode save is committed even if billing is disabled/mocked.
+        if saved_to_episode:
+            try:
+                db.commit()
+                try:
+                    db.refresh(episode)
+                except Exception:
+                    pass
+            except Exception:
+                db.rollback()
+                raise
+        
+        response_payload: Dict[str, Any] = {"success": True, "result": result_content, "meta": debug_meta}
+
+        # Extract subjects_json from LLM output so frontend can use pre-parsed
+        # clean JSON instead of re-parsing the raw markdown with heuristic regex.
+        subjects_json = _extract_subjects_json_from_text(result_content)
+        if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
+            cleaned_for_json = sanitize_llm_markdown_output(result_content)
+            subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
+        response_payload["subjects_json"] = subjects_json
+        response_payload["subjects_json_count"] = {
+            "characters": len(subjects_json.get("characters") or []),
+            "props": len(subjects_json.get("props") or []),
+            "environments": len(subjects_json.get("environments") or []),
+        }
+
+        subject_consistency_meta = _detect_subject_consistency_warnings(result_content)
+        debug_meta["subject_consistency"] = subject_consistency_meta
+
+        prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
+
+        prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
+        debug_meta["prompt_template_syntax"] = prompt_template_meta
+
+        sc_warning_codes = subject_consistency_meta.get("warning_codes") or []
+        sc_warnings = subject_consistency_meta.get("warnings") or []
+        template_warning_codes = prompt_template_meta.get("warning_codes") or []
+        template_warnings = prompt_template_meta.get("warnings") or []
+
+        if integrity_meta.get("warnings"):
+            response_payload["warnings"] = integrity_meta.get("warnings")
+        if integrity_meta.get("warning_codes"):
+            response_payload["warning_codes"] = integrity_meta.get("warning_codes")
+
+        if output_char_cap_reached:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                f"Analysis output reached safety cap of {_ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP} characters and was stopped early.",
+            ]
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                "ANALYSIS_OUTPUT_CHAR_CAP_REACHED",
+            ]
+
+        if sc_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(sc_warnings),
+            ]
+        if sc_warning_codes:
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                *list(sc_warning_codes),
+            ]
+
+        if template_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(template_warnings),
+            ]
+        if template_warning_codes:
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                *list(template_warning_codes),
+            ]
+
+        if llm_fallback_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(llm_fallback_warnings),
+            ]
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                "ANALYSIS_LLM_CALL_FAILED_RETRIED",
+            ]
+
+        if response_payload.get("warnings"):
+            response_payload["warnings"] = list(dict.fromkeys([str(x or "").strip() for x in response_payload["warnings"] if str(x or "").strip()]))
+        if response_payload.get("warning_codes"):
+            response_payload["warning_codes"] = list(dict.fromkeys([str(x or "").strip() for x in response_payload["warning_codes"] if str(x or "").strip()]))
+
+        if integrity_meta.get("warning_codes") or integrity_meta.get("warnings"):
+            try:
+                logger.warning(
+                    "[analyze_scene] integrity warning episode_id=%s codes=%s warnings=%s",
+                    getattr(request, "episode_id", None),
+                    integrity_meta.get("warning_codes") or [],
+                    integrity_meta.get("warnings") or [],
+                )
+            except Exception:
+                pass
+        if sc_warning_codes or sc_warnings:
+            try:
+                logger.warning(
+                    "[analyze_scene] subject consistency warning episode_id=%s codes=%s warnings=%s",
+                    getattr(request, "episode_id", None),
+                    sc_warning_codes,
+                    sc_warnings,
+                )
+            except Exception:
+                pass
+        if template_warning_codes or template_warnings:
+            try:
+                logger.warning(
+                    "[analyze_scene] prompt template syntax warning episode_id=%s codes=%s warnings=%s mismatches=%s",
+                    getattr(request, "episode_id", None),
+                    template_warning_codes,
+                    template_warnings,
+                    (prompt_template_meta or {}).get("mismatch_count", 0),
+                )
+            except Exception:
+                pass
+
+        review_required_codes = set()
+        review_required_codes.update(integrity_meta.get("warning_codes") or [])
+        severe_import_review_codes = {
+            "ANALYSIS_JSON_INVALID",
+            "ANALYSIS_STRUCTURE_INCOMPLETE",
+        }
+        matched_review_codes = [code for code in severe_import_review_codes if code in review_required_codes]
+        if matched_review_codes:
+            review_messages: List[str] = []
+            review_messages.extend([str(x or "").strip() for x in (integrity_meta.get("warnings") or []) if str(x or "").strip()])
+            review_messages = list(dict.fromkeys(review_messages))
+            logger.warning(
+                "[analyze_scene] import_review_required_non_blocking episode_id=%s codes=%s warnings=%s",
+                getattr(request, "episode_id", None),
+                matched_review_codes,
+                review_messages,
+            )
+            response_payload["import_review_required"] = True
+            response_payload["import_review_codes"] = matched_review_codes
+            if review_messages:
+                response_payload["import_review_messages"] = review_messages
+        return response_payload
+
+    except HTTPException as e:
+        # Preserve original status codes (e.g., 402 insufficient credits)
+        conf_log = locals().get("config") or {}
+        p_log = conf_log.get("provider")
+        prefixed_detail = _vendor_failed_message(p_log, e.detail)
+        logger.warning(f"Scene Analysis HTTPException: {prefixed_detail}")
+        try:
+            reservation_tx = locals().get("reservation_tx")
+            if reservation_tx:
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), prefixed_detail)
+        except:
+            pass
+        try:
+            m_log = conf_log.get("model")
+            billing_service.log_failed_transaction(db, current_user_id, "analysis", p_log, m_log, prefixed_detail)
+        except:
+            pass
+        raise HTTPException(status_code=e.status_code, detail=prefixed_detail)
+    except Exception as e:
+        conf_log = locals().get("config") or {}
+        p_log = conf_log.get("provider")
+        prefixed_detail = _vendor_failed_message(p_log, e)
+        logger.error(f"Scene Analysis Failed: {prefixed_detail}", exc_info=True)
+        try:
+            reservation_tx = locals().get("reservation_tx")
+            if reservation_tx:
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), prefixed_detail)
+        except:
+            pass
+        # Log failure
+        try:
+             m_log = conf_log.get("model")
+             billing_service.log_failed_transaction(db, current_user_id, "analysis", p_log, m_log, prefixed_detail)
+        except:
+             pass # Fail safe
+        raise HTTPException(status_code=500, detail=prefixed_detail)
+
+# --- Tools ---
+class TranslateRequest(BaseModel):
+    q: str
+    from_lang: str = 'en'
+    to_lang: str = 'zh'
+

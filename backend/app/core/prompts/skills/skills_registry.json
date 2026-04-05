@@ -46,13 +46,15 @@
         "script_generator_scenes.txt",
         "script_generator_episode_script.txt",
         "scene_regenerate.txt",
-        "shot_generator.txt"
+        "shot_generator.txt",
+        "shot_regenerate.txt"
       ],
       "legacy_refs": [
         "script_generator_scenes.txt",
         "script_generator_episode_script.txt",
         "scene_regenerate.txt",
-        "shot_generator.txt"
+        "shot_generator.txt",
+        "shot_regenerate.txt"
       ]
     },
     {

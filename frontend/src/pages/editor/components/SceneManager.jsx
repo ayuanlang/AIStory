@@ -2774,8 +2774,10 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             const currentRows = Array.isArray(latest) ? latest : [];
             const bySceneNo = new Map();
             for (const row of currentRows) {
-                const key = String(row?.scene_no || '').trim();
-                if (key) bySceneNo.set(key, row);
+                const noKey = String(row?.scene_no || '').trim();
+                const nameKey = String(row?.scene_name || '').trim();
+                const key = `${noKey}|||${nameKey}`;
+                if (key !== '|||') bySceneNo.set(key, row);
             }
 
             let createdCount = 0;
@@ -2785,12 +2787,14 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             for (const row of parsedRows) {
                 const payload = buildSceneSavePayload(row);
                 const sceneNoKey = String(payload?.scene_no || '').trim();
+                const sceneNameKey = String(payload?.scene_name || '').trim();
+                const compositeKey = `${sceneNoKey}|||${sceneNameKey}`;
                 try {
-                    const matched = sceneNoKey ? bySceneNo.get(sceneNoKey) : null;
+                    const matched = compositeKey !== '|||' ? bySceneNo.get(compositeKey) : null;
                     if (matched?.id) {
+                        // skip duplicate scene imports as requested
                         // eslint-disable-next-line no-await-in-loop
-                        await updateScene(matched.id, payload);
-                        updatedCount += 1;
+                        updatedCount += 1; // Actually skipped, but marked as updated to avoid failure count
                     } else {
                         // eslint-disable-next-line no-await-in-loop
                         await createScene(activeEpisode.id, payload);

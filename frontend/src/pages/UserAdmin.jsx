@@ -337,6 +337,12 @@ const UserAdmin = () => {
     const [runtimeLogFiles, setRuntimeLogFiles] = useState([]);
     const [selectedRuntimeLogFile, setSelectedRuntimeLogFile] = useState('app_info.log');
     const [runtimeLogTailLines, setRuntimeLogTailLines] = useState(300);
+    const [runtimeLogFilters, setRuntimeLogFilters] = useState({
+        user_name: '',
+        action: '',
+        start_time: '',
+        end_time: ''
+    });
     const [runtimeLogContent, setRuntimeLogContent] = useState('');
     const [isRuntimeLogsLoading, setIsRuntimeLogsLoading] = useState(false);
     const [runtimeLogsError, setRuntimeLogsError] = useState('');
@@ -4126,6 +4132,10 @@ const UserAdmin = () => {
             const view = await getAdminRuntimeLogView({
                 filename: targetFile,
                 tail_lines: Math.max(1, Number(runtimeLogTailLines) || 300),
+                user_name: runtimeLogFilters.user_name,
+                action: runtimeLogFilters.action,
+                start_time: runtimeLogFilters.start_time,
+                end_time: runtimeLogFilters.end_time
             });
             setRuntimeLogContent(view?.content || '');
         } catch (e) {
@@ -4785,7 +4795,7 @@ const UserAdmin = () => {
         { id: 'oss_pools', label: t('OSS 存储配置', 'OSS Storage'), icon: Database },
         { id: 'prompt_skills', label: t('Prompt Skills', 'Prompt Skills'), icon: List },
         { id: 'storage_usage', label: t('磁盘统计', 'Storage Usage'), icon: HardDrive },
-        { id: 'runtime_logs', label: t('系统日志', 'Runtime Logs'), icon: List },
+        { id: 'runtime_logs', label: t('运行日志', 'Runtime Logs'), icon: List },
         { id: 'payment', label: t('支付', 'Payment'), icon: CreditCard },
         
         { id: 'smtp', label: t('邮件 SMTP', 'Email SMTP'), icon: Mail },
@@ -8547,8 +8557,8 @@ const UserAdmin = () => {
                                 </div>
                             )}
 
-                    {/* RUNTIME LOGS TAB */}
-                    {activeTab === 'runtime_logs' && (
+                      {/* RUNTIME LOGS TAB */}
+                      {activeTab === 'runtime_logs' && (
                         <div className="space-y-4">
                             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                                 <h3 className="text-lg font-bold">{t('系统运行日志（含 logger.info）', 'Runtime Logs (including logger.info)')}</h3>
@@ -8585,6 +8595,50 @@ const UserAdmin = () => {
                                         <RefreshCw size={16} className={isRuntimeLogsLoading ? 'animate-spin' : ''} /> Refresh
                                     </button>
                                 </div>
+                            </div>
+                            
+                            {/* Runtime Log Filters */}
+                            <div className="flex flex-wrap gap-3 bg-black/20 p-3 rounded border border-gray-800 text-sm mt-2">
+                                <div className="text-xs text-gray-500 w-full mb-1">
+                                    {t('使用子串过滤文件里的记录', 'Filter by substrings in log lines')}
+                                </div>
+                                <input 
+                                    type="text" 
+                                    placeholder={t('过滤用户名', 'Filter by User')} 
+                                    value={runtimeLogFilters.user_name}
+                                    onChange={(e) => setRuntimeLogFilters({...runtimeLogFilters, user_name: e.target.value})}
+                                    className="flex-1 min-w-[120px] bg-black/40 border border-gray-700 rounded px-2 py-1.5 outline-none focus:border-primary"
+                                />
+                                <input 
+                                    type="text" 
+                                    placeholder={t('过滤操作内容', 'Filter by Action/Content')} 
+                                    value={runtimeLogFilters.action}
+                                    onChange={(e) => setRuntimeLogFilters({...runtimeLogFilters, action: e.target.value})}
+                                    className="flex-1 min-w-[120px] bg-black/40 border border-gray-700 rounded px-2 py-1.5 outline-none focus:border-primary"
+                                />
+                                <input 
+                                    type="datetime-local" 
+                                    title={t('起始时间', 'Start time')}
+                                    value={runtimeLogFilters.start_time}
+                                    onChange={(e) => setRuntimeLogFilters({...runtimeLogFilters, start_time: e.target.value})}
+                                    className="bg-black/40 border border-gray-700 rounded px-2 py-1.5 outline-none hidden-calendar-icon focus:border-primary"
+                                    style={{ colorScheme: 'dark' }}
+                                />
+                                <input 
+                                    type="datetime-local"
+                                    title={t('结束时间', 'End time')}
+                                    value={runtimeLogFilters.end_time}
+                                    onChange={(e) => setRuntimeLogFilters({...runtimeLogFilters, end_time: e.target.value})}
+                                    className="bg-black/40 border border-gray-700 rounded px-2 py-1.5 outline-none hidden-calendar-icon focus:border-primary"
+                                    style={{ colorScheme: 'dark' }}
+                                />
+                                <button
+                                      onClick={() => {
+                                          setRuntimeLogFilters({user_name:'', action:'', start_time:'', end_time:''});
+                                          fetchRuntimeLogs(selectedRuntimeLogFile);
+                                      }}
+                                      className="bg-gray-800 hover:bg-gray-700 text-xs px-3 py-1.5 rounded transition-colors whitespace-nowrap"
+                                >{t('重置', 'Reset')}</button>
                             </div>
 
                             {runtimeLogsError ? (

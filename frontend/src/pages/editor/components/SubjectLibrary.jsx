@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -40,7 +40,6 @@ import {
     deleteShot,
     fetchEntities, 
     createEntity,
-    cloneEntityWithLLM,
     updateEntity,
     deleteEntity,
     deleteAllEntities,
@@ -307,6 +306,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [assetImageTypeFilter, setAssetImageTypeFilter] = useState('all');
     const [imageSelectAction, setImageSelectAction] = useState('direct_use');
     const [viewingEntity, setViewingEntity] = useState(null);
+    const [viewingEntityTab, setViewingEntityTab] = useState('generate');
+    const [advancedInstruction, setAdvancedInstruction] = useState('');
+    const [isAdvancedOptimizing, setIsAdvancedOptimizing] = useState(false);
+    const [isAdvancedLocalModifying, setIsAdvancedLocalModifying] = useState(false);
     const [isBatchGeneratingEntities, setIsBatchGeneratingEntities] = useState(false);
     const [isStoppingBatchGenerateEntities, setIsStoppingBatchGenerateEntities] = useState(false);
     const [batchEntityProgress, setBatchEntityProgress] = useState(null);
@@ -1525,7 +1528,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     // Create Entity
     const [isAnalyzingEntity, setIsAnalyzingEntity] = useState(false);
-    const [isCopyingEntity, setIsCopyingEntity] = useState(false);
 
     const handleAnalyzeEntity = async (entity) => {
         if (!entity || !entity.id || !entity.image_url) {
@@ -2225,67 +2227,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     };
 
-    const handleCopyEntityWithLLM = async (entity) => {
-        if (!entity || !entity.id || !projectId) return;
-
-        const instruction = await promptUiMessage(
-            t('描述你希望如何基于当前主体生成一个新主体（将保留原提示词结构，仅改写内容差异）', 'Describe how to generate a new subject from this one (the original prompt structure will be preserved, only content deltas will be rewritten).'),
-            {
-                title: t('复制并 AI 生成主体', 'Copy + AI Generate Subject'),
-                confirmText: t('开始生成', 'Generate'),
-                cancelText: t('取消', 'Cancel'),
-                placeholder: t('例如：保留服装结构与镜头结构，改为雨夜、疲惫神态、手持破损公文包', 'Example: Keep wardrobe and camera structure, change to rainy night, exhausted expression, holding a damaged briefcase'),
-            }
-        );
-
-        const stableInstruction = String(instruction || '').trim();
-        if (!stableInstruction) return;
-
-        const newNameHintInput = await promptUiMessage(
-            t('可选：输入新主体名称（留空则由系统自动命名）', 'Optional: Enter a new subject name (leave empty for auto naming).'),
-            {
-                title: t('新主体名称（可选）', 'New Subject Name (Optional)'),
-                confirmText: t('继续', 'Continue'),
-                cancelText: t('取消', 'Cancel'),
-                placeholder: t('例如：林月_雨夜版', 'Example: LinYue_RainyNight'),
-            }
-        );
-
-        if (newNameHintInput === null) return;
-        const newNameHint = String(newNameHintInput || '').trim();
-
-        setIsCopyingEntity(true);
-        if (onLog) onLog(t(`主体复制生成中：${entity.name || entity.name_en || entity.id}`, `Copying subject with AI: ${entity.name || entity.name_en || entity.id}`), 'process');
-        try {
-            const created = await cloneEntityWithLLM(projectId, entity.id, {
-                modification_instruction: stableInstruction,
-                new_name_hint: newNameHint || null,
-            });
-
-            const refreshed = await loadEntities();
-            const stableCreatedId = String(created?.id || '').trim();
-            const hydrated = (Array.isArray(refreshed) ? refreshed : []).find((item) => String(item?.id || '').trim() === stableCreatedId);
-            const nextEntity = hydrated || created;
-
-            if (String(nextEntity?.type || '').trim()) {
-                setSubTab(String(nextEntity.type).trim());
-            }
-            setViewingEntity(nextEntity);
-            setSelectedEntity((prev) => {
-                const prevId = String(prev?.id || '').trim();
-                return prevId && prevId === stableCreatedId ? nextEntity : prev;
-            });
-
-            if (onLog) onLog(t(`主体复制生成成功：${created?.name || created?.id}`, `Subject cloned successfully: ${created?.name || created?.id}`), 'success');
-        } catch (e) {
-            console.error(e);
-            alert(t('主体复制生成失败：', 'Subject clone failed: ') + (e?.response?.data?.detail || e?.message || 'Unknown error'));
-            if (onLog) onLog(t('主体复制生成失败', 'Subject clone failed'), 'error');
-        } finally {
-            setIsCopyingEntity(false);
-        }
-    };
-
 
     // Delete Entity
     const handleDeleteEntity = async (e, entity) => {
@@ -2684,15 +2625,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     };
 
-    const handleGenerate = async () => {
-        if (generating || !!(selectedEntity?.id && subjectImageJobs[String(selectedEntity.id)])) return;
-        const targetEntityId = Number(selectedEntity?.id || 0);
+    const handleGenerate = async (entityOverride = null, customRefs = null, customPrompt = null) => {
+        const activeEntity = entityOverride || selectedEntity;
+        if (generating || !!(activeEntity?.id && subjectImageJobs[String(activeEntity.id)])) return;
+        const targetEntityId = Number(activeEntity?.id || 0);
         if (!Number.isFinite(targetEntityId) || targetEntityId <= 0) return;
-        const targetEntityName = String(selectedEntity?.name || selectedEntity?.name_en || targetEntityId);
+        const targetEntityName = String(activeEntity?.name || activeEntity?.name_en || targetEntityId);
         const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
-        const selectedLangPrompt = getEntityPromptByLang(selectedEntity, currentLang);
+        const selectedLangPrompt = getEntityPromptByLang(activeEntity, currentLang);
         const draftPrompt = String(promptDrafts?.[currentLang] || '').trim();
-        const promptToUse = String(draftPrompt || selectedLangPrompt || '').trim();
+        const promptToUse = customPrompt || String(draftPrompt || selectedLangPrompt || '').trim();
         if (!promptToUse) return;
         setGenerating(true);
         setShowPromptLangMenu(false);
@@ -2716,8 +2658,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         try {
             // Resolve Visual Dependencies
             const depUrls = [];
-            if (selectedEntity && selectedEntity.visual_dependencies) {
-                 const deps = parseVisualDependencies(selectedEntity.visual_dependencies);
+            if (activeEntity && activeEntity.visual_dependencies) {
+                 const deps = parseVisualDependencies(activeEntity.visual_dependencies);
                  deps.forEach(dep => {
                      // dep can be name or id
                      const startDep = String(dep).trim();
@@ -2741,7 +2683,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
             // Combine manual ref and auto-refs
             const allRefs = [];
-            if (refImage?.url) allRefs.push(refImage.url);
+            if (customRefs && customRefs.length > 0) {
+                customRefs.forEach(ref => {
+                    const url = typeof ref === 'object' ? ref.url : String(ref);
+                    if (url) allRefs.push(url);
+                });
+            } else if (refImage?.url) {
+                allRefs.push(refImage.url);
+            }
             if (depUrls.length > 0) allRefs.push(...depUrls);
             
             // Deduplicate
@@ -2759,10 +2708,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
                 entity_id: targetEntityId,
-                entity_name: selectedEntity?.name || selectedEntity?.name_en,
-                subject_name: selectedEntity?.name || selectedEntity?.name_en,
-                subject_type: selectedEntity?.type,
-                entity_type: selectedEntity?.type,
+                entity_name: activeEntity?.name || activeEntity?.name_en,
+                subject_name: activeEntity?.name || activeEntity?.name_en,
+                subject_type: activeEntity?.type,
+                entity_type: activeEntity?.type,
                 prompt_language: effectivePromptSubmitLang,
                 asset_type: 'subject',
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
@@ -3507,9 +3456,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
                     const hasRunningSubjectImageJob = Boolean(trackedJob) || isBatchPending;
                     return (
-                    <div 
-                        key={entity.id} 
-                        onClick={() => setViewingEntity(entity)}
+                    <div
+                        key={entity.id}
+                        onClick={() => { setViewingEntity(entity); setViewingEntityTab('generate'); setAdvancedInstruction(''); }}
                         className="bg-card border border-white/10 rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all min-h-[260px] flex flex-col"
                     >
                         <div className="relative aspect-video w-full overflow-hidden bg-black">
@@ -3597,14 +3546,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     title={t('现有资产重构（分析图片并重生成）', 'Refactor Existing Asset (analyze + regenerate)')}
                                 >
                                     {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
-                                </button>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); handleCopyEntityWithLLM(entity); }}
-                                    disabled={isCopyingEntity}
-                                    className="p-2 bg-emerald-500/80 hover:bg-emerald-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={t('复制并 AI 生成新主体（参考原提示词结构）', 'Copy and AI-generate a new subject (preserve original prompt structure)')}
-                                >
-                                    {isCopyingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Copy size={16} />}
                                 </button>
                                 <button 
                                     onClick={(e) => handleDeleteEntity(e, entity)}
@@ -3746,12 +3687,28 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             placeholder="English Name"
                                         />
                                     </div>
-                                    <button 
+                                    <button
                                         onClick={() => setViewingEntity(null)}
                                         className="p-2 hover:bg-white/10 rounded-full text-muted-foreground hover:text-white transition-colors"
                                     >
                                         <X size={24} />
                                     </button>
+                                </div>
+
+                                <div className="flex border-b border-white/10 bg-black/20">
+                                    {['info', 'generate', 'advanced'].map(tab => (
+                                        <button
+                                            key={tab}
+                                            onClick={() => setViewingEntityTab(tab)}
+                                            className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2 ${
+                                                viewingEntityTab === tab
+                                                ? 'border-primary text-primary bg-primary/5'
+                                                : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'
+                                            }`}
+                                        >
+                                            {tab === 'info' ? t('主体信息', 'Info') : tab === 'generate' ? t('生成资产', 'Generate Asset') : t('修改资产', 'Modify Asset')}
+                                        </button>
+                                    ))}
                                 </div>
 
                                 {reconstructProgress && (
@@ -3770,6 +3727,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 )}
                                 
                                 <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                                    {viewingEntityTab === 'info' && (
+                                        <div className="space-y-6">
                                     {/* Role & Archetype Tags */}
                                     <div className="flex flex-wrap gap-2">
                                         {['role', 'archetype', 'gender'].map(field => (
@@ -4102,17 +4061,427 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             </div>
                                         );
                                     })()}
+                                        </div>
+                                    )}                                    {viewingEntityTab === 'generate' && (
+                                        <div className="space-y-6">
+                                            {/* Technical / Prompt */}
+                                            <div className="space-y-2">
+                                                <div className="grid grid-cols-1 gap-3">
+                                                    <div>
+                                                        <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('中文提示词', 'Chinese Prompt')}</div>
+                                                        <textarea
+                                                            value={viewingEntity.generation_prompt_cn || ''}
+                                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_cn: e.target.value }))}
+                                                            onBlur={(e) => handleFieldUpdate('generation_prompt_cn', e.target.value)}
+                                                            className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
+                                                            placeholder={t('输入中文生图提示词...', 'Enter Chinese generation prompt...')}
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('英文提示词', 'English Prompt')}</div>
+                                                        <textarea
+                                                            value={viewingEntity.generation_prompt_en || ''}
+                                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_en: e.target.value }))}
+                                                            onBlur={(e) => handleFieldUpdate('generation_prompt_en', e.target.value)}
+                                                            className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
+                                                            placeholder="Enter English generation prompt..."
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Fast Generate Section */}
+                                    {viewingEntity.id !== 'new' && (
+                                        <div className="space-y-4 pt-4 border-t border-white/5">
+                                            {/* Auto-detected Visual Dependencies */}
+                                            {parseVisualDependencies(viewingEntity?.visual_dependencies).length > 0 && (
+                                                <div className="relative">
+                                                    <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('视觉依赖（自动作为参考）', 'Visual Dependencies (Auto-Used)')}</label>
+                                                    <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
+                                                        {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, idx) => {
+                                                            const startDep = String(dep).trim();
+                                                            const startDepNormalized = normalizeEntityToken(startDep);
+
+                                                            const depEntity = allEntities.find(e => {
+                                                                if (!e) return false;
+                                                                const entityId = String(e.id || '').trim();
+                                                                const entityName = normalizeEntityToken(e.name || '');
+                                                                const entityNameEn = normalizeEntityToken(e.name_en || '');
+                                                                if (entityId && entityId === startDep) return true;
+                                                                if (startDepNormalized && entityName && entityName === startDepNormalized) return true;
+                                                                if (startDepNormalized && entityNameEn && entityNameEn === startDepNormalized) return true;
+                                                                return false;
+                                                            });
+
+                                                            return (
+                                                                <div key={idx} className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group">
+                                                                    <div className="aspect-square bg-black rounded overflow-hidden">
+                                                                         {depEntity?.image_url ? (
+                                                                             <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" />
+                                                                         ) : (
+                                                                             <div className="w-full h-full flex items-center justify-center bg-white/5">
+                                                                                 <ImageIcon className="w-4 h-4 opacity-40" />
+                                                                             </div>
+                                                                         )}
+                                                                    </div>
+                                                                    <div className="text-[10px] truncate font-bold text-white px-0.5" title={dep}>
+                                                                        {depEntity ? depEntity.name : dep}
+                                                                    </div>
+                                                                    {!depEntity && (
+                                                                        <div className="text-[8px] text-red-400 px-0.5">
+                                                                            {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Reference Image Select */}
+                                            <div className="relative">
+                                                     <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('参考图（可选）', 'Ref Image (Optional)')}</label>
+
+                                                     {!refImage ? (
+                                                         <div className="flex gap-2 items-center">
+                                                              <div className="flex-1 flex gap-2">
+                                                                  <button
+                                                                    onClick={() => setRefSelectionMode(refSelectionMode === 'assets' ? null : 'assets')}
+                                                                    className={`p-2 rounded border border-white/10 text-xs font-bold hover:bg-white/10 flex items-center gap-1 ${refSelectionMode === 'assets' ? 'bg-primary/20 text-primary border-primary/50' : 'bg-black/40 text-muted-foreground'}`}
+                                                                  >
+                                                                      <FolderOpen size={14} /> Assets
+                                                                  </button>
+                                                                  <div className="relative overflow-hidden w-24">
+                                                                      <button className="w-full p-2 bg-black/40 border border-white/10 rounded text-xs font-bold hover:bg-white/10 text-muted-foreground flex items-center gap-1 justify-center">
+                                                                        <Upload size={14} /> Upload
+                                                                      </button>
+                                                                      <input
+                                                                        type="file"
+                                                                        className="absolute inset-0 opacity-0 cursor-pointer"
+                                                                        accept="image/*"
+                                                                        onChange={handleRefUpload}
+                                                                      />
+                                                                  </div>
+                                                              </div>
+
+                                                              <div className="w-1/3 relative">
+                                                                  <input
+                                                                      type="text"
+                                                                      placeholder="URL..."
+                                                                      onBlur={(e) => {
+                                                                          if (e.target.value) setRefImage({ url: e.target.value, name: 'External URL', type: 'image' });
+                                                                      }}
+                                                                      onKeyDown={(e) => {
+                                                                            if (e.key === 'Enter' && e.target.value) setRefImage({ url: e.target.value, name: 'External URL', type: 'image' });
+                                                                      }}
+                                                                      className="w-full bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
+                                                                  />
+                                                              </div>
+                                                         </div>
+                                                     ) : (
+                                                         <div className="flex gap-3 bg-black/40 border border-white/10 rounded-lg p-2 items-center relative group">
+                                                             <div className="w-10 h-10 bg-black rounded overflow-hidden flex-shrink-0 border border-white/5">
+                                                                 <SafeImage src={refImage.url} alt="ref" className="w-full h-full object-cover" />
+                                                             </div>
+                                                             <div className="flex-1 overflow-hidden">
+                                                                 <div className="text-xs font-bold text-white truncate">{refImage.name || 'Reference Image'}</div>
+                                                                 <div className="text-[10px] text-muted-foreground flex gap-2">
+                                                                     <span>{refImage.dimensions || 'Unknown Size'}</span>
+                                                                     {refImage.type && <span className="uppercase">{refImage.type}</span>}
+                                                                 </div>
+                                                             </div>
+                                                             <button
+                                                                 onClick={() => setRefImage(null)}
+                                                                 className="p-1 hover:bg-white/10 rounded-md text-white/50 hover:text-white"
+                                                             >
+                                                                 <X size={14} />
+                                                             </button>
+                                                         </div>
+                                                     )}
+
+                                                     {refSelectionMode === 'assets' && !refImage && (
+                                                         <div className="absolute bottom-full left-0 right-0 mb-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl h-64 overflow-hidden flex flex-col">
+                                                             <div className="p-2 border-b border-white/10 flex justify-between items-center bg-black/20">
+                                                                 <span className="text-xs font-bold text-muted-foreground ml-2">{t('从素材库选择', 'Select from Assets')}</span>
+                                                                 <button onClick={() => setRefSelectionMode(null)}><X size={14} className="text-white/50 hover:text-white"/></button>
+                                                             </div>
+                                                             <div className="px-2 py-2 border-b border-white/10 bg-black/20 grid grid-cols-1 sm:grid-cols-[1fr_130px_130px] gap-2">
+                                                                 <input
+                                                                     type="text"
+                                                                     value={assetKeyword}
+                                                                     onChange={(e) => setAssetKeyword(e.target.value)}
+                                                                     placeholder={t('搜索素材', 'Search assets')}
+                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                                 />
+                                                                 <select
+                                                                     value={assetProjectFilter}
+                                                                     onChange={(e) => setAssetProjectFilter(e.target.value)}
+                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                                 >
+                                                                     <option value="all">{t('所有项目', 'All Projects')}</option>
+                                                                     {assetProjectOptions.map((item) => (
+                                                                         <option key={item.value} value={item.value}>{item.label}</option>
+                                                                     ))}
+                                                                 </select>
+                                                                 <select
+                                                                     value={assetImageTypeFilter}
+                                                                     onChange={(e) => setAssetImageTypeFilter(e.target.value)}
+                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                                 >
+                                                                     <option value="all">{t('所有类型', 'All Types')}</option>
+                                                                     {assetImageTypeOptions.map((item) => (
+                                                                         <option key={item.value} value={item.value}>{item.label}</option>
+                                                                     ))}
+                                                                 </select>
+                                                             </div>
+                                                             <div
+                                                                 ref={imageRefPickerViewportRef}
+                                                                 onScroll={(e) => setImageRefPickerScrollTop(e.currentTarget.scrollTop || 0)}
+                                                                 className="flex-1 overflow-y-auto p-2 custom-scrollbar"
+                                                             >
+                                                                 {imageRefPickerWindow.topSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.topSpacerHeight}px` }} />}
+                                                                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                                                                     {imageRefPickerVisibleAssets.map(asset => (
+                                                                         <div
+                                                                             key={asset.id}
+                                                                             onClick={() => {
+                                                                                 setRefImage(asset);
+                                                                                 setRefSelectionMode(null);
+                                                                             }}
+                                                                             className="aspect-square bg-black/40 rounded border border-white/5 hover:border-primary/50 cursor-pointer overflow-hidden relative group"
+                                                                         >
+                                                                             <AssetHoverMetaOverlay asset={asset} t={t} />
+                                                                             <SafeImage src={asset.url} alt={asset.name} className="w-full h-full object-cover" />
+                                                                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
+                                                                         </div>
+                                                                     ))}
+                                                                 </div>
+                                                                 {imageRefPickerWindow.bottomSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.bottomSpacerHeight}px` }} />}
+                                                                 {assetsLoading ? (
+                                                                     <div className="py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                                                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                         {t('素材加载中...', 'Loading assets...')}
+                                                                     </div>
+                                                                 ) : filteredAssets.length === 0 && (
+                                                                     <div className="py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
+                                                                 )}
+                                                             </div>
+                                                         </div>
+                                                     )}
+                                            </div>
+
+                                            <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
+                                                <div className="text-[11px] text-muted-foreground">
+                                                    {t('提交语种：', 'Submit lang: ')}
+                                                    {tempPromptSubmitLang
+                                                        ? `${promptLangText(tempPromptSubmitLang)} (${t('临时', 'Temp')})`
+                                                        : `${promptLangPrefText(promptSubmitLangPref)}`
+                                                    }
+                                                    {` ${t(' -> 生效: ', '-> Effective: ')}${promptLangText(effectivePromptSubmitLang)}`}
+                                                </div>
+                                                <div className="relative">
+                                                    <button
+                                                        onClick={() => setShowPromptLangMenu(prev => !prev)}
+                                                        disabled={generating}
+                                                        className="px-3 py-1.5 rounded-md border border-white/15 bg-black/40 text-xs font-bold text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50 flex items-center gap-1"
+                                                    >
+                                                        {t('切换语种', 'Switch Lang')} <ChevronDown size={14} />
+                                                    </button>
+                                                    {showPromptLangMenu && (
+                                                        <div className="absolute right-0 bottom-full mb-2 w-48 rounded-lg border border-white/10 bg-[#121212] shadow-2xl z-20 overflow-hidden">
+                                                            <button
+                                                                onClick={() => { setTempPromptSubmitLang(''); setShowPromptLangMenu(false); }}
+                                                                className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === '' ? 'text-primary' : 'text-white/80'}`}
+                                                            >
+                                                                {t('跟随全局', 'Follow config')}
+                                                            </button>
+                                                            <button
+                                                                onClick={() => { setTempPromptSubmitLang('en'); setShowPromptLangMenu(false); }}
+                                                                className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'en' ? 'text-primary' : 'text-white/80'}`}
+                                                            >
+                                                                {t('临时英文', 'Temp English')}
+                                                            </button>
+                                                            <button
+                                                                onClick={() => { setTempPromptSubmitLang('cn'); setShowPromptLangMenu(false); }}
+                                                                className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'cn' ? 'text-primary' : 'text-white/80'}`}
+                                                            >
+                                                                {t('临时中文', 'Temp Chinese')}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div>
+                                                        <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => fetchSubjectGenerationHistory(viewingEntity)}
+                                                        disabled={subjectGenerationHistoryLoading}
+                                                        className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
+                                                    >
+                                                        <RefreshCw className={subjectGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
+                                                        {t('刷新', 'Refresh')}
+                                                    </button>
+                                                </div>
+                                                {subjectGenerationHistoryLoading ? (
+                                                    <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-4 text-xs text-muted-foreground">
+                                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                                    </div>
+                                                ) : subjectGenerationHistory.length === 0 ? (
+                                                    <div className="rounded border border-dashed border-white/10 px-3 py-4 text-center text-xs text-muted-foreground">
+                                                        {t('无历史。', 'No history yet.')}
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
+                                                        {subjectGenerationHistory.map((item) => {
+                                                            const itemId = String(item?.job_id || item?.id || Math.random()).trim();
+                                                            const status = String(item?.status || '').trim().toLowerCase();
+                                                            const canPreview = Boolean(item?.resultUrl);
+                                                            const isDeleting = subjectGenerationHistoryDeletingId === itemId;
+                                                            return (
+                                                                <div key={itemId} className="rounded-lg border border-white/10 bg-black/30 p-2.5 flex gap-3">
+                                                                    <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-white/10 bg-black/40 flex items-center justify-center">
+                                                                        {canPreview ? (
+                                                                            <SafeImage src={item.resultUrl} className="h-full w-full object-cover" fallback={<ImageIcon className="h-4 w-4 opacity-40" />} />
+                                                                        ) : <ImageIcon className="h-4 w-4 opacity-40" />}
+                                                                    </div>
+                                                                    <div className="min-w-0 flex-1 space-y-1">
+                                                                        <div className="flex items-start justify-between gap-2">
+                                                                            <div className="truncate text-xs font-semibold text-white">{item.displayLabel}</div>
+                                                                            <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : 'bg-amber-500/15 text-amber-100'}`}>{status}</span>
+                                                                        </div>
+                                                                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                                                                            <button onClick={() => canPreview && updateEntityImage(item.resultUrl)} disabled={!canPreview} className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/80 hover:bg-white/10">
+                                                                                <ImageIcon size={10} /> {t('设为当前', 'Use Result')}
+                                                                            </button>
+                                                                            <button onClick={() => handleDeleteSubjectGenerationHistoryItem(item)} disabled={isDeleting} className="inline-flex items-center gap-1 rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-500/20">
+                                                                                <Trash2 size={10} /> {t('删除', 'Delete')}
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    </div>
+                                    )}
+
+                                    {viewingEntityTab === 'advanced' && (
+                                        <div className="flex flex-col h-full space-y-4">
+                                            <div className="mb-4">
+                                                <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">{t('修改资产', 'Modify Asset')}</h4>
+                                                <p className="text-[10px] text-white/50 mb-4">
+                                                    {t('输入具体指令以修改该资产的提示词。提交后将自动应用修改并重新生成图片。', 'Enter specific instructions to modify the prompt. Generation will be triggered automatically.')}
+                                                </p>
+                                            </div>
+                                            <div className="flex-1 min-h-[250px]">
+                                                <textarea
+                                                    className="w-full h-full text-sm bg-white/5 border border-white/10 rounded-md p-4 text-white placeholder-white/30 resize-y outline-none focus:border-primary/50"
+                                                    placeholder={t("输入局部修改指令（例如：把狗的颜色换成黑色）...", "Enter local modification instructions (e.g., change the dog's color to black)...")}
+                                                    value={advancedInstruction}
+                                                    onChange={e => setAdvancedInstruction(e.target.value)}
+                                                />
+                                            </div>
+                                            <div className="flex items-center gap-2 mt-4 pb-4">
+                                                <button
+                                                    type="button"
+                                                    className="flex-1 bg-white/10 hover:bg-white/20 text-white border-none py-6 flex items-center justify-center gap-2 rounded-md"
+                                                    disabled={!advancedInstruction.trim() || isAdvancedOptimizing || isAdvancedLocalModifying || generating}
+                                                    onClick={async () => {
+                                                        setIsAdvancedLocalModifying(true);
+                                                        try {
+                                                            const base = viewingEntity?.generation_prompt_en || "";
+                                                            const appended = advancedInstruction.trim();
+                                                            const finalPrompt = base ? `${base}. ${appended}, keeping everything else unchanged.` : appended;
+                                                            
+                                                            const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
+                                                            setPromptDrafts(prev => ({ ...prev, [currentLang]: finalPrompt }));
+                                                            setPrompt(finalPrompt);
+
+                                                            // Update Entity
+                                                            const updated = { ...viewingEntity, generation_prompt_en: finalPrompt };
+                                                            setViewingEntity(updated);
+                                                            updateEntity(updated.id, { generation_prompt_en: finalPrompt });
+
+                                                            const autoRefs = [];
+                                                            if (viewingEntity?.image_url) {
+                                                                autoRefs.push({
+                                                                    url: viewingEntity.image_url,
+                                                                    type: 'image',
+                                                                    weight: 0.8
+                                                                });
+                                                            }
+
+                                                            await handleGenerate(viewingEntity, autoRefs, finalPrompt);
+                                                        } finally {
+                                                            setIsAdvancedLocalModifying(false);
+                                                        }
+                                                    }}
+                                                >
+                                                    {isAdvancedLocalModifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paintbrush className="w-4 h-4" />}
+                                                    <span className="font-semibold text-sm">{t('局部修改', 'Local Modify')}</span>
+                                                </button>
+
+                                                <button
+                                                    type="button"
+                                                    className="flex-1 bg-primary/20 hover:bg-primary/30 text-primary border-none py-6 flex flex-col items-center justify-center py-2 h-auto min-h-12 rounded-md"
+                                                    disabled={isAdvancedOptimizing || !advancedInstruction.trim() || isAdvancedLocalModifying || generating}
+                                                    onClick={async () => {
+                                                        setIsAdvancedOptimizing(true);
+                                                        try {
+                                                            const base = viewingEntity?.generation_prompt_en || "";
+                                                            const res = await refinePrompt(base, advancedInstruction, 'image');
+                                                            if (res && res.refined_prompt) {
+                                                                const optimized = res.refined_prompt;
+                                                                const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
+                                                                setPromptDrafts(prev => ({ ...prev, [currentLang]: optimized }));
+                                                                setPrompt(optimized);
+
+                                                                // Update Entity
+                                                                const updated = { ...viewingEntity, generation_prompt_en: optimized };
+                                                                setViewingEntity(updated);
+                                                                updateEntity(updated.id, { generation_prompt_en: optimized });
+
+                                                                const autoRefs = [];
+                                                                if (viewingEntity?.image_url) {
+                                                                    autoRefs.push({
+                                                                        url: viewingEntity.image_url,
+                                                                        type: 'image',
+                                                                        weight: 0.5
+                                                                    });
+                                                                }
+                                                                    
+                                                                await handleGenerate(viewingEntity, autoRefs, optimized);
+                                                            }
+                                                        } catch (e) {
+                                                            console.error("Refine prompt failed", e);
+                                                        } finally {
+                                                            setIsAdvancedOptimizing(false);
+                                                        }
+                                                    }}
+                                                >
+                                                    <div className="flex items-center gap-2">
+                                                        {isAdvancedOptimizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                                                        <span className="font-semibold text-sm">{t('重新生成', 'Regenerate')}</span>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
 
                                 </div>
                                 
                                 <div className="p-4 border-t border-white/10 bg-black/20 flex justify-end gap-3">
-                                    <button
-                                        onClick={() => handleCopyEntityWithLLM(viewingEntity)}
-                                        disabled={isCopyingEntity || viewingEntity?.id === 'new'}
-                                        className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {isCopyingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Copy size={16} />} {t('复制并AI生成', 'Copy + AI Generate')}
-                                    </button>
                                     <button 
                                         onClick={(e) => handleDeleteEntity(e, viewingEntity)}
                                         className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-md text-sm font-bold transition-colors flex items-center gap-2"
@@ -4120,11 +4489,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         <Trash2 size={16} /> Delete
                                     </button>
                                     <button 
-                                        onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'generate'); }}
-                                        disabled={viewingEntityImageLocked}
+                                        onClick={() => {
+                                            if (viewingEntityTab === 'generate') {
+                                                handleGenerate(viewingEntity, null, getEntityPromptByLang(viewingEntity, effectivePromptSubmitLang));
+                                            } else {
+                                                setViewingEntity(null);
+                                                handleOpenImageModal(viewingEntity, 'generate');
+                                            }
+                                        }}
+                                        disabled={viewingEntityImageLocked || (viewingEntityTab === 'generate' && generating)}
                                         className="px-4 py-2 bg-primary hover:bg-primary/90 text-black rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        <Wand2 size={16} /> Generate Image
+                                        <Wand2 size={16} /> {(viewingEntityTab === 'generate' && generating) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}
                                     </button>
                                 </div>
                             </div>

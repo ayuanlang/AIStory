@@ -369,11 +369,13 @@ class LoggingMiddleware:
             size_part = f" | ReqBytes: {content_length}" if content_length else ""
 
             if 200 <= status_code < 400:
-                logger.info(
-                    f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
-                    f"Action: {action} | Method: {method} | Path: {path} | "
-                    f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
-                )
+                is_basic_get = method == "GET" and not any(k in path for k in ("/export", "/download"))
+                if not is_basic_get:
+                    logger.info(
+                        f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
+                        f"Action: {action} | Method: {method} | Path: {path} | "
+                        f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
+                    )
             elif 400 <= status_code < 500:
                 logger.warning(
                     f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "

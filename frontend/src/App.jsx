@@ -15,7 +15,6 @@ const Editor = lazy(() => import('./pages/Editor'));
 const AdvancedAnalysisResult = lazy(() => import('./pages/AdvancedAnalysisResult'));
 const Auth = lazy(() => import('./pages/Auth'));
 const UserAdmin = lazy(() => import('./pages/UserAdmin'));
-const SystemLogs = lazy(() => import('./pages/SystemLogs'));
 
 // Helper component to protect routes that require authentication
 const PrivateRoute = ({ children }) => {
@@ -202,7 +201,6 @@ function App() {
               <Route path="/editor/:id" element={<PrivateRoute><Editor /></PrivateRoute>} />
               <Route path="/editor/:id/analysis" element={<PrivateRoute><AdvancedAnalysisResult /></PrivateRoute>} />
               <Route path="/admin/users" element={<SuperuserRoute><UserAdmin /></SuperuserRoute>} />
-              <Route path="/admin/logs" element={<SuperuserRoute><SystemLogs /></SuperuserRoute>} />
             </Routes>
           </Suspense>
           <ErrorBoundary

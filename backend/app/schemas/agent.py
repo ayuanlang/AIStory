@@ -34,3 +34,5 @@ class AnalyzeSceneRequest(BaseModel):
     analysis_attention_notes: Optional[str] = None
     reuse_subject_assets: Optional[List[Dict[str, Any]]] = None
     include_negative_prompt: Optional[bool] = True
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None

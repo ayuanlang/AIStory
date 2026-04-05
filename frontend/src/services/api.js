@@ -999,18 +999,8 @@ export const createReviewRoundMessage = async (roundId, payload) => {
 }
 
 
-export const fetchSystemLogs = async (skip = 0, limit = 100) => {
-    const response = await api.get(`/system/logs?skip=${skip}&limit=${limit}`);
-    return response.data;
-}
-
 export const recordSystemLogAction = async (payload = {}) => {
-    try {
-        const response = await api.post('/system/logs/action', payload || {});
-        return response.data;
-    } catch {
-        return null;
-    }
+    return { ok: true };
 }
 
 export const fetchProject = async (id) => {
@@ -1322,8 +1312,18 @@ export const fetchEntities = async (projectId, type = null) => {
     return response.data;
 }
 
+export const batchSupplementMissingEntities = async (projectId, payload) => {
+    const response = await api.post(`/projects/${projectId}/batch_supplement_missing_entities`, payload || {});
+    return response.data;
+};
+
 export const createEntity = async (projectId, data) => {
     const response = await api.post(`/projects/${projectId}/entities`, data);
+    return response.data;
+}
+
+export const cloneEntityWithLLM = async (projectId, entityId, payload) => {
+    const response = await api.post(`/projects/${projectId}/entities/${entityId}/clone_with_llm`, payload);
     return response.data;
 }
 
@@ -1339,11 +1339,6 @@ export const deleteEntity = async (entityId) => {
 
 export const deleteAllEntities = async (projectId) => {
     const response = await api.delete(`/projects/${projectId}/entities`);
-    return response.data;
-}
-
-export const cloneEntityWithLLM = async (projectId, entityId, payload = {}) => {
-    const response = await api.post(`/projects/${projectId}/entities/${entityId}/clone_with_llm`, payload || {});
     return response.data;
 }
 
@@ -2872,13 +2867,17 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
     return await asyncLLMPost('/tools/refine_prompt', { original_prompt, instruction, type });
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = null, systemApiId = null) => {
-    const payload = { 
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null) => {
+    let defaultApiId = systemApiId;
+    if (!defaultApiId && functionName) {
+        defaultApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
+    }
+    const payload = {
         text: scriptText,
         system_prompt: systemPrompt,
         include_negative_prompt: true,
         function_name: functionName,
-        system_api_id: systemApiId,
+        system_api_id: defaultApiId,
     };
     if (projectId) {
         payload.project_id = projectId;

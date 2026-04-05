@@ -126,6 +126,7 @@ import {
     PROJECT_EP_QUALITY_OPTIONS,
     PROJECT_EP_LENS_PREFERENCE_OPTIONS,
     PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS,
+    PROJECT_EP_CREATIVITY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
     PROJECT_SCENE_ANALYSIS_REGION_OPTIONS,
     PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS,
@@ -273,6 +274,17 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
     const [novelImportText, setNovelImportText] = useState('');
     const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
     const [projectTab, setProjectTab] = useState(mode === 'generator' ? 'story_generator' : 'overview');
+    
+    const [expandedSections, setExpandedSections] = useState({
+        basic: true,
+        management: false,
+        tech: false,
+        review: false,
+    });
+    const toggleSection = (section) => {
+        setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+    };
+
     const storyPackageFileInputRef = useRef(null);
     const globalStoryGenerationInFlightRef = useRef(false);
     const episodeScriptsGenerationInFlightRef = useRef(false);
@@ -1908,14 +1920,35 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                 </div>
             )}
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 sm:gap-8 w-full">
+            {mode === 'generator' && (
+                // Keeping generator container if it has its own needs
+                <div className="grid grid-cols-1 gap-6 sm:gap-8 w-full">
+                </div>
+            )}
+            
+            <div className="flex flex-col gap-6 sm:gap-8 w-full">
                 {mode === 'overview' && (
-                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6">
-                    <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('基本信息', 'Basic Information')}</h3>
-
-                    <div className="grid grid-cols-1 gap-4">
-                        <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={info.script_title} onChange={v => updateField('script_title', v)} placeholder={t('例如：我的科幻史诗', 'e.g. My Sci-Fi Epic')} />
-                    </div>
+                <div className="bg-card border border-white/10 rounded-xl overflow-hidden">
+                    <button 
+                        onClick={() => toggleSection('basic')}
+                        className="w-full flex items-center justify-between p-4 sm:p-6 bg-white/5 hover:bg-white/10 transition-colors"
+                    >
+                        <h3 className="text-lg font-semibold text-primary">{t('基本信息', 'Basic Information')}</h3>
+                        <ChevronDown className={`w-5 h-5 transition-transform ${expandedSections.basic ? 'rotate-180' : ''}`} />
+                    </button>
+                    <AnimatePresence initial={false}>
+                        {expandedSections.basic && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                                className="border-t border-white/10"
+                            >
+                                <div className="p-4 sm:p-6 space-y-6">
+                                    <div className="grid grid-cols-1 gap-4">
+                                        <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={info.script_title} onChange={v => updateField('script_title', v)} placeholder={t('例如：我的科幻史诗', 'e.g. My Sci-Fi Epic')} />
+                                    </div>
 
 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <InputGroup idPrefix={prefix}
@@ -1956,22 +1989,18 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             list={["16:9", "2.35:1", "4:3", "9:16", "1:1"]}
                         />
                         <InputGroup idPrefix={prefix}
-                            label={t('图像尺寸', 'Image Size')}
-                            value={info.tech_params?.visual_standard?.image_size}
-                            onChange={v => updateTech('image_size', v)}
-                            list={["0.5K", "1K", "2K", "4K"]}
-                        />
-                        <InputGroup idPrefix={prefix}
                             label={t('播出安全等级', 'Broadcast Safety Level')}
                             value={info.broadcast_safety_level}
                             onChange={v => updateField('broadcast_safety_level', v)}
                             list={PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS}
                         />
+
+                        
                         <InputGroup idPrefix={prefix}
-                            label={t('视频生成偏好', 'Video Gen Preference')}
-                            value={info.video_generation_preference}
-                            onChange={v => updateField('video_generation_preference', v)}
-                            list={PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS}
+                            label={t('创作力', 'Creativity')}
+                            value={info.creativity}
+                            onChange={v => updateField('creativity', v)}
+                            list={PROJECT_EP_CREATIVITY_OPTIONS}
                         />
                         <div className="flex items-center gap-2 mt-[28px] pl-1">
                             <input 
@@ -2035,13 +2064,33 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             </div>
                         </div>
                     </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
                 )}
 
                 {/* Project Management */}
                 {mode === 'overview' && (
-                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6">
-                    <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2">{t('项目管理', 'Project Management')}</h3>
+                <div className="bg-card border border-white/10 rounded-xl overflow-hidden">
+                    <button 
+                        onClick={() => toggleSection('management')}
+                        className="w-full flex items-center justify-between p-4 sm:p-6 bg-white/5 hover:bg-white/10 transition-colors"
+                    >
+                        <h3 className="text-lg font-semibold text-primary">{t('项目管理', 'Project Management')}</h3>
+                        <ChevronDown className={`w-5 h-5 transition-transform ${expandedSections.management ? 'rotate-180' : ''}`} />
+                    </button>
+                    <AnimatePresence initial={false}>
+                        {expandedSections.management && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                                className="border-t border-white/10"
+                            >
+                                <div className="p-4 sm:p-6 space-y-6">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix} 
                             label={t('计划完成时间', 'Planned Completion Time')} 
@@ -2056,16 +2105,36 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             placeholder={t('例如：100万', 'e.g., 1M')} 
                         />
                     </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
                 )}
 
                 {/* Technical & Visual Params */}
                 {mode === 'overview' && (
-                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6">
-                    <h3 className="text-lg font-semibold text-primary border-b border-white/10 pb-2 flex items-center justify-between gap-3">
-                        <span>{t('技术与视觉参数', 'Technical & Visual Parameters')}</span>
-                        <span className="text-xs font-medium text-muted-foreground normal-case">{t('建议不改动，待大模型回填。', 'Recommended to keep unchanged, waiting for LLM backfill.')}</span>
-                    </h3>
+                <div className="bg-card border border-white/10 rounded-xl overflow-hidden">
+                    <button 
+                        onClick={() => toggleSection('tech')}
+                        className="w-full flex items-center justify-between p-4 sm:p-6 bg-white/5 hover:bg-white/10 transition-colors"
+                    >
+                        <div className="flex items-center justify-between gap-3 text-left">
+                            <h3 className="text-lg font-semibold text-primary m-0">{t('技术与视觉参数', 'Technical & Visual Parameters')}</h3>
+                            <span className="text-xs font-medium text-muted-foreground normal-case whitespace-nowrap hidden sm:block">{t('建议不改动，待大模型回填。', 'Recommended to keep unchanged, waiting for LLM backfill.')}</span>
+                        </div>
+                        <ChevronDown className={`w-5 h-5 shrink-0 transition-transform ${expandedSections.tech ? 'rotate-180' : ''}`} />
+                    </button>
+                    <AnimatePresence initial={false}>
+                        {expandedSections.tech && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                                className="border-t border-white/10"
+                            >
+                                <div className="p-4 sm:p-6 space-y-6">
                     
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
@@ -2084,7 +2153,22 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                         />
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+                        <InputGroup idPrefix={prefix}
+                            label={t('图像尺寸', 'Image Size')}
+                            value={info.tech_params?.visual_standard?.image_size}
+                            onChange={v => updateTech('image_size', v)}
+                            list={["0.5K", "1K", "2K", "4K"]}
+                        />
+<InputGroup idPrefix={prefix}
+                            label={t('视频生成偏好', 'Video Gen Preference')}
+                            value={info.video_generation_preference}
+                            onChange={v => updateField('video_generation_preference', v)}
+                            list={PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS,
+    PROJECT_EP_CREATIVITY_OPTIONS}
+                        />
+                    </div>
+<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
                             label={t('帧率', 'Frame Rate')} 
                             value={info.tech_params?.visual_standard?.frame_rate} 
@@ -2140,21 +2224,40 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             list={PROJECT_EP_LIGHTING_OPTIONS} 
                         />
                     </div>
-
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
                 )}
 
 
 
                 {mode === 'overview' && (
-                <div className="bg-card border border-white/10 p-4 sm:p-6 rounded-xl space-y-6 xl:col-span-2">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between border-b border-white/10 pb-3">
-                        <div>
-                            <h3 className="text-lg font-semibold text-primary">{t('项目审核协作', 'Project Review Collaboration')}</h3>
-                            <p className="mt-1 text-sm text-muted-foreground">
+                <div className="bg-card border border-white/10 rounded-xl overflow-hidden xl:col-span-2">
+                    <button 
+                        onClick={() => toggleSection('review')}
+                        className="w-full flex items-start sm:items-center justify-between p-4 sm:p-6 bg-white/5 hover:bg-white/10 transition-colors"
+                    >
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 text-left">
+                            <h3 className="text-lg font-semibold text-primary m-0">{t('项目审核协作', 'Project Review Collaboration')}</h3>
+                            <p className="m-0 text-sm text-muted-foreground hidden sm:block">
                                 {t('可直接从项目总览发起资产/镜头审核，不必回到项目列表。', 'Create asset and shot review requests directly from project overview without returning to the project list.')}
                             </p>
                         </div>
+                        <ChevronDown className={`w-5 h-5 shrink-0 mt-1 sm:mt-0 transition-transform ${expandedSections.review ? 'rotate-180' : ''}`} />
+                    </button>
+                    <AnimatePresence initial={false}>
+                        {expandedSections.review && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                                className="border-t border-white/10"
+                            >
+                                <div className="p-4 sm:p-6 space-y-6">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between pb-3">
                         <div className="flex flex-wrap gap-2">
                             <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-muted-foreground">
                                 {t(`线程 ${projectReviewThreads.length}`, `Threads ${projectReviewThreads.length}`)}
@@ -2393,6 +2496,10 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             </div>
                         </div>
                     </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
                 )}
 
