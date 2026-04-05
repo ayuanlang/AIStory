@@ -1762,7 +1762,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     updateAnalyzeBatchRuntimeState(true, {
                         current: Math.min(processedCount + 1, targets.length),
                         total: targets.length,
-                        status: t(`分析中：${entityLabel}`, `Analyzing: ${entityLabel}`),
+                        status: t(`AI品控查阅中：`, `Analyzing: ${entityLabel}`),
                     });
 
                     try {
@@ -3727,6 +3727,32 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 )}
                                 
                                 <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                                    {viewingEntityImageLocked && (
+                                        <div className="rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center justify-between gap-3">
+                                            <div className="flex items-center gap-2">
+                                                {stoppingSubjectImageJobs[String(viewingEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <RefreshCw className="animate-spin" size={12} />}
+                                                {stoppingSubjectImageJobs[String(viewingEntity.id)]
+                                                    ? t('该主体停止请求发送中，请稍候。', 'Stop request is being sent for this subject. Please wait.')
+                                                    : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'persisting'
+                                                        ? t('该主体已完成生成，正在等待稳定图片同步到素材库。', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
+                                                    : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'running'
+                                                        ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
+                                                        : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'queued'
+                                                            ? t('该主体正在排队中，开始后将自动运行。', 'This subject is queued and will run automatically once started.')
+                                                            : t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleForceStopSubjectImage(viewingEntity)}
+                                                disabled={Boolean(stoppingSubjectImageJobs[String(viewingEntity.id)])}
+                                                className="shrink-0 inline-flex items-center gap-1 rounded border border-red-400/30 bg-red-500/15 px-2 py-1 text-[11px] font-bold text-red-100 hover:bg-red-500/25 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                                                title={t('强制停止该主体的后台图片任务，并解除当前运行状态', 'Force-stop this subject background image task and clear the current running state')}
+                                            >
+                                                {stoppingSubjectImageJobs[String(viewingEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <X size={12} />}
+                                                {stoppingSubjectImageJobs[String(viewingEntity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}
+                                            </button>
+                                        </div>
+                                    )}
                                     {viewingEntityTab === 'info' && (
                                         <div className="space-y-6">
                                     {/* Role & Archetype Tags */}
@@ -4500,7 +4526,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         disabled={viewingEntityImageLocked || (viewingEntityTab === 'generate' && generating)}
                                         className="px-4 py-2 bg-primary hover:bg-primary/90 text-black rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        <Wand2 size={16} /> {(viewingEntityTab === 'generate' && generating) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}
+                                        {((viewingEntityTab === 'generate' && generating) || viewingEntityImageLocked) ? (
+                                            <RefreshCw className="animate-spin" size={16} />
+                                        ) : (
+                                            <Wand2 size={16} />
+                                        )}
+                                        {((viewingEntityTab === 'generate' && generating) || viewingEntityImageLocked) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}
                                     </button>
                                 </div>
                             </div>
