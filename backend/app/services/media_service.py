@@ -8271,6 +8271,15 @@ class MediaGenerationService:
                                         payload[field_name] = target_val
                                         await asyncio.sleep(min(2 * (submit_attempt + 1), 5))
                                         continue
+                            elif "is required, can not be empty" in submit_error_message:
+                                field_match = re.search(r"field\s+'([^']+)'", submit_error_message, re.IGNORECASE)
+                                if field_match:
+                                    field_name = field_match.group(1).strip()
+                                    if field_name in ["generateAudio", "bgm", "audio", "sound"]:
+                                        _debug_log(f"[{log_tag}] RunningHub missing field '{field_name}' detected '{submit_error_message}', automatically assigning False...", "warning")
+                                        payload[field_name] = False
+                                        await asyncio.sleep(min(2 * (submit_attempt + 1), 5))
+                                        continue
                     except Exception:
                         pass
                     break
