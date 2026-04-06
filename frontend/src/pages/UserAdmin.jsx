@@ -2343,6 +2343,8 @@ const UserAdmin = () => {
                 max_duration: '',
                 fps_options: '',
                 has_audio: 'any',
+                has_google_search: 'any',
+                has_thinking_mode: 'any',
                 mode_values: '',
                 capability_flags: '{}',
                 text_capabilities: '{}',
@@ -2401,6 +2403,8 @@ const UserAdmin = () => {
             max_duration: row.max_duration === null || row.max_duration === undefined ? '' : String(row.max_duration),
             fps_options: Array.isArray(row.fps_options) ? row.fps_options.join(', ') : '',
             has_audio: row.has_audio === true ? 'true' : (row.has_audio === false ? 'false' : 'any'),
+            has_google_search: row.has_google_search === true ? 'true' : (row.has_google_search === false ? 'false' : 'any'),
+            has_thinking_mode: row.has_thinking_mode === true ? 'true' : (row.has_thinking_mode === false ? 'false' : 'any'),
             mode_values: Array.isArray(row.mode_values) ? row.mode_values.join(', ') : '',
             capability_flags: safeJsonStr(row.capability_flags) || '{}',
             text_capabilities: safeJsonStr(row.text_capabilities) || '{}',
@@ -2756,6 +2760,8 @@ const UserAdmin = () => {
                 max_duration: toNullableInt(systemApiForm.max_duration),
                 fps_options: parseCsvNumberArrayField(systemApiForm.fps_options),
                 has_audio: toNullableBool(systemApiForm.has_audio),
+                has_google_search: toNullableBool(systemApiForm.has_google_search),
+                has_thinking_mode: toNullableBool(systemApiForm.has_thinking_mode),
                 mode_values: parseCsvArrayField(systemApiForm.mode_values),
                 capability_flags: parseJsonObjectFieldSafe(systemApiForm.capability_flags),
                 text_capabilities: parseJsonObjectFieldSafe(systemApiForm.text_capabilities),
@@ -2814,6 +2820,8 @@ const UserAdmin = () => {
                 max_duration: toNullableInt(systemApiForm.max_duration),
                 fps_options: parseCsvNumberArrayField(systemApiForm.fps_options),
                 has_audio: toNullableBool(systemApiForm.has_audio),
+                has_google_search: toNullableBool(systemApiForm.has_google_search),
+                has_thinking_mode: toNullableBool(systemApiForm.has_thinking_mode),
                 mode_values: parseCsvArrayField(systemApiForm.mode_values),
                 capability_flags: parseJsonObjectFieldSafe(systemApiForm.capability_flags),
                 text_capabilities: parseJsonObjectFieldSafe(systemApiForm.text_capabilities),
@@ -7639,6 +7647,22 @@ const UserAdmin = () => {
                                                     <div>
                                                         <label className="block text-xs uppercase text-gray-400 mb-1">has_audio</label>
                                                         <select value={systemApiForm.has_audio} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, has_audio: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm">
+                                                            <option value="any">any</option>
+                                                            <option value="true">true</option>
+                                                            <option value="false">false</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">has_google_search</label>
+                                                        <select value={systemApiForm.has_google_search} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, has_google_search: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm">
+                                                            <option value="any">any</option>
+                                                            <option value="true">true</option>
+                                                            <option value="false">false</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs uppercase text-gray-400 mb-1">has_thinking_mode</label>
+                                                        <select value={systemApiForm.has_thinking_mode} onChange={(e) => setSystemApiForm((prev) => ({ ...prev, has_thinking_mode: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm">
                                                             <option value="any">any</option>
                                                             <option value="true">true</option>
                                                             <option value="false">false</option>

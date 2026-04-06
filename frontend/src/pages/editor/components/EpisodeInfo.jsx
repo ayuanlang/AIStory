@@ -118,6 +118,7 @@ import {
 } from '../editorConfig';
 import {
     PROJECT_EP_TYPE_OPTIONS,
+    PROJECT_EP_COUNTRY_REGION_OPTIONS,
     PROJECT_EP_LANGUAGE_OPTIONS,
     PROJECT_EP_BASE_POSITIONING_OPTIONS,
     PROJECT_EP_GLOBAL_STYLE_OPTIONS,
@@ -458,10 +459,16 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
                     
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <InputGroup idPrefix={prefix}
-                            label={t('类型', 'Type')} 
-                            value={data.type} 
-                            onChange={v => updateField('type', v)} 
-                            list={PROJECT_EP_TYPE_OPTIONS} 
+                            label={t('类型', 'Type')}
+                            value={data.type}
+                            onChange={v => updateField('type', v)}
+                            list={PROJECT_EP_TYPE_OPTIONS}
+                        />
+                        <InputGroup idPrefix={prefix}
+                            label={t('国家地域', 'Country/Region')}
+                            value={data.country_region}
+                            onChange={v => updateField('country_region', v)}
+                            list={PROJECT_EP_COUNTRY_REGION_OPTIONS}
                         />
                         <InputGroup idPrefix={prefix}
                             label={t('语言', 'Language')}

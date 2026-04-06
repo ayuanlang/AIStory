@@ -508,8 +508,8 @@ export const extractSceneSubjectRefsFromField = (value, defaultType, sourceField
         .filter((item) => {
             const name = String(item?.name || '').trim();
             if (!name) return false;
-            const lowerName = name.toLowerCase();
-            if (lowerName === 'none' || lowerName === 'null' || lowerName === '无' || lowerName === 'nil' || lowerName === 'not applicable') {
+            const lowerName = name.toLowerCase().replace(/^[()[\]{}]+|[()[\]{}]+$/g, '');
+            if (lowerName === 'none' || lowerName === 'null' || lowerName === '无' || lowerName === 'nil' || lowerName === 'not applicable' || lowerName === 'n/a') {
                 return false;
             }
             return true;

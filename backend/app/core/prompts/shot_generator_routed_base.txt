@@ -390,9 +390,9 @@
   - **L-Cut / J-Cut**: 声音与画面的时空错位，增加流动感。
 - **Visual Evidence**: 必须给出**可见证据**来支撑情绪变化（e.g., "brows tighten", "tear line forms", "lips tremble"），使用相对强度词（slight/noticeable/clear），不要使用毫米/厘米等硬数值。
 - **微观流体真实感护栏 (Micro-Fluid Realism Guard, 图/视频双端强制)**：对于眼泪、汗珠、雨滴等液体元素，**必须在全部三个英文提示词字段**（`Start Frame`、`Video Content`、`End Frame`）中贯彻微观真实感描写，**绝不能只在静止帧描写而在 `Video Content` 视频提示词里退化遗漏**。严禁在英文提示词中使用简单的泛化动词（如 "crying", "sweating"）或夸张失真的描述（如 "cartoonish tears", "waterfall sweating"）。此类词语极易导致 AI 图片/视频生成中出现水滴悬浮、二次元化或严重塑料感的情况。必须通过**物理贴合、光学折射与微观轨迹**来强制约束液体的真实感：
-  - **皮肤依附与物理轨迹 (Physical Adherence)**：明确描述液体与皮肤的毛细/重力贴合以及具体的流淌路线，严禁水滴离体悬浮。
-    - **图与视频的明确要求**：静态帧 (`Start/End Frame`) 需写明液体的驻留状态（如液体沉甸甸地挂在下睑缘/汗珠附着在皮肤纹理上，**严禁描写“晶莹闪烁”、“光芒四射”等破坏真实感的夸张光效**），而动态段 (`Video Content`) 则**必须写清液体受重力划过肌肤的物理轨迹**，视频动作绝不能遗漏流体细节。
-    - **合规示例 (Good)**：`a single heavy tear breaks from the reddened lower lash line, sliding slowly down the curve of the cheek, the moisture visibly clinging to the skin texture before gathering at the jawline.`
+  - **皮肤依附与扁平薄层 (Physical Adherence & Flatness)**：明确描述液体作为【平滑薄层】与皮肤的毛细贴合，强调水痕是平滑且紧贴皮肤纹理的，**绝对不能生成过于立体、饱满或鼓起的圆形水珠 (No volumetric/puffy/3D stereoscopic droplets)**，严禁水滴离体悬浮。
+    - **图与视频的明确要求**：静态帧 (`Start/End Frame`) 需写明液体的驻留状态（如液体平滑地散布在睫毛缘/汗珠极薄地附着在肌肤表面，**严禁描写“晶莹闪烁”、“饱满立体”等破坏真实感的夸张形容**），而动态段 (`Video Content`) 则**必须写清这层薄薄的液体受重力划过肌肤的平滑物理轨迹 (a thin, flat sheer trail of moisture)**，视频动作绝不能遗漏流体细节。
+    - **合规示例 (Good)**：`a flat, thin trail of tears breaks from the reddened lower lash line, sliding smoothly down the curve of the cheek, the sheer moisture lying flush against the skin texture before gathering at the jawline.`
     - **不合规示例 (Bad)**：`tears falling down her face` 或 `crying tears continually`（缺乏物理贴合感与明确轨迹，极易生成脱离面部的悬空水滴）。
   - **微弱折射与极其克制的高光 (Subtle Refraction & Extremely Restrained Highlights)**：严防“光学折射过载”导致的玻璃/塑料感。仅通过微弱的局部水分反光来建立体积真实感（e.g., "gentle moisture reflection", "matte wet texture"），**严禁在光影中加任何“晶莹闪烁”、“波光粼粼”、“如钻石般”等破坏真实感的浮夸修饰 (No sparkling/glistening/glowing/highly refractive/crystal clear)，绝对避免生成失真的假水滴**。
   - **克制的高级表述 (Restrained Visible Clues)**：放弃 "crying heavily" 等幼稚描写，转而刻画生理证据（e.g., 用 "reddened sclera, matte dampness on the cheek" 替代大哭；用 "damp hair sticking to the forehead" 配合汗珠）。

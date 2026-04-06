@@ -25,6 +25,30 @@ export default function FunctionApiConfigTab() {
         strict_provider: false
     });
     const [savingRouting, setSavingRouting] = useState(false);
+    const [categoryFilters, setCategoryFilters] = useState({});
+    const [providerFilters, setProviderFilters] = useState({});
+
+    const handleCategoryFilterChange = (funcName, index, category) => {
+        setCategoryFilters(prev => ({
+            ...prev,
+            [`${funcName}_${index}`]: category
+        }));
+        // Reset provider and api_id when category changes
+        setProviderFilters(prev => ({
+            ...prev,
+            [`${funcName}_${index}`]: ''
+        }));
+        handleChangeParams(funcName, index, 'system_api_id', '');
+    };
+
+    const handleProviderFilterChange = (funcName, index, provider) => {
+        setProviderFilters(prev => ({
+            ...prev,
+            [`${funcName}_${index}`]: provider
+        }));
+        // Reset api_id when provider changes
+        handleChangeParams(funcName, index, 'system_api_id', '');
+    };
 
     useEffect(() => {
         fetchData();
@@ -295,18 +319,47 @@ export default function FunctionApiConfigTab() {
                             <div className="space-y-3">
                                 {sortedItems.map((item, index) => {
                                     const originalIndex = items.findIndex(orig => orig === item);
+                                    const currentCategoryFilter = categoryFilters[`${funcName}_${originalIndex}`] || '';
+                                    const currentProviderFilter = providerFilters[`${funcName}_${originalIndex}`] || '';
 
                                     return (
                                         <div key={originalIndex} className="flex flex-col md:flex-row gap-3 md:items-center bg-[#111114] p-3 rounded-lg border border-white/5">
                                             <div className="flex-1">
-                                                <select
-                                                    value={item.system_api_id || ''}
-                                                    onChange={(e) => handleChangeParams(funcName, originalIndex, 'system_api_id', e.target.value)}
-                                                    className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
-                                                >
-                                                    <option value="">-- 选择模型 API --</option>
-                                                    {systemApis.map(api => (
-                                                        <option key={api.id} value={api.id}>
+                                                <div className="flex gap-2 w-full">
+                                                    <select
+                                                        value={currentCategoryFilter}
+                                                        onChange={(e) => handleCategoryFilterChange(funcName, originalIndex, e.target.value)}
+                                                        className="w-[100px] bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50 shrink-0"
+                                                    >
+                                                        <option value="">所有类型</option>
+                                                        {Array.from(new Set(systemApis.map(api => api.category).filter(Boolean))).map(cat => (
+                                                            <option key={cat} value={cat}>{cat}</option>
+                                                        ))}
+                                                    </select>
+                                                    <select
+                                                        value={currentProviderFilter}
+                                                        onChange={(e) => handleProviderFilterChange(funcName, originalIndex, e.target.value)}
+                                                        className="w-[120px] bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50 shrink-0"
+                                                    >
+                                                        <option value="">所有供应商</option>
+                                                        {Array.from(new Set(systemApis
+                                                            .filter(api => !currentCategoryFilter || api.category === currentCategoryFilter)
+                                                            .map(api => api.provider).filter(Boolean)
+                                                        )).sort((a,b) => a.localeCompare(b)).map(prov => (
+                                                            <option key={prov} value={prov}>{prov}</option>
+                                                        ))}
+                                                    </select>
+                                                    <select
+                                                        value={item.system_api_id || ''}
+                                                        onChange={(e) => handleChangeParams(funcName, originalIndex, 'system_api_id', e.target.value)}
+                                                        className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
+                                                    >
+                                                        <option value="">-- 选择模型 API --</option>
+                                                        {systemApis
+                                                            .filter(api => !currentCategoryFilter || api.category === currentCategoryFilter)
+                                                            .filter(api => !currentProviderFilter || api.provider === currentProviderFilter)
+                                                            .map(api => (
+                                                            <option key={api.id} value={api.id}>
                                                             ID:{api.id} | {api.name} ({api.model || 'N/A'}) - {api.provider || ''}
                                                         </option>
                                                     ))}
@@ -317,6 +370,7 @@ export default function FunctionApiConfigTab() {
                                                         </option>
                                                     )}
                                                 </select>
+                                                </div>
                                                 <div className="flex gap-2 mt-2">
                                                     <input
                                                         type="text"

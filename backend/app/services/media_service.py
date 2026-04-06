@@ -4831,6 +4831,11 @@ class MediaGenerationService:
         
         model = config.get("model") or "vidu2.0"
         tool_conf = config.get("config", {}) or {}
+        raw_callback_url = str(tool_conf.get("_provider_callback_url") or tool_conf.get("webhookUrl") or tool_conf.get("webHook") or tool_conf.get("webhook") or tool_conf.get("callBackUrl") or tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or "").strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"vidu-{gen_type}"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
 
         def _normalize_bool(raw: Any, default: bool) -> bool:
             if raw is None:
@@ -4866,6 +4871,12 @@ class MediaGenerationService:
                 "model": model, 
                 "prompt": prompt[:2000] if prompt else ""
             }
+            if callback_url and callback_url != "-1":
+                payload["webhookUrl"] = callback_url
+
+            if callback_url and callback_url != "-1":
+                payload["webhookUrl"] = callback_url
+
             
             # 1. Start Image
             start_img_src = None
@@ -6156,6 +6167,12 @@ class MediaGenerationService:
 
         if gen_type == "image":
             payload: Dict[str, Any] = {"prompt": prompt}
+        if callback_url and callback_url != "-1":
+            payload["callBackUrl"] = callback_url
+
+        if callback_url and callback_url != "-1":
+            payload["callBackUrl"] = callback_url
+
             if callback_url and callback_url != "-1":
                 payload["webhookUrl"] = callback_url
             is_image_edit = any(token in endpoint_lower for token in ("image-to-image", "/edit", "image-edit"))
@@ -6373,6 +6390,11 @@ class MediaGenerationService:
             return {"error": f"No {provider_name} API Key", "submit_failed": True}
 
         tool_conf = config.get("config", {}) or {}
+        raw_callback_url = str(tool_conf.get("_provider_callback_url") or tool_conf.get("webhookUrl") or tool_conf.get("webHook") or tool_conf.get("webhook") or tool_conf.get("callBackUrl") or tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or "").strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"apiyi-{gen_type}"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
         base_url = str(config.get("base_url") or "https://api.apiyi.com").strip().rstrip("/")
         endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "").strip()
         model = str(config.get("model") or "").strip()
@@ -6406,6 +6428,101 @@ class MediaGenerationService:
             return sanitized_prompt
 
         if gen_type == "image":
+            # Native Google API Format for APIYI Image models
+            if "gemini" in model.lower():
+                submit_url = f"{base_url}/v1beta/models/{model}:generateContent"
+                
+                image_config = {}
+                resolved_aspect_ratio = aspect_ratio or tool_conf.get("aspect_ratio")
+                if resolved_aspect_ratio:
+                    image_config["aspectRatio"] = resolved_aspect_ratio
+                
+                normalized_image_size = self._normalize_image_size_value(
+                    image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
+                )
+                if normalized_image_size == "2k":
+                    image_config["imageSize"] = "2K"
+                elif normalized_image_size == "1k":
+                     image_config["imageSize"] = "1K"
+                elif normalized_image_size == "512":
+                     image_config["imageSize"] = "256" # not sure if supported, but whatever
+                     
+                prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+                parts = [{"text": prompt_text}]
+
+                reference_values = ref_image if isinstance(ref_image, list) else [ref_image]
+                for ref_item in reference_values:
+                    raw_ref = str(ref_item or "").strip()
+                    if not raw_ref: continue
+                    data_uri = await self._get_image_base64_for_api_async(raw_ref, force_data_uri=True)
+                    if isinstance(data_uri, str) and data_uri.startswith("data:image/"):
+                        idx = data_uri.find(";base64,")
+                        if idx > 5:
+                            mime = data_uri[5:idx].strip().lower() or "image/png"
+                            parts.append({
+                                "inline_data": {
+                                    "mime_type": mime,
+                                    "data": data_uri[idx + len(";base64,"):].strip(),
+                                }
+                            })
+
+                final_contents = [{"role": "user", "parts": parts}]
+                if config.get("is_gemini_multi_turn_edit"):
+                    base_prompt = config.get("gemini_base_prompt") or prompt_text
+                    edit_instruction = config.get("gemini_edit_instruction") or prompt_text
+                    inline_parts = [p for p in parts if "inline_data" in p]
+                    if inline_parts:
+                        final_contents = [
+                            {"role": "user", "parts": [{"text": base_prompt}]},
+                            {"role": "model", "parts": inline_parts},
+                            {"role": "user", "parts": [{"text": edit_instruction}]}
+                        ]
+
+                payload = {
+                     "contents": final_contents,
+                     "generationConfig": {
+                         "responseModalities": ["IMAGE"],
+                     }
+                }
+                if image_config:
+                    payload["generationConfig"]["imageConfig"] = image_config
+
+                if config.get("has_google_search") or tool_conf.get("has_google_search"):
+                    payload["tools"] = [{"google_search": {}}]
+
+                if config.get("has_thinking_mode") or tool_conf.get("has_thinking_mode"):
+                    think_level = str(config.get("thinking_level") or tool_conf.get("thinking_level") or "high").lower()
+                    if think_level not in ["minimal", "high"]: think_level = "high"
+                    payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": think_level, "includeThoughts": True}
+
+                if callback_url and callback_url != "-1":
+                    payload["webhookUrl"] = callback_url
+                    
+                base_metadata = {
+                    "provider": provider_name,
+                    "model": model,
+                    "prompt": prompt,
+                    "submit_url": submit_url,
+                    "endpoint_family": "gemini-native",
+                }
+                
+                # We need special handling for the response since it returns base64
+                res = await self._common_requests_post(submit_url, payload, api_key, f"{str(provider_name).lower()}_image_gemini", extra_metadata=base_metadata)
+                
+                # Check for base64 inlineData in response
+                if isinstance(res, dict) and not res.get("error"):
+                    try:
+                        raw_data = res.get("metadata", {}).get("raw", {})
+                        if "candidates" in raw_data:
+                            b64_data = raw_data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+                            if b64_data:
+                                res["url"] = f"data:image/png;base64,{b64_data}"
+                    except Exception:
+                        pass
+                
+                return res
+
+            # Fallback to OpenAI compatible for non-gemini apiyi image models if any (or we replace entirely)
             endpoint_lower = endpoint.lower()
             if "/v1/images/generations" not in endpoint_lower:
                 return {"error": f"{provider_name} image endpoint family not supported yet: {endpoint}", "submit_failed": True}
@@ -6446,6 +6563,9 @@ class MediaGenerationService:
             for optional_key in ["quality", "output_format", "output_compression", "background", "user"]:
                 if tool_conf.get(optional_key) is not None:
                     payload[optional_key] = tool_conf.get(optional_key)
+
+            if callback_url and callback_url != "-1":
+                payload["webhookUrl"] = callback_url
 
             base_metadata = {
                 "provider": provider_name,
@@ -6553,6 +6673,11 @@ class MediaGenerationService:
             return {"error": f"No {provider_name} API Key", "submit_failed": True}
 
         tool_conf = config.get("config", {}) or {}
+        raw_callback_url = str(tool_conf.get("_provider_callback_url") or tool_conf.get("webhookUrl") or tool_conf.get("webHook") or tool_conf.get("webhook") or tool_conf.get("callBackUrl") or tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or "").strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"aiclub-{gen_type}"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
         base_url = str(config.get("base_url") or "https://aiclub.zimaocloud.com/model/openApi").strip().rstrip("/")
         model = str(config.get("model") or "nanoBanana").strip()
         
@@ -7211,6 +7336,11 @@ class MediaGenerationService:
             return {"error": "No zlhub API Key", "submit_failed": True}
 
         tool_conf = config.get("config", {}) or {}
+        raw_callback_url = str(tool_conf.get("_provider_callback_url") or tool_conf.get("webhookUrl") or tool_conf.get("webHook") or tool_conf.get("webhook") or tool_conf.get("callBackUrl") or tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or "").strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"zlhub-{gen_type}"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
         provider_name = self._vendor_label(config.get("provider") or tool_conf.get("provider") or "zlhub")
         base_url = str(config.get("base_url") or "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1").strip().rstrip("/")
         raw_endpoint = str(tool_conf.get("endpoint") or "").strip()
@@ -7797,11 +7927,24 @@ class MediaGenerationService:
         if "IMAGE" not in normalized_modalities:
             normalized_modalities.append("IMAGE")
 
+        final_contents = [{
+            "role": "user",
+            "parts": parts,
+        }]
+
+        if config.get("is_gemini_multi_turn_edit"):
+            base_prompt = config.get("gemini_base_prompt") or prompt_text
+            edit_instruction = config.get("gemini_edit_instruction") or prompt_text
+            inline_parts = [p for p in parts if "inline_data" in p]
+            if inline_parts:
+                final_contents = [
+                    {"role": "user", "parts": [{"text": base_prompt}]},
+                    {"role": "model", "parts": inline_parts},
+                    {"role": "user", "parts": [{"text": edit_instruction}]}
+                ]
+
         payload: Dict[str, Any] = {
-            "contents": [{
-                "role": "user",
-                "parts": parts,
-            }],
+            "contents": final_contents,
             "generationConfig": {
                 "responseModalities": normalized_modalities,
             },
@@ -7820,6 +7963,14 @@ class MediaGenerationService:
 
         if image_config:
             payload["generationConfig"]["imageConfig"] = image_config
+
+        if config.get("has_google_search") or tool_conf.get("has_google_search"):
+            payload["tools"] = [{"google_search": {}}]
+
+        if config.get("has_thinking_mode") or tool_conf.get("has_thinking_mode"):
+            think_level = str(config.get("thinking_level") or tool_conf.get("thinking_level") or "high").lower()
+            if think_level not in ["minimal", "high"]: think_level = "high"
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": think_level, "includeThoughts": True}
 
         headers = {
             "Authorization": f"Bearer {api_key}",

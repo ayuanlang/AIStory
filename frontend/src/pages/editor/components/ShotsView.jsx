@@ -3495,8 +3495,8 @@ await applyJointShotDiptychResult({
                                     
                                 try {
                                     if (isJointDiptych) {
-                                        setShotGeneratingState(targetShotId, 'cropping', true);
-await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
+                                        setShotGeneratingState(stableShotId, 'cropping', true);
+                                        await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
                                     } else if (stableKind === 'start') {
                                         try {
                                             await new Promise((resolve) => {

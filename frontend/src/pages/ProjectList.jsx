@@ -27,8 +27,6 @@ import {
     fetchReviewRoundMessages,
     createReviewRoundMessage,
     getKieStandardValueOptions,
-    submitImageGenerationJob,
-    getImageGenerationJobStatus,
     fetchMe as fetchMeApi,
 } from '../services/api';
 import { BASE_URL, ASSET_BASE_URL } from '../config';
@@ -71,7 +69,7 @@ import {
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
+import { confirmUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 import {
     PROJECT_EP_TONE_OPTIONS,
@@ -80,6 +78,7 @@ import {
     PROJECT_EP_LENS_PREFERENCE_OPTIONS,
     PROJECT_EP_RESOLUTION_OPTIONS,
     PROJECT_EP_TYPE_OPTIONS,
+    PROJECT_EP_COUNTRY_REGION_OPTIONS,
     PROJECT_EP_LANGUAGE_OPTIONS,
     PROJECT_EP_BASE_POSITIONING_OPTIONS,
     PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
@@ -126,6 +125,7 @@ const PROJECT_CREATE_PREFERRED_ASPECT_RATIO = '9:16';
 const PROJECT_CREATE_PREFERRED_IMAGE_SIZE = '1K';
 const PROJECT_CREATE_DEFAULT_OPTIONS = {
     type: [...PROJECT_EP_TYPE_OPTIONS],
+    country_region: [...PROJECT_EP_COUNTRY_REGION_OPTIONS],
     language: [...PROJECT_EP_LANGUAGE_OPTIONS],
     base_positioning: [...PROJECT_EP_BASE_POSITIONING_OPTIONS],
     aspect_ratio: [...PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS],
@@ -175,51 +175,6 @@ const uniqueNonEmptyStrings = (items) => {
 
 const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-const extractImageJobResultUrl = (statusResp) => {
-    const result = (statusResp?.result && typeof statusResp.result === 'object') ? statusResp.result : {};
-    const candidates = [
-        result?.url,
-        result?.image_url,
-        result?.imageUrl,
-        result?.generated_url,
-        statusResp?.url,
-        statusResp?.image_url,
-        statusResp?.imageUrl,
-    ];
-    for (const value of candidates) {
-        const stable = String(value || '').trim();
-        if (stable) return stable;
-    }
-    return '';
-};
-
-const buildProjectCoverPrompt = (project) => {
-    const info = project?.global_info && typeof project.global_info === 'object' ? project.global_info : {};
-    const tech = info?.tech_params && typeof info.tech_params === 'object' ? info.tech_params : {};
-    const visual = tech?.visual_standard && typeof tech.visual_standard === 'object' ? tech.visual_standard : {};
-    const notes = String(project?.description || info?.notes || '').trim();
-    const genre = String(info?.type || '').trim();
-    const language = String(info?.language || '').trim();
-    const positioning = String(info?.base_positioning || '').trim();
-    const tone = String(info?.color_tone || visual?.color_tone || '').trim();
-
-    const detailBits = [
-        genre ? `genre: ${genre}` : '',
-        language ? `language mood: ${language}` : '',
-        positioning ? `positioning: ${positioning}` : '',
-        tone ? `tone: ${tone}` : '',
-        notes ? `story context: ${notes}` : '',
-    ].filter(Boolean);
-
-    return [
-        `Create a premium cinematic vertical cover poster for the project titled "${String(project?.title || '').trim() || 'Untitled Project'}".`,
-        'Use a strong central subject, clear foreground-background separation, bold lighting, and blockbuster poster composition.',
-        'Reserve clean safe areas for title placement at the top and credits or tagline at the bottom. Avoid clutter and avoid tiny repeated subjects.',
-        'The image should feel like international film key art: polished, dramatic, stylish, and commercially appealing.',
-        detailBits.join('; '),
-    ].filter(Boolean).join(' ');
-};
-
 const parseUserListInput = (value) => {
     if (Array.isArray(value)) return uniqueNonEmptyStrings(value);
     return uniqueNonEmptyStrings(String(value || '').split(/[;,\n\r]+/));
@@ -262,6 +217,7 @@ const normalizeProjectCreateOptions = (payload) => {
 
     return {
         type: type.length ? type : [...PROJECT_CREATE_DEFAULT_OPTIONS.type],
+        country_region: [...PROJECT_CREATE_DEFAULT_OPTIONS.country_region],
         language: language.length ? language : [...PROJECT_CREATE_DEFAULT_OPTIONS.language],
         base_positioning: basePositioning.length ? basePositioning : [...PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning],
         aspect_ratio: aspectRatio.length ? aspectRatio : [...PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio],
@@ -482,6 +438,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isCreateManagementCollapsed, setIsCreateManagementCollapsed] = useState(true);
     const [projectCreateOptions, setProjectCreateOptions] = useState(PROJECT_CREATE_DEFAULT_OPTIONS);
     const [newType, setNewType] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.type));
+    const [newCountryRegion, setNewCountryRegion] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.country_region));
     const [newLanguage, setNewLanguage] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.language));
     const [newBasePositioning, setNewBasePositioning] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning));
     const [newAspectRatio, setNewAspectRatio] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
@@ -501,7 +458,6 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     // Theme Logic - Moved to Parent for persistence on reload
     const [currentTheme, setCurrentTheme] = useState('default');
     const [toast, setToast] = useState(null);
-    const [coverGenerationByProject, setCoverGenerationByProject] = useState({});
     const [shareModalProject, setShareModalProject] = useState(null);
     const [shareModalTab, setShareModalTab] = useState('share');
     const [projectShares, setProjectShares] = useState([]);
@@ -820,6 +776,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             global_info: {
                 script_title: title,
                 type: String(newType || '').trim(),
+                country_region: String(newCountryRegion || '').trim(),
                 language: String(newLanguage || '').trim(),
                 base_positioning: String(newBasePositioning || '').trim(),
                 era: String(newEra || '').trim(),
@@ -969,101 +926,6 @@ const ProjectList = ({ initialTab = 'projects' }) => {
             console.error("Failed to delete project", error);
             setToast({ type: 'error', message: t('项目删除失败', 'Failed to delete project') });
             setTimeout(() => setToast(null), 3000);
-        }
-    };
-
-    const handleGenerateProjectCover = async (event, project) => {
-        event.stopPropagation();
-        const projectId = Number(project?.id || 0);
-        if (projectId <= 0 || coverGenerationByProject[projectId]) return;
-
-        const defaultPrompt = buildProjectCoverPrompt(project);
-        const promptInput = await promptUiMessage(
-            t('请输入封面图提示词', 'Enter cover image prompt'),
-            { defaultValue: defaultPrompt }
-        );
-        if (promptInput == null) return;
-
-        const finalPrompt = String(promptInput || '').trim();
-        if (!finalPrompt) {
-            setToast({ type: 'error', message: t('封面图提示词不能为空', 'Cover image prompt cannot be empty') });
-            setTimeout(() => setToast(null), 3000);
-            return;
-        }
-
-        setCoverGenerationByProject((prev) => ({
-            ...(prev || {}),
-            [projectId]: { status: 'queued' },
-        }));
-
-        try {
-            const submitResult = await submitImageGenerationJob(finalPrompt, null, null, {
-                project_id: projectId,
-                asset_type: 'cover',
-                prompt_language: uiLang === 'zh' ? 'cn' : 'en',
-            });
-            const jobId = String(submitResult?.job_id || '').trim();
-            if (!jobId) throw new Error(t('缺少封面任务 ID', 'Missing cover job id'));
-
-            setCoverGenerationByProject((prev) => ({
-                ...(prev || {}),
-                [projectId]: { status: 'running', jobId },
-            }));
-
-            const deadline = Date.now() + 8 * 60 * 1000;
-            let stableImageUrl = '';
-            while (Date.now() < deadline) {
-                const statusResp = await getImageGenerationJobStatus(jobId);
-                const status = String(statusResp?.status || '').trim().toLowerCase();
-
-                if (status === 'queued' || status === 'running' || status === 'persisting') {
-                    setCoverGenerationByProject((prev) => ({
-                        ...(prev || {}),
-                        [projectId]: { status: status || 'running', jobId },
-                    }));
-                    await sleep(2500);
-                    continue;
-                }
-
-                if (status === 'completed' || status === 'succeeded') {
-                    stableImageUrl = extractImageJobResultUrl(statusResp);
-                    if (!stableImageUrl) {
-                        throw new Error(t('封面任务已完成，但未返回图片地址', 'Cover job completed but returned no image URL'));
-                    }
-                    break;
-                }
-
-                if (status === 'failed' || status === 'error' || status === 'canceled' || status === 'cancelled') {
-                    throw new Error(statusResp?.error || statusResp?.detail || t('封面图生成失败', 'Cover image generation failed'));
-                }
-
-                await sleep(2500);
-            }
-
-            if (!stableImageUrl) {
-                throw new Error(t('等待封面图结果超时', 'Timed out waiting for cover image result'));
-            }
-
-            await updateProject(projectId, { cover_image: stableImageUrl });
-            setProjects((prev) => (Array.isArray(prev)
-                ? prev.map((item) => (Number(item?.id || 0) === projectId ? { ...item, cover_image: stableImageUrl } : item))
-                : prev
-            ));
-            setToast({ type: 'success', message: t('封面图已更新', 'Cover image updated') });
-            setTimeout(() => setToast(null), 3000);
-        } catch (error) {
-            console.error('Failed to generate project cover', error);
-            setToast({
-                type: 'error',
-                message: error?.response?.data?.detail || error?.message || t('生成封面图失败', 'Failed to generate cover image'),
-            });
-            setTimeout(() => setToast(null), 3500);
-        } finally {
-            setCoverGenerationByProject((prev) => {
-                const next = { ...(prev || {}) };
-                delete next[projectId];
-                return next;
-            });
         }
     };
 
@@ -1922,6 +1784,16 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                             </select>
                                             </div>
                                             <div>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('国家地域', 'Country/Region')}</label>
+                                                <select
+                                                                className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                                value={newCountryRegion}
+                                                                onChange={(e) => setNewCountryRegion(e.target.value)}
+                                                            >
+                                                                {projectCreateOptions.country_region.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                            </select>
+                                            </div>
+                                            <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('语言', 'Language')}</label>
                                                 <select
                                                                 className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
@@ -2219,16 +2091,6 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                     <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-semibold text-black">
                                                                         {t('审核', 'Review')} {getProjectUnreadReviewCount(p)}
                                                                     </span>
-                                                                )}
-                                                                {isProjectOwner(p) && (
-                                                                    <button
-                                                                        onClick={(e) => handleGenerateProjectCover(e, p)}
-                                                                        disabled={Boolean(coverGenerationByProject[p.id])}
-                                                                        className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-fuchsia-300 hover:bg-white/10 rounded-lg transition-all disabled:opacity-100 disabled:text-fuchsia-200"
-                                                                        title={t('生成封面图', 'Generate Cover Image')}
-                                                                    >
-                                                                        {coverGenerationByProject[p.id] ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
-                                                                    </button>
                                                                 )}
                                                                 {isProjectOwner(p) && (
                                                                     <button

@@ -1111,6 +1111,8 @@ def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, A
     digital_caps = _clean_feature_dict(profile.get("digital_human_capabilities"))
     voice_caps = _clean_feature_dict(profile.get("voice_capabilities"))
     music_caps = _clean_feature_dict(profile.get("music_capabilities"))
+    has_google_search = profile.get("has_google_search")
+    has_thinking_mode = profile.get("has_thinking_mode")
 
     out: Dict[str, Any] = {
         "generation_modes": generation_modes,
@@ -1186,6 +1188,10 @@ def _build_modality_from_feature_profile(profile: Dict[str, Any]) -> Dict[str, A
 
     if music_caps:
         out["music_capabilities"] = music_caps
+    if has_google_search is not None:
+        out["has_google_search"] = bool(has_google_search)
+    if has_thinking_mode is not None:
+        out["has_thinking_mode"] = bool(has_thinking_mode)
         if music_caps.get("has_audio") is not None:
             out["has_audio"] = bool(music_caps.get("has_audio"))
         if music_caps.get("input_formats") and not out.get("input_formats"):
@@ -1360,6 +1366,8 @@ def _build_modality_payload_from_item(source: Any) -> Optional[Dict[str, Any]]:
         "digital_human_capabilities": getattr(source, "digital_human_capabilities", None),
         "voice_capabilities": getattr(source, "voice_capabilities", None),
         "music_capabilities": getattr(source, "music_capabilities", None),
+        "has_google_search": getattr(source, "has_google_search", None),
+        "has_thinking_mode": getattr(source, "has_thinking_mode", None),
     }
     modality = _build_modality_from_feature_profile(profile)
 
@@ -1437,6 +1445,8 @@ def _extract_modality_manage_fields(modality_value: Any) -> Dict[str, Any]:
         "digital_human_capabilities",
         "voice_capabilities",
         "music_capabilities",
+        "has_google_search",
+        "has_thinking_mode",
     ]:
         value = modality.get(name)
         if value is not None:

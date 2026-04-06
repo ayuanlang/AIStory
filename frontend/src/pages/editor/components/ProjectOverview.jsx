@@ -118,6 +118,7 @@ import {
 } from '../editorConfig';
 import {
     PROJECT_EP_TYPE_OPTIONS,
+    PROJECT_EP_COUNTRY_REGION_OPTIONS,
     PROJECT_EP_LANGUAGE_OPTIONS,
     PROJECT_EP_BASE_POSITIONING_OPTIONS,
     PROJECT_EP_GLOBAL_STYLE_OPTIONS,
@@ -822,6 +823,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                     if (missing.length > 0) {
                         const labels = missing.map((field) => {
                             if (field === 'type') return t('类型', 'Type');
+                            if (field === 'country_region') return t('国家地域', 'Country/Region');
                             if (field === 'language') return t('语言', 'Language');
                             return String(field || '');
                         }).filter(Boolean).join(' / ');
@@ -1956,6 +1958,12 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             value={info.type}
                             onChange={v => updateField('type', v)}
                             list={PROJECT_EP_TYPE_OPTIONS}
+                        />
+                         <InputGroup idPrefix={prefix}
+                            label={t('国家地域', 'Country/Region')}
+                            value={info.country_region}
+                            onChange={v => updateField('country_region', v)}
+                            list={PROJECT_EP_COUNTRY_REGION_OPTIONS}
                         />
                          <InputGroup idPrefix={prefix}
                             label={t('语言', 'Language')}

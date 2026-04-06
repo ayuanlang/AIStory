@@ -2623,7 +2623,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     };
 
-    const handleGenerate = async (entityOverride = null, customRefs = null, customPrompt = null) => {
+    const handleGenerate = async (entityOverride = null, customRefs = null, customPrompt = null, extraProviderOptions = null) => {
         const activeEntity = entityOverride || selectedEntity;
         if (generating || !!(activeEntity?.id && subjectImageJobs[String(activeEntity.id)])) return;
         const targetEntityId = Number(activeEntity?.id || 0);
@@ -2714,6 +2714,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 asset_type: 'subject',
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                 negative_prompt: buildEntityNegativePrompt(finalPrompt, selectedEntity, allEntities),
+                ...(extraProviderOptions || {})
             });
 
             const jobId = String(submitResult?.job_id || '').trim();
@@ -4439,7 +4440,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 });
                                                             }
 
-                                                            await handleGenerate(viewingEntity, autoRefs, finalPrompt);
+                                                            const extraProviderOptions = {
+                                                                is_gemini_multi_turn_edit: true,
+                                                                gemini_base_prompt: base,
+                                                                gemini_edit_instruction: appended,
+                                                            };
+
+                                                            await handleGenerate(viewingEntity, autoRefs, finalPrompt, extraProviderOptions);
                                                         } finally {
                                                             setIsAdvancedLocalModifying(false);
                                                         }
@@ -4455,6 +4462,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     disabled={isAdvancedOptimizing || !advancedInstruction.trim() || isAdvancedLocalModifying || generating}
                                                     onClick={async () => {
                                                         setIsAdvancedOptimizing(true);
+                                                        if (onLog) onLog(t('正在通过大模型优化提示词...', 'Optimizing prompt using LLM...'), 'process');
                                                         try {
                                                             const base = viewingEntity?.generation_prompt_en || "";
                                                             const res = await refinePrompt(base, advancedInstruction, 'image');
@@ -4477,11 +4485,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         weight: 0.5
                                                                     });
                                                                 }
-                                                                    
-                                                                await handleGenerate(viewingEntity, autoRefs, optimized);
+
+                                                                if (onLog) onLog(t('已生成新提示词，准备拉起生成...', 'Generated new prompt, ready to regenerate...'), 'info');
+                                                                try {
+                                                                    await handleGenerate(viewingEntity, autoRefs, optimized);
+                                                                    if (onLog) onLog(t('提交成功', 'Submitted successfully'), 'success');
+                                                                } catch (err) {
+                                                                    if (onLog) onLog(t('生成失败', 'Generation failed'), 'error');
+                                                                }
+                                                            } else {
+                                                                if (onLog) onLog(t('优化失败，请稍后再试', 'Optimization failed, please try again'), 'error');
                                                             }
                                                         } catch (e) {
                                                             console.error("Refine prompt failed", e);
+                                                            if (onLog) onLog(t('指令分析失败', 'Instruction analysis failed') + ': ' + e.message, 'error');
                                                         } finally {
                                                             setIsAdvancedOptimizing(false);
                                                         }

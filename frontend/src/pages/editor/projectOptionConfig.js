@@ -28,6 +28,15 @@ export const PROJECT_EP_TYPE_OPTIONS = [
 
 
 
+export const PROJECT_EP_COUNTRY_REGION_OPTIONS = [
+    "欧美 / Europe & America",
+    "中国 / China",
+    "日韩 / Japan & Korea",
+    "泛亚 / Pan-Asia",
+    "全球通用 / Global",
+    "其他 / Other"
+];
+
 export const PROJECT_EP_LANGUAGE_OPTIONS = [
 
     "中文 / Chinese",

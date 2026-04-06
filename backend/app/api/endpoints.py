@@ -8622,6 +8622,7 @@ def export_project_story_generator_global_package(
         "script_title": _pick_text(gi.get("script_title"), basic_info_nested.get("script_title"), e_global_info.get("script_title"), story_input.get("script_title")),
         "series_episode": _pick_text(gi.get("series_episode"), basic_info_nested.get("series_episode"), e_global_info.get("series_episode")),
         "type": _pick_text(gi.get("type"), basic_info_nested.get("type"), e_global_info.get("type"), story_input.get("type")),
+        "country_region": _pick_text(gi.get("country_region"), basic_info_nested.get("country_region"), e_global_info.get("country_region"), story_input.get("country_region")),
         "language": _pick_text(gi.get("language"), basic_info_nested.get("language"), e_global_info.get("language"), story_input.get("language")),
         "base_positioning": _pick_text(gi.get("base_positioning"), basic_info_nested.get("base_positioning"), e_global_info.get("base_positioning"), story_input.get("base_positioning")),
         "Global_Style": _pick_text(gi.get("Global_Style"), gi.get("global_style"), basic_info_nested.get("Global_Style"), e_global_info.get("Global_Style"), story_input.get("Global_Style")),
@@ -9188,6 +9189,12 @@ def read_project(
         e_global_info.get("type"),
         story_input.get("type"),
     )
+    country_region_value = _pick_non_empty_text(
+        global_info.get("country_region"),
+        basic_info.get("country_region"),
+        e_global_info.get("country_region"),
+        story_input.get("country_region"),
+    )
     language_value = _pick_non_empty_text(
         global_info.get("language"),
         basic_info.get("language"),
@@ -9198,6 +9205,8 @@ def read_project(
     missing_basic_fields: List[str] = []
     if not type_value:
         missing_basic_fields.append("type")
+    if not country_region_value:
+        missing_basic_fields.append("country_region")
     if not language_value:
         missing_basic_fields.append("language")
     
@@ -21982,17 +21991,18 @@ async def _run_generate_image(
 
         # Fill remaining blanks with project-level defaults.
         is_keyframe_generation = asset_type in {"keyframe", "shot", "start_frame", "end_frame", "shot_image"}
+        if not aspect_ratio and project_visual.get("aspect_ratio"):
+            aspect_ratio = str(project_visual.get("aspect_ratio")).strip() or None
+        if not image_size:
+            raw_size = _normalize_project_image_size(project_visual.get("image_size"))
+            if raw_size:
+                image_size = raw_size
+            
         if not is_keyframe_generation:
-            if not aspect_ratio and project_visual.get("aspect_ratio"):
-                aspect_ratio = str(project_visual.get("aspect_ratio")).strip() or None
             if not width and project_visual.get("width"):
                 width = project_visual.get("width")
             if not height and project_visual.get("height"):
                 height = project_visual.get("height")
-            if not image_size:
-                raw_size = _normalize_project_image_size(project_visual.get("image_size"))
-                if raw_size:
-                    image_size = raw_size
 
             # Compatibility: support resolution strings like "1920x1080" from project/episode defaults.
             if not width or not height:

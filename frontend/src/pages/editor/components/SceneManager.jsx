@@ -381,8 +381,8 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                     <div className="flex-1 bg-black/50 flex items-center justify-center p-4 relative group/modal">
                         <SafeImage src={selectedImage} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
                         <button 
-                            className="absolute top-4 right-4 bg-black/50 text-white p-2 rounded-full hover:bg-white/20 transition-colors"
-                            onClick={() => setSelectedImage(null)}
+                            className="absolute top-4 right-4 bg-black/50 text-white p-2 rounded-full hover:bg-white/20 transition-colors z-50"
+                            onClick={(e) => { e.stopPropagation(); setSelectedImage(null); }}
                         >
                             <X size={24} />
                         </button>

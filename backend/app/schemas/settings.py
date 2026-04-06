@@ -123,6 +123,8 @@ class SystemAPISettingFeatureFields(BaseModel):
     digital_human_capabilities: Optional[Dict[str, Any]] = None
     voice_capabilities: Optional[Dict[str, Any]] = None
     music_capabilities: Optional[Dict[str, Any]] = None
+    has_google_search: Optional[bool] = None
+    has_thinking_mode: Optional[bool] = None
     pricing_unit: Optional[str] = None
     token_billing_supported: Optional[bool] = None
     input_token_price: Optional[float] = None
@@ -244,6 +246,8 @@ class SystemAPISettingOut(BaseModel):
     digital_human_capabilities: Optional[Dict[str, Any]] = None
     voice_capabilities: Optional[Dict[str, Any]] = None
     music_capabilities: Optional[Dict[str, Any]] = None
+    has_google_search: Optional[bool] = None
+    has_thinking_mode: Optional[bool] = None
     pricing_unit: Optional[str] = None
     token_billing_supported: Optional[bool] = None
     input_token_price: Optional[float] = None
