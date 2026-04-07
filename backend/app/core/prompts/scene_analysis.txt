@@ -9,8 +9,8 @@
 - **角色与道具四宫格绝对强制**：所有角色（character）与所有道具（prop）的 `generation_prompt_cn` 和 `generation_prompt_en` 必须严格采用**四宫格/四视图设定图**（4-panel character sheet / 4-view prop study）格式，且默认对齐到系统 `subject_aspect_ratio` 的 `16:9` 横向资产画布。绝对禁止以任何理由省略、简化、缩减为单张肖像、单张全身像、单张物体图、概念海报、单格参考图、双格或三格变体。无论实体数量、token 压力、角色戏份轻重、道具重要程度、年龄、性别、体型、风格定位或任何其他因素，四宫格都是不可协商的输出格式底线。主体四宫格固定版式必须严格按从左到右划分别为四格。对于角色：第1格是面部特征特写（Close-up），第2格是正面全身（Front），第3格是侧面全身（Side），第4格是背面全身（Back）。**注意：包含特写在内总共只有且必须仅仅是 4 个画面，绝对禁止画成“1 个特写 + 4 个全身（变成 5 宫格或以上）”，也禁止画出多余的动态参考**；且最左侧第1格必须是面部特写宫格，不得替换成半身、中景、全身或任何其他视图；四格缺一或第1格不是特写即无效。对于道具：第1格是微距特写/局部特写（Close-up），第2格是正面视图（Front），第3格是侧面视图（Side），第4格是背面视图（Back），同样**总共仅限 4 个画面**，四格缺一或多出即无效。提示词必须严格按照本文件 Character Prompt Template / Prop Prompt Template 中的模板示例结构书写，不得自行发明替代版式，也不得写出与 `16:9` 横向资产表冲突的其他画幅。此条优先级与"Subjects JSON 零省略"并列最高。
 11. 层级编码延续：`Episode ID=EPxx`，`Scene ID=EPxx_SCyy`，下游 `Shot ID=EPxx_SCyy_SHzz`；Scene 内状态态必须形成 `Entry -> Exit` 闭环。
 - `name_en` 历史兼容边界：若上游旧数据、输入示例、`subject_name_exact`、`visual_dependencies` 或引用 token 中出现任何带下划线、连字符、驼峰拼接或其他工程式分隔的历史名字包装，必须先在理解阶段将其归一为空格分词的人类可读名称，再继续分析与回写。最终新输出里，`name_en`、`subject_name_exact`、`visual_dependencies`、引用 token 负载名都必须统一使用空格分词形式；禁止继续产出任何带下划线、连字符或无分词拼接的名字包装。
-34. 封面特制场景强制生成：每一集 / 每次完整剧本分析都必须额外生成 1 个**封面特制 Scene**，作为该集/该剧本全部内容的封面主视觉。该 Scene 必须基于当前剧本真实内容提炼，不能脱离剧情乱造新人物、新道具或新环境；必须优先依赖本集最重要的角色、关键道具与核心环境来完成单张封面构图，并在 Part 1 中与普通叙事 Scene 一样完整输出。
-37. 封面依赖关系硬规则：封面特制 Scene 的 `Scene Subjects` 与相关 environment generation prompt，必须显式引用已在 Subject Index / Part 2 中存在的主要角色、关键道具、核心环境；禁止创造只为封面存在的“封面专用角色”或“封面专用道具”替代真实剧情实体。若标题、徽记、标语或世界观文字进入封面，只能作为封面排版内容存在，不得反向制造新的 subject。
+34. 封面资产强制生成：每一集 / 每次完整剧本分析都必须额外生成 1 个**封面海报主体资产**。注意：封面**不用**单独作为一个 Scene 生成（即不要在 Part 1 独立占用一行 Scene），只要在 Part 2 作为单独的 environment 资产生成即可。该资产必须基于当前剧本真实内容提炼，不能脱离剧情乱造新人物、新道具或新环境；必须优先依赖本集最重要的角色、关键道具与核心环境来完成单张封面构图。
+37. 封面依赖关系硬规则：封面资产的 environment generation prompt，必须显式引用已在 Subject Index / Part 2 中存在的主要角色、关键道具、核心环境；禁止创造只为封面存在的“封面专用角色”或“封面专用道具”替代真实剧情实体。若标题、徽记、标语或世界观文字进入封面，只能作为封面排版内容存在，不得反向制造新的 subject。
 20. 禁止模板抄袭式设计：示例、模板、规则中的职业、人种、年龄、服装、道具、环境名、空间结构、镜头话术都只能作为**格式参考**，不能直接作为真实输出的设计内容。每次生成都必须基于当前剧本重新设计实体形象、材质、空间与细节；若输出仍残留示例里的默认角色类型、默认空间、默认道具或默认视觉组合，判为无效并必须重写。
 21. 基准环境统一：同一地理场地的变体依托同一 Base Reference；变体仅写 Delta，`REUSE` 必写 `None/No visual delta`。
 28. 零推理泄露：仅输出最终结果；禁止思维链、解释、`<think>`、代码围栏。若指令冲突，本条优先。
@@ -46,7 +46,7 @@
   - 未命中类型时：按 `Project Context.Base Positioning` 与 `project_visual_backfill.Global_Style` 注入正向风格词，不得留空。
 19.2 场景与道具正向措辞硬规则：Environment 与 Prop 主提示词必须以正向、可执行描述为主，不得用“不要/禁止/not/no/without/avoid/非xx”这类否定式堆叠来主导风格表达。
 30. 开场留存生死线规则：每一集开场必须把前 3-5 秒视为最高优先级留存段。若当前 Episode 的首场承担开场职责，必须先给出“高冲击高悬念高情绪”的冷开镜头，再通过明确桥接回到正片主时间线（常用桥接：视线、道具特写、声音桥、动作余势、构图呼应）。
-35. 封面大片海报规则：封面特制 Scene 必须以**国际大片海报 / premium theatrical one-sheet** 的完成度生成，构图要求大气、明确、强情绪、强冲突、强识别度；同时要把剧本分格/分场的层次关系压缩进单张主视觉，可通过前中后景群像关系、道具引导线、环境纵深、光区切分、块面分区或多层叙事焦点来体现“剧情分格感”，但最终仍必须是**一张完整海报**，不得退化成漫画分镜表、拼贴九宫格或多张小图拼版。
+35. 封面大片海报规则：封面海报资产必须以**国际大片海报 / premium theatrical one-sheet** 的完成度生成，构图要求大气、明确、强情绪、强冲突、强识别度；同时要把剧本分格/分场的层次关系压缩进单张主视觉，可通过前中后景群像关系、道具引导线、环境纵深、光区切分、块面分区或多层叙事焦点来体现“剧情分格感”，但最终仍必须是**一张完整海报**，不得退化成漫画分镜表、拼贴九宫格或多张小图拼版。
 24. 角色与道具命名权威：Character/Prop 同样以本文件为最终权威，禁止别名/翻译漂移。
 26. Subjects 视觉舒适度优先：人物 `description`、`appearance`、`generation_prompt_cn/en` 与相关说明默认必须采用可播出、非血腥、非重口、非强视觉不适的表达；尽量不要使用血浆、喷溅血迹、开放性伤口、暴露组织、残缺肢体、腐烂、脓液、虫噬、尸变、器官外露等描述。若剧情确实要求“受伤/污染/疲惫”等状态态，优先改写为非图形化、克制、识别优先的表述，只保留必要且温和的可见结果。
 27. 锚点描述更严格：`anchor_description` 只能保留稳定身份识别锚点，如脸型、发型轮廓、体态、服装版型、配色、饰品、鞋履、非图形化的小型识别痕迹；禁止把血迹、伤口细节、瘀伤细节、烧灼创面、残缺、暴露组织、腐烂、体液污渍等任何血腥或视觉不适内容写入锚点。
@@ -68,7 +68,7 @@
 15. 项目语言驱动的视觉设计语境：`Project Context.Language` 不仅约束文字输出语言，也约束**角色 / 道具 / 环境** 的默认视觉设计语境。若剧本未明确给出人物族裔/地域、道具产地/品牌体系、建筑地域/城市语境、标识系统或生活方式线索，则必须优先按项目语言对应的常识性现实语境补全设计基线，而不是套用示例中的人种、服装、道具、建筑或空间风格。
 16. 英文项目默认设计基线：当项目语言为英文，且剧本没有明确给出相反证据时，角色默认按**英语语境下的英美人物与生活系统**进行设计基线补全；道具、服装剪裁、室内陈设、街道标识、办公/家居环境、印刷物与 UI 语言也应默认匹配英美语境。禁止在无剧本依据时，把英文项目默认设计成中文语境人物、中国式生活道具/空间，或直接照抄示例中的东亚人物设定。
 17. 中文及其他项目语言设计对齐：当项目语言为中文或其他明确语言时，同样必须让角色外观基线、服装组织方式、道具系统、环境构造、招牌/文字与日常生活细节优先匹配该语言对应的现实语境；除非剧本已明确指定跨文化/跨地域设定，否则不得混入无依据的异语种生活系统。
-36. 封面画幅与标题安全区规则：封面特制 Scene 使用固定 `4:3` 横向海报画幅，作为封面专用画布；此规则仅适用于封面 Scene，不影响 character/prop 的 `16:9` 资产表规则。封面必须包含**剧本名称 / 项目标题**，文字语言遵循 `Project Context.Language`，若未指定则遵循剧本原始语言；字体要求匀称、自然、可读，不得使用畸形、漂浮、过度装饰或难以辨识的字形。标题文字必须放置在**安全区内在纵向 1/3 位置**，默认约束为画面横向中部，建议控制在画布 `x=20%-80%`、`y=30%-35%` 的安全带内，同时避开右侧移动端操作图标区与底部字幕/菜单区，确保在 TikTok 等手机软件界面中不被 UI 菜单遮挡。
+36. 封面画幅与标题安全区规则：封面海报资产使用固定 `4:3` 横向海报画幅，作为封面专用画布；此规则仅适用于封面这一特殊环境资产，不影响 character/prop 的 `16:9` 资产表规则。封面必须包含**剧本名称 / 项目标题**，文字语言遵循 `Project Context.Language`，若未指定则遵循剧本原始语言；字体要求匀称、自然、可读，不得使用畸形、漂浮、过度装饰或难以辨识的字形。标题文字必须放置在**安全区内在纵向 1/3 位置**，默认约束为画面横向中部，建议控制在画布 `x=20%-80%`、`y=30%-35%` 的安全带内，同时避开右侧移动端操作图标区与底部字幕/菜单区，确保在 TikTok 等手机软件界面中不被 UI 菜单遮挡。
 28. 锚点精简与检索清晰度规则：`anchor_description` 的目标是让大模型能用少量文字快速定位参考图中的同一实体，因此必须精简为少量高密度英文短语，通常控制在 3 到 5 个锚点内，不得堆砌长串细节。对 character，锚点内容应优先覆盖三类核心识别信息：1) 身份/角色定位；2) 相貌或轮廓特征，如脸型、发型轮廓、体态；3) 仅在确有区分价值时才补服饰或固定配件识别点，如独特外套轮廓、鞋履、长期佩戴饰品。第一个锚点通常应写“基本角色定位/身份定位”的英文短语，如 `female teacher`、`female investigative reporter`、`male chef`、`retired male judge`；后续锚点再补最稳定且最有区分度的相貌、轮廓与服饰细节。
 29. 服装时尚对标强制写回：Character 的 `clothing` 字段不得只写服装单品清单，必须同时写入“时尚对标”信息，并与当前项目语言语境、角色身份和时代现实一致。`时尚对标` 至少要包含：1) 基本角色定位，如“女性教师 / 女性调查记者”；2) 当代流行穿搭方向；3) 与该身份相容的版型/材质/配色参考；4) 可复用的风格关键词。若无法外部检索，也必须基于当前通用时尚知识给出可信的当代参考，不得留空或只写“时尚/高级”。
 
@@ -114,7 +114,7 @@
 - 环境变体具体化规则：生成不同视角、不同方向、不同状态态的 Environment 变体时，禁止只写 `反向/Reverse`、`另一侧`、`同场景不同角度`、`similar to base`、`same environment with changes` 之类空泛说明；必须落到具体可见实体、层级位置与差异细节，至少明确 `Viewpoint Anchor/Viewing Direction`、`Visible Set`、`Excluded Set`、`Primary Subject/Secondary Subject` 与 `FG/MG/BG` 中实际出现的物体。
 - 环境状态态细节落点规则：描述环境状态态变化时，禁止只写 `变坏了`、`更乱了`、`更旧了`、`破败感增强`、`状态态恶化`、`有损坏痕迹` 这类抽象结果词；必须写清具体是哪些实体发生了什么可见变化，例如 `wall paint peeling near the window frame`、`two chairs overturned beside the desk`、`lamp shade dented with warm bulb still on`、`floor tile cracked along the doorway seam`。
 - 环境锚点禁人物：Environment 的 `Primary Subject`/`Secondary Subject` 与 `Viewpoint Anchor` 必须使用固定显目物体或结构锚点（如门框、窗、舞台口、桌组、灯具、柱体、屏幕、墙面标识），禁止使用任何人物/人体部位作为锚点。
-- 环境描述去人物化：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅描述空间、材质、构图、光照与可变部件状态态，禁止夹带人物外观、服装、姿态、表情、身份描述（唯独特殊环境“封面海报/Cover Poster”可在此规则上予以豁免）。
+- 环境描述去人物化：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅描述空间、材质、构图、光照与可变部件状态态，禁止夹带人物外观、服装、姿态、表情、身份描述（唯独对于作为特殊环境资产生成的“封面海报/Cover Poster”，允许在环境提示词中包含主角群像和设计动作以完成海报构图，可在此规则上予以豁免）。
 - 通道隔离硬规则：`Core Scene Info/{Beats}` 可以描述角色与动作，但 `Environment generation_prompt_cn/en` 必须做“角色清零”。同一 Scene 内若两处信息冲突，以“环境提示词去人物化规则”优先，必须删除环境提示词中的角色语义。
 - 情节归位规则：情节发展、冲突升级、关系变化与信息揭示，必须通过 `Core Scene Info / {Observer View} / {Beats}` 以及下游 Shot 的画面动作来可视化承载；`Environment generation_prompt_cn/en` 只负责提供可供剧情发生的空间条件与调度结构，不得承担情节推进本身。
 - OTS 去人物化总规则：凡涉及 OTS/正反方向的描述（包含 `{Observer View}`、`{Beats}`、`generation_prompt_cn/en`、`Environment Delta`），必须是**纯环境描述**，禁止出现任何人物语义。
@@ -292,7 +292,7 @@
 - 默认禁止器材入画：除非剧情明确要求“摄像设备作为道具”，否则不得把 `camera/camcorder/lens rig/tripod/operator` 写成画面实体。
 - Subject 生图提示词仅用于描述“最终要生成的画面”，禁止夹带生成原因、推理逻辑、解释性说明或流程话术。
 - Subject 资产画幅职责规则：系统运行设置中的 `subject_aspect_ratio` 是 subject 资产的最终提交源，当前默认基线为 `16:9`。因此所有 character / prop 的 `generation_prompt_cn/generation_prompt_en` 必须与 `16:9` 横向资产表保持一致，并可显式写明这是 `16:9` 的横向四宫格画布，用于锁定第一宫特写(占比约三分之一的大宫格)、第二宫正面、第三宫侧面、第四宫背面的四宫格版式。绝对禁止写出与之冲突的 `3:2 / 1:1 / vertical / square canvas / portrait sheet` 等其他画幅指令。environment 类 prompt 仍不得自行发明与系统设置冲突的固定画幅。
-- 封面海报画幅职责规则：封面特制 Scene 使用固定 `4:3` 横向海报画布，并且必须明确区别于 character/prop 的 `16:9` 资产表用途。封面信息不单列独立 JSON 对象，而是并入对应的特殊环境规则描述、`description_cn` 与 `generation_prompt_cn/en` 中处理；可以显式写出 `4:3 poster canvas`、标题安全区与移动端 UI 安全边界，但不得把这条 `4:3` 规则错误扩散到角色四宫格、道具四宫格或普通环境资产。
+- 封面海报画幅职责规则：封面海报特殊资产使用固定 `4:3` 横向海报画布，并且必须明确区别于 character/prop 的 `16:9` 资产表用途。封面信息不单列独立 JSON 对象，而是并入对应的特殊环境规则描述、`description_cn` 与 `generation_prompt_cn/en` 中处理；可以显式写出 `4:3 poster canvas`、标题安全区与移动端 UI 安全边界，但不得把这条 `4:3` 规则错误扩散到角色四宫格、道具四宫格或普通环境资产。
 - 单状态态绝对禁止：同一 Subject 的单条 `generation_prompt_cn/generation_prompt_en` 绝对禁止同时描述“之前怎样/之后怎样”或并列两个不同状态态（如“干净+破损”“年轻+年老”“打开+关闭”）。若确需表达状态态变化，必须拆分为两个独立 Subject（或独立变体）并分别输出各自的“单一最终状态态”提示词。
 - 禁止写法（示例）：`because...`, `in order to...`, `to ensure...`, `reason: ...`, `logic: ...`, `explain...`，以及中文“因为/为了/逻辑是/原因是/这样做是为了”。
 - 禁止方向模糊词（如 `somewhere`, `around`）。
@@ -333,8 +333,8 @@
 - 去叙事化硬规则：Environment 的 `generation_prompt_cn/generation_prompt_en` 仅允许描述“抽象空间结构、几何关系、光照层次、材质质感、构图层级”，不得涉及角色、剧情事件、动作因果、对话语义。
 - 泄漏根因提示：高频误差来自“把 OTS 的角色关系（A/B shoulder）从分镜层串写进环境提示词”。处理顺序必须为：先完成 Scene/Beats，再单独生成 Environment prompt，最后执行角色词剔除。
 - OTS 环境生成顺序：若某 Shot 计划采用 OTS，生成顺序必须固定为：先完成角色分镜与 OTS 关系，再单独抽取该视角下承载剧情空间的 **纯环境 clean plate**，最后仅在 Shot 级叠加角色肩部/头部/动作信息。禁止反向操作成“先写带人物关系或事件关系的 OTS 画面，再把人物/剧情信息回填进 Environment”。
-- 禁止角色信息：严禁出现任何角色名、角色代号（注：仅普通环境适用，封面特制海报环境可豁免此限制）、`CHAR:[@...]`、人称指代（如“他/她/他们”）及人物身份词（如警察、记者、保安、母亲等）。
-- 禁止剧情信息：严禁出现剧情推进语句（如“因为…所以…”、“进入/离开/追逐/躲藏/对峙”等事件描述）（同理，封面环境仅可展现凝固的情感关系，普通环境严禁任何剧情动作）与时间线动作指令。
+- 禁止角色信息：严禁出现任何角色名、角色代号（注：仅普通环境适用，封面海报特殊资产可豁免此限制）、`CHAR:[@...]`、人称指代（如“他/她/他们”）及人物身份词（如警察、记者、保安、母亲等）。
+- 禁止剧情信息：严禁出现剧情推进语句（如“因为…所以…”、“进入/离开/追逐/躲藏/对峙”等事件描述）（同理，封面海报特殊资产仅可展现凝固的情感关系，普通环境严禁任何剧情动作）与时间线动作指令。
 - 剧情可视化承载规则：情节必须继续通过画面体现，以便支持情节发展与剧情推进；但其承载通道只能是 `Core Scene Info / {Observer View} / {Beats}` 与下游 Shot 的 `Start Frame / Video Content / End Frame`，不能写入 Environment prompt。
 - 模板示例统一收口：Environment 的长 prompt 示例与正反环境完整写法统一以下文 Part 2C 的 JSON 示例为准；本节只保留规则与字段骨架，不再重复放长示例。
 - 正反环境补充约束：除“边界共同瞄定物/固定锚点集合”必须保持一致外，Front 与 Reverse 应尽量避免重复出现同类大件主体物（如床、整组沙发、大型柜体）作为两侧主构图锚点；应通过主次锚点重排体现视角差异。
@@ -447,9 +447,6 @@
 - **禁止混表**：`Subject Index` 与 `Part 2` 不得使用 Markdown 表格展示；请分别使用“编号列表/键值列表 + JSON”。
 
 ### Part 1: Scenes Table (Markdown)
-- **封面特制 Scene 强制输出**：Part 1 必须包含且仅包含 1 行封面特制 Scene。该行固定放在 Part 1 第一行，作为整集/整剧本的封面主视觉场景；`Scene Name` 固定写为 `封面海报`，`Core Scene Info` 中必须写出 `**{Scene Function}**: Cover Poster`。
-- **封面特制 Scene 内容规则**：该 Scene 不承担常规连续叙事时长，而承担“整集封面主视觉”职责；因此 `Equivalent Duration` 可写为 `Cover Key Art / Non-narrative Poster Moment` 或等价中文表达。其 `Scene Subjects` 必须来自本集最重要的角色、关键道具与核心环境，且 `Split Reason` 必须说明：为什么这些主体足以代表整集内容、封面如何体现剧情分格感、以及标题放置为何安全可读。
-- **封面特制 Scene 标题排版规则**：封面 Scene 的 `Core Scene Info`、对应特殊环境的 `description_cn` 与 `generation_prompt_cn/en` 中，必须明确标题使用项目语言、放置在中上部安全区、避免右侧移动端按钮区与底部字幕菜单区遮挡。若标题较长，必须允许自然换行或层级排版，但仍需保持重心稳定与字形均衡。
 - `Split Reason` 必须首要说明该 Scene 在剧本中承担的主要类型/剧情定位（如：宏大开场/高光开场、发展、转折、高潮、回收、钩子等），以及对应的设计思路。随后说明该 Scene 为什么单独成立，指出本场主要承载的原剧本覆盖维度，例如对白、动作链、外观/着装变化、道具状态态变化、环境状态态变化、闪回桥接或语言信息落位；禁止只写“机位变化/方便分镜”这类空泛理由。
 - 若该 Scene 属于闪回/回忆段或承担闪回桥接，`Split Reason` 必须额外写出 `Transition Anchor`（如视线承接、物体特写、声音桥、动作延续、构图呼应），说明它如何从上一 Scene 接入并如何回接下一 Scene；禁止把闪回 Scene 写成无来源、无回路的孤立段落。
 - `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Scene Subjects}`, `{Beats}`。
@@ -474,7 +471,6 @@
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01 | EP01_SC00 | 0 | 封面海报 | Cover Key Art / Non-narrative Poster Moment | **{Scene Function}**: Cover Poster。<br>**{Env Anchor}**: ENV:[Cover Poster]。<br>**{Stage} (核心舞台)**: 以核心环境中的可识别舞台区承载主角群像与关键道具关系，保持国际大片海报式中心构图。<br>**{Environment Context}**: 中文描述封面环境基底、空间纵深、光区切分与气氛。<br>**{Layout}**: 中文描述前景/中景/后景的海报层次、角色主次关系、道具引导线与标题留白区。<br>**{Axis}**: 中文描述封面主视觉观看轴线与重心方向。<br>**{Observer View}**: 面向封面主体群像的稳定主海报观察位。<br>**{Split Reason}**: 本场为整集封面特制 Scene，使用最重要角色、关键道具与核心环境压缩呈现剧情分格感，并为标题保留中上部安全区；标题遵循项目语言，避开 TikTok 等移动端右侧按钮区与底部菜单区。<br>**{Scene Subjects}**: CHAR:[@Lead A], CHAR:[@Lead B], PROP:[Signature Prop], ENV:[Cover Poster]。<br>**{Beats}**:<br>1. {空间} 以核心环境舞台区形成单张海报式群像落位；{主体关系} 主角色形成主次层级，关键道具承担视觉引导；{环境交互} 环境结构与光区共同压缩剧情分格信息；{动作变化过程} 保持海报级稳定姿态与强情绪张力，不写连续运动；-> {新状态态} 形成可直接作为封面的稳定终态。 | {对应本集核心冲突、人物关系与标题语义的原始剧本文本片段} | `Cover Poster` | `VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写封面视角、构图、光区、标题留白等相对变化项` | 封面主视觉建立 | 封面可直接交付 | `CHAR:[@Lead A]`, `CHAR:[@Lead B]` | `PROP:[Signature Prop]` |
 | EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 作为【宏大开场/发展/高潮等剧情定位】，设计思路为【视觉及导演设计思路】。因{对白/动作/外观变化/状态态/环境/闪回}需独立承载；Transition Anchor={视线/动作余势/相似构图等}。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿，相对{Stage}偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{环境交互} CHAR:[@Char A]坐在ENV:[Bed]边缘；{动作变化过程} CHAR:[@Char A]前倾半步并抬手，台词/字幕/音效:{原剧本对应内容}；-> {新状态态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）
@@ -492,7 +488,7 @@
 - **Base Environment 强制入索引**：凡 `Environment Relation=REUSE/VARIANT_OF` 或 `Base Environment Reference` 非空时，`Base Environment Reference` 指向的 `ENV:[...]` 必须进入 Subject Index（`subject_type=environment`），并在 Part 2 的 `environments` 中有一条同名实体；禁止只写当前 `Environment Name` 而漏掉 Base 环境。
 - **Base Environment 强制入最终环境 JSON**：上述 `ENV:[...]` 不仅要在 Subject Index 出现，还必须明确出现在最终输出的 `Part 2C - environments` JSON 数组中（作为独立 environment 对象，名称逐字符一致）；若仅在 Subject Index 出现但未进入最终环境 JSON，判定为无效输出并重写。
 - **出现即纳入**：只要实体在任一 Scene 中被提及或可见参与（含被对视、被交互、被引用、作为环境容器），就必须计入；不得因戏份轻重、省略台词、镜头时长短而忽略。
-- **封面实体复用规则**：封面特制 Scene 中出现的角色、道具、环境，必须全部来自 Part 1 其他 narrative scenes 已确认的核心实体，并在 Subject Index / Part 2 中逐条可回溯。封面行可以重新组合这些核心实体，但不得新造“封面专用主体”。
+- **封面实体复用规则**：封面海报资产中引用的角色、道具、环境，必须全部来自已有剧情 Scenes 中已确认的核心实体，并在 Subject Index / Part 2 中逐条可回溯。封面海报中可以重新组合这些核心实体，但不得新造“封面专用主体”。
 - **逐场闭环**：每个 Scene 的实体集合必须满足：`Scene实体集合 ⊆ Subject Index ∩ Part2(JSON)`；任一差集均判无效，必须重写。
 - **逐行强制映射**：`Subject Index` 的每一行都必须在 `Part 2 JSON` 中出现且仅出现一次，不得遗漏、不得合并、不得以“代表项”替代。
 - **类型一致强约束**：`subject_type=character` 必须落在 `characters[]`，`subject_type=prop` 必须落在 `props[]`，`subject_type=environment` 必须落在 `environments[]`；跨类型映射一律判无效。
@@ -576,7 +572,7 @@
 
 
 #### Part 2C — Environments （对应最终 JSON 对象的 "environments" 数组） （对应最终 JSON 对象的 "environments" 数组） （对应最终 JSON 对象的 "environments" 数组）
-- 封面环境固定命名规则：封面特制 Scene 对应的环境必须进入 `environments[]`，并使用固定命名：`name="封面海报"`、`name_en="Cover Poster"`。它是一个特殊 environment 条目，但 JSON 结构必须与普通环境完全一致，不得新增专属键，不得单列独立 `cover_poster` 对象。
+- 封面环境固定命名规则：封面不作为一个单独 Scene 生成，而是作为一个特殊的环境资产进入 `environments[]`，并使用固定命名：`name="封面海报"`、`name_en="Cover Poster"`。它是一个特殊 environment 条目，但 JSON 结构必须与普通环境完全一致，不得新增专属键，不得单列独立 `cover_poster` 对象。
 - 封面环境规则承载方式：海报标题、标题安全区、`4:3` 画幅、移动端 UI 避让要求，必须写进这个特殊环境条目的 `description_cn` 与 `generation_prompt_cn/en` 中，作为环境规则描述的一部分，而不是拆成额外 JSON 字段。也就是说，封面相关信息要“写在环境描述里”，不再单独建 schema。
 - 封面环境大片参考写回规则：封面环境的 `description_cn` 不得只写“国际大片海报感”这种抽象结论，必须明确说明参考了哪些大片海报的哪些具体视觉元素，例如主角群像压迫式站位、前景道具引导、逆光轮廓、冷暖对冲、城市夜雨反射、标题压顶留白、单点高亮焦区等。可以引用影片名作为风格参照，但必须同步落到可见元素层，不得只列片名不解释。
 - 封面环境提示词硬规则：该特殊环境条目的 `generation_prompt_cn/en` 必须明确说明：这是整集封面海报环境、采用 `4:3` 横向海报画布、标题使用项目语言、标题位于中上部安全区，并显式避开右侧移动端按钮区与底部字幕/菜单区。封面可体现剧情分格感，但最终必须保持单张国际大片海报式环境主视觉，不得变成拼格海报或多图拼贴。

@@ -4598,6 +4598,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 meta_parts.append(f"Tone: {_pick('tone')}")
             if _pick("lighting"):
                 meta_parts.append(f"Lighting: {_pick('lighting')}")
+            if _pick("era", "era_setting", "period", "time_setting"):
+                meta_parts.append(f"Era / Period (年代): {_pick('era', 'era_setting', 'period', 'time_setting')}")
+            if _pick("region_culture", "region", "country"):
+                meta_parts.append(f"Region / Country (国家地域): {_pick('region_culture', 'region', 'country')}")
 
             meta_parts.append("Use this project context as first-class constraints before analyzing the script.")
 
@@ -13035,8 +13039,10 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     lighting = get_context_val(["lighting", "light_style", "light"])
     character_relationships = get_context_val(["character_relationships"])
     project_notes = get_context_val(["notes"])
-    region_culture = get_context_val(["region_culture", "region", "culture"])
-    era_setting = get_context_val(["era_setting", "era", "period", "time_setting"])
+    region_culture = get_context_val(["region_culture", "region", "country", "culture", "country_region"])
+    era_setting = get_context_val(["era", "era_setting", "period", "time_setting"])
+    shot_preference = get_context_val(["shot_preference", "lens_preference", "camera_preference"])
+    broadcast_security_level = get_context_val(["broadcast_security_level", "broadcast_safety_level", "safety_level", "broadcast_safety"])
     expected_model_family = get_context_val(["expected_model_family", "expected_model", "target_model", "model_family"])
     generation_workflow = get_context_val(["generation_workflow", "workflow", "pipeline"])
     continuity_priority = get_context_val(["continuity_priority", "continuity", "continuity_mode"])
@@ -13063,10 +13069,14 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
         project_context_lines.append(f"Tone: {tone}")
     if lighting:
         project_context_lines.append(f"Lighting: {lighting}")
-    if region_culture:
-        project_context_lines.append(f"Region Culture: {region_culture}")
     if era_setting:
-        project_context_lines.append(f"Era Setting: {era_setting}")
+        project_context_lines.append(f"Era / Period (年代): {era_setting}")
+    if region_culture:
+        project_context_lines.append(f"Region / Country (国家地域): {region_culture}")
+    if shot_preference:
+        project_context_lines.append(f"Shot / Lens Preference (镜头偏好): {shot_preference}")
+    if broadcast_security_level:
+        project_context_lines.append(f"Broadcast Safety Level (播出安全等级): {broadcast_security_level}")
     if borrowed_films:
         project_context_lines.append(f"Borrowed Films: {', '.join(borrowed_films)}")
     if character_relationships:
@@ -13381,15 +13391,9 @@ def _build_shot_prompts(
         logger.error(f"Failed to load shot generation prompt stack: {e}")
         raise HTTPException(status_code=500, detail="Shot generation prompt stack could not be loaded.")
 
-    global_section = f"# Global Context\nGlobal Style: {global_style}"
-    if additional_context:
-        global_section += f"\n{additional_context}"
-
     # Environment Context is now a separate field in the table
 
-    user_input = f"""{global_section}
-
-{project_context_section}
+    user_input = f"""{project_context_section}
 
 # Core Scene Info
 | Field | Value |
@@ -14883,6 +14887,9 @@ def apply_scene_ai_result(
     # but the requirement implies "Modify and Re-import", which usually means "This is the new list".
     # Existing logic was "delete all", so we stick to that for "Apply".
     
+    existing_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+    old_shot_map = {(str(s.shot_id or "").strip()): s for s in existing_shots if str(s.shot_id or "").strip()}
+
     db.query(Shot).filter(Shot.scene_id == scene_id).delete()
     
     def _split_combined_cn_prompt(raw_text: str) -> Tuple[str, str, str, str]:
@@ -15038,26 +15045,43 @@ def apply_scene_ai_result(
         if extra_columns:
             technical_notes_payload["shot_extra_columns"] = extra_columns
 
+        old_shot = old_shot_map.get(str(shot_id_text).strip())
+        preserved_image_url = None
+        preserved_video_url = None
+        if old_shot:
+            preserved_image_url = old_shot.image_url
+            preserved_video_url = old_shot.video_url
+            try:
+                old_tech = json.loads(old_shot.technical_notes) if old_shot.technical_notes else {}
+                for k, v in old_tech.items():
+                    if k.endswith("_url") or k.endswith("_urls") or k in {"start_frame_supported", "supports_start_frame"}:
+                        if k not in technical_notes_payload:
+                            technical_notes_payload[k] = v
+            except:
+                pass
+
         shot = Shot(
             scene_id=scene_id,
             project_id=project.id,
             episode_id=episode.id,
-            
+
             shot_id=shot_id_text,
             shot_name=shot_name_text,
             scene_code=scene_code_text,
-            
+
             start_frame=start_frame_text,
             end_frame=end_frame_text,
             video_content=video_content_text,
             duration=str(dur_val),
-            
+
             associated_entities=associated_entities_text,
             shot_logic_cn=shot_logic_cn_text,
             keyframes=keyframes_text,
-            
+
             # Legacy/Internal
             prompt=video_content_text,
+            image_url=preserved_image_url,
+            video_url=preserved_video_url,
             technical_notes=(json.dumps(technical_notes_payload, ensure_ascii=False) if technical_notes_payload else None),
         )
         db.add(shot)
@@ -21512,9 +21536,6 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
         if shot.image_url != media_url:
             shot.image_url = media_url
             changed = True
-        if req_prompt and not str(shot.start_frame or "").strip():
-            shot.start_frame = req_prompt
-            changed = True
 
     elif asset_type in {"end_frame", "end"}:
         tech = {}
@@ -21529,16 +21550,10 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
             tech["end_frame_url"] = media_url
             shot.technical_notes = json.dumps(tech, ensure_ascii=False)
             changed = True
-        if req_prompt and not str(shot.end_frame or "").strip():
-            shot.end_frame = req_prompt
-            changed = True
 
     elif asset_type == "video":
         if shot.video_url != media_url:
             shot.video_url = media_url
-            changed = True
-        if req_prompt and not str(shot.prompt or "").strip():
-            shot.prompt = req_prompt
             changed = True
 
     if not changed:
@@ -25833,6 +25848,7 @@ def get_generation_job_pool(
     kind: str = "all",
     running_only: bool = False,
     limit: int = 200,
+    shot_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -25858,11 +25874,12 @@ def get_generation_job_pool(
     t_query_owners_ms = 0
     t_query_episodes_ms = 0
     t_filter_sort_ms = 0
+    safe_shot_id = str(shot_id or "").strip() if shot_id else None
 
     cache_key = _build_generation_job_pool_cache_key(
         user_id=int(getattr(current_user, "id", 0) or 0),
         is_superuser=bool(getattr(current_user, "is_superuser", False)),
-        kind=safe_kind,
+        kind=f"{safe_kind}_shot_{safe_shot_id}" if safe_shot_id else safe_kind,
         running_only=bool(running_only),
         limit=safe_limit,
     )
@@ -26154,6 +26171,13 @@ def get_generation_job_pool(
         items = [item for item in items if str(item.get("status") or "").lower() not in final_statuses]
 
     t_filter_sort_start = time.perf_counter()
+    if safe_shot_id:
+        def _match_shot_id(itm):
+            v1 = str(itm.get("shot_id") or "").strip()
+            v2 = str((itm.get("metadata") or {}).get("shot_id") or "").strip()  
+            return v1 == safe_shot_id or v2 == safe_shot_id
+        items = [itm for itm in items if _match_shot_id(itm)]
+
     items.sort(key=lambda item: _job_sort_key(item), reverse=True)
     items = items[:safe_limit]
 

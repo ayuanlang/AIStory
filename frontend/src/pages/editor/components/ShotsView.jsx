@@ -157,6 +157,101 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
+const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, onGenerateAsset, currentGenerating, currentImageCfgValue, uiLang }) => {
+    const userLang = (strZh, strEn) => uiLang === 'zh' ? strZh : strEn;
+    const { addLog } = useLog();
+    const [instruction, setInstruction] = useState('');
+    const [isLocalModifying, setIsLocalModifying] = useState(false);
+    const [isRegenerating, setIsRegenerating] = useState(false);
+
+    const handleLocalModify = async () => {
+        setIsLocalModifying(true);
+        try {
+            const base = promptText || "";
+            const appended = instruction.trim();
+            const finalPrompt = `${appended}, keeping everything else unchanged.`;
+            onPromptUpdate(finalPrompt);
+            
+            addLog(userLang('已生成新提示词，准备拉起局部修改...', 'Generated new prompt, ready to local modify...'), 'info');
+            setTimeout(() => {
+                const autoRefs = [];
+                if (currentImage) {
+                    autoRefs.push(currentImage);
+                }
+                
+                onGenerateAsset(type, -1, { 
+                    cfg: currentImageCfgValue,
+                    is_gemini_multi_turn_edit: true,
+                    gemini_base_prompt: base,
+                    gemini_edit_instruction: appended,
+                    auto_refs: autoRefs
+                });
+            }, 100);
+        } finally {
+            setIsLocalModifying(false);
+        }
+    };
+
+    const handleRegenerate = async () => {
+        setIsRegenerating(true);
+        addLog(userLang('正在通过大模型优化提示词...', 'Optimizing prompt using LLM...'), 'process');
+        try {
+            const base = promptText || "";
+            const res = await refinePrompt(base, instruction, 'image');
+            if (res && res.refined_prompt) {
+                const optimized = res.refined_prompt;
+                onPromptUpdate(optimized);
+                
+                addLog(userLang('已生成新提示词，准备拉起生成...', 'Generated new prompt, ready to regenerate...'), 'info');
+                setTimeout(() => {
+                    onGenerateAsset(type, -1, { cfg: currentImageCfgValue });
+                }, 100);
+            } else {
+                addLog(userLang('优化失败，请稍后再试', 'Optimization failed, please try again'), 'error');
+            }
+        } catch (e) {
+            console.error("Refine prompt failed", e);
+            addLog(userLang('指令分析失败', 'Instruction analysis failed') + ': ' + e.message, 'error');
+        } finally {
+            setIsRegenerating(false);
+            setInstruction('');
+        }
+    };
+
+    return (
+        <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4 mt-3">
+            <div className="text-[11px] text-muted-foreground uppercase font-bold mb-2">{userLang('脚本修改与重新生成', 'Modify Script & Regenerate')}</div>
+            <textarea
+                className="w-full h-24 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                placeholder={userLang("输入剧本修改与重新生成指令（例如：把狗的颜色换成黑色）...", "Enter instructions to modify script and regenerate (e.g., change the dog's color to black)...")}
+                value={instruction}
+                onChange={e => setInstruction(e.target.value)}
+            />
+            <div className="flex items-center gap-2 mt-2">
+                <button
+                    type="button"
+                    className="flex-1 bg-white/10 hover:bg-white/20 text-white border-none py-2 flex items-center justify-center gap-2 rounded-md"
+                    disabled={!instruction.trim() || isRegenerating || isLocalModifying || currentGenerating}
+                    onClick={handleLocalModify}
+                >
+                    {isLocalModifying ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    <span className="font-semibold text-sm">{userLang('局部修改', 'Local Modify')}</span>
+                </button>
+
+                <button
+                    type="button"
+                    className="flex-1 bg-primary/20 hover:bg-primary/30 text-primary border-none py-2 flex items-center justify-center gap-2 rounded-md"
+                    disabled={!instruction.trim() || isRegenerating || isLocalModifying || currentGenerating}
+                    onClick={handleRegenerate}
+                >
+                    {isRegenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                    <span className="font-semibold text-sm">{userLang('重新生成', 'Regenerate')}</span>
+                </button>
+            </div>
+        </div>
+    );
+};
+
 export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3 }) => {
     const functionApiConfigs = useFunctionApis();
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
@@ -5046,13 +5141,12 @@ await applyJointShotDiptychResult({
             : null;
 
         if (assetType === 'start') {
-            await handleGenerateStartFrame(null, normalizedCfgOverride);
+            await handleGenerateStartFrame(null, normalizedCfgOverride, options);
             return;
         }
 
         if (assetType === 'end') {
-            await handleGenerateEndFrame(null, normalizedCfgOverride);
-            return;
+            await handleGenerateEndFrame(null, normalizedCfgOverride, options);
         }
 
         if (assetType === 'video') {
@@ -5289,7 +5383,7 @@ await applyJointShotDiptychResult({
     }, [editingShot?.id, editingShot?.start_frame, editingShot?.image_url, shots, onUpdateShot, setEditingShot]);
 
     // --- Generation Handlers ---
-    const handleGenerateStartFrame = async (promptOverride = null, cfgOverride = null) => {
+    const handleGenerateStartFrame = async (promptOverride = null, cfgOverride = null, extraProviderOptions = {}) => {
         if (!editingShot) return;
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
@@ -5358,6 +5452,10 @@ await applyJointShotDiptychResult({
 
              try {
                 const refs = resolveShotStartFrameRefs(shotSnapshot, rawPrompt, resolvedEntities);
+                if (extraProviderOptions && extraProviderOptions.auto_refs) {
+                    refs.push(...extraProviderOptions.auto_refs);
+                    delete extraProviderOptions.auto_refs;
+                }
 
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
@@ -5376,6 +5474,7 @@ await applyJointShotDiptychResult({
                     ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
                     ...(cfgOverride ? { cfg: cfgOverride } : {}),
                     ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                    ...extraProviderOptions,
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
                         createdImageJobId = String(jobId || '').trim();
@@ -5437,7 +5536,7 @@ await applyJointShotDiptychResult({
         }
     };
 
-    const handleGenerateEndFrame = async (promptOverride = null, cfgOverride = null) => {
+    const handleGenerateEndFrame = async (promptOverride = null, cfgOverride = null, extraProviderOptions = {}) => {
         if (!editingShot) return;
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
@@ -5479,7 +5578,11 @@ await applyJointShotDiptychResult({
              try {
                 const tech = JSON.parse(shotSnapshot.technical_notes || '{}');
                 const uniqueRefs = getEndFrameVisibleRefs(shotSnapshot, rawPrompt, resolvedEntities);
-                
+                if (extraProviderOptions && extraProviderOptions.auto_refs) {
+                    uniqueRefs.push(...extraProviderOptions.auto_refs);
+                    delete extraProviderOptions.auto_refs;
+                }
+
                 // NEW: Inject Global Context
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
                 const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
@@ -5497,6 +5600,7 @@ await applyJointShotDiptychResult({
                     ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
                     ...(cfgOverride ? { cfg: cfgOverride } : {}),
                     ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                    ...extraProviderOptions,
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
                         createdImageJobId = String(jobId || '').trim();
@@ -8877,6 +8981,19 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         }
                                                                         openMediaPicker(cb, { shotId: editingShot.id, shotFrameType: 'start' });
                                                                     }} />
+
+                                                                    <AdvancedModifyFrame
+                                                                        uiLang={uiLang}
+                                                                        type="start"
+                                                                        promptText={startPromptTextEn}
+                                                                        currentImage={editingShot.image_url}
+                                                                        currentGenerating={currentShotGenerating}
+                                                                        currentImageCfgValue={currentImageCfgValue}
+                                                                        onGenerateAsset={generateAssetWithLang}
+                                                                        onPromptUpdate={(v) => {
+                                                                            setEditingShot({...editingShot, start_frame: v});
+                                                                        }}
+                                                                    />
                                                                 </div>
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
@@ -8983,6 +9100,17 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         }
                                                                         openMediaPicker(cb, { shotId: editingShot.id, shotFrameType: 'end' });
                                                                     }} />
+
+                                                                    <AdvancedModifyFrame
+                                                                        uiLang={uiLang}
+                                                                        type="end"
+                                                                        promptText={endPromptTextEn}
+                                                                        currentImage={endFrameUrl}
+                                                                        currentGenerating={currentShotGenerating}
+                                                                        currentImageCfgValue={currentImageCfgValue}
+                                                                        onGenerateAsset={generateAssetWithLang}
+                                                                        onPromptUpdate={handleManualEndFrameInputChange}
+                                                                    />
                                                                 </div>
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={editingShot.end_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}

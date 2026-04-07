@@ -4407,6 +4407,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
                             if (tone) metaParts.push(`Tone: ${tone}`);
                             if (lighting) metaParts.push(`Lighting: ${lighting}`);
+                            const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
+                            const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
+                            const shotPrefField = getInfoValue(['shot_preference', 'lens_preference', 'camera_preference']);
+                            const broadcastSafetyField = getInfoValue(['broadcast_security_level', 'broadcast_safety_level', 'safety_level', 'broadcast_safety']);
+                            if (eraField) metaParts.push(`Era / Period (年代): ${eraField}`);
+                            if (regionField) metaParts.push(`Region / Country (国家地域): ${regionField}`);
+                            if (shotPrefField) metaParts.push(`Shot / Lens Preference (镜头偏好): ${shotPrefField}`);
+                            if (broadcastSafetyField) metaParts.push(`Broadcast Security Level (播出安全等级): ${broadcastSafetyField}`);
                             metaParts.push('Use this project context as first-class constraints before analyzing the script.');
                      
                      if (metaParts.length > 1) {

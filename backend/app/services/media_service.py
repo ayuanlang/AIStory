@@ -6568,6 +6568,8 @@ class MediaGenerationService:
                                 logger.warning(f"[{provider_name}_gemini_image] 警告：没有从返回的 payload 中解析到符合条件的图片。")
                     except Exception as e:
                         logger.error(f"[{provider_name}_gemini_image] 无法解析 base64 响应内容: {e}")
+                return res
+
             # Fallback to OpenAI compatible for non-gemini apiyi image models if any (or we replace entirely)
             endpoint_lower = endpoint.lower()
             if "/v1/images/generations" not in endpoint_lower:

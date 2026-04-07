@@ -399,7 +399,8 @@
     [[SHOT_GENERATION_LANGUAGE_CONTEXT_RULES]]
   - **未指定语言时回退原文（Fallback to Script Language, 强制）**：若 `Project Context` / `{Global Context}` 未明确给出 `Language`，则所有对白、旁白、字幕、屏幕文字、标识语、消息内容、信件文字等语言性内容，默认沿用剧本原始语言；禁止无依据地统一英文化。
   - **描述骨架与文字载荷分离（Prompt Carrier vs Language Payload, 强制）**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 的描述骨架可沿用字段既定语言与镜头术语规范，但其中凡属于“角色会说出来、观众会听见、画面会看见的具体语言内容”的部分，必须按项目目标语言填写；若未指定，则按剧本原始语言填写。禁止为了维持英文 prompt 外壳而把实际对白、旁白、字幕、屏幕字、招牌字、短信内容生硬写成英文。
-  - **中文项目直写中文（Chinese Project Direct Rendering, 强制）**：当 `Language: 中文 / Chinese` 时，`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 内凡出现引号台词、`Dialogue/OS/V.O.` 内容、`On-screen Text`、字幕、界面文案、门牌、标识语等，都必须直接写自然中文，不得用英文句子代替，也不得先写英文再在中文列补译。
+  - **主列英文强制（Main Columns English Mandate, 强制）**：Start Frame / Video Content / End Frame / Keyframes 列的主体描述、镜头骨架、动作指令必须使用英文书写，绝不允许通篇使用中文（除上述规定的台词/屏幕字需保留原文外）。
+- **中文项目直写中文（Chinese Project Direct Rendering, 强制）**：当 `Language: 中文 / Chinese` 时，`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 内凡出现引号台词、`Dialogue/OS/V.O.` 内容、`On-screen Text`、字幕、界面文案、门牌、标识语等，都必须直接写自然中文，不得用英文句子代替，也不得先写英文再在中文列补译。
   - **中文结果连接词本地化（CN Consequence Connector, 强制）**：在四个中文列中，主节拍结尾若需要表达结果闭环，不得保留英文 `-> resulting in`；必须改写为自然中文结果连接，如 `-> 最终形成...`、`-> 使画面落到...`、`-> 收束为...`、`-> 结果停在...`。英文连接词只允许保留在英文列。
   - **中文提示词四列强制（4 CN Columns, 强制）**：必须输出四个独立中文列：`Start Frame (CN)` / `Video Content (CN)` / `Keyframes (CN)` / `End Frame (CN)`；禁止再使用单列 `Prompt (CN)` 汇总。
   - **关键帧显式化（Keyframes Explicit, 强制）**：`Keyframes (CN)` 列必须始终出现；若 `Keyframes` 列为 `NO`，则 `Keyframes (CN)` 必须写 `NO`；若 `Keyframes` 列存在内容，则中文必须逐条翻译该列内容，不得省略。

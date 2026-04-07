@@ -802,9 +802,6 @@ export const resolveShotVideoPosterUrl = (shotLike = {}) => {
         techObj?.thumbnail_url,
         techObj?.preview_image_url,
         techObj?.cover_url,
-        techObj?.start_frame_url,
-        techObj?.image_url,
-        shotLike?.image_url,
     ].map((value) => String(value || '').trim()).find(Boolean) || '';
 };
 

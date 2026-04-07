@@ -3228,6 +3228,11 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             ? project.global_info
             : {};
 
+const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.period || projectInfo?.time_setting;
+        const regionKey = projectInfo?.region_culture || projectInfo?.region || projectInfo?.country || projectInfo?.country_region;
+        const shotKey = projectInfo?.shot_preference || projectInfo?.lens_preference || projectInfo?.camera_preference;
+        const safetyKey = projectInfo?.broadcast_security_level || projectInfo?.broadcast_safety_level || projectInfo?.safety_level || projectInfo?.broadcast_safety;
+
         const projectContextLines = [
             `Project Title: ${project?.title || ''}`,
             `Episode Title: ${activeEpisode?.title || ''}`,
@@ -3235,10 +3240,14 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             projectInfo?.series_episode ? `Series Episode: ${projectInfo.series_episode}` : '',
             projectInfo?.type ? `Type: ${projectInfo.type}` : '',
             projectInfo?.base_positioning ? `Base Positioning: ${projectInfo.base_positioning}` : '',
-            projectInfo?.language ? `Language: ${projectInfo.language}` : '',
+            projectInfo?.language ? `Language: ${projectInfo.language}` : '',   
             projectInfo?.Global_Style ? `Global Style: ${projectInfo.Global_Style}` : '',
             projectInfo?.tone ? `Tone: ${projectInfo.tone}` : '',
             projectInfo?.lighting ? `Lighting: ${projectInfo.lighting}` : '',
+            eraKey ? `Era / Period (年代): ${eraKey}` : '',
+            regionKey ? `Region / Country (国家地域): ${regionKey}` : '',
+            shotKey ? `Shot / Lens Preference (镜头偏好): ${shotKey}` : '',
+            safetyKey ? `Broadcast Security Level (播出安全等级): ${safetyKey}` : '',
             Array.isArray(projectInfo?.borrowed_films) && projectInfo.borrowed_films.length > 0
                 ? `Borrowed Films: ${projectInfo.borrowed_films.join(', ')}`
                 : '',
