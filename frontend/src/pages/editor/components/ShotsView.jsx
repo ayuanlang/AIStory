@@ -7639,8 +7639,8 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 {editingShot.shot_name && <span className="text-base font-normal text-muted-foreground">- {editingShot.shot_name}</span>}
                             </h3>
                             <div className="flex items-center gap-2">
-                                <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} />
-                                <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} />
+                                <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型', 'Image Model')} />
+                                <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型', 'Video Model')} />
                                 <button
                                     onClick={() => {
                                         const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
