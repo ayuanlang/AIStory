@@ -7688,12 +7688,17 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         </div>
                                         <textarea
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
-                                            placeholder={t('起始帧提示词...', 'Start Frame Prompt...')}
-                                            value={editingShot.start_frame || ''} 
+                                            placeholder={shotPromptDisplayLang === 'cn' ? t('起始帧提示词（中文）...', 'Start Frame Prompt (CN)...') : t('起始帧提示词...', 'Start Frame Prompt...')}
+                                            value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             onChange={(e) => {
                                                 const tech = JSON.parse(editingShot.technical_notes || '{}');
                                                 tech.manual_start_frame = true;
-                                                setEditingShot({...editingShot, start_frame: e.target.value, technical_notes: JSON.stringify(tech)});
+                                                if (shotPromptDisplayLang === 'cn') {
+                                                    tech.start_frame_cn = e.target.value;
+                                                    setEditingShot({...editingShot, technical_notes: JSON.stringify(tech)});
+                                                } else {
+                                                    setEditingShot({...editingShot, start_frame: e.target.value, technical_notes: JSON.stringify(tech)});
+                                                }
                                             }}
                                         />
                                         <ReferenceManager 
@@ -7701,7 +7706,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
                                             title={t('参考图（起始帧）', 'Refs (Start)')}
-                                            promptText={editingShot.start_frame || ''}
+                                            promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
                                             storageKey="ref_image_urls"
@@ -7892,10 +7897,17 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         
                                         <textarea
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
-                                            placeholder={t('结束帧提示词...', 'End Frame Prompt...')}
-                                            value={editingShot.end_frame || ''} 
+                                            placeholder={shotPromptDisplayLang === 'cn' ? t('结束帧提示词（中文）...', 'End Frame Prompt (CN)...') : t('结束帧提示词...', 'End Frame Prompt...')}
+                                            value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             onChange={(e) => {
-                                                handleManualEndFrameInputChange(e.target.value);
+                                                if (shotPromptDisplayLang === 'cn') {
+                                                    const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                    tech.end_frame_cn = e.target.value;
+                                                    tech.manual_end_frame = true;
+                                                    setEditingShot({ ...editingShot, technical_notes: JSON.stringify(tech) });
+                                                } else {
+                                                    handleManualEndFrameInputChange(e.target.value);
+                                                }
                                             }}
                                         />
                                         <ReferenceManager 
@@ -7903,7 +7915,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
                                             title={t('参考图（结束帧）', 'Refs (End)')}
-                                            promptText={editingShot.end_frame || ''}
+                                            promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
                                             storageKey="end_ref_image_urls"
@@ -8041,16 +8053,24 @@ const isCroppingThisShot = !!(shotState.cropping);
 
                                         <textarea
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
-                                            placeholder={t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
-                                            value={getShotVideoPromptEn(editingShot)}
+                                            placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
+                                            value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}
                                             onChange={(e) => {
                                                 const tech = JSON.parse(editingShot.technical_notes || '{}');
                                                 tech.manual_video_prompt = true;
-                                                setEditingShot({
-                                                    ...editingShot,
-                                                    ...buildVideoPromptEnUpdates(e.target.value),
-                                                    technical_notes: JSON.stringify(tech),
-                                                });
+                                                if (shotPromptDisplayLang === 'cn') {
+                                                    tech.video_prompt_cn = e.target.value;
+                                                    setEditingShot({
+                                                        ...editingShot,
+                                                        technical_notes: JSON.stringify(tech),
+                                                    });
+                                                } else {
+                                                    setEditingShot({
+                                                        ...editingShot,
+                                                        ...buildVideoPromptEnUpdates(e.target.value),
+                                                        technical_notes: JSON.stringify(tech),
+                                                    });
+                                                }
                                             }}
                                         />
                                         <ReferenceManager 
