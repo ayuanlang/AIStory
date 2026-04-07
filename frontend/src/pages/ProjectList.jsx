@@ -123,6 +123,12 @@ const PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS = ['16:9', '2.35:1', '4:3', '
 const PROJECT_CREATE_FALLBACK_IMAGE_SIZE_OPTIONS = ['0.5K', '1K', '2K', '4K'];
 const PROJECT_CREATE_PREFERRED_ASPECT_RATIO = '9:16';
 const PROJECT_CREATE_PREFERRED_IMAGE_SIZE = '1K';
+const PROJECT_CREATE_PREFERRED_TYPE = '实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)';
+const PROJECT_CREATE_PREFERRED_COUNTRY_REGION = '欧美 / Europe & America';
+const PROJECT_CREATE_PREFERRED_LANGUAGE = '英文 / English';
+const PROJECT_CREATE_PREFERRED_BASE_POSITIONING = '古装武侠 / Period / Wuxia';
+const PROJECT_CREATE_PREFERRED_ERA = '古代';
+const PROJECT_CREATE_PREFERRED_LENS_PREFERENCE = '长镜头 / Long Take';
 const PROJECT_CREATE_DEFAULT_OPTIONS = {
     type: [...PROJECT_EP_TYPE_OPTIONS],
     country_region: [...PROJECT_EP_COUNTRY_REGION_OPTIONS],
@@ -423,9 +429,9 @@ const ProjectList = ({ initialTab = 'projects' }) => {
   const [newHasExistingAssets, setNewHasExistingAssets] = useState(false);
     const [newShareUsers, setNewShareUsers] = useState('');
     const [newReviewerUsers, setNewReviewerUsers] = useState('');
-    const [newEra, setNewEra] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.era));
-    const [newLensPreference, setNewLensPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference));
-    const [newBroadcastSafetyLevel, setNewBroadcastSafetyLevel] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level));
+    const [newEra, setNewEra] = useState('');
+    const [newLensPreference, setNewLensPreference] = useState('');
+    const [newBroadcastSafetyLevel, setNewBroadcastSafetyLevel] = useState('');
     const [newVideoGenerationPreference, setNewVideoGenerationPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference));
     const [newCreativity, setNewCreativity] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.creativity));
     const [newScriptText, setNewScriptText] = useState('');
@@ -437,11 +443,11 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isCreateTechVisualCollapsed, setIsCreateTechVisualCollapsed] = useState(true);
     const [isCreateManagementCollapsed, setIsCreateManagementCollapsed] = useState(true);
     const [projectCreateOptions, setProjectCreateOptions] = useState(PROJECT_CREATE_DEFAULT_OPTIONS);
-    const [newType, setNewType] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.type));
-    const [newCountryRegion, setNewCountryRegion] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.country_region));
-    const [newLanguage, setNewLanguage] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.language));
-    const [newBasePositioning, setNewBasePositioning] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning));
-    const [newAspectRatio, setNewAspectRatio] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
+    const [newType, setNewType] = useState('');
+    const [newCountryRegion, setNewCountryRegion] = useState('');
+    const [newLanguage, setNewLanguage] = useState('');
+    const [newBasePositioning, setNewBasePositioning] = useState('');
+    const [newAspectRatio, setNewAspectRatio] = useState('');
     const [newImageSize, setNewImageSize] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
     const [newVideoSoundEnabled, setNewVideoSoundEnabled] = useState(true);
     const [newPlannedCompletionTime, setNewPlannedCompletionTime] = useState('');
@@ -606,22 +612,23 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 const data = await getKieStandardValueOptions();
                 const normalized = normalizeProjectCreateOptions(data);
                 setProjectCreateOptions(normalized);
-                setNewType((prev) => (normalized.type.includes(prev) ? prev : pickPreferredOrFirst(normalized.type)));
-                setNewLanguage((prev) => (normalized.language.includes(prev) ? prev : pickPreferredOrFirst(normalized.language)));
-                setNewBasePositioning((prev) => (normalized.base_positioning.includes(prev) ? prev : pickPreferredOrFirst(normalized.base_positioning)));
+                setNewType((prev) => (normalized.type.includes(prev) ? prev : ''));
+                setNewLanguage((prev) => (normalized.language.includes(prev) ? prev : ''));
+                setNewCountryRegion((prev) => (normalized.country_region.includes(prev) ? prev : ''));
+                setNewBasePositioning((prev) => (normalized.base_positioning.includes(prev) ? prev : ''));
                 setNewAspectRatio((prev) => (
                     normalized.aspect_ratio.includes(prev)
                         ? prev
-                        : pickPreferredOrFirst(normalized.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO)
+                        : ''
                 ));
                 setNewImageSize((prev) => (
                     normalized.image_size.includes(prev)
                         ? prev
                         : pickPreferredOrFirst(normalized.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE)
                 ));
-                setNewEra((prev) => (normalized.era.includes(prev) ? prev : pickPreferredOrFirst(normalized.era)));
-                setNewLensPreference((prev) => (normalized.lens_preference.includes(prev) ? prev : pickPreferredOrFirst(normalized.lens_preference)));
-                setNewBroadcastSafetyLevel((prev) => (normalized.broadcast_safety_level.includes(prev) ? prev : pickPreferredOrFirst(normalized.broadcast_safety_level)));
+                setNewEra((prev) => (normalized.era.includes(prev) ? prev : ''));
+                setNewLensPreference((prev) => (normalized.lens_preference.includes(prev) ? prev : ''));
+                setNewBroadcastSafetyLevel((prev) => (normalized.broadcast_safety_level.includes(prev) ? prev : ''));
                 setNewVideoGenerationPreference((prev) => (normalized.video_generation_preference.includes(prev) ? prev : pickPreferredOrFirst(normalized.video_generation_preference)));
                 setNewResolution((prev) => (normalized.resolution.includes(prev) ? prev : pickPreferredOrFirst(normalized.resolution)));
                 setNewColorTone((prev) => (normalized.color_tone.includes(prev) ? prev : pickPreferredOrFirst(normalized.color_tone)));
@@ -736,14 +743,15 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         setNewDescription('');
         setNewShareUsers('');
         setNewReviewerUsers('');
-        setNewType(pickPreferredOrFirst(projectCreateOptions.type));
-        setNewLanguage(pickPreferredOrFirst(projectCreateOptions.language));
-        setNewBasePositioning(pickPreferredOrFirst(projectCreateOptions.base_positioning));
-        setNewAspectRatio(pickPreferredOrFirst(projectCreateOptions.aspect_ratio, PROJECT_CREATE_PREFERRED_ASPECT_RATIO));
+        setNewType('');
+        setNewCountryRegion('');
+        setNewLanguage('');
+        setNewBasePositioning('');
+        setNewAspectRatio('');
         setNewImageSize(pickPreferredOrFirst(projectCreateOptions.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
-        setNewEra(pickPreferredOrFirst(projectCreateOptions.era));
-        setNewLensPreference(pickPreferredOrFirst(projectCreateOptions.lens_preference));
-        setNewBroadcastSafetyLevel(pickPreferredOrFirst(projectCreateOptions.broadcast_safety_level));
+        setNewEra('');
+        setNewLensPreference('');
+        setNewBroadcastSafetyLevel('');
         setNewVideoGenerationPreference(pickPreferredOrFirst(projectCreateOptions.video_generation_preference));
         setNewCreativity(pickPreferredOrFirst(projectCreateOptions.creativity));
         setNewScriptText('');
@@ -764,7 +772,21 @@ const ProjectList = ({ initialTab = 'projects' }) => {
 
     const handleCreate = async () => {
         const title = String(newTitle || '').trim();
-        if (!title) return;
+        if (!title) {
+            setToast({ type: 'error', message: t('项目名称为必输项', 'Project Title is required') });
+            setTimeout(() => setToast(null), 3000);
+            return;
+        }
+        if (!String(newType || '').trim()) {
+            setToast({ type: 'error', message: t('类型为必输项', 'Type is required') });
+            setTimeout(() => setToast(null), 3000);
+            return;
+        }
+        if (!String(newAspectRatio || '').trim()) {
+            setToast({ type: 'error', message: t('画幅比例为必输项', 'Aspect Ratio is required') });
+            setTimeout(() => setToast(null), 3000);
+            return;
+        }
         const description = String(newDescription || '');
         const shareUsers = parseUserListInput(newShareUsers);
         const reviewerUsers = parseUserListInput(newReviewerUsers);
@@ -1780,6 +1802,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 value={newType}
                                                                 onChange={(e) => setNewType(e.target.value)}
                                                             >
+                                                                <option value=""></option>
                                                                 {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
                                             </div>
@@ -1790,6 +1813,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 value={newCountryRegion}
                                                                 onChange={(e) => setNewCountryRegion(e.target.value)}
                                                             >
+                                                                <option value=""></option>
                                                                 {projectCreateOptions.country_region.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
                                             </div>
@@ -1800,6 +1824,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 value={newLanguage}
                                                                 onChange={(e) => setNewLanguage(e.target.value)}
                                                             >
+                                                                <option value=""></option>
                                                                 {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
                                             </div>
@@ -1810,6 +1835,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 value={newBasePositioning}
                                                                 onChange={(e) => setNewBasePositioning(e.target.value)}
                                                             >
+                                                                <option value=""></option>
                                                                 {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
                                             </div>
@@ -1820,6 +1846,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 value={newAspectRatio}
                                                                 onChange={(e) => setNewAspectRatio(e.target.value)}
                                                             >
+                                                                <option value=""></option>
                                                                 {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
                                             </div>
@@ -1831,6 +1858,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 value={newEra}
                                                                 onChange={(e) => setNewEra(e.target.value)}
                                                             >
+                                                                <option value=""></option>
                                                                 {projectCreateOptions.era.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
                                             </div>
@@ -1841,6 +1869,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 value={newLensPreference}
                                                                 onChange={(e) => setNewLensPreference(e.target.value)}
                                                             >
+                                                                <option value=""></option>
                                                                 {projectCreateOptions.lens_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
                                             </div>
@@ -1851,6 +1880,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 value={newBroadcastSafetyLevel}
                                                                 onChange={(e) => setNewBroadcastSafetyLevel(e.target.value)}
                                                             >
+                                                                <option value=""></option>
                                                                 {projectCreateOptions.broadcast_safety_level.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
                                             </div>
