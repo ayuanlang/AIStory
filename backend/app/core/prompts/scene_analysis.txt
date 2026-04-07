@@ -55,7 +55,7 @@
 
 ### 3. 语言与项目语境 (Language & Context)
 4. 原剧本全覆盖：最终分析必须完整覆盖原剧本可视可听信息，不限于对白、动作、表情/情绪反应、外观描写、着装描述、道具状态态、环境细节、字幕、屏幕文字、V.O./O.S. 与语言切换事件；禁止只提炼主干情节而吞掉描述性细节。
-- **台词零删减硬规则**：所有的对话，旁白，画外音，独白都要原样写入 beat 中，不允许删减、概括或截断。
+- **台词零删减硬规则（极度重要）**：所有的对白/对话、旁白（V.O.）、画外音（O.S.）、独白等，都必须**逐字逐句原文保留**并写入 beat 中，绝对不允许进行任何形式的删减、概括、改写、截断或合并。再长、再多的对话也必须全部完整写出，严禁使用省略号（`...`）或“等”字来替换或浓缩台词文本。若违反此条导致台词丢失，整个输出判定无效。
 - 最高审美冲突规则：所有角色、场景与道具都必须在不违背剧情事实、时代、身份、职业、阶层、地域语境与写实度的前提下，自动朝“当前条件下的最高审美版本”收敛。若审美优化与剧情事实冲突，剧情事实优先；若不冲突，则禁止退回到平庸、廉价、素材堆砌或无设计感的默认解。
 - 角色默认主角化基线：对有具体姓名且承担主要叙事功能的成年角色，若剧本未明确限制外貌、体型或服装，必须主动补全为“现代、新潮、高级、大气、镜头友好”的主角级设计，同时服从题材、时代、职业、阶层与生活条件。女性默认优先高挑修长、肩颈线舒展、比例利落；男性默认优先挺拔健壮、肩背展开、体态稳定。主角肤色默认可落在更白净、细腻、明亮的上镜区间，但不得违背族裔、地域语境、职业状态态与剧情现实度；若剧本明确要求相反体貌、年龄阶段或特殊身体条件，以剧本为准。
 - 发型与肤色落地规则：发型必须写到可被镜头稳定识别的结构层，例如分线方式、刘海形态、发长区间、卷直关系、厚薄蓬贴、束发方式、鬓角和发尾轮廓；肤色必须写到可拍的真实区间与质感层，例如冷白、暖白、白皙、偏白净、浅蜜色、健康麦色，并与年龄、职业、日晒程度和项目语境一致，禁止所有角色都落成同一种“标准肤色”。
@@ -80,11 +80,12 @@
 8. 双视角默认：每个核心 Environment 默认有 Front 与 Reverse；仅在轴线全程不变且无反打需求时可豁免。
 31. 开场第一秒抓取规则：开场第 1 秒必须尽可能同时满足以下元素中的多数：劲爆、强戏剧冲突、非常 drama、高悬念、反转或出人意料、情绪爆点、强注意力抓取。若与剧本事实冲突，以剧本事实优先，并在事实边界内最大化抓取力。
 32. 单集情节密度规则：
+  - 结构完整性（极其重要）：每集（Episode）都必须具备完整的戏剧结构，包括：高光开场/宏大开场、发展、转折、高潮、回收、钩子等。在剧情逻辑允许的情况下，必须进行适当的剧情动作与细节扩写，以确保每一集的这些结构节点能被充分且扎实地展现，禁止流水账式平铺直叙。
   - 节奏：优先快节奏推进，多人物对话默认减少无效停顿。
   - 台词：必须精炼且高信息密度，优先能拉高情绪与冲突张力的关键句，避免废话。
   - 反转：单集必须至少包含 3 个明确冲突/反转节点；若集中在不同场景，需在分场与 beats 中保留其可追溯落点。
   - 钩子：集末必须保留未决悬念钩子（风险、问题、反转后果或迫近威胁）。
-33. 分场承载规则：在 Scene 拆分与 `Split Reason` 中，必须显式标注本场承担的是“开场高光段 / 主线推进段 / 反转段 / 钩子段”中的哪一类，并确保整集层面的 3 次以上冲突/反转可被逐场追溯。
+33. 分场承载与剧情定位规则：要求在每个场景定位清楚本场的剧情定位（必须包含：高光开场/宏大开场、发展、转折、高潮、回收、钩子等其中之一）。在 Scene 拆分与 `Split Reason` 中，必须首要重点说明该 scene 在剧本中承担的主要类型（如宏大开场、高潮等），及对应的视觉与导演设计思路，并确保整集层面的冲突/反转可被逐场追溯。
 
 
 
@@ -233,7 +234,7 @@
 - 可补特写/全景以提升覆盖。
 
 #### Full Script Coverage
-- Beats 必须覆盖原剧本全部信息：动作、对白/台词、表情与情绪反应、人物外观与着装描写、道具状态态变化、环境细节、字幕、屏幕文字、V.O./O.S.、语言切换事件。
+- Beats 必须覆盖原剧本全部信息：动作、对白/台词、表情与情绪反应、人物外观与着装描写、道具状态态变化、环境细节、字幕、屏幕文字、V.O./O.S.、语言切换事件。**其中，所有的对白和旁白内容必须逐字完整抄录，严禁用省略号替代。**
 - 完整覆盖判定：凡剧本中能被看见、听见、识别、或会直接影响镜头设计与实体抽取的信息，都必须在 Scene 分析、`{Beats}`、实体抽取、Subject Index 或 Part 2 中找到明确落点；禁止仅保留剧情主干而省略外观描写、动作细节、道具细节、环境细节或对白附带信息。
 - 若 `Project Context` 指定了项目语言，则上述所有语言性信息在覆盖时必须先翻译/转换成项目语言，再写入最终分析结果；若未指定，则沿用剧本原始语言，不得额外英文化。
 
@@ -449,7 +450,7 @@
 - **封面特制 Scene 强制输出**：Part 1 必须包含且仅包含 1 行封面特制 Scene。该行固定放在 Part 1 第一行，作为整集/整剧本的封面主视觉场景；`Scene Name` 固定写为 `封面海报`，`Core Scene Info` 中必须写出 `**{Scene Function}**: Cover Poster`。
 - **封面特制 Scene 内容规则**：该 Scene 不承担常规连续叙事时长，而承担“整集封面主视觉”职责；因此 `Equivalent Duration` 可写为 `Cover Key Art / Non-narrative Poster Moment` 或等价中文表达。其 `Scene Subjects` 必须来自本集最重要的角色、关键道具与核心环境，且 `Split Reason` 必须说明：为什么这些主体足以代表整集内容、封面如何体现剧情分格感、以及标题放置为何安全可读。
 - **封面特制 Scene 标题排版规则**：封面 Scene 的 `Core Scene Info`、对应特殊环境的 `description_cn` 与 `generation_prompt_cn/en` 中，必须明确标题使用项目语言、放置在中上部安全区、避免右侧移动端按钮区与底部字幕菜单区遮挡。若标题较长，必须允许自然换行或层级排版，但仍需保持重心稳定与字形均衡。
-- `Split Reason` 必须写明该 Scene 为什么单独成立，并明确指出本场主要承载的原剧本覆盖维度，例如对白、动作链、外观/着装变化、道具状态态变化、环境状态态变化、闪回桥接或语言信息落位；禁止只写“机位变化/方便分镜”这类空泛理由。
+- `Split Reason` 必须首要说明该 Scene 在剧本中承担的主要类型/剧情定位（如：宏大开场/高光开场、发展、转折、高潮、回收、钩子等），以及对应的设计思路。随后说明该 Scene 为什么单独成立，指出本场主要承载的原剧本覆盖维度，例如对白、动作链、外观/着装变化、道具状态态变化、环境状态态变化、闪回桥接或语言信息落位；禁止只写“机位变化/方便分镜”这类空泛理由。
 - 若该 Scene 属于闪回/回忆段或承担闪回桥接，`Split Reason` 必须额外写出 `Transition Anchor`（如视线承接、物体特写、声音桥、动作延续、构图呼应），说明它如何从上一 Scene 接入并如何回接下一 Scene；禁止把闪回 Scene 写成无来源、无回路的孤立段落。
 - `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Scene Subjects}`, `{Beats}`。
 - `Core Scene Info` 必须包含 `**{Env Anchor}**: ENV:[<Environment Name>]`，且该名称与本行 `Environment Name` 完全一致。
@@ -474,7 +475,7 @@
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | EP01 | EP01_SC00 | 0 | 封面海报 | Cover Key Art / Non-narrative Poster Moment | **{Scene Function}**: Cover Poster。<br>**{Env Anchor}**: ENV:[Cover Poster]。<br>**{Stage} (核心舞台)**: 以核心环境中的可识别舞台区承载主角群像与关键道具关系，保持国际大片海报式中心构图。<br>**{Environment Context}**: 中文描述封面环境基底、空间纵深、光区切分与气氛。<br>**{Layout}**: 中文描述前景/中景/后景的海报层次、角色主次关系、道具引导线与标题留白区。<br>**{Axis}**: 中文描述封面主视觉观看轴线与重心方向。<br>**{Observer View}**: 面向封面主体群像的稳定主海报观察位。<br>**{Split Reason}**: 本场为整集封面特制 Scene，使用最重要角色、关键道具与核心环境压缩呈现剧情分格感，并为标题保留中上部安全区；标题遵循项目语言，避开 TikTok 等移动端右侧按钮区与底部菜单区。<br>**{Scene Subjects}**: CHAR:[@Lead A], CHAR:[@Lead B], PROP:[Signature Prop], ENV:[Cover Poster]。<br>**{Beats}**:<br>1. {空间} 以核心环境舞台区形成单张海报式群像落位；{主体关系} 主角色形成主次层级，关键道具承担视觉引导；{环境交互} 环境结构与光区共同压缩剧情分格信息；{动作变化过程} 保持海报级稳定姿态与强情绪张力，不写连续运动；-> {新状态态} 形成可直接作为封面的稳定终态。 | {对应本集核心冲突、人物关系与标题语义的原始剧本文本片段} | `Cover Poster` | `VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写封面视角、构图、光区、标题留白等相对变化项` | 封面主视觉建立 | 封面可直接交付 | `CHAR:[@Lead A]`, `CHAR:[@Lead B]` | `PROP:[Signature Prop]` |
-| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 因{对白/动作/外观变化/道具状态态/环境状态态/闪回桥接}需要独立承载本场；Transition Anchor={视线/物体特写/声音桥/动作余势/构图呼应}。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿，相对{Stage}偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{环境交互} CHAR:[@Char A]坐在ENV:[Bed]边缘；{动作变化过程} CHAR:[@Char A]前倾半步并抬手，台词/字幕/音效:{原剧本对应内容}；-> {新状态态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
+| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 作为【宏大开场/发展/高潮等剧情定位】，设计思路为【视觉及导演设计思路】。因{对白/动作/外观变化/状态态/环境/闪回}需独立承载；Transition Anchor={视线/动作余势/相似构图等}。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿，相对{Stage}偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{环境交互} CHAR:[@Char A]坐在ENV:[Bed]边缘；{动作变化过程} CHAR:[@Char A]前倾半步并抬手，台词/字幕/音效:{原剧本对应内容}；-> {新状态态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）
 - **模板锁定**：Subject Index 每一行必须严格采用固定骨架，禁止改序、改键、增键、删键：
