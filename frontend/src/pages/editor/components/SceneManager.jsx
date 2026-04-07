@@ -328,14 +328,21 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         return !!e.image_url && !activeRefs.includes(e.image_url);
     });
 
-    const handleAdd = (url) => {
-        if (!url || activeRefs.includes(url)) return;
-        const newRefList = [...activeRefs, url];
-        // If sequential, do we save back to ref_image_urls? 
-        // User request implies the LOGIC for getting pics is fixed. 
-        // So for "Refs (Video)", maybe we don't save to 'ref_image_urls' necessarily, 
-        // OR we overwrite 'ref_image_urls' with this sequence so backend uses it?
-        // Let's assume we update the standard field so backend picks it up easily.
+    const handleAdd = (urls) => {
+        if (!urls) return;
+        const urlsToAdd = Array.isArray(urls) ? urls : [urls];
+        const newRefList = [...activeRefs];
+        let changed = false;
+        
+        for (const url of urlsToAdd) {
+            if (url && !newRefList.includes(url)) {
+                newRefList.push(url);
+                changed = true;
+            }
+        }
+        
+        if (!changed) return;
+
         const userEditedKey = `${storageKey}_user_edited`;
         const newTech = { ...tech, [storageKey]: newRefList, [userEditedKey]: true };
         if (isVideoRefManager) {
@@ -511,7 +518,13 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                     {/* Add Button */}
                     {!useSequenceLogic && onPickMedia && (
                         <button 
-                            onClick={() => onPickMedia((url) => handleAdd(url), { shotId: shot?.id })}
+                            onClick={() => onPickMedia((url, type, selectedItems) => {
+                                if (selectedItems && selectedItems.length > 0) {
+                                    handleAdd(selectedItems.map(item => item.url));
+                                } else {
+                                    handleAdd(url);
+                                }
+                            }, { shotId: shot?.id })}
                             className="shrink-0 w-[50px] aspect-video bg-white/5 hover:bg-white/10 border border-white/10 border-dashed rounded flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-white transition-colors"
                             title={t('从素材中选择', 'Pick from Assets')}
                         >
@@ -1807,6 +1820,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
 
         try {
             const result = await regenerateSceneShots(sceneId, {
+                function_name: 'script_analysis',
                 content: aiShotsStaging.content || [],
                 additional_instructions: String(shotRegenModal.instructions || '').trim(),
             });
@@ -3109,6 +3123,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         try {
             const startedAt = Date.now();
             const result = await generateSceneShots(sceneId, {
+                function_name: 'script_analysis',
                 user_prompt: promptData?.user_prompt,
                 system_prompt: promptData?.system_prompt,
             }, {

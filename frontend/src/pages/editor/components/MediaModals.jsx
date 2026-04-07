@@ -278,7 +278,7 @@ export const AssetHoverMetaOverlay = ({ asset, t, entities = [] }) => {
     ];
 
     return (
-        <div className="pointer-events-none absolute left-0 right-[-10px] top-0 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150 z-50">
+        <div className="pointer-events-none absolute left-0 bottom-full mb-2 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150 z-50 origin-bottom">
             <div className="rounded-lg border border-white/10 bg-black/95 backdrop-blur-md shadow-2xl p-3 w-56 max-w-[280px]">
                 <div className="text-[11px] font-bold uppercase tracking-wide text-primary/90 mb-2.5">
                     {t('资产信息', 'Asset Info')}
@@ -303,6 +303,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
+    const [selectedMulti, setSelectedMulti] = useState(new Set()); // Multi-selection state
     
     // Filters
     const [filterScope, setFilterScope] = useState('project_subjects'); // 'project_subjects', 'project', 'subject', 'shot', 'type'
@@ -386,6 +387,12 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             loadAssets();
         }
     }, [isOpen, tab, filterScope, filterType, filterValue, filterFrameType]);
+
+    useEffect(() => {
+        if (isOpen) {
+            setSelectedMulti(new Set());
+        }
+    }, [isOpen]);
 
     useEffect(() => {
         if (!isOpen || tab !== 'assets') return;
@@ -618,8 +625,13 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                     className="relative group"
                                 >
                                     <div
-                                        onClick={() => setSelectedAsset(asset)}
-                                        className="aspect-square bg-black/40 rounded overflow-hidden border border-white/5 hover:border-primary/50 cursor-pointer relative"
+                                        onClick={() => {
+                                            const nextSet = new Set(selectedMulti);
+                                            if (nextSet.has(asset.id)) nextSet.delete(asset.id);
+                                            else nextSet.add(asset.id);
+                                            setSelectedMulti(nextSet);
+                                        }}
+                                        className={`aspect-square bg-black/40 rounded overflow-hidden border cursor-pointer relative transition-all ${selectedMulti.has(asset.id) ? 'border-primary shadow-[0_0_0_2px_rgba(var(--color-primary),0.5)]' : 'border-white/5 hover:border-primary/50'}`}
                                     >
                                         {asset.type === 'video' ? (
                                             <div className="w-full h-full flex items-center justify-center bg-black">
@@ -632,14 +644,20 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                         <div className="absolute bottom-0 inset-x-0 p-1 bg-black/60 text-[9px] truncate text-white/70">
                                             {asset.name}
                                         </div>
-                                        {/* Quick Select Button on Hover */}
+                                        {/* Floating Button for Detail/Preview */}
                                         <button
-                                            onClick={(e) => { e.stopPropagation(); onSelect(asset.url, asset.type); }}
-                                            className="absolute top-1 right-1 bg-primary text-black p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all hover:scale-110 shadow-lg z-10"
-                                            title={t('快速选择', 'Quick Select')}
+                                            onClick={(e) => { e.stopPropagation(); setSelectedAsset(asset); }}
+                                            className="absolute top-1 right-1 bg-black/60 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all hover:scale-110 shadow-lg z-10"
+                                            title={t('预览详情', 'Preview Details')}
                                         >
-                                            <Check size={12} strokeWidth={3} />
+                                            <Maximize2 size={12} strokeWidth={2} />
                                         </button>
+                                        {/* Selected Indicator */}
+                                        {selectedMulti.has(asset.id) && (
+                                            <div className="absolute top-1 left-1 bg-primary text-black p-0.5 rounded-full shadow-lg z-10">
+                                                <Check size={14} strokeWidth={3} />
+                                            </div>
+                                        )}
                                     </div>
                                     <AssetHoverMetaOverlay asset={asset} t={t} entities={entities} />
                                 </div>
@@ -800,6 +818,26 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         </div>
                     )}
                 </div>
+
+                {tab === 'assets' && (
+                    <div className="flex border-t border-white/10 p-3 bg-black/40 justify-between items-center shrink-0">
+                        <div className="text-sm font-medium text-white/80">
+                            {selectedMulti.size} {t('已选中', 'selected')}
+                        </div>
+                        <button
+                            disabled={selectedMulti.size === 0}
+                            onClick={() => {
+                                const selectedItems = Array.from(selectedMulti).map(id => assets.find(a => a.id === id)).filter(Boolean);
+                                if (selectedItems.length > 0) {
+                                    onSelect(selectedItems[0].url, selectedItems[0].type, selectedItems);
+                                }
+                            }}
+                            className="bg-primary text-black text-sm font-bold px-6 py-2 rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {t('确认', 'Confirm')}
+                        </button>
+                    </div>
+                )}
              </div>
         </div>
     );

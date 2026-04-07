@@ -169,7 +169,7 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
         try {
             const base = promptText || "";
             const appended = instruction.trim();
-            const finalPrompt = `${appended}, keeping everything else unchanged.`;
+            const finalPrompt = base ? `${base}. ${appended}, keeping everything else unchanged.` : appended;
             onPromptUpdate(finalPrompt);
             
             addLog(userLang('已生成新提示词，准备拉起局部修改...', 'Generated new prompt, ready to local modify...'), 'info');
@@ -184,7 +184,8 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
                     is_gemini_multi_turn_edit: true,
                     gemini_base_prompt: base,
                     gemini_edit_instruction: appended,
-                    auto_refs: autoRefs
+                    auto_refs: autoRefs,
+                    finalPrompt: finalPrompt
                 });
             }, 100);
         } finally {
@@ -204,7 +205,7 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
                 
                 addLog(userLang('已生成新提示词，准备拉起生成...', 'Generated new prompt, ready to regenerate...'), 'info');
                 setTimeout(() => {
-                    onGenerateAsset(type, -1, { cfg: currentImageCfgValue });
+                    onGenerateAsset(type, -1, { cfg: currentImageCfgValue, finalPrompt: optimized });
                 }, 100);
             } else {
                 addLog(userLang('优化失败，请稍后再试', 'Optimization failed, please try again'), 'error');
@@ -3472,7 +3473,7 @@ await applyJointShotDiptychResult({
          onLog?.(`Generating shots for Scene ${sceneId}...`, 'info');
          try {
              // Now returns { content: [], timestamp }
-             const result = await generateSceneShots(sceneId, { function_name: 'generate_shot_images', 
+             const result = await generateSceneShots(sceneId, { function_name: 'script_analysis', 
                  user_prompt: data.user_prompt,
                  system_prompt: data.system_prompt 
              });
@@ -3520,9 +3521,9 @@ await applyJointShotDiptychResult({
          }
     };
 
-    const handleMediaSelect = (url, type) => {
+    const handleMediaSelect = (url, type, selectedItems) => {
         if (pickerConfig.callback) {
-            pickerConfig.callback(url, type);
+            pickerConfig.callback(url, type, selectedItems);
         }
         setPickerConfig({ isOpen: false, callback: null });
     };
@@ -5141,12 +5142,12 @@ await applyJointShotDiptychResult({
             : null;
 
         if (assetType === 'start') {
-            await handleGenerateStartFrame(null, normalizedCfgOverride, options);
+            await handleGenerateStartFrame(options.finalPrompt || null, normalizedCfgOverride, options);
             return;
         }
 
         if (assetType === 'end') {
-            await handleGenerateEndFrame(null, normalizedCfgOverride, options);
+            await handleGenerateEndFrame(options.finalPrompt || null, normalizedCfgOverride, options);
         }
 
         if (assetType === 'video') {
@@ -8959,28 +8960,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                             updateTechField('start_frame_cn', e.target.value);
                                                                         }}
                                                                     />
-                                                                    {/* Use Chinese prompt for refine if preferred, or English. Current refiner mostly targets one string. For now we tie Refine to EN prompt, or CN. */}
-                                                                    <RefineControl originalText={showCnPrompt ? startPromptTextCn : startPromptTextEn} onUpdate={(v) => {
-                                                                        if (showCnPrompt) {
-                                                                            updateTechField('start_frame_cn', v);
-                                                                            return;
-                                                                        }
-                                                                        setEditingShot({...editingShot, start_frame: v});
-                                                                    }} type="image" currentImage={editingShot.image_url} onImageUpdate={async (url) => {
-                                                                        if (isShotFrameActionLocked('start')) {
-                                                                            notifyShotFrameActionLocked('start');
-                                                                            return;
-                                                                        }
-                                                                        const newData = { image_url: url };
-                                                                        await onUpdateShot(editingShot.id, newData);
-                                                                        setEditingShot(prev => ({...prev, ...newData}));
-                                                                    }} projectId={projectId} shotId={editingShot.id} assetType="start_frame" featureInjector={injectEntityFeatures} onPickMedia={(cb) => {
-                                                                        if (isShotFrameActionLocked('start')) {
-                                                                            notifyShotFrameActionLocked('start');
-                                                                            return;
-                                                                        }
-                                                                        openMediaPicker(cb, { shotId: editingShot.id, shotFrameType: 'start' });
-                                                                    }} />
 
                                                                     <AdvancedModifyFrame
                                                                         uiLang={uiLang}
@@ -9078,28 +9057,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                             updateTechField('end_frame_cn', e.target.value);
                                                                         }}
                                                                     />
-                                                                    <RefineControl originalText={showCnPrompt ? endPromptTextCn : endPromptTextEn} onUpdate={(v) => {
-                                                                        if (showCnPrompt) {
-                                                                            updateTechField('end_frame_cn', v);
-                                                                            return;
-                                                                        }
-                                                                        setEditingShot({...editingShot, end_frame: v});
-                                                                    }} type="image" currentImage={endFrameUrl} onImageUpdate={async (url) => {
-                                                                        if (isShotFrameActionLocked('end')) {
-                                                                            notifyShotFrameActionLocked('end');
-                                                                            return;
-                                                                        }
-                                                                        const nextTech = { ...tech, end_frame_url: url, video_gen_mode: 'start_end' };
-                                                                        const newData = { technical_notes: JSON.stringify(nextTech) };
-                                                                        await onUpdateShot(editingShot.id, newData);
-                                                                        setEditingShot(prev => ({...prev, ...newData}));
-                                                                    }} projectId={projectId} shotId={editingShot.id} assetType="end_frame" featureInjector={injectEntityFeatures} onPickMedia={(cb) => {
-                                                                        if (isShotFrameActionLocked('end')) {
-                                                                            notifyShotFrameActionLocked('end');
-                                                                            return;
-                                                                        }
-                                                                        openMediaPicker(cb, { shotId: editingShot.id, shotFrameType: 'end' });
-                                                                    }} />
 
                                                                     <AdvancedModifyFrame
                                                                         uiLang={uiLang}
@@ -9280,13 +9237,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         updateTechField('video_prompt_cn', e.target.value);
                                                                     }}
                                                                 />
-                                                                <RefineControl originalText={showCnPrompt ? videoPromptTextCn : videoPromptTextEn} onUpdate={(v) => {
-                                                                    if (showCnPrompt) {
-                                                                        updateTechField('video_prompt_cn', v);
-                                                                        return;
-                                                                    }
-                                                                    setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(v) });
-                                                                }} type="video" />
                                                                 <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
                                                                     {t('英文提示词', 'Prompt (EN)')}
                                                                 </div>

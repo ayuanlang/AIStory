@@ -5167,8 +5167,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             <MediaPickerModal 
                 isOpen={pickerConfig.isOpen}
                 onClose={() => setPickerConfig(prev => ({ ...prev, isOpen: false }))}
-                onSelect={(url, type) => {
-                    if (pickerConfig.callback) pickerConfig.callback(url, type);
+                onSelect={(url, type, selectedItems) => {
+                    if (pickerConfig.callback) pickerConfig.callback(url, type, selectedItems);
                     setPickerConfig(prev => ({ ...prev, isOpen: false }));
                 }}
                 projectId={projectId}

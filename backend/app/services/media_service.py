@@ -42,7 +42,7 @@ import logging
 logger = logging.getLogger("media_service")
 # ... imports ...
 
-DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS = min(600, max(300, int(os.getenv("VIDEO_POLL_TIMEOUT_SECONDS", "600"))))
+DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS = int(os.getenv("VIDEO_POLL_TIMEOUT_SECONDS", "600"))
 DEFAULT_N1N_IMAGE_READ_TIMEOUT_SECONDS = max(120, int(os.getenv("N1N_IMAGE_READ_TIMEOUT_SECONDS", "300")))
 
 _BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')

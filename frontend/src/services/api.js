@@ -1138,6 +1138,10 @@ export const fetchSceneShotsPrompt = async (sceneId) => {
 }
 
 export const generateSceneShots = async (sceneId, promptData = null, runtimeHooks = {}) => {
+    promptData = promptData || {};
+    promptData.function_name = 'script_analysis';
+    promptData.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
+    
     // This now returns the Staging result (timestamp, content=[]), not the applied shots
     const payloadMeta = {
         hasUserPrompt: Boolean(promptData?.user_prompt),
@@ -1163,6 +1167,9 @@ export const generateSceneShots = async (sceneId, promptData = null, runtimeHook
 }
 
 export const regenerateSceneShots = async (sceneId, payload = null, runtimeHooks = {}) => {
+    payload = payload || {};
+    payload.function_name = 'script_analysis';
+    payload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
     try {
         return await asyncLLMPost(`/scenes/${sceneId}/ai_regenerate_shots`, payload, {
             onTaskCreated: runtimeHooks?.onTaskCreated,
