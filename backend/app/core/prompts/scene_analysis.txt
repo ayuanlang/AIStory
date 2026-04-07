@@ -371,7 +371,7 @@
   - `anchor_description` 合规尺度示例：像 `female teacher, oval face, neat shoulder-length bob, slim metal-rim glasses` 这样短而清楚即可；优先指出身份、相貌与更有区分度的稳定识别点，而不是把共性服饰写成主描点，也不会膨胀成长段特征列举。
   - 禁止抽象占位：禁止用“具有某种职业状态态”“体现职业气质”“有主角感”“判断敏捷感”“平静求证感”这类抽象总结句替代可见画面信息；这些语义必须落地为可被看见的脸部结构、发型整理、肩颈线条、站姿重心、衣物开合、面料轮廓、鞋履状态态与布光效果。
 - 核心示例（中英文双轨示范，必须按目标语言/角色重新推导，不可照抄）：
-  - generation_prompt_cn：写实现代剧情风格，林月/Lila角色四视图设定图，整张资产表按 16:9 横向四宫格执行。项目类型为实拍/真人/写实，具备微细毛孔、皮肤微斑、自然的肤色层次与真实光泽等明确的真人特征，以区别于3D渲染模型。她约28岁，身高178cm，头身比1:9.3，腰线明显上提，腿线长于上身(下半身占63%)，整体接近黄金分割并避免五五分。四个面板保持同一身份/服装/比例，第一宫必须是30%面部特写大宫格，第二宫为正面全身，第三宫为侧面全身，第四宫为背面全身，严格保持所有宫格在同一横向单排、绝对不换行(全身保留鞋履清晰)。统一服装为修身短机能夹克、柔垂内搭、高腰短裤、黑色长靴。站姿稳定重心。布光为电影棚拍柔和主光+轮廓光。纯白背景在所有宫格间连续填充。
+  - generation_prompt_cn：写实现代剧情风格，林月/Lila角色四视图设定图，项目类型为实拍/真人/写实，具备微细毛孔、皮肤微斑、自然的肤色层次与真实光泽等明确的真人特征，以区别于3D渲染模型。她约28岁，身高178cm，头身比1:9.3，腰线明显上提，腿线长于上身(下半身占63%)，整体接近黄金分割并避免五五分。四个面板保持同一身份/服装/比例，第一宫必须是30%面部特写大宫格，第二宫为正面全身，第三宫为侧面全身，第四宫为背面全身，严格保持所有宫格在同一横向单排、绝对不换行(全身保留鞋履清晰)。统一服装为修身短机能夹克、柔垂内搭、高腰短裤、黑色长靴。站姿稳定重心。布光为电影棚拍柔和主光+轮廓光。纯白背景在所有宫格间连续填充。
   - generation_prompt_en：Photoreal character sheet for Lin Yue/Lila, treated as a 16:9 horizontal canvas. Live Action/Photorealistic project type (visible skin pores, fine skin texture, slight facial imperfections, realistic skin tones, differentiating from 3D models). Around 28yo, 178cm, 1:9.3 head-to-body proportion, visibly elevated waistline, lower body ~63%, avoiding 1:1 split, subtle vertical stretch. Keep the four panels in strict order: facial Close-up, full-body Front, Side, Back. Panel 1 is a 30% facial Close-up, Panel 2 is full-body Front, Panel 3 is Side, and Panel 4 is Back, kept in a single row without line breaks, shoes visible. Wardrobe: fitted cropped navy jacket, draped inner top, high-waist shorts, knee-high boots. Stable posture. Soft key light, clean rim. Continuous pure white background across all panels.
   *注：若为英文项目，则调整面貌/时尚对标为英美语境；若为其他画风则调整材质要求。*
 - 全身像硬规则：角色 `generation_prompt_en` 必须明确为 full-body framing，人物从头到脚完整入镜，双脚与鞋子清晰可见（shoes fully visible）。
@@ -415,7 +415,7 @@
 - Beat 触发道具状态态回写规则：若 `{Beats}` 中的动作会直接改变某个可独立识别的道具状态态，例如被撞裂、被砸弯、洒出液体、封口撕开、灯泡炸裂、屏幕碎裂、刀刃崩口、箱体变形、绳索断开、表面沾灰/沾水/烧焦/污染，这些变化必须写入对应 `PROP:[...]` 的 `description_cn`、`generation_prompt_cn/en`、`visual_dependencies` 与 `dependency_strategy.logic`，不得只在 beat 过程里提一句“被砸坏了”。
 - Beat 触发道具拆分规则：若镜头需要同时保留道具的初始态与变化态，必须拆成多个独立 prop 条目并建立依赖链，例如 `PROP:[Bottle_Intact] -> PROP:[Bottle_Shattered]`、`PROP:[Monitor_On] -> PROP:[Monitor_Cracked_Black]`；禁止单一道具条目同时描述“完好+破损后”或“关闭+炸裂后”双状态态。
 - 核心示例（中英文双轨示范，必须按目标语言/道具重新推导，不可照抄）：
-  - generation_prompt_cn：写实[项目语言体系]道具四视图：警徽挂绳/古董怀表，整张资产表按 16:9 横向四宫格画布执行。保留深蓝织带、透明卡套、磨损徽章及英文卡面排版（或黄铜壳、划痕镜面）。机位锚点于转台中心略高，视角严格为[微距特写、正面、侧面、反面]。柔和上方主光与轻轮廓光，呈现塑料、金属与磨损细节。纯白背景，无人物介入。
+  - generation_prompt_cn：写实[项目语言体系]道具四视图：警徽挂绳/古董怀表，保留深蓝织带、透明卡套、磨损徽章及英文卡面排版（或黄铜壳、划痕镜面）。机位锚点于转台中心略高，视角严格为[微距特写、正面、侧面、反面]。柔和上方主光与轻轮廓光，呈现塑料、金属与磨损细节。纯白背景，无人物介入。
   - generation_prompt_en：Photoreal prop sheet for Police ID Lanyard / Antique Watch on a 16:9 horizontal canvas. Preserve navy woven strap, worn metal clip, rigid holder / brushed brass body, scratched crystal. Centered turntable camera. Strict panel order: Close-up, Front, Side, Back. Soft overhead key, clean rim separation for material depth. White background, object-only composition.
 - 未给定风格时注入默认道具审美回退语义。
 - 道具风格映射必须跟随剧本风格，真人剧强调真实材质与磨损。
