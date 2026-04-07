@@ -88,6 +88,13 @@
 
 
 
+### 6. 命名与依赖锚点规范 (Naming & Anchors)
+22. 环境命名权威：scene_analysis.txt 是 Environment 最终命名唯一权威；上游若提供 environment_name 仅作种子参考，必须在本阶段统一定稿。
+23. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
+25. 锚点不可变更：nchor_description 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
+
+---
+
 ## 一、分场与分析原则
 
 ### 1) 场景/环境分离
