@@ -599,7 +599,7 @@
 
 
 
-- **统一 JSON 示例（合并版精简示范，必读参照）**：以下为 characters, props, environments, project_visual_backfill 的合成形态示例。**极其重要：最终输出的 JSON 必须是一个完整对象，根节点包含并列的四个数组/对象（即 characters 数组, props 数组, environments 数组, project_visual_backfill 对象）。绝不能把 prop 或 environment 实体生硬塞进 characters 数组中！实体必须按照类别分配到对应的数组里！**：
+- **统一 JSON 示例（合并版精确实例示范，必读参照）**：以下为 characters, props, environments, project_visual_backfill 的合成形态示例。在本示例中所有字段均被**完整实例化（Full Instantiation）**，未省略或使用占位符，且严格遵守前文的所有核心规定（包括角色比例、细节要求、服装格式、多视角、横幅强制性、安全区等）。**极其重要：最终输出的 JSON 必须是一个完整对象，根节点包含并列的四个数组/对象（即 characters 数组, props 数组, environments 数组, project_visual_backfill 对象）。绝不能把 prop 或 environment 实体生硬塞进 characters 数组中！实体必须按照类别分配到对应的数组里！**：
 ```json
 {
   "characters": [
@@ -607,17 +607,17 @@
       "subject_no": "S001",
       "name": "林月",
       "name_en": "Lin Yue",
-      "description_cn": "调查记者，28岁左右...",
+      "description_cn": "调查记者，28岁。冷静、警觉且在危机中追求真相的克制型人物。下颌线清晰利落，具有观察者的深邃眼神。",
       "gender": "F",
       "role": "Investigative Reporter",
       "archetype": "Calm Truth Seeker",
-      "appearance_cn": "28岁，东亚女性，身高约178cm...",
-      "clothing": "当前服装：深海军蓝修身夹克... 时尚对标：... 其他装束：无。",
-      "action_characteristics": "动作克制、重心稳定...",
-      "generation_prompt_cn": "写实现代剧情风格，林月四视图...",
-      "generation_prompt_en": "Photoreal contemporary drama character sheet for Lin Yue...",
-      "negative_prompt_en": "beauty-filter skin, cheap glamour styling...",
-      "anchor_description": "female investigative reporter, clean jawline...",
+      "appearance_cn": "28岁，东亚女性，身高178cm，头身比1:9.3，腰线明显上提，下半身视觉占比约63%，上半身约37%，呈现出修长且接近黄金分割的比例。面部核心特征：1) 略带单眼皮质感的内双眼型，瞳孔呈深琥珀色且睫毛自然；2) 鼻梁挺直、鼻翼偏窄且线条紧致；3) 额骨到下巴的轮廓线利落。皮肤真实，带有皮肤微瑕细纹、微弱斑点与肤质高光质感。黑色齐肩短发，右侧习惯性挽在耳后。",
+      "clothing": "当前服装：深海军蓝修身截短款机能风夹克，内搭浅灰色垂坠感真丝衬衫，下身穿高腰黑色修身阔腿短裤与及膝平底皮靴。时尚对标：角色定位=都市调查记者；当代风格参考=实用机能风（Techwear）与高级极简主义；版型/材质/配色关键词=高腰修身、利落实用、深蓝与冷灰渐变、防水冲锋衣哑光材质。其他剧本衣着描述：无。",
+      "action_characteristics": "动作极度克制，重心下沉且稳定，观察事物前习惯有0.5秒的停滞停顿。",
+      "generation_prompt_cn": "电影级写实真人设定四视图，16:9横向资产画布。项目类型为实拍写实，由于强调真实质感，展示真实肤色微斑点、细小毛孔与自然光泽。28岁东亚女性，林月。身高178cm，头身比1:9.3，高腰线，长腿比例下半身占63%。深琥珀色内双眼睛，挺直鼻梁，清晰下颌线。黑色齐肩短发。四个面板严格同一身份/服装/比例：第一宫是30%面部特写(Close-up)，第二宫是正面全身(Front)，第三宫是侧面全身(Side)，第四宫是背面全身(Back)，全部在同一横排展开，鞋子完全可见。穿着深海军蓝截短机能夹克，浅灰内衬，高腰黑短裤，及膝黑皮靴。电影棚拍柔和贝壳光加极细边缘轮廓光。纯净全白背景在四格间连续空置填充。",
+      "generation_prompt_en": "Photoreal character sheet for Lin Yue on a 16:9 horizontal canvas. Live Action project type highlighting skin pores, fine texture, and realistic features. 28yo East Asian woman, 178cm, 1:9.3 head-to-body proportion, elevated waistline, lower body ~63% with long legs. Deep amber inner-double monolid eyes, straight nose bridge, sharp jawline, shoulder-length black bob tucked behind her right ear. Strict four panels in a single row: Panel 1 is a 30% facial Close-up, Panel 2 is full-body Front, Panel 3 is Side, and Panel 4 is Back. Continuous sequence, shoes completely visible in full body shots. Wardrobe: fitted cropped navy techwear jacket, draped light grey inner top, high-waist black shorts, knee-high flat leather boots. Soft clamshell key light with sharp rim light. Continuous pure white background.",
+      "negative_prompt_en": "beauty-filter skin, plastic face, CGI look, waxy skin, anime illustration, oversized clothing, 1:1 body split, incorrect panel order, fewer than 4 panels, cropped shoes, split-screen comic.",
+      "anchor_description": "female investigative reporter, shoulder-length black bob, sharp jawline, cropped navy techwear jacket, knee-high boots",
       "visual_dependencies": [],
       "dependency_strategy": { "type": "Original", "logic": "Original Chinese/English-project character." }
     }
@@ -628,11 +628,11 @@
       "name": "警徽挂绳证件卡",
       "name_en": "Police ID Badge Lanyard",
       "type": "held/static",
-      "description_cn": "英文项目警探常用证件挂绳...",
-      "generation_prompt_cn": "写实英文项目道具四视图：警徽挂绳证件卡...",
-      "generation_prompt_en": "Photoreal prop sheet for a Police ID Badge Lanyard...",
-      "negative_prompt_en": "Chinese text, toy-like plastic...",
-      "anchor_description": "navy woven lanyard, rigid clear badge holder...",
+      "description_cn": "英文项目警探日常使用的身份挂绳。其组成包含：顶部深蓝色编制尼龙长绳、带有使用痕迹的硬质全透明亚克力卡套、前端带有老旧黄铜拉丝质感的五角星警徽以及英文排版的文字ID卡面。",
+      "generation_prompt_cn": "写实英文项目道具四视图：警徽挂绳证件卡。固定于16:9横向单画布。居中转台相机视角。该道具呈现深蓝尼龙织带、边缘磨损的硬体宽卡套、划痕做旧的铜表面警徽及英文证件图文。视图呈现为四个独立面格：第一宫微距特写(Close-up展现金属划痕与纤维细节)，第二宫正面视图(Front)，第三宫侧面视图(Side)，第四宫背面视图(Back)，采用规整的4宫格表现形式。侧重打光材质厚度，顶部柔和关键光源分离轮廓深度。静物单体展示，配备全白纯净背景。",
+      "generation_prompt_en": "Photoreal prop sheet for a Police ID Badge Lanyard on a 16:9 horizontal canvas. Centered turntable view. Exactly four panels in a single row: Close-up (highlighting brass badge scratches, acrylic texture, and nylon fibers), Front, Side, and Back. Display navy woven strap, worn brass clip and badge, rigid clear acrylic holder, and English layout ID card. Soft top-angle key light with clean rim separation to emphasize material depth and wear. Pure white background, object-only static composition.",
+      "negative_prompt_en": "human hands, fingers, holding, Chinese text, toy-like plastic, 3D render, fewer than 4 panels, more than 4 panels, comic lines.",
+      "anchor_description": "navy woven lanyard, rigid clear badge holder, worn brass police badge, English ID",
       "visual_dependencies": [],
       "dependency_strategy": { "type": "Original", "logic": "Original English/Chinese-project prop." }
     }
@@ -642,13 +642,13 @@
       "subject_no": "S003",
       "name": "港口办公室_正向_中景_夜",
       "name_en": "Harbor Office Front Mid Night",
-      "atmosphere": "Rainy tense night with restrained noir contrast",
+      "atmosphere": "Rainy tense night with restrained noir contrast and highly structured staging",
       "visual_params": "Mid/Interior/Night",
-      "description_cn": "港口办公区夜景，玻璃隔断与桌面灯形成主视觉锚点...",
-      "generation_prompt_cn": "电影级写实剧情环境，港口办公室正向中景夜景版本...",
-      "generation_prompt_en": "Cinematic photoreal drama environment for Harbor Office Front Mid Night...",
-      "negative_prompt_en": "clean environment-only composition, stable architectural realism...",
-      "anchor_description": "glass partition, desk lamp row, wall clock...",
+      "description_cn": "港口办公区夜景，呈现纯粹的物理实景结构。从门外走廊向内看去的一条深邃视线。老旧木桌与后方百叶窗拉伸出空间透视，一盏金属色桌灯照亮桌面。窗体玻璃倒映街角路灯夜雨斑驳。静谧的环境空镜状态。",
+      "generation_prompt_cn": "电影级写实剧情环境，港口办公室正向中景夜景版本。静物空镜环境展现。从半开的实木门框内侧(Viewpoint Anchor)正向径直看入室内办公区(Viewing Direction)。前景(FG)：左侧厚重的门框木纹。中景(MG)：一张边缘起皮的实木办公桌和两把空置的转椅，作为主要主体(Primary Subject)。后景(BG)：紧闭的金属百叶窗墙和透出夜雨反光的大扇玻璃，作为次级主体(Secondary Subject)。室内依靠办公桌上一盏老式黄铜长臂台灯发出暖黄灯光维持基底亮度，与窗外散射进来的冷蓝色街灯形成冷暖反差。纯净写实的物理空间呈现，桌边通道区域开阔明朗。",
+      "generation_prompt_en": "Cinematic photoreal drama environment for Harbor Office Front Mid Night. Clean plate composition. From the inner edge of the open solid wooden door frame (Viewpoint Anchor), facing directly inward toward the office depth (Viewing Direction). FG: solid wooden texture of the door edge on the left. MG: a worn solid wood desk and two empty rolling office chairs acting as the Primary Subject. BG: wall obscured by metal blinds and rain-streaked glass pushing cold blue streetlights inside, acting as Secondary Subject. A vintage brass desk lamp emits warm yellow motivated practical lighting in the lower region, giving high cool-warm noir contrast. Static environment focus, clear walkable lanes past the desk.",
+      "negative_prompt_en": "people, characters, human silhouette, hands, over shoulder, human shadows, messy clutter blocking paths, bright flat lighting, CG rendering.",
+      "anchor_description": "solid wood desk, vintage brass desk lamp, wall with metal blinds, rain-streaked glass window",
       "visual_dependencies": [],
       "dependency_strategy": { "type": "Original", "logic": "Original Chinese/English-project environment." }
     },
@@ -658,20 +658,20 @@
       "name_en": "Cover Poster",
       "atmosphere": "Premium theatrical tension with dramatic layered poster depth",
       "visual_params": "Poster/Cover/4:3",
-      "description_cn": "整集封面海报专用环境，固定使用 4:3 横向画布...",
-      "generation_prompt_cn": "电影级写实封面海报环境，固定名称为封面海报，4:3 横向海报画布执行...",
-      "generation_prompt_en": "Premium theatrical cover-poster environment named Cover Poster, rendered on a fixed 4:3 canvas...",
-      "negative_prompt_en": "comic grid, tiled collage, split-screen montage...",
-      "anchor_description": "cover poster layout, layered key art depth...",
-      "visual_dependencies": ["CHAR:[@林月]", "CHAR:[@程雾]", "PROP:[证据档案袋]", "ENV:[港口办公室 正向 中景 夜]"],
-      "dependency_strategy": { "type": "Type A", "logic": "Derived as a special cover-poster environment..." }
+      "description_cn": "整集封面海报核心画布，专为 4:3 横版海报设计。林月和其搭档在办公室内背靠背持枪戒备的画面组合。底色为雨夜灯光映射下的阴冷构图空间。项目大标题置于画面顶部(y=30%-35%)的专属留白区，侧重黄金分割视觉，确保左右与底部的净空率以规避设备界面元素。",
+      "generation_prompt_cn": "电影级写实封面海报资产，固定名为封面海报。专门基于 4:3 横向定图画布渲染。顶级电影海报表现手法：林月与同伴在昏暗的港口办公室当中背对背站立警戒，胸前的警务证书挂绳充当前景视觉引导结构。利用深层的桌面暖灯与夜雨冷蓝背景构建戏剧化的冷暖冲撞光效。画面正上方三分之一的专属展示区内水平布置加粗的项目中文大字标题。结构重心内敛，保留侧边和底部的干净间隙用以容纳叠加的文字和UI装饰层，呈现出严谨的大片级定格排版。",
+      "generation_prompt_en": "Premium theatrical cover-poster named Cover Poster, utilizing a dedicated 4:3 horizontal canvas. Cinematic poster composition: Lin Yue and her male companion standing back-to-back alertly inside the dark Harbor Office tense setup. The Police ID badge and lanyard hang prominently creating a foreground leading structural line. Cool/warm cinematic lighting pushed through vintage desk lamp and cold rain-streaked backdrop. Bold project title text positioned clearly within the top-third zone, incorporating clean margins on the right and bottom edges to maintain a premium movie layout. Focused key art depth.",
+      "negative_prompt_en": "comic grid, tiled collage, split-screen montage, characters out of proportion, 16:9 canvas, blurry faces.",
+      "anchor_description": "cover poster layout, top-third title safe zone, dramatic cool-warm poster contrast, layered key art depth",
+      "visual_dependencies": ["CHAR:[@林月]", "CHAR:[@同伴]", "PROP:[警徽挂绳证件卡]", "ENV:[港口办公室_正向_中景_夜]"],
+      "dependency_strategy": { "type": "Type A", "logic": "Derived as a special cover-poster integrating key subjects into a single 4:3 layout." }
     }
   ],
   "project_visual_backfill": {
-    "Global_Style": "Cinematic realism with restrained noir contrast",
-    "borrowed_films": ["Sicario", "Blade Runner 2049"],
-    "tone": "tense, restrained, melancholic",
-    "lighting": "low-key motivated practical lighting with cool shadows"
+    "Global_Style": "Cinematic live-action photorealism with restrained noir contrast and explicit micro-texture details",
+    "borrowed_films": ["Sicario", "Blade Runner 2049", "Zodiac", "Se7en"],
+    "tone": "tense, restrained, investigative, melancholic, gritty",
+    "lighting": "low-key motivated practical lighting with cool-warm shadow contrasts and sharp atmospheric rim separation"
   }
 }
 ```
