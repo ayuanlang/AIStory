@@ -2067,11 +2067,9 @@ const Editor = ({
                                     id: null,
                                 });
 
-                                const currentSceneNo = String(scData.scene_no || '').trim();
-                                const currentSceneName = String(scData.scene_name || '').trim();
-                                const match = existingScenes.find(s => 
-                                    String(s.scene_no || '').trim() === currentSceneNo && 
-                                    String(s.scene_name || '').trim() === currentSceneName
+const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
+                                const match = existingScenes.find(s =>
+                                    String(s.scene_no || '').replace(/\s+/g, '') === currentSceneNo
                                 );
 
                                 if (match) {

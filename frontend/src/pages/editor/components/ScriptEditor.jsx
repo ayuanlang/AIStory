@@ -2286,36 +2286,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const runAutoImportAndSwitchToScenes = async (analyzedText, options = {}) => {
-        const switchToScenes = options?.switchToScenes !== false;
-        const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
-        if (typeof onImportText !== 'function') {
-            if (onLog) onLog('Import is not available in this context.', 'warning');
-            setAnalysisFlowStatus({
-                phase: 'completed',
-                message: t('分析完成（当前上下文不支持自动导入）', 'Analysis completed (auto import is not available in this context)'),
-            });
+        if (autoImportRunningRef.current) {
+            if (onLog) onLog('Skipped duplicate auto-import run while another import is already active in this view.', 'warning');
             return null;
         }
+        autoImportRunningRef.current = true;
+        try {
+            const switchToScenes = options?.switchToScenes !== false;
+            const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
+            if (typeof onImportText !== 'function') {
+                if (onLog) onLog('Import is not available in this context.', 'warning');
+                setAnalysisFlowStatus({
+                    phase: 'completed',
+                    message: t('分析完成（当前上下文不支持自动导入）', 'Analysis completed (auto import is not available in this context)'),
+                });
+                return null;
+            }
 
-        setAnalysisFlowStatus({
-            phase: 'importing',
-            message: t('推演完成：已成功获取 AI 的导演级解析框架，正在为您结构化导入至工作台...', 'LLM response received, auto-importing...'),
-        });
+            setAnalysisFlowStatus({
+                phase: 'importing',
+                message: t('推演完成：已成功获取 AI 的导演级解析框架，正在为您结构化导入至工作台...', 'LLM response received, auto-importing...'),
+            });
 
-        if (onLog) onLog('Auto-importing analysis result...', 'process');
-        const check = validateAutoSceneTableImport(analyzedText || '');
-        if (check.ok && check.warning && onLog) onLog(check.warning, 'warning');
-        if (!check.ok && onLog) onLog(`Auto scene-table check skipped: ${check.reason}`, 'warning');
+            if (onLog) onLog('Auto-importing analysis result...', 'process');       
+            const check = validateAutoSceneTableImport(analyzedText || '');
+            if (check.ok && check.warning && onLog) onLog(check.warning, 'warning');
+            if (!check.ok && onLog) onLog(`Auto scene-table check skipped: ${check.reason}`, 'warning');
 
-        // Keep full analysis payload so entities JSON can be imported in the same run.
-        const importReport = await onImportText(analyzedText || '', 'auto', importOptions);
-        if (onLog) onLog('Auto-import finished.', 'success');
+            // Keep full analysis payload so entities JSON can be imported in the same run.
+            const importReport = await onImportText(analyzedText || '', 'auto', importOptions);
+            if (onLog) onLog('Auto-import finished.', 'success');
 
-        if (switchToScenes && typeof onSwitchToScenes === 'function') {
-            onSwitchToScenes();
+            if (switchToScenes && typeof onSwitchToScenes === 'function') {
+                onSwitchToScenes();
+            }
+
+            return importReport || null;
+        } finally {
+            autoImportRunningRef.current = false;
         }
-
-        return importReport || null;
     };
 
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, options = {}) => {
@@ -2972,6 +2981,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisResumeInFlightRef = useRef(false);
     const analysisStopRequestedRef = useRef(false);
     const analysisRunInFlightRef = useRef(false);
+    const autoImportRunningRef = useRef(false);
     const lastSubjectsImportIncompleteAlertRef = useRef('');
     const ANALYSIS_TASK_MAX_AGE_MS = 10 * 60 * 1000;
     const ANALYSIS_TASK_MARKER_TTL_MS = 12 * 60 * 1000;
@@ -3172,7 +3182,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resumeAnalysisFromTaskMarker = useCallback(async (marker) => {
         if (!activeEpisode?.id || !marker?.taskId) return;
-        if (analysisResumeInFlightRef.current) return;
+        if (analysisResumeInFlightRef.current || analysisRunInFlightRef.current) return;
         analysisResumeInFlightRef.current = true;
 
         const startedAt = Number(marker?.startedAt || Date.now());
@@ -4439,7 +4449,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
-        if (analysisRunInFlightRef.current) {
+        if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
             if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
@@ -4802,7 +4812,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert("No active episode selected.");
             return;
         }
-        if (analysisRunInFlightRef.current) {
+        if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
