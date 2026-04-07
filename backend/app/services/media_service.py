@@ -6448,25 +6448,53 @@ class MediaGenerationService:
                      image_config["imageSize"] = "256" # not sure if supported, but whatever
                      
                 prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
-                parts = [{"text": prompt_text}]
+                parts = []
+                final_contents = []
 
-                reference_values = ref_image if isinstance(ref_image, list) else [ref_image]
-                for ref_item in reference_values:
-                    raw_ref = str(ref_item or "").strip()
-                    if not raw_ref: continue
-                    data_uri = await self._get_image_base64_for_api_async(raw_ref, force_data_uri=True)
-                    if isinstance(data_uri, str) and data_uri.startswith("data:image/"):
-                        idx = data_uri.find(";base64,")
-                        if idx > 5:
-                            mime = data_uri[5:idx].strip().lower() or "image/png"
-                            parts.append({
-                                "inline_data": {
-                                    "mime_type": mime,
-                                    "data": data_uri[idx + len(";base64,"):].strip(),
-                                }
-                            })
-
-                final_contents = [{"role": "user", "parts": parts}]
+                if prompt and prompt.startswith("GEMINI_BATCH::"):
+                    try:
+                        batch_data = json.loads(prompt[14:])
+                        for item in batch_data:
+                            item_text = self._merge_negative_prompt(item.get("text", ""), negative_prompt)
+                            item_parts = [{"text": item_text}]
+                            item_ref = item.get("ref")
+                            if item_ref:
+                                data_uri = await self._get_image_base64_for_api_async(item_ref, force_data_uri=True)
+                                if isinstance(data_uri, str) and data_uri.startswith("data:image/"):
+                                    idx = data_uri.find(";base64,")
+                                    if idx > 5:
+                                        mime = data_uri[5:idx].strip().lower() or "image/png"
+                                        item_parts.append({
+                                            "inline_data": {
+                                                "mime_type": mime,
+                                                "data": data_uri[idx + len(";base64,"):].strip(),
+                                            }
+                                        })
+                            # Append directly as parts inside the main object, since multiple results come from single content with multiple inputs, OR single part
+                            # According to instruction, "数组功能" implies putting all prompts/images in one request part array or multiple parts
+                            parts.extend(item_parts)
+                        final_contents = [{"role": "user", "parts": parts}]
+                    except Exception as e:
+                        _debug_log(f"[n1n_gemini_image] Failed to parse GEMINI_BATCH: {e}")
+                        final_contents = [{"role": "user", "parts": [{"text": prompt_text}]}]
+                else:
+                    parts = [{"text": prompt_text}]
+                    reference_values = ref_image if isinstance(ref_image, list) else [ref_image]
+                    for ref_item in reference_values:
+                        raw_ref = str(ref_item or "").strip()
+                        if not raw_ref: continue
+                        data_uri = await self._get_image_base64_for_api_async(raw_ref, force_data_uri=True)
+                        if isinstance(data_uri, str) and data_uri.startswith("data:image/"):
+                            idx = data_uri.find(";base64,")
+                            if idx > 5:
+                                mime = data_uri[5:idx].strip().lower() or "image/png"
+                                parts.append({
+                                    "inline_data": {
+                                        "mime_type": mime,
+                                        "data": data_uri[idx + len(";base64,"):].strip(),
+                                    }
+                                })
+                    final_contents = [{"role": "user", "parts": parts}]
                 if config.get("is_gemini_multi_turn_edit"):
                     base_prompt = config.get("gemini_base_prompt") or prompt_text
                     edit_instruction = config.get("gemini_edit_instruction") or prompt_text
@@ -6514,14 +6542,32 @@ class MediaGenerationService:
                     try:
                         raw_data = res.get("metadata", {}).get("raw", {})
                         if "candidates" in raw_data:
-                            b64_data = raw_data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
-                            if b64_data:
-                                res["url"] = f"data:image/png;base64,{b64_data}"
-                    except Exception:
-                        pass
-                
-                return res
-
+                            # Handle multiple images when batching
+                            out_parts = raw_data["candidates"][0]["content"]["parts"]
+                            urls = []
+                            for p in out_parts:
+                                if "inlineData" in p:
+                                    b64_data = p["inlineData"]["data"]
+                                    if b64_data:
+                                        urls.append(f"data:image/png;base64,{b64_data}")
+                            
+                            if len(urls) > 1:
+                                # For batch array feature, we return multiple URLs joined by a sentinel delimiter
+                                # Which will be split by the frontend.
+                                logger.info(f"[{provider_name}_gemini_image] 批处理模式：收到了 {len(urls)} 张图片的返回结果。")
+                                res["url"] = "|||".join(urls)
+                            elif len(urls) == 1:
+                                logger.info(f"[{provider_name}_gemini_image] 标准模式：只收到了 1 张图片的返回结果。")
+                                res["url"] = urls[0]
+                            elif len(out_parts) > 0 and "inlineData" in out_parts[0]:
+                                b64_data = out_parts[0]["inlineData"]["data"]
+                                if b64_data:
+                                    logger.info(f"[{provider_name}_gemini_image] 标准模式：只收到了 1 张图片的返回结果(out_parts[0])。")
+                                    res["url"] = f"data:image/png;base64,{b64_data}"
+                            else:
+                                logger.warning(f"[{provider_name}_gemini_image] 警告：没有从返回的 payload 中解析到符合条件的图片。")
+                    except Exception as e:
+                        logger.error(f"[{provider_name}_gemini_image] 无法解析 base64 响应内容: {e}")
             # Fallback to OpenAI compatible for non-gemini apiyi image models if any (or we replace entirely)
             endpoint_lower = endpoint.lower()
             if "/v1/images/generations" not in endpoint_lower:

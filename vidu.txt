@@ -1,0 +1,195 @@
+_handle_vidu_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, keyframes=None, negative_prompt: Optional[str] = None):
+        """
+        Vidu API Support (Images + Text -> Video)
+        """
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
+        api_key = config.get("api_key")
+        if not api_key: return {"error": "No Vidu API Key"}
+        
+        raw_base_url = config.get("base_url") or "https://api.vidu.studio/open/v1/creation"
+        endpoint = raw_base_url.rstrip("/")
+        if "creation" not in endpoint: endpoint += "/open/v1/creation"
+        
+        model = config.get("model") or "vidu2.0"
+        tool_conf = config.get("config", {}) or {}
+
+        def _normalize_bool(raw: Any, default: bool) -> bool:
+            if raw is None:
+                return default
+            if isinstance(raw, bool):
+                return raw
+            text = str(raw).strip().lower()
+            if text in {"1", "true", "yes", "y", "on"}:
+                return True
+            if text in {"0", "false", "no", "n", "off"}:
+                return False
+            return default
+
+        # Vidu sound switch: prefer explicit `sound`, then legacy `is_rec`, default enabled.
+        sound_enabled = _normalize_bool(
+            tool_conf.get("sound") if "sound" in tool_conf else tool_conf.get("is_rec"),
+            True,
+        )
+        
+        # Check for Multi-Frame Mode (Keyframes present)
+        is_multiframe = keyframes and len(keyframes) >= 1
+        
+        # If multi-frame, we use different payload structure
+        if is_multiframe:
+            _debug_log("[Vidu] Using Multi-Frame (Keyframes) Mode")
+            # Required: model, start_image, image_settings
+            # Typically model is viduq2-turbo or viduq2-pro for this mode (as per user snippet)
+            # Default to viduq2-turbo if current model is not appropriate? 
+            # Or just use configured model and hope user selected correct one.
+            # User snippet: Optional values: viduq2-turbo, viduq2-pro
+            
+            payload = {
+                "model": model, 
+                "prompt": prompt[:2000] if prompt else ""
+            }
+            
+            # 1. Start Image
+            start_img_src = None
+            if ref_image:
+                 refs = ref_image if isinstance(ref_image, list) else [ref_image]
+                 if refs: start_img_src = refs[0]
+            
+            if not start_img_src:
+                 return {"error": "Vidu Multi-Frame requires a Start Image (Reference Image)"}
+                 
+            start_ref = await self._resolve_ref_for_api_async(start_img_src, force_data_uri_for_local=True)
+            if not start_ref: return {"error": "Failed to load Start Image"}
+            
+            payload["start_image"] = start_ref
+            
+            # 2. Image Settings (Keyframes)
+            # User spec: Array of keyframe config. Min 2.
+            # Assuming structure: [{"image": "b64"}, ...] based on general Vidu practices or simplified interpretation.
+            # Actually, user provided spec didn't define inside object.
+            # But "image_settings" name implies objects. Maybe related to timestamps too.
+            # Since we only have URLs, we will try to pass minimal object: {"image": "...", "timestamp": auto?}
+            # Or just pass the images if the array expects strings? 
+            # Note: "image_settings Array ... max 9 keyframes"
+            # It's safest to assume standard keyframe format: { "image": "base64", "timestamp": float (0-1) } or just ordered list.
+            # Given user didn't specify timestamp rules, likely just ordered frames?
+            # Let's try passing list of objects with "image" key.
+            
+            settings_arr = []
+            for kf in keyframes:
+                 resolved_kf = await self._resolve_ref_for_api_async(kf, force_data_uri_for_local=True)
+                 if resolved_kf:
+                     # Attempt generic structure. 
+                     # If backend rejects, we will know.
+                     # Vidu Character Consistency uses "characters".
+                     # This "image_settings" is likely for timeline control.
+                     settings_arr.append({"image": resolved_kf})
+            
+            # Validation: Min 2 keyframes
+            if len(settings_arr) < 2:
+                  _debug_log("[Vidu] Warning: Multi-frame expects min 2 keyframes. Current: " + str(len(settings_arr)), "warning")
+                  # If only 1 keyframe, maybe duplication works? Or fall back?
+                  if len(settings_arr) == 1:
+                       settings_arr.append(settings_arr[0]) # Duplicate to meet min requirements
+            
+            payload["image_settings"] = settings_arr[:9] # Max 9
+
+        else:
+            # Standard Start/End Mode
+            payload = {
+                "model": model,
+                "prompt": prompt[:2000] if prompt else ""
+            }
+            images = []
+            if ref_image:
+                refs = ref_image if isinstance(ref_image, list) else [ref_image]
+                if refs:
+                    start_ref = await self._resolve_ref_for_api_async(refs[0], force_data_uri_for_local=True)
+                    if start_ref: images.append(start_ref)
+            
+            if last_frame_url:
+                end_ref = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
+                if end_ref:
+                     if not images: images.append(end_ref) # Use as start if no start
+                     else: images.append(end_ref) # Use as end
+            
+            if images: payload["images"] = images
+
+        # Shared: Duration & Resolution
+        if duration:
+            dur_int = int(duration)
+            if dur_int < 1: dur_int = 4 
+            if model == "vidu2.0":
+                 payload["duration"] = 8 if dur_int >= 6 else 4
+                 if payload["duration"] == 8: payload["resolution"] = "720p" 
+            elif "viduq1" in model:
+                 payload["duration"] = 5
+                 payload["resolution"] = "1080p"
+            else:
+                 payload["duration"] = min(dur_int, 8)
+
+        if "resolution" not in payload: payload["resolution"] = "720p" 
+
+        # Config overrides
+        if config.get("config"):
+             cf = config.get("config")
+             if cf.get("seed"): payload["seed"] = int(cf.get("seed"))
+             if cf.get("resolution"): payload["resolution"] = cf.get("resolution")
+
+        # Always pass the resolved audio flag to Vidu payload.
+        payload["is_rec"] = bool(sound_enabled)
+
+        _debug_log(
+            f"[Vidu] Job Submission: Model={model}, Dur={payload.get('duration')}, Res={payload.get('resolution')}, MultiFrame={is_multiframe}, Sound={payload.get('is_rec')}"
+        )
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Token {api_key}"
+        }
+        
+        try:
+            # Submit
+            resp = await asyncio.to_thread(
+                lambda: requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120))
+            )
+            if resp.status_code not in [200, 201]:
+                return {"error": f"Vidu Error {resp.status_code}", "details": resp.text}
+
+            data = resp.json()
+            task_id = data.get("id")
+            if not task_id:
+                return {"error": "No Task ID returned", "details": resp.text}
+
+            # Poll
+            poll_url = f"{endpoint}/{task_id}"
+            for _ in range(90):
+                await asyncio.sleep(2)
+                p_resp = await asyncio.to_thread(
+                    lambda: requests.get(poll_url, headers=headers, timeout=30)
+                )
+                if p_resp.status_code == 200:
+                    p_data = p_resp.json()
+                    status = p_data.get("state") or p_data.get("status")
+
+                    if status == "success" or status == "SUCCESS":
+                        vid_url = p_data.get("valid_video_url") or p_data.get("video_url") or p_data.get("url")
+                        if vid_url:
+                            return {
+                                "url": vid_url,
+                                "metadata": {
+                                    "raw": p_data,
+                                    "provider": "vidu",
+                                    "model": model,
+                                    "has_audio": bool(sound_enabled),
+                                    "sound": bool(sound_enabled),
+                                },
+                            }
+                    elif status == "failed" or status == "FAILED":
+                        return {"error": "Vidu Generation Failed", "details": str(p_data)}
+
+            return {"error": "Timeout polling Vidu"}
+
+        except Exception as e:
+            traceback.print_exc()
+            return {"error": f"Vidu Exception: {str(e)}"}
+             

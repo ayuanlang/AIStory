@@ -1,0 +1,286 @@
+_handle_wanxiang_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
+        if gen_type != "video": return {"error": "Wanxiang only supports video"}
+
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
+        
+        api_key = config.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
+        endpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis" 
+        model = config.get("model") or "wanx2.1-i2v-plus"
+        
+        # Auto-correction for KF2V with single image to avoid "video frames must be set" error
+        # KF2V likely requires multiple frames or specific array input, while I2V handles single image.
+        if "kf2v" in model and ref_image and not last_frame_url:
+             _debug_log(f"[Wanxiang] Model {model} requested but only 1 ref image provided. Switching to wanx2.1-i2v-plus.", "warning")
+             model = "wanx2.1-i2v-plus"
+
+        base_metadata = {"provider": "wanxiang", "model": model, "prompt": prompt}
+        
+        # Determine parameter names based on model type
+        # i2v (Image) uses image_url
+        # kf2v (KeyFrame) uses first_frame_url/last_frame_url, so we exclude it from is_i2v
+        is_i2v = "i2v" in model
+        
+        first_img = await self._resolve_ref_for_api_async(ref_image, force_data_uri_for_local=True)
+        
+        # Validations
+        if is_i2v and not first_img:
+             return {"error": "Wanxiang I2V model requires a reference image."}
+        
+        input_data = {"prompt": prompt}
+        effective_negative_prompt = str(negative_prompt or config.get("negative_prompt") or "").strip()
+        if effective_negative_prompt:
+            input_data["negative_prompt"] = effective_negative_prompt
+        
+        if is_i2v:
+            input_data["image_url"] = first_img
+        elif first_img:
+            # T2V with start frame (if supported)
+            input_data["first_frame_url"] = first_img
+
+        if last_frame_url:
+            last_img = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
+            if last_img:
+                if is_i2v:
+                     logger.warning("[Wanxiang] Warning: Model is i2v but last_frame_url provided. Ignoring.")
+                else:
+                     input_data["last_frame_url"] = last_img
+        
+        # Construct Parameters safely
+        # Default resolution
+        res = str(config.get("resolution", "720P"))
+        
+        # Override with aspect_ratio if provided
+        if aspect_ratio:
+             # Wanx 2.1 strictly requires '720P' or '480P'. It does NOT accept '1280*720'.
+             # It seems to infer orientation from valid input images or defaults to 1280x720.
+             if aspect_ratio == "16:9": res = "720P"
+             elif aspect_ratio == "9:16": res = "720P" # Use 720P and hope model respects input image
+             elif aspect_ratio == "1:1": res = "720P"
+             # If user provided a pixel string (e.g. 1280x720), force fallback to 720P to avoid API error
+             elif "*" in aspect_ratio or "x" in aspect_ratio:
+                  res = "720P"
+        
+        # Double check validity against known strict list
+        if res not in ["720P", "480P", "1080P"]:
+            # Wanx2.1 typically only supports 720P and 480P. 1080P might be available on some but safer to fallback.
+            if "1280" in res or "720" in res:
+                res = "720P"
+            else:
+                res = "720P" # Fallback safe default
+
+        
+        parameters = {
+            "resolution": res,
+            "prompt_extend": bool(config.get("prompt_extend", True))
+        }
+        if config.get("seed"): parameters["seed"] = int(config.get("seed"))
+        
+        payload = {
+            "model": model,
+            "input": input_data,
+            "parameters": parameters
+        }
+
+        # logger.info(f"[Wanxiang] Payload: {json.dumps(payload, ensure_ascii=False)}")
+        
+        headers = {"X-DashScope-Async": "enable", "Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        
+        _debug_log(f"[Wanxiang] POSTING to {endpoint} with Model {model}")
+        
+        def _post(): return requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
+        
+        try:
+            resp = await asyncio.to_thread(_post)
+            
+            if resp.status_code != 200: 
+                _debug_log(f"[Wanxiang] HTTP {resp.status_code} Error Body: {resp.text}", "error")
+                # Try to parse error code if json
+                try: 
+                    err_body = resp.json()
+                    return {"error": f"Wanxiang API Error ({err_body.get('code', 'Unknown')})", "details": err_body.get('message', resp.text)}
+                except:
+                    return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
+            
+            data = resp.json()
+            _debug_log(f"[Wanxiang] Submission Success: {_strip_base64_from_log(data)}")
+        except Exception as e:
+            _debug_log(f"[Wanxiang] Exception: {e}", "error")
+            import traceback
+            traceback.print_exc()
+            return {"error": f"Wanxiang Request Exception: {e}"}
+
+        task_id = data.get("output", {}).get("task_id")
+        if not task_id: return {"error": "No Task ID"}
+        
+        task_endpoint = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+        
+        for _ in range(120):
+            await asyncio.sleep(2)
+            def _poll(): return requests.get(task_endpoint, headers={"Authorization": f"Bearer {api_key}"}, timeout=30, verify=False)
+            p_resp = await asyncio.to_thread(_poll)
+            
+            if p_resp.status_code == 200:
+                p_data = p_resp.json()
+                status = p_data.get("output", {}).get("task_status")
+                if status == "SUCCEEDED":
+                     meta = {"raw": p_data}
+                     meta.update(base_metadata)
+                     return {"url": p_data.get("output", {}).get("video_url"), "metadata": meta}
+                elif status in ["FAILED", "CANCELED"]:
+                     err_msg = p_data.get("output", {}).get("message")
+                     _debug_log(f"[Wanxiang] Task Failed: {err_msg}", "error")
+                     return {"error": "Generation Failed", "details": err_msg}
+        return {"error": "Timeout"}
+
+    def _looks_like_video_media_ref(self, value: Any) -> bool:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return False
+        if raw.startswith("data:video/"):
+            return True
+        return any(token in raw for token in (".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v", "/video/", "video/"))
+
+    def _resolve_public_media_url(self, value: Any) -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if self._is_public_http_url(raw):
+            return raw
+        return self._resolve_public_upload_url(raw)
+
+    def _resolve_public_media_urls(self, values: Any) -> List[str]:
+        source = values if isinstance(values, list) else [values]
+        resolved: List[str] = []
+        for item in source:
+            url = self._resolve_public_media_url(item)
+            if url:
+                resolved.append(url)
+        return resolved
+
+    def _load_media_binary_for_upload(self, url_or_path: Any):
+        raw = str(url_or_path or "").strip()
+        if not raw:
+            return None, None, None
+
+        def _normalize_ext(ext: str, mime: str) -> str:
+            normalized = str(ext or "").strip().lower()
+            if normalized == ".jpe":
+                return ".jpg"
+            if normalized:
+                return normalized
+            guessed = mimetypes.guess_extension(mime or "") or ""
+            if guessed == ".jpe":
+                guessed = ".jpg"
+            return guessed
+
+        if raw.startswith("data:"):
+            marker = ";base64,"
+            idx = raw.find(marker)
+            if idx <= 5:
+                return None, None, None
+            mime = raw[5:idx].strip().lower() or "application/octet-stream"
+            b64 = raw[idx + len(marker):].strip()
+            if not b64:
+                return None, None, None
+            try:
+                data = base64.b64decode(b64)
+            except Exception:
+                return None, None, None
+            ext = _normalize_ext("", mime)
+            filename = f"rh-upload-{uuid.uuid4().hex[:12]}{ext or '.bin'}"
+            return data, mime, filename
+
+        if raw.startswith("http://") or raw.startswith("https://"):
+            try:
+                resp = requests.get(raw, stream=True, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code != 200:
+                    return None, None, None
+                data = resp.content
+                mime = str(resp.headers.get("Content-Type", "")).split(";")[0].strip().lower() or "application/octet-stream"
+                parsed_path = requests.utils.urlparse(raw).path or ""
+                ext = _normalize_ext(os.path.splitext(parsed_path)[1], mime)
+                filename = f"rh-upload-{uuid.uuid4().hex[:12]}{ext or '.bin'}"
+                return data, mime, filename
+            except Exception:
+                return None, None, None
+
+        path = raw
+        if raw.startswith("/uploads/") or "/uploads/" in raw:
+            fname = raw.split("/uploads/")[-1]
+            upload_dir = settings.UPLOAD_DIR
+            if not os.path.isabs(upload_dir):
+                upload_dir = os.path.abspath(upload_dir)
+            import urllib.parse
+            clean_fname = fname.split('?')[0]
+            path = os.path.join(upload_dir, urllib.parse.unquote(clean_fname))
+
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+
+        if not os.path.exists(path) or not os.path.isfile(path):
+            return None, None, None
+
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except Exception:
+            return None, None, None
+
+        mime = (mimetypes.guess_type(path)[0] or "application/octet-stream").lower()
+        ext = _normalize_ext(os.path.splitext(path)[1], mime)
+        filename = f"rh-upload-{uuid.uuid4().hex[:12]}{ext or '.bin'}"
+        return data, mime, filename
+
+    def _upload_runninghub_binary_ref(self, ref_value: Any, api_key: str, base_url: str) -> Optional[str]:
+        if not api_key:
+            return None
+        data, mime, filename = self._load_media_binary_for_upload(ref_value)
+        if not data:
+            return None
+
+        upload_url = f"{str(base_url or 'https://www.runninghub.cn').rstrip('/')}/openapi/v2/media/upload/binary"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        files = {
+            "file": (filename or f"rh-upload-{uuid.uuid4().hex[:12]}.bin", data, mime or "application/octet-stream")
+        }
+
+        try:
+            resp = requests.post(upload_url, headers=headers, files=files, timeout=(15, 120), verify=False)
+            if resp.status_code != 200:
+                logger.warning("RunningHub binary upload failed | status=%s body=%s", resp.status_code, (resp.text or "")[:500])
+                return None
+
+            payload = resp.json() if resp.content else {}
+            if not isinstance(payload, dict):
+                return None
+
+            code = payload.get("code")
+            if code not in (0, "0", None):
+                logger.warning("RunningHub binary upload rejected | code=%s message=%s", code, str(payload.get("message") or payload)[:300])
+                return None
+
+            data_block = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            download_url = str(data_block.get("download_url") or data_block.get("downloadUrl") or "").strip()
+            if download_url.startswith(("http://", "https://")):
+                return download_url
+            return None
+        except Exception as e:
+            logger.warning("RunningHub binary upload exception | error=%s", str(e)[:300])
+            return None
+
+    def _resolve_runninghub_media_input(self, value: Any, api_key: str, base_url: str, media_kind: str = "image") -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if self._is_public_http_url(raw):
+            return raw
+
+        uploaded_url = self._upload_runninghub_binary_ref(raw, api_key=api_key, base_url=base_url)
+        if uploaded_url:
+            return uploaded_url
+
+        if str(media_kind or "").strip().lower() == "image":
+            fallback = self._resolve_ref_for_api(raw, force_data_uri_for_local=True)
+            return str(fallback or "").strip() or None
+
+        return None

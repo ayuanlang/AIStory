@@ -1,0 +1,171 @@
+_handle_n1n_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+        provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "n1n")
+        api_key = str(config.get("api_key") or "").strip()
+        if not api_key:
+            return {"error": f"No {provider_name} API Key", "submit_failed": True}
+
+        if gen_type != "image":
+            return {"error": f"{provider_name} generation type not supported yet: {gen_type}", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        base_url = str(config.get("base_url") or "https://api.n1n.ai").strip().rstrip("/")
+        endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "").strip()
+        model = str(config.get("model") or "").strip()
+        if not endpoint:
+            return {"error": f"{provider_name} endpoint missing from system configuration", "submit_failed": True}
+        if not model:
+            return {"error": f"{provider_name} runtime model missing from system configuration", "submit_failed": True}
+
+        endpoint_lower = endpoint.lower()
+        if "generatecontent" not in endpoint_lower:
+            return {"error": f"{provider_name} image endpoint family not supported yet: {endpoint}", "submit_failed": True}
+
+        resolved_endpoint = endpoint.replace("{model}", urllib.parse.quote(model, safe="-._~"))
+        submit_url = resolved_endpoint if re.match(r"^https?://", resolved_endpoint, flags=re.IGNORECASE) else f"{base_url}{resolved_endpoint if resolved_endpoint.startswith('/') else '/' + resolved_endpoint}"
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+        parts: List[Dict[str, Any]] = []
+        if prompt_text:
+            parts.append({"text": prompt_text})
+
+        reference_values = ref_image if isinstance(ref_image, list) else [ref_image]
+        for ref_item in reference_values:
+            raw_ref = str(ref_item or "").strip()
+            if not raw_ref:
+                continue
+            data_uri = await self._get_image_base64_for_api_async(raw_ref, force_data_uri=True)
+            if not isinstance(data_uri, str) or not data_uri.startswith("data:image/"):
+                return {"error": f"{provider_name} Gemini image editing requires resolvable image inputs", "submit_failed": True}
+            marker = ";base64,"
+            idx = data_uri.find(marker)
+            if idx <= 5:
+                return {"error": f"{provider_name} Gemini image input data URI is malformed", "submit_failed": True}
+            mime = data_uri[5:idx].strip().lower() or "image/png"
+            parts.append({
+                "inline_data": {
+                    "mime_type": mime,
+                    "data": data_uri[idx + len(marker):].strip(),
+                }
+            })
+
+        if not parts:
+            return {"error": f"{provider_name} Gemini image generation requires at least one prompt or image input", "submit_failed": True}
+
+        response_modalities = tool_conf.get("responseModalities") or tool_conf.get("response_modalities") or ["TEXT", "IMAGE"]
+        if isinstance(response_modalities, str):
+            response_modalities = [response_modalities]
+        normalized_modalities = []
+        for item in response_modalities if isinstance(response_modalities, list) else []:
+            value = str(item or "").strip().upper()
+            if value and value not in normalized_modalities:
+                normalized_modalities.append(value)
+        if "IMAGE" not in normalized_modalities:
+            normalized_modalities.append("IMAGE")
+
+        payload: Dict[str, Any] = {
+            "contents": [{
+                "role": "user",
+                "parts": parts,
+            }],
+            "generationConfig": {
+                "responseModalities": normalized_modalities,
+            },
+        }
+
+        image_config: Dict[str, Any] = {}
+        normalized_aspect_ratio = self._normalize_aspect_ratio_value(aspect_ratio or tool_conf.get("aspect_ratio") or tool_conf.get("aspectRatio"))
+        if normalized_aspect_ratio and normalized_aspect_ratio != "adaptive":
+            image_config["aspectRatio"] = normalized_aspect_ratio
+
+        normalized_image_size = self._normalize_image_size_value(image_size or tool_conf.get("image_size") or tool_conf.get("imageSize"))
+        if normalized_image_size:
+            model_lower = model.lower()
+            if "gemini-3-pro-image-preview" in model_lower or "gemini-3.1-flash-image-preview" in model_lower:
+                image_config["imageSize"] = normalized_image_size
+
+        if image_config:
+            payload["generationConfig"]["imageConfig"] = image_config
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        prefer_no_proxy = self._should_prefer_no_proxy(provider_name, "n1n_gemini_image")
+
+        def _post(use_proxy=True, connect_timeout=None):
+            c_timeout = connect_timeout or 120
+            return self._post_json_request(submit_url, payload, headers, (c_timeout, 120), verify=False, use_proxy=use_proxy)
+
+        def _extract_generated_image(value: Any) -> Optional[str]:
+            if isinstance(value, dict):
+                for key in ["inline_data", "inlineData"]:
+                    inline_block = value.get(key)
+                    if isinstance(inline_block, dict):
+                        mime = str(inline_block.get("mime_type") or inline_block.get("mimeType") or "").strip().lower()
+                        data = str(inline_block.get("data") or "").strip()
+                        if mime.startswith("image/") and data:
+                            return f"data:{mime};base64,{data}"
+                for key in ["url", "imageUrl", "image_url"]:
+                    candidate = value.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        return candidate.strip()
+                preferred_keys = ["parts", "content", "contents", "candidates", "data", "result", "results", "response"]
+                for key in preferred_keys:
+                    found = _extract_generated_image(value.get(key))
+                    if found:
+                        return found
+                for nested in value.values():
+                    found = _extract_generated_image(nested)
+                    if found:
+                        return found
+            elif isinstance(value, list):
+                for item in value:
+                    found = _extract_generated_image(item)
+                    if found:
+                        return found
+            elif isinstance(value, str):
+                raw = value.strip()
+                if raw.startswith("data:image/") or raw.lower().startswith(("http://", "https://")):
+                    return raw
+            return None
+
+        try:
+            try:
+                resp = await asyncio.to_thread(_post, not prefer_no_proxy)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if prefer_no_proxy:
+                    raise
+                _debug_log(f"[n1n_gemini_image] Connection Failed with Proxy ({str(e)[:50]}...). Retrying without proxy (connect_timeout=15s)...", "warning")
+                resp = await asyncio.to_thread(_post, False, 15)
+
+            if resp.status_code != 200:
+                _debug_log(f"[n1n_gemini_image] Error {resp.status_code}: {resp.text}", "error")
+                return {"error": f"n1n API Error {resp.status_code}", "details": resp.text, "submit_failed": True}
+
+            data = resp.json()
+            _debug_log(f"[n1n_gemini_image] API Response: {_strip_base64_from_log(data)}")
+            generated_image = _extract_generated_image(data)
+            if not generated_image:
+                return {
+                    "error": "n1n Gemini response did not include an image output",
+                    "details": _strip_base64_from_log(data),
+                    "submit_failed": True,
+                }
+
+            metadata = {
+                "raw": data,
+                "provider": "n1n",
+                "model": model,
+                "submit_url": submit_url,
+                "endpoint_family": "/v1beta/models/{model}:generateContent",
+            }
+            return {"url": generated_image, "metadata": metadata}
+        except requests.exceptions.Timeout as e:
+            _debug_log(f"[n1n_gemini_image] Timeout: {e}", "error")
+            return {"error": "n1n upstream request timeout", "details": str(e), "submit_failed": True}
+        except requests.exceptions.RequestException as e:
+            _debug_log(f"[n1n_gemini_image] RequestException: {e}", "error")
+            return {"error": "n1n upstream request failed", "details": str(e), "submit_failed": True}
+        except Exception as e:
+            _debug_log(f"[n1n_gemini_image] Exception: {e}", "error")
+            return {"error": str(e), "submit_failed": True}

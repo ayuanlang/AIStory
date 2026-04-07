@@ -1,15 +1,36 @@
 ﻿import re
-with open('frontend/src/pages/editor/components/ShotsView.jsx', 'r', encoding='utf-8') as f:
+with open('backend/app/services/media_service.py', 'r', encoding='utf-8') as f:
     text = f.read()
 
-target = r"\} else if \(stableKind === 'start'\) \{\s*const nextData = \{ image_url: resultUrl \};\s*await onUpdateShot\(stableShotId, nextData\);\s*setEditingShot\(\(prev\) => \(prev && String\(prev\.id\) === stableShotId \? \{ \.\.\.prev, \.\.\.nextData \} : prev\)\);\s*\} else \{"
-replacement = r"} else if (stableKind === 'start') {\n                                        try {\n                                            await new Promise((resolve) => {\n                                                const img = new Image();\n                                                img.onload = resolve;\n                                                img.onerror = resolve;\n                                                img.src = resultUrl;\n                                            });\n                                        } catch (e) {}\n                                        const nextData = { image_url: resultUrl };\n                                        await onUpdateShot(stableShotId, nextData);\n                                        setEditingShot((prev) => (prev && String(prev.id) === stableShotId ? { ...prev, ...nextData } : prev));\n                                    } else {"
+def patch_handler(name, provider, webhook_key):
+    global text
+    idx = text.find(f'def {name}')
+    if idx == -1: return
+    idx2 = text.find('async def _handle_', idx+10)
+    if idx2 == -1: idx2 = len(text)
+    
+    chunk = text[idx:idx2]
+    if '_resolve_provider_callback_url' not in chunk:
+        # inject resolver snippet right after tool_conf
+        target = 'tool_conf = config.get("config", {}) or {}'
+        insert_idx = chunk.find(target)
+        if insert_idx != -1:
+            end_idx = insert_idx + len(target)
+            inj = f'''
+        raw_callback_url = str(tool_conf.get("_provider_callback_url") or tool_conf.get("webhookUrl") or tool_conf.get("webHook") or tool_conf.get("webhook") or tool_conf.get("callBackUrl") or tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or "").strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"{provider}-{{gen_type}}"
+        callback_tool_conf = dict(tool_conf or {{}})
+        if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)'''
+            chunk = chunk[:end_idx] + inj + chunk[end_idx:]
+            text = text[:idx] + chunk + text[idx2:]
+            print(f"Patched config for {name}")
 
-match = re.search(target, text)
-if match:
-    text = text.replace(match.group(0), replacement)
-    with open('frontend/src/pages/editor/components/ShotsView.jsx', 'w', encoding='utf-8') as f:
-        f.write(text)
-    print("Updated start frame preload!!")
-else:
-    print("Not found by regex")
+patch_handler('_handle_zlhub_generation', 'zlhub', 'callBackUrl')
+patch_handler('_handle_vidu_generation', 'vidu', 'webhookUrl')
+patch_handler('_handle_apiyi_generation', 'apiyi', 'webhookUrl')
+patch_handler('_handle_aiclub_generation', 'aiclub', 'webhookUrl')
+
+with open('backend/app/services/media_service.py', 'w', encoding='utf-8') as f:
+    f.write(text)
+

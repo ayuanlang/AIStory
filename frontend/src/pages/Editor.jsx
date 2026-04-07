@@ -222,6 +222,7 @@ const Editor = ({
     const [jobPoolData, setJobPoolData] = useState({ total: 0, status_counts: {}, items: [] });
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [currentUserId, setCurrentUserId] = useState(null);
+    const [currentUserCredits, setCurrentUserCredits] = useState(0);
     const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
@@ -243,8 +244,14 @@ const Editor = ({
     const loadProjectData = async () => {
         if (!id) return;
         try {
-            const p = await fetchProject(id);
+            const [p, user] = await Promise.all([
+                fetchProject(id),
+                fetchMe().catch(() => null)
+            ]);
             if (p) setProject(p);
+            if (user && typeof user.credits === 'number') {
+                setCurrentUserCredits(user.credits);
+            }
         } catch (e) {
             console.error("Failed to load project data", e);
         }
@@ -359,10 +366,12 @@ const Editor = ({
                 if (user) {
                     setIsSuperuser(!!user?.is_superuser);
                     setCurrentUserId(Number(user?.id || 0) || null);
+                    setCurrentUserCredits(typeof user?.credits === 'number' ? user.credits : 0);
                     setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
                 } else {
                     setIsSuperuser(false);
                     setCurrentUserId(null);
+                    setCurrentUserCredits(0);
                     setUserBatchParallelLimit(3);
                 }
 
@@ -3060,6 +3069,7 @@ const Editor = ({
                 workflowStage={project?.global_info?.workflow_stage}
                 totalProjectCost={project?.total_tokens || 0}
                 userCost={project?.user_tokens || 0}
+                userBalance={currentUserCredits}
                 t={t}
                 hasAssets={project?.global_info?.has_existing_assets === true}
                 lensPreference={project?.global_info?.lens_preference}

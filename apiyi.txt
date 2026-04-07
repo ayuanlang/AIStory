@@ -1,0 +1,179 @@
+_handle_apiyi_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+        provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "apiyi")
+        api_key = str(config.get("api_key") or "").strip()
+        if not api_key:
+            return {"error": f"No {provider_name} API Key", "submit_failed": True}
+
+        tool_conf = config.get("config", {}) or {}
+        base_url = str(config.get("base_url") or "https://api.apiyi.com").strip().rstrip("/")
+        endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "").strip()
+        model = str(config.get("model") or "").strip()
+        
+        provider_key = str(provider_name).strip().lower()
+        if not endpoint:
+            if provider_key == "aiclub":
+                if gen_type == "image":
+                    endpoint = "/v1/images/generations"
+                elif gen_type == "video":
+                    endpoint = "/v1/videos"
+                else:
+                    return {"error": f"{provider_name} generation type not supported by default endpoint injection", "submit_failed": True}
+            else:
+                return {"error": f"{provider_name} endpoint missing from system configuration", "submit_failed": True}
+
+        submit_url = endpoint if re.match(r"^https?://", endpoint, flags=re.IGNORECASE) else f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
+
+        def _sanitize_video_prompt_if_needed(raw_prompt: Any, raw_negative_prompt: Optional[str] = None, resolved_model_name: Optional[str] = None) -> str:
+            merged_prompt = self._merge_negative_prompt(raw_prompt, raw_negative_prompt)
+            model_name = str(resolved_model_name or model or "").strip().lower()
+            if not model_name.startswith("sora"):
+                return merged_prompt
+            sanitized_prompt = self._sanitize_sora_prompt_mentions(merged_prompt)
+            if sanitized_prompt and sanitized_prompt != str(merged_prompt or ""):
+                logger.warning(
+                    "APIYI Sora prompt mention sanitizer applied | model=%s removed_at_mentions=%s",
+                    resolved_model_name or model,
+                    str(merged_prompt or "").count("@"),
+                )
+            return sanitized_prompt
+
+        if gen_type == "image":
+            endpoint_lower = endpoint.lower()
+            if "/v1/images/generations" not in endpoint_lower:
+                return {"error": f"{provider_name} image endpoint family not supported yet: {endpoint}", "submit_failed": True}
+
+            normalized_image_size = self._normalize_image_size_value(
+                image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
+            )
+            size_value = self._resolve_openai_compatible_image_size(
+                model=model,
+                explicit_size=tool_conf.get("size"),
+                normalized_image_size=normalized_image_size,
+                aspect_ratio=aspect_ratio,
+            )
+
+            payload = {
+                "model": model,
+                "prompt": self._merge_negative_prompt(prompt, negative_prompt),
+                "n": int(tool_conf.get("n") or 1),
+                "size": str(size_value),
+            }
+            resolved_refs = self._resolve_ref_list_for_api(
+                ref_image,
+                force_data_uri_for_local=True,
+                prefer_public_upload_url=True,
+                data_uri_profile="n1n_image_ref",
+            ) if ref_image else []
+            if resolved_refs:
+                payload["image_urls"] = resolved_refs
+                payload["imageUrls"] = resolved_refs
+                payload["filesUrl"] = resolved_refs[:5]
+                if len(resolved_refs) == 1:
+                    payload["fileUrl"] = resolved_refs[0]
+                mask_url_candidate = str(tool_conf.get("maskUrl") or tool_conf.get("mask_url") or "").strip()
+                if mask_url_candidate:
+                    payload["maskUrl"] = mask_url_candidate
+            if str(provider_name).strip().lower() != "n1n":
+                payload["response_format"] = str(tool_conf.get("response_format") or "url")
+            for optional_key in ["quality", "output_format", "output_compression", "background", "user"]:
+                if tool_conf.get(optional_key) is not None:
+                    payload[optional_key] = tool_conf.get(optional_key)
+
+            base_metadata = {
+                "provider": provider_name,
+                "model": model,
+                "prompt": prompt,
+                "submit_url": submit_url,
+                "endpoint_family": "/v1/images/generations",
+            }
+            return await self._common_requests_post(submit_url, payload, api_key, f"{str(provider_name).lower()}_image", extra_metadata=base_metadata)
+
+        if gen_type == "video":
+            endpoint_lower = endpoint.lower()
+            if "/v1/chat/completions" in endpoint_lower:
+                if last_frame_url:
+                    return {"error": f"{provider_name} chat/completions video does not support last-frame control", "submit_failed": True}
+
+                resolved_model = self._resolve_apiyi_chat_video_model(model, aspect_ratio=aspect_ratio, duration=duration)
+                resolved_refs = self._resolve_ref_list_for_api(
+                    ref_image,
+                    force_data_uri_for_local=True,
+                    prefer_public_upload_url=True,
+                ) if ref_image else []
+                content_payload: List[Dict[str, Any]] = []
+                merged_prompt = _sanitize_video_prompt_if_needed(prompt, negative_prompt, resolved_model)
+                if merged_prompt:
+                    content_payload.append({"type": "text", "text": merged_prompt})
+                if resolved_refs:
+                    content_payload.append({
+                        "type": "image_url",
+                        "image_url": {"url": resolved_refs[0]},
+                    })
+
+                payload = {
+                    "model": resolved_model,
+                    "stream": True,
+                    "messages": [{
+                        "role": "user",
+                        "content": content_payload,
+                    }],
+                }
+                base_metadata = {
+                    "provider": provider_name,
+                    "model": resolved_model,
+                    "requested_model": model,
+                    "prompt": prompt,
+                    "submit_url": submit_url,
+                    "endpoint_family": "/v1/chat/completions",
+                    "requested_duration": int(duration or 0),
+                    "requested_aspect_ratio": str(aspect_ratio or "").strip() or None,
+                    "resolved_reference_count": len(resolved_refs),
+                    "resolved_video_size": self._apiyi_chat_video_size_for_model(resolved_model),
+                }
+                return await self._submit_apiyi_chat_video_stream(
+                    submit_url,
+                    payload,
+                    api_key,
+                    f"{str(provider_name).lower()}_video",
+                    extra_metadata=base_metadata,
+                )
+            elif "/v1/videos" not in endpoint_lower:
+                return {"error": f"{provider_name} video endpoint family not supported yet: {endpoint}", "submit_failed": True}
+
+            payload = {
+                "model": model,
+                "prompt": _sanitize_video_prompt_if_needed(prompt, negative_prompt, model),
+                "seconds": str(int(duration or tool_conf.get("seconds") or 4)),
+                "size": str(tool_conf.get("size") or "1280x720"),
+            }
+            if aspect_ratio and not tool_conf.get("size"):
+                size_map = {
+                    "16:9": "1280x720",
+                    "9:16": "720x1280",
+                }
+                payload["size"] = size_map.get(str(aspect_ratio).strip(), payload["size"])
+
+            # APIYI /v1/videos: non-fl models are text-to-video only — silently
+            # ignore any reference image the caller passes through.  For -fl models
+            # the async API requires multipart upload which is not implemented yet.
+            model_lower = model.lower()
+            is_frame_model = model_lower.endswith("-fl") or "-fl-" in model_lower
+            if is_frame_model and (ref_image or last_frame_url):
+                return {"error": f"{provider_name} /v1/videos frame-to-video (multipart upload) is not enabled yet in media service", "submit_failed": True}
+            # For non-fl models, just drop the ref images
+            if not is_frame_model:
+                ref_image = None
+                last_frame_url = None
+
+            base_metadata = {
+                "provider": provider_name,
+                "model": model,
+                "prompt": prompt,
+                "submit_url": submit_url,
+                "endpoint_family": "/v1/videos",
+                "seconds": payload.get("seconds"),
+                "size": payload.get("size"),
+            }
+            return await self._submit_and_poll_video(submit_url, payload, api_key, f"{str(provider_name).lower()}_video", extra_metadata=base_metadata)
+
+        return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}

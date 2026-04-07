@@ -1,4 +1,4 @@
-﻿
+
 import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -162,9 +162,66 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
+    const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
+    const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
+    
+    const promptLangText = useCallback((lang) => {
+        return lang === 'cn' ? t('中文', 'Chinese') : t('英文', 'English');
+    }, [t]);
+
+    const promptLangPrefText = useCallback((pref) => {
+        if (pref === 'cn') return t('中文', 'Chinese');
+        if (pref === 'auto') return t('跟随界面语言', 'Follow UI');
+        return t('英文', 'English');
+    }, [t]);
+
+    const renderPromptLangMenu = (menuId) => {
+        const isOpen = showPromptLangMenu === menuId;
+        return (
+            <div className="flex bg-black/40 border border-white/20 rounded text-[10px] items-stretch">
+                <div className="px-2 bg-black/40 text-muted-foreground border-r border-white/10 flex items-center justify-center">
+                    {t('提交语言', 'Submit Lang')}
+                </div>
+                <div
+                    className="px-2 min-w-[70px] text-sky-400 flex items-center justify-center cursor-pointer hover:bg-white/5 relative"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setShowPromptLangMenu(isOpen ? false : menuId);
+                    }}
+                >
+                    {tempPromptSubmitLang ? promptLangText(tempPromptSubmitLang) : promptLangPrefText(promptSubmitLangPref)}
+                    <ChevronDown className="w-3 h-3 ml-1 opacity-50" />
+                    {isOpen && (
+                        <div className="absolute top-full right-0 mt-1 w-32 bg-gray-900 border border-white/20 rounded shadow-xl z-[999] overflow-hidden py-1">
+                            <div className="px-3 py-1.5 text-[9px] font-bold text-muted-foreground uppercase bg-black/40">
+                                {t('单次覆盖 (不保存)', 'Temp Override')}
+                            </div>
+                            <div className={`px-3 py-1.5 cursor-pointer hover:bg-white/10 ${tempPromptSubmitLang === 'en' ? 'text-sky-400 bg-sky-500/10' : 'text-white'}`} onClick={(e) => { e.stopPropagation(); setTempPromptSubmitLang('en'); setShowPromptLangMenu(false); }}>
+                                {t('临时英文', 'Temp EN')} {tempPromptSubmitLang === 'en' && '✓'}
+                            </div>
+                            <div className={`px-3 py-1.5 cursor-pointer hover:bg-white/10 ${tempPromptSubmitLang === 'cn' ? 'text-sky-400 bg-sky-500/10' : 'text-white'}`} onClick={(e) => { e.stopPropagation(); setTempPromptSubmitLang('cn'); setShowPromptLangMenu(false); }}>
+                                {t('临时中文', 'Temp CN')} {tempPromptSubmitLang === 'cn' && '✓'}
+                            </div>
+                            <div className="h-px bg-white/10 my-1"></div>
+                            <div className="px-3 py-1.5 text-[9px] font-bold text-muted-foreground uppercase bg-black/40">
+                                {t('全局默认', 'Global Default')}
+                            </div>
+                            <div className={`px-3 py-1.5 cursor-pointer hover:bg-white/10 flex items-center justify-between ${tempPromptSubmitLang === '' ? 'text-sky-400 bg-sky-500/10' : 'text-white'}`} onClick={(e) => { e.stopPropagation(); setTempPromptSubmitLang(''); setShowPromptLangMenu(false); }}>
+                                <span className="truncate" title={promptLangPrefText(promptSubmitLangPref)}>{t('跟随全局', 'Follow Global')} ({promptLangPrefText(promptSubmitLangPref)})</span>
+                                {tempPromptSubmitLang === '' && '✓'}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     const resolvedPromptSubmitLang = useMemo(() => {
+        if (tempPromptSubmitLang) return tempPromptSubmitLang;
         return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
-    }, [promptSubmitLangPref, uiLang]);
+    }, [promptSubmitLangPref, uiLang, tempPromptSubmitLang]);
+    const effectivePromptSubmitLang = resolvedPromptSubmitLang;
     const shotPromptDisplayLang = resolvedPromptSubmitLang === 'cn' ? 'cn' : 'en';
 
     const getShotCardPromptPreview = useCallback((shot) => {
@@ -1713,10 +1770,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (type === 'start' || type === 'end' || type === 'keyframe') {
             syncShotImageCfgFromSettings();
         }
+        setTempPromptSubmitLang('');
+        setShowPromptLangMenu(false);
         setAssetDetailModal({ open: true, type, keyframeIndex });
     };
 
     const closeAssetDetailModal = () => {
+        setTempPromptSubmitLang('');
+        setShowPromptLangMenu(false);
         setAssetDetailModal({ open: false, type: 'start', keyframeIndex: -1 });
     };
 
@@ -2698,6 +2759,36 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 targetAspectRatio: diptychPlan.targetAspectRatio,
                 exportSize,
             });
+
+            try {
+                const startBlobUrl = URL.createObjectURL(startBlob);
+                const endBlobUrl = URL.createObjectURL(endBlob);
+                
+                if (typeof rememberWarmMediaUrl === 'function') {
+                    rememberWarmMediaUrl(startBlobUrl);
+                    rememberWarmMediaUrl(endBlobUrl);
+                }
+
+                setEditingShot((prev) => {
+                    if (!prev || String(prev.id) !== targetShotId) return prev;
+                    let existingTech = {};
+                    try { existingTech = JSON.parse(prev.technical_notes || '{}'); } catch {}
+                    existingTech.end_frame_url = endBlobUrl;
+                    return { ...prev, image_url: startBlobUrl, technical_notes: JSON.stringify(existingTech) };
+                });
+                
+                setShots((prevShots) =>
+                    prevShots.map((s) => {
+                        if (String(s?.id || '') !== targetShotId) return s;
+                        let existingTech = {};
+                        try { existingTech = JSON.parse(s.technical_notes || '{}'); } catch {}
+                        existingTech.end_frame_url = endBlobUrl;
+                        return { ...s, image_url: startBlobUrl, technical_notes: JSON.stringify(existingTech) };
+                    })
+                );
+            } catch (optErr) {
+                console.warn('Failed optimistic object URL assignment:', optErr);
+            }
 
             const startUploadIdempotencyKey = buildJointShotDiptychUploadIdempotencyKey({
                 shotId: targetShotId,
@@ -5018,6 +5109,18 @@ await applyJointShotDiptychResult({
             });
             
             if (res && res.url) {
+                try {
+                    await new Promise((resolve) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(res.url);
+                            resolve();
+                        };
+                        img.onerror = resolve;
+                        img.src = getFullUrl(res.url);
+                    });
+                } catch (preloadErr) {}
+
                 updated[kfIndex].url = res.url;
                 if (promptOverride) {
                     updated[kfIndex].prompt = promptOverride;
@@ -5281,6 +5384,18 @@ await applyJointShotDiptychResult({
                     },
                 });
                 if (res && res.url) {
+                    try {
+                        await new Promise((resolve) => {
+                            const img = new Image();
+                            img.onload = () => {
+                                if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(res.url);
+                                resolve();
+                            };
+                            img.onerror = resolve;
+                            img.src = getFullUrl(res.url);
+                        });
+                    } catch (preloadErr) {}
+
                     clearPendingImageJob(targetShotId, 'start');
                     // Save original prompt to DB (user view), but image was generated with context
                     const newData = { image_url: res.url, start_frame: rawPrompt };
@@ -5390,6 +5505,18 @@ await applyJointShotDiptychResult({
                     },
                 });
                 if (res && res.url) {
+                    try {
+                        await new Promise((resolve) => {
+                            const img = new Image();
+                            img.onload = () => {
+                                if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(res.url);
+                                resolve();
+                            };
+                            img.onerror = resolve;
+                            img.src = getFullUrl(res.url);
+                        });
+                    } catch (preloadErr) {}
+
                     clearPendingImageJob(targetShotId, 'end');
                     tech.end_frame_url = res.url;
                     tech.video_gen_mode = 'start_end'; // Auto-switch to Start+End
@@ -8321,9 +8448,12 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                     setEditingShot(prev => ({ ...(prev || {}), technical_notes: JSON.stringify(nextTech) }));
                                                 };
                                                 const showCnPrompt = shotPromptDisplayLang === 'cn';
-                                                const startPromptText = showCnPrompt ? String(tech.start_frame_cn || '') : String(editingShot.start_frame || '');
-                                                const endPromptText = showCnPrompt ? String(tech.end_frame_cn || '') : String(editingShot.end_frame || '');
-                                                const videoPromptText = showCnPrompt ? String(tech.video_prompt_cn || '') : getShotVideoPromptEn(editingShot);
+                                                const startPromptTextCn = String(tech.start_frame_cn || '');
+                                                const startPromptTextEn = String(editingShot.start_frame || '');
+                                                const endPromptTextCn = String(tech.end_frame_cn || '');
+                                                const endPromptTextEn = String(editingShot.end_frame || '');
+                                                const videoPromptTextCn = String(tech.video_prompt_cn || '');
+                                                const videoPromptTextEn = getShotVideoPromptEn(editingShot);
                                                 const modalType = assetDetailModal.type;
                                                 const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;
                                                 const endFrameUrl = String(tech.end_frame_url || '');
@@ -8538,6 +8668,106 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                     );
                                                 };
 
+                                                const renderGenerationHistoryPanel = () => (
+                                                    <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div>
+                                                                <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
+                                                                <div className="text-[11px] text-muted-foreground">{t('显示该分镜最近的首帧、尾帧与视频生成记录。', 'Recent start frame, end frame, and video generation records for this shot.')}</div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => fetchShotGenerationHistory(editingShot)}
+                                                                disabled={shotGenerationHistoryLoading || !editingShot?.id}
+                                                                className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
+                                                            >
+                                                                <RefreshCw className={shotGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
+                                                                {t('刷新', 'Refresh')}
+                                                            </button>
+                                                        </div>
+                                                        {shotGenerationHistoryLoading ? (
+                                                            <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-6 text-xs text-muted-foreground">
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                                {t('正在加载镜头生成历史...', 'Loading shot generation history...')}
+                                                            </div>
+                                                        ) : shotGenerationHistory.length === 0 ? (
+                                                            <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
+                                                                {t('该分镜还没有生成历史。', 'No generation history for this shot yet.')}
+                                                            </div>
+                                                        ) : (
+                                                            <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                                                                {shotGenerationHistory.map((item) => {
+                                                                    const itemId = String(item?.job_id || item?.id || Math.random()).trim();
+                                                                    const status = String(item?.status || '').trim().toLowerCase();
+                                                                    const canPreview = Boolean(item?.resultUrl);
+                                                                    const isVideoItem = item?.mediaKind === 'video' || String(item?.kind || '').trim().toLowerCase() === 'video';
+                                                                    const createdText = item?.created_at ? new Date(item.created_at).toLocaleString() : '-';
+                                                                    const isDeleting = shotGenerationHistoryDeletingId === itemId;
+                                                                    return (
+                                                                        <div key={itemId} className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                                                                            <div className="flex gap-3">
+                                                                                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-black/40 flex items-center justify-center">
+                                                                                    {canPreview ? (
+                                                                                        isVideoItem ? (
+                                                                                            <LazyHoverVideo
+                                                                                                src={item.resultUrl}
+                                                                                                className="h-full w-full"
+                                                                                                mediaClassName="h-full w-full object-cover"
+                                                                                                muted
+                                                                                                playsInline
+                                                                                                preload="metadata"
+                                                                                                playOnHover={false}
+                                                                                            />
+                                                                                        ) : (
+                                                                                            <SafeImage src={item.resultUrl} className="h-full w-full object-cover" fallback={<ImageIcon className="h-5 w-5 opacity-40" />} />
+                                                                                        )
+                                                                                    ) : isVideoItem ? (
+                                                                                        <Video className="h-5 w-5 opacity-40" />
+                                                                                    ) : (
+                                                                                        <ImageIcon className="h-5 w-5 opacity-40" />
+                                                                                    )}
+                                                                                </div>
+                                                                                <div className="min-w-0 flex-1 space-y-1">
+                                                                                    <div className="flex items-start justify-between gap-2">
+                                                                                        <div className="min-w-0">
+                                                                                            <div className="truncate text-sm font-semibold text-white">{item.displayLabel}</div>
+                                                                                            <div className="text-[11px] text-muted-foreground truncate">{item.shotName || editingShot?.shot_name || editingShot?.shot_number || '-'}</div>
+                                                                                        </div>
+                                                                                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : status === 'failed' ? 'bg-red-500/15 text-red-200' : status === 'canceled' ? 'bg-slate-500/20 text-slate-200' : 'bg-amber-500/15 text-amber-100'}`}>
+                                                                                            {status || 'unknown'}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                    <div className="text-[11px] text-muted-foreground">{createdText}</div>
+                                                                                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={() => canPreview && window.open(getFullUrl(item.resultUrl), '_blank', 'noopener,noreferrer')}
+                                                                                            disabled={!canPreview}
+                                                                                            className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
+                                                                                        >
+                                                                                            <ExternalLink size={12} />
+                                                                                            {t('查看', 'Open')}
+                                                                                        </button>
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={() => handleDeleteShotGenerationHistoryItem(item)}
+                                                                                            disabled={isDeleting}
+                                                                                            className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                                                                                        >
+                                                                                            {isDeleting ? <Loader2 className="animate-spin" size={12} /> : <Trash2 size={12} />}
+                                                                                            {isDeleting ? t('删除中', 'Deleting') : t('删除记录', 'Delete Record')}
+                                                                                        </button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+
                                                 if (modalType === 'start') {
                                                     return (
                                                         <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
@@ -8573,6 +8803,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
+                                                                    {renderPromptLangMenu('start')}
                                                                     {renderDetailActionButton({
                                                                         label: t('裁边', 'Trim Edges'),
                                                                         busyLabel: t('裁边处理中...', 'Trimming...'),
@@ -8585,20 +8816,27 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                 </div>
                                                                 <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">
-                                                                        {showCnPrompt ? t('中文提示词', 'Prompt (CN)') : t('英文提示词', 'Prompt (EN)')}
+                                                                        {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
                                                                     <textarea
-                                                                        className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm"
-                                                                        value={startPromptText}
+                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={startPromptTextEn}
                                                                         onChange={(e) => {
-                                                                            if (showCnPrompt) {
-                                                                                updateTechField('start_frame_cn', e.target.value);
-                                                                                return;
-                                                                            }
                                                                             setEditingShot({...editingShot, start_frame: e.target.value});
                                                                         }}
                                                                     />
-                                                                    <RefineControl originalText={startPromptText} onUpdate={(v) => {
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
+                                                                        {t('中文提示词', 'Prompt (CN)')}
+                                                                    </div>
+                                                                    <textarea
+                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={startPromptTextCn}
+                                                                        onChange={(e) => {
+                                                                            updateTechField('start_frame_cn', e.target.value);
+                                                                        }}
+                                                                    />
+                                                                    {/* Use Chinese prompt for refine if preferred, or English. Current refiner mostly targets one string. For now we tie Refine to EN prompt, or CN. */}
+                                                                    <RefineControl originalText={showCnPrompt ? startPromptTextCn : startPromptTextEn} onUpdate={(v) => {
                                                                         if (showCnPrompt) {
                                                                             updateTechField('start_frame_cn', v);
                                                                             return;
@@ -8622,6 +8860,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                 </div>
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
+                                                                {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>
                                                     );
@@ -8662,6 +8901,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
+                                                                    {renderPromptLangMenu('end')}
                                                                     {renderDetailActionButton({
                                                                         label: t('裁边', 'Trim Edges'),
                                                                         busyLabel: t('裁边处理中...', 'Trimming...'),
@@ -8680,44 +8920,53 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         title: t('从当前视频提取最后一帧', 'Extract last frame from current video'),
                                                                     })}
                                                                 </div>
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">
-                                                                    {showCnPrompt ? t('中文提示词', 'Prompt (CN)') : t('英文提示词', 'Prompt (EN)')}
-                                                                </div>
-                                                                <textarea
-                                                                    className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm"
-                                                                    value={endPromptText}
-                                                                    onChange={(e) => {
-                                                                        if (showCnPrompt) {
+                                                                <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">
+                                                                        {t('英文提示词', 'Prompt (EN)')}
+                                                                    </div>
+                                                                    <textarea
+                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={endPromptTextEn}
+                                                                        onChange={(e) => {
+                                                                            handleManualEndFrameInputChange(e.target.value);
+                                                                        }}
+                                                                    />
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
+                                                                        {t('中文提示词', 'Prompt (CN)')}
+                                                                    </div>
+                                                                    <textarea
+                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={endPromptTextCn}
+                                                                        onChange={(e) => {
                                                                             updateTechField('end_frame_cn', e.target.value);
+                                                                        }}
+                                                                    />
+                                                                    <RefineControl originalText={showCnPrompt ? endPromptTextCn : endPromptTextEn} onUpdate={(v) => {
+                                                                        if (showCnPrompt) {
+                                                                            updateTechField('end_frame_cn', v);
                                                                             return;
                                                                         }
-                                                                        handleManualEndFrameInputChange(e.target.value);
-                                                                    }}
-                                                                />
-                                                                <RefineControl originalText={endPromptText} onUpdate={(v) => {
-                                                                    if (showCnPrompt) {
-                                                                        updateTechField('end_frame_cn', v);
-                                                                        return;
-                                                                    }
-                                                                    setEditingShot({...editingShot, end_frame: v});
-                                                                }} type="image" currentImage={endFrameUrl} onImageUpdate={async (url) => {
-                                                                    if (isShotFrameActionLocked('end')) {
-                                                                        notifyShotFrameActionLocked('end');
-                                                                        return;
-                                                                    }
-                                                                    const nextTech = { ...tech, end_frame_url: url, video_gen_mode: 'start_end' };
-                                                                    const newData = { technical_notes: JSON.stringify(nextTech) };
-                                                                    await onUpdateShot(editingShot.id, newData);
-                                                                    setEditingShot(prev => ({...prev, ...newData}));
-                                                                }} projectId={projectId} shotId={editingShot.id} assetType="end_frame" featureInjector={injectEntityFeatures} onPickMedia={(cb) => {
-                                                                    if (isShotFrameActionLocked('end')) {
-                                                                        notifyShotFrameActionLocked('end');
-                                                                        return;
-                                                                    }
-                                                                    openMediaPicker(cb, { shotId: editingShot.id, shotFrameType: 'end' });
-                                                                }} />
+                                                                        setEditingShot({...editingShot, end_frame: v});
+                                                                    }} type="image" currentImage={endFrameUrl} onImageUpdate={async (url) => {
+                                                                        if (isShotFrameActionLocked('end')) {
+                                                                            notifyShotFrameActionLocked('end');
+                                                                            return;
+                                                                        }
+                                                                        const nextTech = { ...tech, end_frame_url: url, video_gen_mode: 'start_end' };
+                                                                        const newData = { technical_notes: JSON.stringify(nextTech) };
+                                                                        await onUpdateShot(editingShot.id, newData);
+                                                                        setEditingShot(prev => ({...prev, ...newData}));
+                                                                    }} projectId={projectId} shotId={editingShot.id} assetType="end_frame" featureInjector={injectEntityFeatures} onPickMedia={(cb) => {
+                                                                        if (isShotFrameActionLocked('end')) {
+                                                                            notifyShotFrameActionLocked('end');
+                                                                            return;
+                                                                        }
+                                                                        openMediaPicker(cb, { shotId: editingShot.id, shotFrameType: 'end' });
+                                                                    }} />
+                                                                </div>
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={editingShot.end_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
+                                                                {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>
                                                     );
@@ -8826,6 +9075,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
+                                                                    {renderPromptLangMenu('video')}
                                                                     {renderDetailActionButton({
                                                                         label: t('生成配音', 'Generate Voiceover'),
                                                                         busyLabel: t('配音生成中...', 'Generating Voiceover...'),
@@ -8872,125 +9122,35 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
                                                                     </select>
                                                                 </div>
-                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">
-                                                                    {showCnPrompt ? t('中文提示词', 'Prompt (CN)') : t('英文提示词', 'Prompt (EN)')}
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
+                                                                    {t('中文提示词', 'Prompt (CN)')}
                                                                 </div>
                                                                 <textarea
-                                                                    className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm"
-                                                                    value={videoPromptText}
+                                                                    className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    value={videoPromptTextCn}
                                                                     onChange={(e) => {
-                                                                        if (showCnPrompt) {
-                                                                            updateTechField('video_prompt_cn', e.target.value);
-                                                                            return;
-                                                                        }
-                                                                        setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(e.target.value) });
+                                                                        updateTechField('video_prompt_cn', e.target.value);
                                                                     }}
                                                                 />
-                                                                <RefineControl originalText={videoPromptText} onUpdate={(v) => {
+                                                                <RefineControl originalText={showCnPrompt ? videoPromptTextCn : videoPromptTextEn} onUpdate={(v) => {
                                                                     if (showCnPrompt) {
                                                                         updateTechField('video_prompt_cn', v);
                                                                         return;
                                                                     }
                                                                     setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(v) });
                                                                 }} type="video" />
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
-                                                                <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
-                                                                    <div className="flex items-center justify-between gap-2">
-                                                                        <div>
-                                                                            <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
-                                                                            <div className="text-[11px] text-muted-foreground">{t('显示该分镜最近的首帧、尾帧与视频生成记录。', 'Recent start frame, end frame, and video generation records for this shot.')}</div>
-                                                                        </div>
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => fetchShotGenerationHistory(editingShot)}
-                                                                            disabled={shotGenerationHistoryLoading || !editingShot?.id}
-                                                                            className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
-                                                                        >
-                                                                            <RefreshCw className={shotGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
-                                                                            {t('刷新', 'Refresh')}
-                                                                        </button>
-                                                                    </div>
-                                                                    {shotGenerationHistoryLoading ? (
-                                                                        <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-6 text-xs text-muted-foreground">
-                                                                            <Loader2 className="h-4 w-4 animate-spin" />
-                                                                            {t('正在加载镜头生成历史...', 'Loading shot generation history...')}
-                                                                        </div>
-                                                                    ) : shotGenerationHistory.length === 0 ? (
-                                                                        <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
-                                                                            {t('该分镜还没有生成历史。', 'No generation history for this shot yet.')}
-                                                                        </div>
-                                                                    ) : (
-                                                                        <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
-                                                                            {shotGenerationHistory.map((item) => {
-                                                                                const itemId = String(item?.job_id || item?.id || Math.random()).trim();
-                                                                                const status = String(item?.status || '').trim().toLowerCase();
-                                                                                const canPreview = Boolean(item?.resultUrl);
-                                                                                const isVideoItem = item?.mediaKind === 'video' || String(item?.kind || '').trim().toLowerCase() === 'video';
-                                                                                const createdText = item?.created_at ? new Date(item.created_at).toLocaleString() : '-';
-                                                                                const isDeleting = shotGenerationHistoryDeletingId === itemId;
-                                                                                return (
-                                                                                    <div key={itemId} className="rounded-lg border border-white/10 bg-black/30 p-2.5">
-                                                                                        <div className="flex gap-3">
-                                                                                            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-black/40 flex items-center justify-center">
-                                                                                                {canPreview ? (
-                                                                                                    isVideoItem ? (
-                                                                                                        <LazyHoverVideo
-                                                                                                            src={item.resultUrl}
-                                                                                                            className="h-full w-full"
-                                                                                                            mediaClassName="h-full w-full object-cover"
-                                                                                                            muted
-                                                                                                            playsInline
-                                                                                                            preload="metadata"
-                                                                                                            playOnHover={false}
-                                                                                                        />
-                                                                                                    ) : (
-                                                                                                        <SafeImage src={item.resultUrl} className="h-full w-full object-cover" fallback={<ImageIcon className="h-5 w-5 opacity-40" />} />
-                                                                                                    )
-                                                                                                ) : isVideoItem ? (
-                                                                                                    <Video className="h-5 w-5 opacity-40" />
-                                                                                                ) : (
-                                                                                                    <ImageIcon className="h-5 w-5 opacity-40" />
-                                                                                                )}
-                                                                                            </div>
-                                                                                            <div className="min-w-0 flex-1 space-y-1">
-                                                                                                <div className="flex items-start justify-between gap-2">
-                                                                                                    <div className="min-w-0">
-                                                                                                        <div className="truncate text-sm font-semibold text-white">{item.displayLabel}</div>
-                                                                                                        <div className="text-[11px] text-muted-foreground truncate">{item.shotName || editingShot?.shot_name || editingShot?.shot_number || '-'}</div>
-                                                                                                    </div>
-                                                                                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : status === 'failed' ? 'bg-red-500/15 text-red-200' : status === 'canceled' ? 'bg-slate-500/20 text-slate-200' : 'bg-amber-500/15 text-amber-100'}`}>
-                                                                                                        {status || 'unknown'}
-                                                                                                    </span>
-                                                                                                </div>
-                                                                                                <div className="text-[11px] text-muted-foreground">{createdText}</div>
-                                                                                                <div className="flex flex-wrap items-center gap-2 pt-1">
-                                                                                                    <button
-                                                                                                        type="button"
-                                                                                                        onClick={() => canPreview && window.open(getFullUrl(item.resultUrl), '_blank', 'noopener,noreferrer')}
-                                                                                                        disabled={!canPreview}
-                                                                                                        className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
-                                                                                                    >
-                                                                                                        <ExternalLink size={12} />
-                                                                                                        {t('查看', 'Open')}
-                                                                                                    </button>
-                                                                                                    <button
-                                                                                                        type="button"
-                                                                                                        onClick={() => handleDeleteShotGenerationHistoryItem(item)}
-                                                                                                        disabled={isDeleting}
-                                                                                                        className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20 disabled:opacity-50"
-                                                                                                    >
-                                                                                                        {isDeleting ? <Loader2 className="animate-spin" size={12} /> : <Trash2 size={12} />}
-                                                                                                        {isDeleting ? t('删除中', 'Deleting') : t('删除记录', 'Delete Record')}
-                                                                                                    </button>
-                                                                                                </div>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                );
-                                                                            })}
-                                                                        </div>
-                                                                    )}
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
+                                                                    {t('英文提示词', 'Prompt (EN)')}
                                                                 </div>
+                                                                <textarea
+                                                                    className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    value={videoPromptTextEn}
+                                                                    onChange={(e) => {
+                                                                        setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(e.target.value) });
+                                                                    }}
+                                                                />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
+                                                                {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>
                                                     );
@@ -9024,6 +9184,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     busy: !!keyframe?.loading || currentShotGenerating,
                                                                     variant: 'primary',
                                                                 })}
+                                                                {renderPromptLangMenu('keyframe')}
                                                                 {renderDetailActionButton({
                                                                     label: t('翻译成中文', 'To Chinese'),
                                                                     busyLabel: t('翻译中...', 'Translating...'),
@@ -9569,4 +9730,3 @@ const isCroppingThisShot = !!(shotState.cropping);
         </div>
     );
 };
-

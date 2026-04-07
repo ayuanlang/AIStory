@@ -1,62 +1,40 @@
+﻿import re
+
 with open('backend/app/services/media_service.py', 'r', encoding='utf-8') as f:
     text = f.read()
 
-text = text.replace(
-'''        elif "text-to-video" in endpoint_lower:
-            payload["duration"] = normalized_video_duration
-            _set_if_present(payload, "resolution", normalized_video_resolution)
-            _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
-            _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
-            _set_audio_flags(payload)
-        else:''',
-'''        elif "text-to-video" in endpoint_lower:
-            payload["duration"] = normalized_video_duration
-            _set_if_present(payload, "resolution", normalized_video_resolution)
-            _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
-            _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
+handlers = [
+    {'_name': '_handle_zlhub_generation', 'provider': 'zlhub', 'insert_before': r'(\s*)if re.match\(r\"\^https\?://\", endpoint'},
+    {'_name': '_handle_vidu_generation', 'provider': 'vidu', 'insert_before': r'(\s*)def _normalize_bool'},
+    {'_name': '_handle_apiyi_generation', 'provider': 'apiyi', 'insert_before': r'(\s*)provider_key = str\('},
+    {'_name': '_handle_n1n_generation', 'provider': 'n1n', 'insert_before': r'(\s*)def _post_korea'},
+    {'_name': '_handle_tencent_generation', 'provider': 'tencent', 'insert_before': r'(\s*)if gen_type == \"image\":'},
+    {'_name': '_handle_wanxiang_generation', 'provider': 'wanxiang', 'insert_before': r'(\s*)if gen_type == \"video\":|elif gen_type == \"video\":'},
+    {'_name': '_handle_aiclub_generation', 'provider': 'aiclub', 'insert_before': r'(\s*)if not str\(endpoint\)\.startswith'},
+    {'_name': '_handle_stability_generation', 'provider': 'stability', 'insert_before': r'(\s*)# I2I'}
+]
+
+for h in handlers:
+    idx = text.find(h['_name'])
+    if idx == -1: continue
+    if '_resolve_provider_callback_url' not in text[idx:idx+2500]:
+        m = re.search(h['insert_before'], text[idx:idx+3000])
+        if m:
+            insert_idx = idx + m.start()
+            ind = m.group(1)
+            # Remove newline from ind if any
+            ind = ind.replace('\n', '')
             
-            camera_fixed = _pick_tool_value("cameraFixed")
-            if camera_fixed is not None:
-                if "seedance" in endpoint_lower or "seedance" in model_lower:
-                    payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false"
-                else:
-                    payload["cameraFixed"] = _normalize_bool(camera_fixed, False)
-                    
-            _set_audio_flags(payload)
-        else:'''
-)
-
-
-text = text.replace(
-'''            if resolved_last_frame and "/rhart-video-" in endpoint_lower:
-                payload["lastImageUrl"] = resolved_last_frame
-            payload["duration"] = normalized_video_duration
-            _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
-            _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
-            _set_if_present(payload, "movementAmplitude", movement_amplitude)
-            _set_audio_flags(payload)
-
-        _set_runninghub_prompt_expansion_flag(payload)''',
-'''            if resolved_last_frame and "/rhart-video-" in endpoint_lower:
-                payload["lastImageUrl"] = resolved_last_frame
+            inj =  ind + 'raw_callback_url = str(tool_conf.get("_provider_callback_url") or tool_conf.get("webhookUrl") or tool_conf.get("webHook") or tool_conf.get("webhook") or tool_conf.get("callBackUrl") or tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or "").strip()\n'
+            inj += ind + f'callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"{h["provider"]}-{{gen_type}}"\n'
+            inj += ind + 'callback_tool_conf = dict(tool_conf or {})\n'
+            inj += ind + 'if raw_callback_url:\n'
+            inj += ind + '    callback_tool_conf.setdefault("callback_url", raw_callback_url)\n'
+            inj += ind + 'callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)\n\n'
             
-            payload["duration"] = normalized_video_duration
-            _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
-            _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
-            _set_if_present(payload, "movementAmplitude", movement_amplitude)
-            
-            camera_fixed = _pick_tool_value("cameraFixed")
-            if camera_fixed is not None:
-                if "seedance" in endpoint_lower or "seedance" in model_lower:
-                    payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false"
-                else:
-                    payload["cameraFixed"] = _normalize_bool(camera_fixed, False)
-                    
-            _set_audio_flags(payload)
-
-        _set_runninghub_prompt_expansion_flag(payload)'''
-)
+            text = text[:insert_idx] + '\n' + inj + text[insert_idx:]
+            print('fixed', h['_name'])
 
 with open('backend/app/services/media_service.py', 'w', encoding='utf-8') as f:
     f.write(text)
-print('Done camera fixes!')
+

@@ -48,7 +48,8 @@ import {
     getImageGenerationJobStatus,
     generateVideo,
     generateVoice,
-    fetchAssets, 
+    fetchAssets,
+    deleteAsset, 
     generateSceneShots,
     regenerateSceneShots,
     fetchSceneShotsPrompt,
@@ -424,14 +425,27 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         setSubjectGenerationHistoryLoading(true);
         try {
-            const imagePool = await getGenerationJobPool({ kind: 'image', running_only: false, limit: 300 });
-            const normalized = normalizeSubjectGenerationHistory(imagePool?.items || []);
-            const filtered = normalized.filter((item) => {
+            const data = await fetchAssets();
+            const filtered = data.filter((item) => {
+                const meta = item?.meta_info && typeof item.meta_info === 'object' ? item.meta_info : {};
                 if (item.projectId && String(projectId || '').trim() && item.projectId !== String(projectId || '').trim()) {
-                    return false;
+                    // return false; 
                 }
-                return item.entityId === stableEntityId;
-            });
+                if (String(meta?.entity_id || '').trim() !== stableEntityId) return false;
+                if (String(item.type).toLowerCase() !== 'image') return false;
+                return true;
+            }).map((item) => {
+                const meta = item?.meta_info && typeof item.meta_info === 'object' ? item.meta_info : {};
+                return {
+                    id: item.id,
+                    job_id: item.id,
+                    status: 'completed',
+                    resultUrl: item.url,
+                    displayLabel: item.remark || t('主体生图', 'Subject Image Generation'),
+                    createdAtMs: Date.parse(item.created_at || '') || 0,
+                    kind: 'asset'
+                };
+            }).sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
             setSubjectGenerationHistory(filtered.slice(0, 12));
         } catch (e) {
             onLog?.(`Failed to load subject generation history: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
@@ -439,7 +453,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         } finally {
             setSubjectGenerationHistoryLoading(false);
         }
-    }, [getGenerationJobPool, normalizeSubjectGenerationHistory, onLog, projectId]);
+    }, [onLog, t, projectId]);
 
     useEffect(() => {
         if (!selectedEntity?.id) {
@@ -450,21 +464,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [fetchSubjectGenerationHistory, selectedEntity]);
 
     const handleDeleteSubjectGenerationHistoryItem = useCallback(async (item) => {
-        const kind = String(item?.kind || '').trim();
-        const jobId = String(item?.job_id || '').trim();
-        if (!kind || !jobId || !selectedEntity?.id) return;
+        const assetId = String(item?.id || '').trim();
+        if (!assetId || !selectedEntity?.id) return;
 
-        setSubjectGenerationHistoryDeletingId(jobId);
+        setSubjectGenerationHistoryDeletingId(assetId);
         try {
-            await deleteGenerationJob(kind, jobId);
+            await deleteAsset(assetId);
             await fetchSubjectGenerationHistory(selectedEntity);
-            onLog?.(t('主体历史任务记录已删除。', 'Subject history item deleted.'), 'warning');
+            onLog?.(t('主体历史图片已删除。', 'Subject history image deleted.'), 'warning');
         } catch (e) {
-            onLog?.(t('删除主体历史失败：', 'Failed to delete subject history item: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
+            onLog?.(t('删除历史图片失败：', 'Failed to delete subject history image: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
         } finally {
             setSubjectGenerationHistoryDeletingId('');
         }
-    }, [deleteGenerationJob, fetchSubjectGenerationHistory, onLog, selectedEntity, t]);
+    }, [fetchSubjectGenerationHistory, onLog, selectedEntity, t]);
 
     const forceClearSubjectImageJob = useCallback(async (entityId, payload, reason) => {
         const stableEntityId = String(entityId || payload?.ownerEntityId || '').trim();
@@ -2819,18 +2832,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     };
 
-    const updateEntityImage = async (url, closeModal = true) => {
-        if (!selectedEntity) return;
-        if (isSubjectImageActionLocked(selectedEntity)) {
-            notifySubjectImageActionLocked(selectedEntity);
+    const updateEntityImage = async (url, closeModal = true, entityOverride = null) => {
+        const targetEntity = entityOverride || selectedEntity;
+        if (!targetEntity) return null;
+        if (isSubjectImageActionLocked(targetEntity)) {
+            notifySubjectImageActionLocked(targetEntity);
             return null;
         }
         const targetUrl = String(url || '').trim();
         if (!targetUrl) return;
         try {
-            await updateEntity(selectedEntity.id, { image_url: targetUrl });
-            const updatedEntity = { ...selectedEntity, image_url: targetUrl };
-            setSelectedEntity(updatedEntity);
+            await updateEntity(targetEntity.id, { image_url: targetUrl });
+            const updatedEntity = { ...targetEntity, image_url: targetUrl };
+            if (selectedEntity && String(selectedEntity.id) === String(updatedEntity.id)) {
+                setSelectedEntity(updatedEntity);
+            }
             setViewingEntity(prev => (String(prev?.id || '') === String(updatedEntity.id) ? { ...prev, image_url: targetUrl } : prev));
             setEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, image_url: targetUrl } : ent));
             setAllEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, image_url: targetUrl } : ent));
@@ -4374,7 +4390,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                             <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : 'bg-amber-500/15 text-amber-100'}`}>{status}</span>
                                                                         </div>
                                                                         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                                                                            <button onClick={() => canPreview && updateEntityImage(item.resultUrl)} disabled={!canPreview} className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/80 hover:bg-white/10">
+                                                                            <button onClick={() => canPreview && updateEntityImage(item.resultUrl, false, viewingEntity)} disabled={!canPreview} className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/80 hover:bg-white/10">
                                                                                 <ImageIcon size={10} /> {t('设为当前', 'Use Result')}
                                                                             </button>
                                                                             <button onClick={() => handleDeleteSubjectGenerationHistoryItem(item)} disabled={isDeleting} className="inline-flex items-center gap-1 rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-500/20">
@@ -5103,7 +5119,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         <div className="flex flex-wrap items-center gap-2 pt-1">
                                                                             <button
                                                                                 type="button"
-                                                                                onClick={() => canPreview && updateEntityImage(item.resultUrl)}
+                                                                                onClick={() => canPreview && updateEntityImage(item.resultUrl, true, selectedEntity)}
                                                                                 disabled={!canPreview}
                                                                                 className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
                                                                             >

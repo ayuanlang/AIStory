@@ -1,11 +1,12 @@
 ﻿import React, { useMemo } from 'react';
 import { Check, UploadCloud, UserCircle, Coins, ChevronRight, AlertCircle, Circle } from 'lucide-react';
 
-export default function ProjectStatusBar({ 
+export default function ProjectStatusBar({
   activeTab = 'overview',
-  workflowStage = 'script', 
+  workflowStage = 'script',
   totalProjectCost = 0,
   userCost = 0,
+  userBalance = 0,
   t,
   hasAssets = false,
   lensPreference = '',
@@ -106,7 +107,11 @@ export default function ProjectStatusBar({
       </div>
 
       {/* 右侧：成本微型仪表盘 */}
-      <div className="flex-1 flex justify-end items-center space-x-3 pl-3 font-mono opacity-80 hover:opacity-100 transition-opacity">
+      <div className="flex-1 flex justify-end items-center space-x-3 pl-3 font-mono opacity-80 hover:opacity-100 transition-opacity">        {/* 当前积分余额 */}
+        <div className="flex items-center space-x-1" title={t ? t('当前积分余额', 'Current Point Balance') : '当前积分余额'}>
+          <Coins className="w-3.5 h-3.5 text-green-500" />
+          <span className="text-green-500 font-medium">{userBalance ? userBalance.toLocaleString() : 0}</span>
+        </div>
         {/* 用户消耗 */}
         <div className="flex items-center space-x-1" title={t ? t('我在该项目的消耗', 'My Cost in this Project') : '我的消耗'}>
           <UserCircle className="w-3.5 h-3.5 text-muted-foreground" />

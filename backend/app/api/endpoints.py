@@ -26170,16 +26170,13 @@ def get_generation_job_pool(
         "status_counts": status_counts,
         "items": [
             {
-                "kind": item.get("kind"),
-                "job_id": item.get("job_id"),
-                "status": item.get("status"),
-                "user_id": item.get("user_id"),
-                "username": item.get("username"),
-                "created_at": item.get("created_at"),
-                "started_at": item.get("started_at"),
-                "finished_at": item.get("finished_at"),
-                "error": item.get("error"),
-                "has_task": bool(item.get("has_task")),
+                k: v for k, v in item.items()
+                if k not in {
+                    "callback_url",
+                    "provider_callback_url",
+                    "provider_callback_ticket",
+                    "task_scope",
+                }
             }
             for item in items
         ],

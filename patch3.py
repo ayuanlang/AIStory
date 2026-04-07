@@ -1,112 +1,61 @@
 ﻿import re
 
-with open('frontend/src/pages/editor/components/ShotsView.jsx', 'r', encoding='utf-8') as f:
+with open('backend/app/services/media_service.py', 'r', encoding='utf-8') as f:
     text = f.read()
 
-# PATCH 1: applyJointShotDiptychResult
-target1 = r'''            const startUrl = String\(startUpload\?\.url \|\| \'\'\)\.trim\(\);
-            const endUrl = String\(endUpload\?\.url \|\| \'\'\)\.trim\(\);
-            if \(\!startUrl \|\| \!endUrl\) \{
-                throw new Error\(\'Failed to upload split start/end frame assets\'\);
-            \}
+# Define targeted replacement functions
 
-            try \{
-                const preloadUrl = \(url\) => new Promise\(\(resolve\) => \{
-                    if \(\!url\) return resolve\(\);
-                    const img = new Image\(\);
-                    img\.onload = resolve;
-                    img\.onerror = resolve;
-                    img\.src = url;
-                \}\);
-                await Promise\.all\(\[preloadUrl\(startUrl\), preloadUrl\(endUrl\)\]\);
-            \} catch \(e\) \{
-                console\.warn\(\'Failed to preload split frames, continuing\.\.\.\', e\);
-            \}'''
+def apply_patch(func_name, provider_name, url_key, payload_str="payload", webhook_field="webhookUrl"):
+    global text
+    idx = text.find(f"async def {func_name}")
+    if idx == -1: return
+    idx2 = text.find("async def _handle_", idx + 10)
+    if idx2 == -1: idx2 = len(text)
+    
+    chunk = text[idx:idx2]
+    
+    # 1. Add resolver if missing
+    if "_resolve_provider_callback_url" not in chunk:
+        target = 'tool_conf = config.get("config", {}) or {}'
+        inj1 = f'''
+        raw_callback_url = str(tool_conf.get("_provider_callback_url") or tool_conf.get("webhookUrl") or tool_conf.get("webHook") or tool_conf.get("webhook") or tool_conf.get("callBackUrl") or tool_conf.get("callback_url") or tool_conf.get("callbackUrl") or "").strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"{provider_name}-{{gen_type}}"
+        callback_tool_conf = dict(tool_conf or {{}})
+        if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+'''
+        if target in chunk:
+            chunk = chunk.replace(target, target + inj1, 1)
 
-replace1 = '''            const startUrl = String(startUpload?.url || '').trim();
-            const endUrl = String(endUpload?.url || '').trim();
-            if (!startUrl || !endUrl) {
-                throw new Error('Failed to upload split start/end frame assets');
-            }
+    # 2. Add payload assignment
+    # We find the main payload dict and inject it
+    if "callback_url and callback_url !=" not in chunk:
+        # Simplistic approach: find where payload is used, right before requests.post/submit_and_poll
+        inj2 = f'''
+        if callback_url and callback_url != "-1":
+            {payload_str}["{webhook_field}"] = callback_url
+'''
+        if payload_str in chunk:
+            # specifically for ZLHub "seedance2_payload_mode"
+            if provider_name == 'zlhub':
+                t2 = 'payload: Dict[str, Any] = {'
+                chunk = chunk.replace(t2, t2 + inj2, 1)
+            elif provider_name == 'vidu':
+                # Replace right before the poll loop or post
+                t2 = 'payload = {'
+                chunk = chunk.replace(t2, t2 + inj2, 1)
+            elif provider_name == 'apiyi':
+                t2 = 'base_metadata = {'
+                chunk = chunk.replace(t2, inj2 + '        ' + t2, 1)
 
-            try {
-                const preloadUrl = (url) => new Promise((resolve) => {
-                    if (!url) return resolve();
-                    const img = new Image();
-                    img.onload = () => {
-                        if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(url);
-                        resolve();
-                    };
-                    img.onerror = resolve;
-                    img.src = getFullUrl(url);
-                });
-                await Promise.all([preloadUrl(startUrl), preloadUrl(endUrl)]);
-            } catch (e) {
-                console.warn('Failed to preload split frames, continuing...', e);
-            }'''
+    text = text[:idx] + chunk + text[idx2:]
+    print(f"Patched {func_name}")
 
-# PATCH 2: onImageJobComplete start
-target2 = r'''\} else if \(stableKind === \'start\'\) \{\s*try \{\s*await new Promise\(\(resolve\) => \{\s*const img = new Image\(\);\s*img\.onload = resolve;\s*img\.onerror = resolve;\s*img\.src = resultUrl;\s*\}\);\s*\} catch \(e\) \{\}\s*const nextData = \{ image_url: resultUrl \};'''
+apply_patch('_handle_zlhub_generation', 'zlhub', 'callBackUrl', 'payload', 'callBackUrl')
+apply_patch('_handle_vidu_generation', 'vidu', 'webhookUrl', 'payload', 'webhookUrl')
+apply_patch('_handle_apiyi_generation', 'apiyi', 'webhookUrl', 'payload', 'webhookUrl')
+apply_patch('_handle_aiclub_generation', 'aiclub', 'webhookUrl', 'payload', 'webhookUrl')
 
-replace2 = '''} else if (stableKind === 'start') {
-                                        try {
-                                            await new Promise((resolve) => {
-                                                const img = new Image();
-                                                img.onload = () => {
-                                                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(resultUrl);
-                                                    resolve();
-                                                };
-                                                img.onerror = resolve;
-                                                img.src = getFullUrl(resultUrl);
-                                            });
-                                        } catch (e) {}
-                                        const nextData = { image_url: resultUrl };'''
-
-# Also patch stableKind === 'end' just in case
-target3 = r'''\} else if \(stableKind === \'end\'\) \{\s*let tech = \{\};\s*try \{\s*tech = JSON\.parse\(currentShot\?\.technical_notes \|\| \'\{\}\'\);\s*\} catch \{\s*tech = \{\};\s*\}\s*tech\.end_frame_url = resultUrl;'''
-
-replace3 = '''} else if (stableKind === 'end') {
-                                        try {
-                                            await new Promise((resolve) => {
-                                                const img = new Image();
-                                                img.onload = () => {
-                                                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(resultUrl);
-                                                    resolve();
-                                                };
-                                                img.onerror = resolve;
-                                                img.src = getFullUrl(resultUrl);
-                                            });
-                                        } catch (e) {}
-                                        let tech = {};
-                                        try {
-                                            tech = JSON.parse(currentShot?.technical_notes || '{}');
-                                        } catch {
-                                            tech = {};
-                                        }
-                                        tech.end_frame_url = resultUrl;'''
-
-# Execute patches
-m1 = re.search(target1, text)
-if m1:
-    text = text.replace(m1.group(0), replace1)
-    print("Patched 1")
-else:
-    print("Missed 1")
-
-m2 = re.search(target2, text)
-if m2:
-    text = text.replace(m2.group(0), replace2)
-    print("Patched 2")
-else:
-    print("Missed 2")
-
-m3 = re.search(target3, text)
-if m3:
-    text = text.replace(m3.group(0), replace3)
-    print("Patched 3")
-else:
-    print("Missed 3")
-
-with open('frontend/src/pages/editor/components/ShotsView.jsx', 'w', encoding='utf-8') as f:
+with open('backend/app/services/media_service.py', 'w', encoding='utf-8') as f:
     f.write(text)
 
