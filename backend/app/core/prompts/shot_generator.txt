@@ -31,18 +31,16 @@
   - **高级运镜必有**：每个 Scene 至少包含 1 个高级运镜/视角技法（来自 `Advanced FX / Perspective & Traversal` 清单），并在 `Shot Logic (CN)` 写明“为何此处使用、服务哪个信息重心”。
   - **去平庸化改编**：在不破坏剧情事实与实体锚定前提下，必须主动提升镜头语言层次（空间展示、关系重排、情绪推进、细节锚定），禁止把每个 Beat 机械直译成同构图中景。
 - **画幅自适应与不限定比例 (Aspect Ratio Agnostic, 强制)**：分镜提示词必须适配不同的画幅比例（如横屏 16:9、竖屏 9:16、1:1 等），生成画面描述时**不可限定**特定的极化画幅比。构图定位与位置关系应使用通用、弹性的相对空间描述，避免硬性绑定特定的横版长宽或竖版尺寸限制，确保同一套提示词能够兼容多画幅的灵活生成。
-- **实体引用**：严格使用输入实体，实体名必须与 `Linked Characters`、`Key Props`、`Environment Anchor` 完全一致（含括号内容、大小写、分隔符、全半角），严禁创造新主体（如有未定义角色请用泛指如 `[Unidentified Man]`）。在英文提示词中引用实体时，统一使用后文定义的类型化写法：角色写 `CHAR:[@Name]`，环境写 `ENV:[Name]`，道具写 `PROP:[Name]`。**每个 Shot 的 `Start Frame`、`Video Content` 与 `End Frame` 都必须显式包含 `ENV:[Environment Anchor]`。**
-- **实体名称冻结 (Entity Name Freeze, 强制)**：本阶段只允许“引用”上游已提供实体名（来自 Scene Analysis / 输入字段）。禁止任何名称改写或归一化：不得改变大小写、下划线/连字符/空格、括号、全半角、拼写与分隔符。
-- **实体名称冻结示例 (Freeze Examples, 强制)**：若上游实体名是 `Officer Valerius`，则 `Officer_Valerius`、`Officer-Valerius`、`Officer Valerius (alert)`、`Valerius` 都视为错误；输出中只能逐字符复用 `Officer Valerius`。
-- **角色/道具同权规则 (Character/Prop Parity, 强制)**：角色与道具与环境执行完全相同的名称继承规则；不得使用别名、同义词、翻译名或简写替代上游规范名。
+- **实体与外貌锁定协议 (Entity & Appearance Lockdown, 强制)**：
+  - 严格使用输入实体，必须与 `Linked Characters`、`Key Props`、`Environment Anchor` 完全一致（包含所有标点、大小写、分隔符等），严禁新造主体名或任何归一化改写。
+  - **同权与继承**：环境、角色、道具只能继承已定稿规范名。禁止使用别名、同义词。若需换装/环境翻新，回退 Scene 层处理。
+  - **前缀语法**：角色写 `CHAR:[@Name]`（必须有@），环境写 `ENV:[Name]`（绝不能有@），道具写 `PROP:[Name]`（绝不能有@）。每条生成描述必须含有且正确引用。
+  - **冻结示例**：若实体名是 `Officer Valerius`，则 `Officer_Valerius` 等全是错误。
 - **环境继承权威 (Scene-to-Shot Environment Inheritance, 强制)**：环境在 Scene 阶段已定稿（名称/视角语义/Entry-Exit 连续性）。Shot 阶段只能继承，不得重命名、重定义或新建环境。
 - **环境变更回退规则 (Environment Change Fallback, 强制)**：若某镜头需求导致背景集合显著变化、轴线跨越/反转、观察方向重构或已超出当前 Scene 环境语义，不得在 Shot 内临时改环境；必须回退到 Scene 层新增 Scene + Environment 变体后再生成该 Shot。
-- **OTS 切换强制拆分 (OTS Split Mandate, 强制)**：当出现过肩镜头从 `A over B shoulder` 切换到 `B over A shoulder`（角色视角切换）时，必须至少拆成两个独立 Shot，禁止在同一 Shot 内同时完成双向 OTS。
-  - 即使在同一 Scene 内执行正反方向切换，也必须输出两个独立 Shot（`视角_01` 与 `视角_02`），不得合并为单镜。
-  - 两个 OTS Shot 必须分别写明：机位落点、拍摄朝向、`Axis Side`（如 `left/right`）与是否跨线（`crossed/not crossed`）。
-  - 两个 OTS Shot 必须在 `Shot Logic (CN)` 中显式标注对应关系：`视角_01: Front`、`视角_02: Reverse`。
-- **OTS 分场触发器 (OTS Scene-Split Trigger, 强制)**：若 OTS 切换伴随背景主集合变化、轴线跨越/反转、观察方向重构、镜位由门内看外↔门外看内，必须新起 Scene 并绑定对应 Environment 变体；禁止在原 Scene 内硬写“反打重构”。
-- **禁止新造实体 (No New Entity Creation, 强制)**：Shot 生成阶段绝不能新增角色/环境/道具实体名；`Associated Entities` 仅能由 Start/Video/End 中已出现且属于上游实体清单的名称组成。
+- **OTS 视角切换与分场规则 (OTS Transition Rules, 强制)**：
+  - **强制拆分Shot**：当 `A over B shoulder` 切到 `B over A shoulder` 时，必须至少拆成两个独立 Shot（视角_01 / 视角_02），并注明 Front/Reverse 关系与机位落点（是否跨线）。
+  - **强制触发新Scene**：若此切换伴随背景主集合变化、越轴反转或视角重构（如门内看外转为门外看内），必须新起 Scene 并绑定 Environment 变体，严禁同场重构。
 - **上游 Subject Packet 继承 (Upstream Subject Packet Inheritance, 强制)**：若输入中提供 `Relevant Subject Packets` / `Entity Reference` / 其他上游 subject 描述块，这些内容属于当前 Scene 的**权威 subject 描述输入**。Shot 阶段必须继承、消费并注入这些描述，不能把它们当作可忽略背景信息。
   - **逐镜匹配**：每生成一条 shot，必须先根据该镜头的 `Associated Entities` 精确匹配对应 subject packets，然后再写 `Shot Logic (CN)`、`Start Frame`、`Video Content`、`Keyframes`、`End Frame`。
   - **只注入本镜相关 subjects**：不得把整个 Scene 的全部 subjects 描述平均摊入每条镜头；只允许继承当前 shot 真正使用到的 1-3 个核心 subjects 与环境锚点。
@@ -72,13 +70,6 @@
     - **所有格特殊规则 (Possessive Exemption)**：当需要表达“角色的...”时（例如 `CHAR:[@RoleName]`'s hand），请直接书写 `CHAR:[@RoleName]'s`。这种形式会被系统识别并**跳过描述注入**，从而避免语法错误。这是**唯一**允许 Skipping Injection 的情况。请善用此规则来描述局部特写（e.g., `Close up of CHAR:[@RoleName]'s eyes`）。
 - **正反面特征道具朝向强制 (Front/Back Prop Orientation Mandate, 强制)**：对于手机、显示屏、证件、书本等具有明显正面与背面差异的道具，在 `Start Frame` / `Video Content` / `End Frame` / `Keyframes` 描述中必须显式写明当前朝向或可见的是哪一面（例如：`showing the screen side facing camera`, `back of the phone visible`, `front display facing out`），禁止仅写“拿着手机”等泛指，以避免 AI 生成图像或视频时前后穿帮或正反面错乱。
 - **左右侧及成对事物明确性强制 (Left/Right/Both Specification Mandate, 强制)**：凡提及人体天然成对器官（如手、眼、脚、腿、肩等）或环境场景中具有左右之分或成双成对的事物（如对开门、车窗、抽屉等），在 `Start Frame` / `Video Content` / `End Frame` / `Keyframes` 描述中，都必须显式指明其明确为左（left）、右（right）还是双侧/两个（both/two）。严禁使用无明确方位定语的模糊单数或泛指复数（如 `a hand`, `an eye`, `eyes`, `reaching out`，必须精确写出如 `the left hand`, `the right eye`, `both hands`, `both doors`），以防止 AI 视频渲染时发生左右倒错、肢体数目畸变或空间位置随机漂移。
-- **Bracket Safety (括号安全，强制)**：在 Start/Video/End 的英文描述中，方括号 `[]` 内**只能出现**本 Scene 输入提供的实体名称：`[Environment Anchor]`、`Linked Characters`、`Key Props`（以及允许的泛指占位如 `[Unidentified Man]`）。严禁在 `[]` 内新造“窗/门/桌/路灯”等未资产化对象名；这些应以自然语言名词短语描述（不加括号），否则会触发 AI 幻觉与主体漂移。
-- **@Subject 命名强制 (Subject @ Tag Mandate, 强制)**：凡属于角色/说话主体/动作执行主体的实体名，必须写成 `CHAR:[@Name]`（如 `CHAR:[@Character A]`、`CHAR:[@Kael]`）。若出现未加 `@` 的角色名，判定为不合规并必须重写。
-- **环境/道具禁加 @ (Env/Prop No-@ Rule, 强制)**：环境与道具保持原资产名，不加 `@`（如 `ENV:[Environment Anchor]`、`ENV:[Window]`、`PROP:[Cup]`）。若写成 `[@Window]`、`[@Dark Alley]`，判定为不合规并必须重写。
-- **实体类型前缀 (Entity Typing, 强制)**：在叙述中引用实体时，必须显式使用类型前缀语义：`CHAR:[@Name]`、`ENV:[Name]`、`PROP:[Name]`。
-  - **示例**：`CHAR:[@Kael] stands in ENV:[Dark Alley], holding PROP:[Plasma Revolver].`
-  - **类型错配判定**：若把环境/道具写成 `CHAR:`，或把角色写成 `ENV:`/`PROP:`，判定为不合规并必须重写。
-- **外观锁定 (Appearance Lockdown)**：严禁描述角色的具体外貌（如发型、肤色、面部特征）及服装细节（如颜色、款式）。这些元素完全由 Reference Image 控制。prompt 中仅需提及 `CHAR:[@Character Name]` 并专注于其动作、表情与光影互动。
 - **生图镜头参数强化 (Image Prompt Lens/Noise/Anti-Copy, 强制)**：在用于图片生成的提示词（尤其 `Start Frame` / `End Frame` / `Keyframes`）中必须额外满足：
   - **焦距必写**：必须明确镜头焦距或等效镜头描述（如 `24mm wide`, `35mm`, `50mm`, `85mm portrait`, `telephoto compression`），禁止只写泛化词汇。
   - **焦距禁用模糊替代词 (No Vague Lens Wording, 强制)**：禁止使用 `cinematic lens`, `close cinematic framing`, `wide feel`, `zoomed-in look`, `long-lens feeling`, `dramatic compression` 这类没有数值或等效镜头锚点的空泛写法。若使用 `telephoto compression`、`wide-angle distortion` 等等效描述，必须同时给出可落地的焦距区间或主焦距（如 `85mm with telephoto compression`, `24mm wide-angle distortion`）。
