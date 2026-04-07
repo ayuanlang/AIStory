@@ -2748,6 +2748,21 @@ export const getAdminStorageUsage = async () => {
     return response.data;
 };
 
+export const getAdminExpiredFiles = async () => {
+    const response = await api.get('/admin/storage-usage/expired');
+    return response.data;
+};
+
+export const remindAdminExpiredFiles = async (userIds = null) => {
+    const response = await api.post('/admin/storage-usage/expired/remind', { user_ids: userIds });
+    return response.data;
+};
+
+export const deleteAdminExpiredFiles = async (userIds = null) => {
+    const response = await api.post('/admin/storage-usage/expired/delete', { user_ids: userIds });
+    return response.data;
+};
+
 export const getAdminMaintenanceConfig = async () => {
     const response = await api.get('/admin/maintenance-config');
     return response.data;

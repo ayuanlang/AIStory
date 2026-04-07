@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
 import Footer from '../components/Footer';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
@@ -350,6 +350,9 @@ const UserAdmin = () => {
     const [storageUsage, setStorageUsage] = useState(null);
     const [isStorageUsageLoading, setIsStorageUsageLoading] = useState(false);
     const [storageUsageError, setStorageUsageError] = useState('');
+    const [expiredFilesData, setExpiredFilesData] = useState(null);
+    const [isExpiredFilesLoading, setIsExpiredFilesLoading] = useState(false);
+    const [expiredFilesError, setExpiredFilesError] = useState('');
     const [promptSkills, setPromptSkills] = useState([]);
     const [isPromptSkillsLoading, setIsPromptSkillsLoading] = useState(false);
     const [selectedPromptSkillId, setSelectedPromptSkillId] = useState('');
@@ -883,6 +886,7 @@ const UserAdmin = () => {
     useEffect(() => {
         if (activeTab === 'storage_usage') {
             fetchStorageUsage();
+            fetchExpiredFiles();
         }
     }, [activeTab]);
 
@@ -4167,6 +4171,42 @@ const UserAdmin = () => {
             setStorageUsage(null);
         } finally {
             setIsStorageUsageLoading(false);
+        }
+    };
+
+    const fetchExpiredFiles = async () => {
+        setIsExpiredFilesLoading(true);
+        setExpiredFilesError('');
+        try {
+            const payload = await getAdminExpiredFiles();
+            setExpiredFilesData(payload || null);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e.message || 'Failed to load expired files';
+            setExpiredFilesError(detail);
+            setExpiredFilesData(null);
+        } finally {
+            setIsExpiredFilesLoading(false);
+        }
+    };
+
+    const handleRemindExpiredFiles = async (userIds = null) => {
+        try {
+            const res = await remindAdminExpiredFiles(userIds);
+            alert(res.message || 'Reminders sent');
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to send reminders');
+        }
+    };
+
+    const handleDeleteExpiredFiles = async (userIds = null) => {
+        if (!window.confirm('Delete these expired files permanently?')) return;
+        try {
+            const res = await deleteAdminExpiredFiles(userIds);
+            alert(res.message || 'Files deleted');
+            await fetchExpiredFiles();
+            await fetchStorageUsage();
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || 'Failed to delete files');
         }
     };
 
@@ -8686,11 +8726,11 @@ const UserAdmin = () => {
                             <div className="flex items-center justify-between gap-3">
                                 <h3 className="text-lg font-bold">{t('用户磁盘使用统计', 'Per-User Storage Usage')}</h3>
                                 <button
-                                    onClick={fetchStorageUsage}
-                                    disabled={isStorageUsageLoading}
+                                    onClick={() => { fetchStorageUsage(); fetchExpiredFiles(); }}
+                                    disabled={isStorageUsageLoading || isExpiredFilesLoading}
                                     className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
                                 >
-                                    <RefreshCw size={16} className={isStorageUsageLoading ? 'animate-spin' : ''} /> {t('刷新', 'Refresh')}
+                                    <RefreshCw size={16} className={(isStorageUsageLoading || isExpiredFilesLoading) ? 'animate-spin' : ''} /> {t('刷新', 'Refresh')}
                                 </button>
                             </div>
 
@@ -8742,6 +8782,66 @@ const UserAdmin = () => {
                                     </tbody>
                                 </table>
                             </div>
+
+                            <hr className="border-white/20 my-6" />
+
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <h3 className="text-lg font-bold text-orange-400">{t('超期文件清理 (超过30天)', 'Expired Files Cleanup (>30 days)')}</h3>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        {t(`总计: ${expiredFilesData?.total_count || 0} 个文件, 占用空间: ${formatBytes(expiredFilesData?.total_size || 0)}`, `Total: ${expiredFilesData?.total_count || 0} files, Size: ${formatBytes(expiredFilesData?.total_size || 0)}`)}
+                                    </p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => handleRemindExpiredFiles()}
+                                        disabled={isExpiredFilesLoading || !expiredFilesData?.files?.length}
+                                        className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <Mail size={16} /> {t('群发提醒邮件', 'Send Reminder Emails')}
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteExpiredFiles()}
+                                        disabled={isExpiredFilesLoading || !expiredFilesData?.files?.length}
+                                        className="bg-red-600 hover:bg-red-500 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <Trash2 size={16} /> {t('清除超期文件', 'Clear Expired Files')}
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {expiredFilesError ? (
+                                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3">{expiredFilesError}</div>
+                            ) : null}
+
+                            <div className="overflow-x-auto border border-white/10 rounded-lg max-h-96 overflow-y-auto">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-black/40 sticky top-0">
+                                        <tr className="text-left text-gray-300">
+                                            <th className="px-3 py-2">{t('用户名', 'User')}</th>
+                                            <th className="px-3 py-2">{t('文件路径', 'File Path')}</th>
+                                            <th className="px-3 py-2 text-right">{t('修改时间', 'Modified At')}</th>
+                                            <th className="px-3 py-2 text-right">{t('大小', 'Size')}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(expiredFilesData?.files || []).map((row, idx) => (
+                                            <tr key={idx} className="border-t border-white/5">
+                                                <td className="px-3 py-2">{row.username} <span className="text-xs text-gray-500">({row.user_id})</span></td>
+                                                <td className="px-3 py-2 text-gray-300 break-all">{row.filepath}</td>
+                                                <td className="px-3 py-2 text-right whitespace-nowrap">{new Date(row.modified_at).toLocaleString()}</td>
+                                                <td className="px-3 py-2 text-right font-mono">{formatBytes(row.size || 0)}</td>
+                                            </tr>
+                                        ))}
+                                        {!isExpiredFilesLoading && (!expiredFilesData?.files || expiredFilesData.files.length === 0) && (
+                                            <tr>
+                                                <td colSpan={4} className="px-3 py-6 text-center text-gray-400">{t('暂无超期文件', 'No expired files')}</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
                         </div>
                     )}
 
