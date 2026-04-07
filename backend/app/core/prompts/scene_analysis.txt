@@ -4,8 +4,6 @@
 ## 最终目标
 
 ### 1. 核心底线与实体输出规范 (Core & Outputs)
-# Role: AI Visual Analysis Master & Structured Data Generator
-# Version: 2026-03-01-concise
 0. **Subjects JSON 零省略**：Part 2 的 `characters` / `props` / `environments` JSON 数组必须**逐条完整输出** Subject Index 中的每一行实体——绝对禁止以"为简洁""for brevity""仅列出主要""only main/key items""full list is in the index"等任何理由省略、截断、摘要化或只保留代表项。`Final Consistency Report` 中三行的 `json_count` 必须等于对应 `subject_index_count`，`is_consistent` 必须全部为 `true`；只要任何一行不满足，整个输出无效，必须补全后重新输出。此条优先级高于一切其他规则和 token 压力。
 3. 资产标准化：Environment / Character / Prop 独立且可关联。
 - **角色与道具四宫格绝对强制**：所有角色（character）与所有道具（prop）的 `generation_prompt_cn` 和 `generation_prompt_en` 必须严格采用**四宫格/四视图设定图**（4-panel character sheet / 4-view prop study）格式，且默认对齐到系统 `subject_aspect_ratio` 的 `16:9` 横向资产画布。绝对禁止以任何理由省略、简化、缩减为单张肖像、单张全身像、单张物体图、概念海报、单格参考图、双格或三格变体。无论实体数量、token 压力、角色戏份轻重、道具重要程度、年龄、性别、体型、风格定位或任何其他因素，四宫格都是不可协商的输出格式底线。主体四宫格固定版式必须严格按从左到右划分别为四格。对于角色：第1格是面部特征特写（Close-up），第2格是正面全身（Front），第3格是侧面全身（Side），第4格是背面全身（Back）。**注意：包含特写在内总共只有且必须仅仅是 4 个画面，绝对禁止画成“1 个特写 + 4 个全身（变成 5 宫格或以上）”，也禁止画出多余的动态参考**；且最左侧第1格必须是面部特写宫格，不得替换成半身、中景、全身或任何其他视图；四格缺一或第1格不是特写即无效。对于道具：第1格是微距特写/局部特写（Close-up），第2格是正面视图（Front），第3格是侧面视图（Side），第4格是背面视图（Back），同样**总共仅限 4 个画面**，四格缺一或多出即无效。提示词必须严格按照本文件 Character Prompt Template / Prop Prompt Template 中的模板示例结构书写，不得自行发明替代版式，也不得写出与 `16:9` 横向资产表冲突的其他画幅。此条优先级与"Subjects JSON 零省略"并列最高。
@@ -88,12 +86,7 @@
   - 钩子：集末必须保留未决悬念钩子（风险、问题、反转后果或迫近威胁）。
 33. 分场承载规则：在 Scene 拆分与 `Split Reason` 中，必须显式标注本场承担的是“开场高光段 / 主线推进段 / 反转段 / 钩子段”中的哪一类，并确保整集层面的 3 次以上冲突/反转可被逐场追溯。
 
-### 6. 命名与依赖锚点规范 (Naming & Anchors)
-22. 环境命名权威：`scene_analysis.txt` 是 Environment 最终命名唯一权威；上游若提供 `environment_name` 仅作种子参考，必须在本阶段统一定稿。
-23. 名称冻结：Environment/Character/Prop 一旦定稿，下游逐字符继承，禁止任何自动改写。
-25. 锚点不可变更：`anchor_description` 与已定稿身份锚点（脸型/体态/标志物/鞋履识别点）一经确定即为只读，后续阶段仅可引用，不得增删改或语义改写。
 
----
 
 ## 一、分场与分析原则
 
@@ -198,7 +191,6 @@
 
 - 按时间顺序。
 - 必须是可拍摄、可见变化的动作，不得抽象总结。
-- **对话与旁白零删减（SUPREME）**：所有的对话，旁白，画外音，独白都要原样写入 beat 中，不允许删减。
 - 多主体拆镜规则：遵循上文"Shot-facing 焦点压缩"上限；单个 shot 若需清晰承载超过 3 个核心 subjects，必须拆镜。
 - OTS 拆 Beat 规则：任何角色视角切换（A 看 B → B 看 A）必须拆为两个 Beat，分别写清各自空间落位与朝向关系；禁止单 Beat 同时描述双向视角。
 - 下游交付约束（Shot 级）：上述 OTS 双 Beat 在 `shot_generator` 阶段必须落成两个独立 Shot（`视角_01` / `视角_02`），不得并镜。
@@ -235,26 +227,9 @@
 
 #### Full Script Coverage
 - Beats 必须覆盖原剧本全部信息：动作、对白/台词、表情与情绪反应、人物外观与着装描写、道具状态态变化、环境细节、字幕、屏幕文字、V.O./O.S.、语言切换事件。
-- **对话与旁白零删减**：所有的对话，旁白，画外音，独白都要原样写入 beat 中，不允许删减。
 - 完整覆盖判定：凡剧本中能被看见、听见、识别、或会直接影响镜头设计与实体抽取的信息，都必须在 Scene 分析、`{Beats}`、实体抽取、Subject Index 或 Part 2 中找到明确落点；禁止仅保留剧情主干而省略外观描写、动作细节、道具细节、环境细节或对白附带信息。
 - 若 `Project Context` 指定了项目语言，则上述所有语言性信息在覆盖时必须先翻译/转换成项目语言，再写入最终分析结果；若未指定，则沿用剧本原始语言，不得额外英文化。
 
-#### Shot 级下游交付模板
-- 凡 `{Beats}` 继续下沉为 Shot，必须显式映射到 `Shot ID=EPxx_SCyy_SHzz`，并保持与对应 Beat 一一对应；禁止多个高信息量 Beat 在 Shot 级无说明合并。
-- 每个 Shot 必须至少包含以下 6 个槽位，供下游 `shot_generator` 使用：
-  1. `Shot ID`
-  2. `Source Beat`
-  3. `Core Subjects (1-3)`
-  4. `Start Frame`
-  5. `Video Content`
-  6. `End Frame`
-- Shot 覆盖闭环：`Start Frame / Video Content / End Frame` 三段合起来必须完整承载该 Shot 对应 Beat 的原剧本信息，不限于动作、对白、表情/情绪、外观/着装、道具状态态、环境变化、字幕/屏幕文字、V.O./O.S. 与语言切换事件；禁止只写运动轨迹而漏掉文本信息或外观状态态。
-- Shot 单镜保真规则：若某一 Beat 中同时存在“动作推进 + 关键对白 + 外观/道具状态态变化 + 闪回桥接”且单镜无法清楚承载，必须继续拆成多个 Shot，而不是在一个 `Video Content` 里堆砌过量信息。
-- 闪回 Shot 过渡规则：当 Shot 承担“进入闪回”或“从闪回回切”功能时，`Start Frame` 与 `End Frame` 必须至少有一端明确保留桥接锚点，`Video Content` 必须写清过渡方式（如视线承接、物体特写推进、声音桥延续、动作余势匹配、构图/光线呼应、焦点漂移）；禁止把闪回 Shot 写成单纯的时空跳变硬切。
-- 闪回桥接镜头最小模板：
-  `Shot ID: EPxx_SCyy_SHzz | Source Beat: Beat n | Core Subjects: {1-3项} | Start Frame: 当前时空中的桥接锚点仍清晰可见，并承接上一镜动作/视线/声音 | Video Content: 通过{视线/物体/声音/动作/构图/光线}完成时空滑移，逐步显露闪回信息 | End Frame: 闪回时空中的新主体、新状态态与关键覆盖信息已稳定成立`。
-- 常规 Shot 最小模板：
-  `Shot ID: EPxx_SCyy_SHzz | Source Beat: Beat n | Core Subjects: CHAR:[@A], PROP:[B], ENV:[C] | Start Frame: {起始位置/起始表情或状态态/起始对白或屏幕信息} | Video Content: {动作过程 + 关系变化 + 对白/字幕/音效 + 必要外观/道具/环境细节} | End Frame: {结果位置/结果状态态/下一镜可接的稳定画面}`。
 
 ### 3) 实体完备性
 - **维度生成检查 (Dimension Completeness Gate, 强制)**：每个 Scene 在输出前必须先做“实体层 + 提示词层”双重维度验收；该检查只作为内部门禁，不得把 checklist 或“通过/失败”字样输出到最终结果。
@@ -370,7 +345,6 @@
 - 环境提示词门禁词自检：提交前必须额外扫描并确保不存在以下词或模式：`CHAR:[@`、`over shoulder`、`over-the-shoulder`、`A over B`、`B over A`、`shoulder silhouette`、`behind head`、`blurred shoulder`、`back-of-head`、`arm entering frame`、`hand in foreground`、`hair edge`、`mirror reflection of a person`、`human shadow`、`he/she/they`（中英代词均禁）。命中任一即整条环境提示词作废并重写。
 
 ### 2) Character Prompt Template
-- 模板已合并到本文件（Merged In-File, Authoritative）。
 - 角色模板与规则在本文件内统一维护，避免外部模板漂移。
 - 身份字段显式回写硬规则：Character 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics`、`anchor_description`。禁止只写“四视图角色图 + 服装 + 布光”，却遗漏人物身份定位、职业气质、性别呈现、年龄外观与动作性格。
 
@@ -426,7 +400,6 @@
 - 锚点仅可用稳定身份特征；禁用表情、瞬时姿态、暂态光影、机位错觉、运动模糊等。
 
 ### 3) Prop Prompt Template
-- 模板已合并到本文件（Merged In-File, Authoritative）。
 - 道具模板与规则在本文件内统一维护，避免外部模板漂移。
 - 字段回写硬规则：Prop 的 `generation_prompt_cn/generation_prompt_en` 必须显式、自然地吸收并回写以下结构字段中的有效信息：`name/name_en`、`type`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic`。禁止只写“四视图道具图 + 材质”，却遗漏道具类型（held/static）、状态态、结构特征、功能身份与依赖来源。
 - 道具身份落点规则：Prop prompt 必须明确该物体是什么、属于手持还是静置、当前处于何种单一状态态、有哪些不可一失的识别结构。若 `description_cn` 中有磨损、氧化、裂痕、液位、开合状态态、雕刻、标签等信息，必须回写进 prompt 主体段落。
