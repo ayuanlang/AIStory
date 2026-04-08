@@ -1,7 +1,7 @@
 {
   "version": 2,
   "exported_at": "2026-03-06T13:24:00.804850+00:00",
-  "count": 148,
+  "count": 162,
   "items": [
     {
       "name": "Doubao (Volcengine)",
@@ -3706,6 +3706,99 @@
       "deprecated": false,
       "is_active": false,
       "tags": null
+    },
+    {
+      "name": "RunningHub SparkVideo 2.0 (I2V)",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "sparkvideo-2.0",
+      "modality": "video",
+      "config": {
+        "endpoint": "/openapi/v2/rhart-video/sparkvideo-2.0/image-to-video",
+        "query_endpoint": "/openapi/v2/query"
+      },
+      "deprecated": false,
+      "is_active": true,
+      "tags": [
+        "runninghub",
+        "i2v"
+      ]
+    },
+    {
+      "name": "RunningHub SparkVideo 2.0 (I2V)",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "sparkvideo-2.0",
+      "modality": "video",
+      "config": {
+        "endpoint": "/openapi/v2/rhart-video/sparkvideo-2.0/image-to-video",
+        "query_endpoint": "/openapi/v2/query"
+      },
+      "deprecated": false,
+      "is_active": true,
+      "tags": [
+        "runninghub",
+        "i2v"
+      ]
+    },
+    {
+      "name": "RunningHub SparkVideo 2.0 Fast (I2V)",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "sparkvideo-2.0-fast",
+      "modality": "video",
+      "config": {
+        "endpoint": "/openapi/v2/rhart-video/sparkvideo-2.0-fast/image-to-video",
+        "query_endpoint": "/openapi/v2/query"
+      },
+      "deprecated": false,
+      "is_active": true,
+      "tags": [
+        "runninghub",
+        "i2v",
+        "fast"
+      ]
+    },
+    {
+      "name": "RunningHub SparkVideo 2.0 Fast Multimodal",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "sparkvideo-2.0-fast-multimodal",
+      "modality": "video",
+      "config": {
+        "endpoint": "/openapi/v2/rhart-video/sparkvideo-2.0-fast/multimodal-video",
+        "query_endpoint": "/openapi/v2/query"
+      },
+      "deprecated": false,
+      "is_active": true,
+      "tags": [
+        "runninghub",
+        "multimodal",
+        "fast"
+      ]
+    },
+    {
+      "name": "RunningHub SparkVideo 2.0 Multimodal",
+      "category": "Video",
+      "provider": "runninghub",
+      "base_url": "https://www.runninghub.cn",
+      "model": "sparkvideo-2.0-multimodal",
+      "modality": "video",
+      "config": {
+        "endpoint": "/openapi/v2/rhart-video/sparkvideo-2.0/multimodal-video",
+        "query_endpoint": "/openapi/v2/query"
+      },
+      "deprecated": false,
+      "is_active": true,
+      "tags": [
+        "runninghub",
+        "multimodal",
+        "v2.0"
+      ]
     }
   ]
 }

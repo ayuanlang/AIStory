@@ -5970,6 +5970,8 @@ class MediaGenerationService:
             for key in keys:
                 if key in tool_conf and tool_conf.get(key) is not None:
                     return tool_conf.get(key)
+                if key in config and config.get(key) is not None:
+                    return config.get(key)
             return None
 
         configured_video_refs = _pick_tool_value("reference_video_urls", "ref_video_urls")
@@ -5999,7 +6001,7 @@ class MediaGenerationService:
         )
 
         def _is_runninghub_vidu_video_endpoint() -> bool:
-            return "/vidu/" in endpoint_lower
+            return "/vidu/" in endpoint_lower or endpoint_lower.startswith("vidu") or "vidu" in model_lower
 
         def _runninghub_video_duration_allowed_values() -> List[int]:
             endpoint_rules = [
@@ -6016,6 +6018,9 @@ class MediaGenerationService:
                 ("/openapi/v2/kling-v3.0-pro/text-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
                 ("/openapi/v2/kling-v3.0-std/image-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
                 ("/openapi/v2/kling-v3.0-std/text-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                ("/openapi/v2/rhart-video/sparkvideo", [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                ("/openapi/v2/rhart-video/sparkvideo-2.0-fast/multimodal-video", [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                ("/openapi/v2/rhart-video/sparkvideo-2.0/multimodal-video", [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
             ]
 
             for endpoint_token, values in endpoint_rules:
@@ -6039,6 +6044,10 @@ class MediaGenerationService:
             for endpoint_token in first_image_field_endpoints:
                 if endpoint_token in endpoint_lower:
                     return "firstImageUrl"
+            if "start-end-to-video" in endpoint_lower or "start-to-end" in endpoint_lower:
+                return "firstImageUrl"
+            if "/openapi/v2/rhart-video" in endpoint_lower:
+                return "firstFrameUrl"
             return "imageUrl"
 
         def _normalize_runninghub_video_duration(raw_value: Any, default_value: Any = 5) -> Optional[str]:
@@ -6058,13 +6067,15 @@ class MediaGenerationService:
             return _normalize_duration_value(requested_duration, 5)
 
         def _runninghub_video_resolution_allowed_values() -> List[str]:
-            if "/vidu/" not in endpoint_lower:
+            if "/openapi/v2/rhart-video" in endpoint_lower:
+                return ["480p", "720p", "1080p", "2k", "4k"]
+            if not _is_runninghub_vidu_video_endpoint():
                 return []
             if "q2-pro-fast" in endpoint_lower:
                 return ["720p", "1080p"]
-            if "q2-pro" in endpoint_lower:
+            if "q2-pro" in endpoint_lower or "q3-pro" in endpoint_lower:
                 return ["540p", "720p", "1080p"]
-            return []
+            return ["720p", "1080p"]
 
         def _normalize_runninghub_video_resolution(raw_value: Any, default_value: Optional[str] = None) -> Optional[str]:
             allowed_values = _runninghub_video_resolution_allowed_values()
@@ -6094,6 +6105,10 @@ class MediaGenerationService:
                 if "seedance" in endpoint_lower or "seedance" in model_lower:
                     av = _pick_tool_value("generateAudio") or _pick_tool_value("audio") or _pick_tool_value("sound")
                     payload_obj["generateAudio"] = "true" if _normalize_bool(av, False) else "false"
+                elif "/openapi/v2/rhart-video/sparkvideo" in endpoint_lower:
+                    av = _pick_tool_value("generateAudio") or _pick_tool_value("audio") or _pick_tool_value("sound")
+                    if av is not None:
+                        payload_obj["generateAudio"] = _normalize_bool(av, False)
                 elif _pick_tool_value("generateAudio") is not None:
                     payload_obj["generateAudio"] = _normalize_bool(_pick_tool_value("generateAudio"), False)
                 elif _pick_tool_value("audio") is not None:
@@ -6328,6 +6343,23 @@ class MediaGenerationService:
             camera_fixed = _pick_tool_value("cameraFixed")
             payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false" if "seedance" in str(config.get("model", "")).lower() else _normalize_bool(camera_fixed, False)
             _set_audio_flags(payload)
+        elif "multimodal-video" in endpoint_lower:
+            payload["imageUrls"] = image_refs[:9]
+            if video_refs:
+                payload["videoUrls"] = video_refs[:3]
+            else:
+                payload["videoUrls"] = []
+                
+            audio_refs = _pick_tool_value("audioUrls") or []
+            if isinstance(audio_refs, str): audio_refs = [audio_refs]
+            payload["audioUrls"] = audio_refs[:3]
+            
+            payload["duration"] = normalized_video_duration
+            _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
+            _set_if_present(payload, "ratio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
+            _set_if_present(payload, "realPersonMode", True)
+            
+            _set_audio_flags(payload)
         elif "start-end-to-video" in endpoint_lower or "start-to-end" in endpoint_lower:
             first_image = image_refs[0] if image_refs else None
             last_image = resolved_last_frame or (image_refs[1] if len(image_refs) > 1 else None)
@@ -6364,17 +6396,27 @@ class MediaGenerationService:
             
             primary_field = _runninghub_video_primary_image_field()
             payload[primary_field] = first_image
-            if primary_field != "imageUrls":
-                payload["imageUrls"] = image_refs[:3]
-            if primary_field != "firstImageUrl":
-                payload["firstImageUrl"] = first_image
             
-            if resolved_last_frame and "/rhart-video-" in endpoint_lower:
+            if "/openapi/v2/rhart-video" not in endpoint_lower:
+                if primary_field != "imageUrls":
+                    payload["imageUrls"] = image_refs[:3]
+                if primary_field != "firstImageUrl":
+                    payload["firstImageUrl"] = first_image
+            
+            if resolved_last_frame and ("/openapi/v2/rhart-video/sparkvideo" in endpoint_lower):
+                payload["lastFrameUrl"] = resolved_last_frame
+            elif resolved_last_frame and "/rhart-video-" in endpoint_lower:
                 payload["lastImageUrl"] = resolved_last_frame
-            
+
             payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
-            _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
+            
+            if "/openapi/v2/rhart-video" in endpoint_lower:
+                _set_if_present(payload, "ratio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
+                _set_if_present(payload, "realPersonMode", True)
+            else:
+                _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
+            
             _set_if_present(payload, "movementAmplitude", movement_amplitude)
             
             camera_fixed = _pick_tool_value("cameraFixed")

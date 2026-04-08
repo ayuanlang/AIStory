@@ -6966,6 +6966,11 @@ def _require_review_round_access(db: Session, round_id: int, current_user: User)
     return round_row, thread, project
 
 
+def _cleanup_media_files(urls):
+    # TODO: Refactor global deletion logic for media files.
+    pass
+
+
 def _require_project_access(
     db: Session,
     project_id: int,
@@ -9400,54 +9405,7 @@ def delete_project(
         raise HTTPException(status_code=500, detail=str(e))
 
     # Best-effort file cleanup after DB commit
-    try:
-        upload_root = settings.UPLOAD_DIR
-        if not os.path.isabs(upload_root):
-            upload_root = os.path.abspath(upload_root)
-
-        def _to_upload_path(url_or_path: str) -> Optional[str]:
-            if not url_or_path:
-                return None
-            raw = str(url_or_path).strip()
-            if not raw:
-                return None
-
-            # If it's a URL, strip scheme/host
-            try:
-                parsed = urllib.parse.urlparse(raw)
-                path_part = parsed.path if parsed.scheme else raw
-            except Exception:
-                path_part = raw
-
-            path_part = urllib.parse.unquote(path_part)
-            path_part = path_part.lstrip("/")
-
-            # Normalize common forms:
-            # - uploads/<user>/<file>
-            # - /uploads/<user>/<file>
-            # - <user>/<file> (relative already)
-            if path_part.startswith("uploads/"):
-                rel = path_part.replace("uploads/", "", 1)
-            elif "/uploads/" in path_part:
-                rel = path_part.split("/uploads/", 1)[1]
-            else:
-                rel = path_part
-
-            abs_path = os.path.abspath(os.path.join(upload_root, rel))
-            # Safety: only delete within upload_root
-            if not abs_path.startswith(upload_root):
-                return None
-            return abs_path
-
-        for u in set(candidate_urls):
-            p = _to_upload_path(u)
-            if p and os.path.exists(p) and os.path.isfile(p):
-                try:
-                    os.remove(p)
-                except Exception as fe:
-                    logger.warning(f"[delete_project] Failed to delete file {p}: {fe}")
-    except Exception as e:
-        logger.warning(f"[delete_project] File cleanup skipped/failed project_id={project_id}: {e}")
+    _cleanup_media_files(candidate_urls)
 
     return None
 
@@ -12227,8 +12185,17 @@ def delete_scene(
 
     _require_project_access(db, episode.project_id, current_user, owner_only=True)
 
+    candidate_urls = []
+    shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+    for s in shots:
+        if s.image_url: candidate_urls.append(s.image_url)
+        if s.video_url: candidate_urls.append(s.video_url)
+
     db.delete(db_scene)
     db.commit()
+    
+    _cleanup_media_files(candidate_urls)
+    
     return None
 
 
@@ -15245,10 +15212,17 @@ def delete_shot(
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
     _require_project_access(db, episode.project_id, current_user, owner_only=True)
         
+    candidate_urls = []
+    if db_shot.image_url:
+        candidate_urls.append(db_shot.image_url)
+    if db_shot.video_url:
+        candidate_urls.append(db_shot.video_url)
+
     db.delete(db_shot)
     db.commit()
-    return {"ok": True}
-
+    
+    _cleanup_media_files(candidate_urls)
+    
 # --- Entities ---
 
 class EntityCreate(BaseModel):
@@ -16088,10 +16062,15 @@ def delete_entity(
         
     _require_project_access(db, entity.project_id, current_user, owner_only=True)
         
+    candidate_urls = []
+    if entity.image_url:
+        candidate_urls.append(entity.image_url)
+
     db.delete(entity)
     db.commit()
-    return {"status": "success"}
-
+    
+    _cleanup_media_files(candidate_urls)
+    
 @router.delete("/projects/{project_id}/entities")
 def delete_project_entities(
     project_id: int,
@@ -16100,10 +16079,14 @@ def delete_project_entities(
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
         
-    db.query(Entity).filter(Entity.project_id == project_id).delete()
-    db.commit()
-    return {"status": "success", "message": "All entities deleted"}
+    entities = db.query(Entity).filter(Entity.project_id == project_id).all()
+    candidate_urls = [e.image_url for e in entities if e.image_url]
 
+    db.query(Entity).filter(Entity.project_id == project_id).delete()    
+    db.commit()
+    
+    _cleanup_media_files(candidate_urls)
+    
 # --- Users ---
 
 class UserCreate(BaseModel):
@@ -18205,26 +18188,15 @@ def delete_asset(
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
         
-    # Delete file if local
-    try:
-        if asset.url and "/uploads/" in asset.url:
-            # parsing logic: /uploads/{user_id}/{filename}
-            parts = asset.url.split("/uploads/")
-            if len(parts) > 1:
-                rel_path = parts[1] # user_id/filename
-                file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-        elif asset.url:
-            oss_storage_service.delete_url(asset.url)
-    except Exception as e:
-        print(f"Error deleting file for asset {asset_id}: {e}")
+    candidate_urls = []
+    if asset.url:
+        candidate_urls.append(asset.url)
 
     db.delete(asset)
     db.commit()
-    return {"status": "success"}
-
-@router.post("/assets/batch-delete")
+    
+    _cleanup_media_files(candidate_urls)
+    
 def batch_delete_assets(
     asset_ids: List[int] = Body(...),
     current_user: User = Depends(get_current_user),
@@ -18236,26 +18208,17 @@ def batch_delete_assets(
     ).all()
     
     deleted_count = 0
+    candidate_urls = []
     for asset in assets:
-        # Delete file if local
-        try:
-            if asset.url and "/uploads/" in asset.url:
-                parts = asset.url.split("/uploads/")
-                if len(parts) > 1:
-                    rel_path = parts[1]
-                    file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-            elif asset.url:
-                oss_storage_service.delete_url(asset.url)
-        except Exception as e:
-            print(f"Error deleting file for asset {asset.id}: {e}")
-        
+        if asset.url:
+            candidate_urls.append(asset.url)
         db.delete(asset)
         deleted_count += 1
-        
+
     db.commit()
-    return {"status": "success", "deleted_count": deleted_count}
+    
+    _cleanup_media_files(candidate_urls)
+    
 
 @router.put("/assets/{asset_id}", response_model=dict)
 def update_asset(

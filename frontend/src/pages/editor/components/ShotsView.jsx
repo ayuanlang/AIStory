@@ -1090,12 +1090,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const startedAt = Number(payload?.startedAt || 0);
             if (!stableKey || !stableShotId || !stableJobId) return;
             if (startedAt > 0 && (now - startedAt) > IMAGE_JOB_STATE_TTL_MS) return;
+
+            // Extract the original mode to handle joint diptych correctly across reloads
+            const originalMode = payload?.mode === 'joint_diptych' ? 'joint_diptych' : 'single';
+
             cleaned[stableKey] = {
                 shotId: stableShotId,
                 kind: stableKind,
                 jobId: stableJobId,
                 startedAt: startedAt || now,
-                mode: payload?.mode === 'joint_diptych' ? 'joint_diptych' : 'single',
+                mode: originalMode,
                 ...buildShotJobMeta(stableShotId, stableKind, payload),
             };
         });
@@ -2902,6 +2906,30 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 targetAspectRatio: diptychPlan.targetAspectRatio,
                 exportSize,
             });
+            const compositeUploadIdempotencyKey = buildJointShotDiptychUploadIdempotencyKey({
+                shotId: targetShotId,
+                frameRole: 'composite',
+                compositeUrl: stableCompositeUrl,
+                layout: diptychPlan.layout,
+                targetAspectRatio: diptychPlan.targetAspectRatio,
+                exportSize,
+            });
+
+            // Upload the original composite image to the asset library, per user request
+            const compositeUploadP = uploadAsset(
+                new File([compositeBlob], `shot_${targetShotId}_joint_diptych_composite_${Date.now()}.jpg`, { type: 'image/jpeg' }),
+                {
+                    project_id: projectId,
+                    episode_id: activeEpisode?.id,
+                    shot_id: targetShotId,
+                    shot_number: latestShot?.shot_id,
+                    shot_name: latestShot?.shot_name,
+                    asset_type: 'joint_diptych_composite',
+                    source_asset_url: stableCompositeUrl,
+                    idempotency_key: compositeUploadIdempotencyKey,
+                    remark: 'Joint diptych composite image',
+                }
+            ).catch(err => console.warn('Silent failure uploading joint diptych composite asset:', err));
 
             const startUpload = await uploadAsset(
                 new File([startBlob], `shot_${targetShotId}_start_diptych_${Date.now()}.jpg`, { type: 'image/jpeg' }),
@@ -2937,6 +2965,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             if (!startUrl || !endUrl) {
                 throw new Error('Failed to upload split start/end frame assets');
             }
+            
+            await compositeUploadP;
 
             try {
                 const preloadUrl = (url) => new Promise((resolve) => {

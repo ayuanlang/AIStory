@@ -19,6 +19,7 @@ ProjectAssetReviewMessage = getattr(models, "ProjectAssetReviewMessage", None)
 SystemAPISetting = models.SystemAPISetting
 ProviderKeyPool = models.ProviderKeyPool
 OSSProviderPool = getattr(models, "OSSProviderPool", None)
+DeletedMedia = getattr(models, "DeletedMedia", None)
 SystemAPIBillingRule = models.SystemAPIBillingRule
 TransactionAction = models.TransactionAction
 SMTPSystemConfig = models.SMTPSystemConfig
@@ -653,6 +654,9 @@ def check_and_migrate_tables(*, critical_only: bool = False):
 
         # Ensure oss_provider_pools table exists for OSS admin/storage routing.
         try:
+            if DeletedMedia is not None and not inspector.has_table("deleted_media"):
+                DeletedMedia.__table__.create(bind=engine, checkfirst=True)
+                logger.info("Created deleted_media table")
             if OSSProviderPool is not None and not inspector.has_table("oss_provider_pools"):
                 OSSProviderPool.__table__.create(bind=engine, checkfirst=True)
                 logger.info("Created oss_provider_pools table")

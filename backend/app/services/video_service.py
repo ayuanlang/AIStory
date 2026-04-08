@@ -47,11 +47,29 @@ def create_montage(project_id: int, items: list) -> str:
                 # Assuming simple filename if not url
                 filename = os.path.basename(url)
                 
+            # Remove any query parameters from filename
+            from urllib.parse import urlparse
+            filename = urlparse(filename).path
+                
             file_path = os.path.join(settings.UPLOAD_DIR, filename)
-            
+
             if not os.path.exists(file_path):
-                logger.warning(f"Video file not found: {file_path}")
-                continue
+                if url.startswith("http://") or url.startswith("https://"):
+                    try:
+                        import requests
+                        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                        logger.info(f"Downloading remote video: {url} to {file_path}")
+                        with requests.get(url, stream=True, timeout=60) as r:
+                            r.raise_for_status()
+                            with open(file_path, 'wb') as f:
+                                for chunk in r.iter_content(chunk_size=8192):
+                                    f.write(chunk)
+                    except Exception as e:
+                        logger.error(f"Failed to download remote video {url}: {e}")
+                        continue
+                else:
+                    logger.warning(f"Video file not found: {file_path}")
+                    continue
                 
             try:
                 clip = VideoFileClip(file_path)

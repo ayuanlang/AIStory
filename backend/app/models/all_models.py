@@ -1,5 +1,5 @@
-﻿
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float, UniqueConstraint
+
+from sqlalchemy import func, DateTime, Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 from app.core.time_utils import now_bj_iso
@@ -654,3 +654,9 @@ class PaymentOrder(Base):
     
     user = relationship("User")
 
+
+class DeletedMedia(Base):
+    __tablename__ = "deleted_media"
+    id = Column(Integer, primary_key=True, index=True)
+    url = Column(String, index=True)
+    deleted_at = Column(DateTime(timezone=True), default=func.now())
