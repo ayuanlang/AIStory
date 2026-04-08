@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, ExternalLink } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -3105,7 +3105,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             clearPendingJointDiptychImageJob(targetShotId);
             if (abortGenerationRef.current) return;
             setShotGeneratingState(targetShotId, 'cropping', true);
-await applyJointShotDiptychResult({
+            await applyJointShotDiptychResult({
                 shotRecord: {
                     ...shotSnapshot,
                     start_frame: rawStartPrompt,
@@ -3250,8 +3250,8 @@ await applyJointShotDiptychResult({
                 throw new Error('No composite image URL returned');
             }
             clearPendingJointDiptychImageJob(targetShotId);
-            const nextData = setShotGeneratingState(targetShotId, 'cropping', true);
-await applyJointShotDiptychResult({
+            setShotGeneratingState(targetShotId, 'cropping', true);
+            const nextData = await applyJointShotDiptychResult({
                 shotRecord: {
                     ...stableShot,
                     start_frame: rawStartPrompt,
@@ -6125,11 +6125,33 @@ await applyJointShotDiptychResult({
                 return { imageRefs, videoRefs };
             };
 
+            // Resolve local blob URLs before splitting
+            const resolveBlobUrlIfAny = async (url) => {
+                if (typeof url !== 'string' || !url.startsWith('blob:')) return url;
+                try {
+                    const res = await fetch(url);
+                    const blob = await res.blob();
+                    let ext = 'jpg';
+                    if (blob.type === 'image/png') ext = 'png';
+                    else if (blob.type === 'image/webp') ext = 'webp';
+                    
+                    const file = new File([blob], `blob_upload_${Date.now()}.${ext}`, { type: blob.type });
+                    const uploaded = await uploadAsset(file, { project_id: projectId, shot_id: targetShotId });
+                    
+                    if (uploaded?.url) return uploaded.url;
+                } catch (e) {
+                    console.warn('[handleGenerateVideo] Failed to upload local blob to server:', e);
+                }
+                return url;
+            };
+
+            const resolvedUniqueRefs = await Promise.all(uniqueRefs.map(resolveBlobUrlIfAny));
+
             let apiRefImageUrl = null;
             let apiRefVideoUrls = null;
             let apiLastFrameUrl;
             const apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
-            const { imageRefs, videoRefs } = splitReferenceMediaUrls(uniqueRefs);
+            const { imageRefs, videoRefs } = splitReferenceMediaUrls(resolvedUniqueRefs);
             apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
             apiRefVideoUrls = videoRefs.length > 0 ? videoRefs : null;
             apiLastFrameUrl = undefined;
@@ -8076,7 +8098,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                         try {
                                                             const t = JSON.parse(editingShot.technical_notes || '{}');
                                                             return resolveUnifiedVideoMode(t);
-                                                        } catch(e) { return 'start'; }
+                                                        } catch(e) { return 'start_end'; }
                                                     })()}
                                                     onChange={(e) => {
                                                         const nextMode = e.target.value;

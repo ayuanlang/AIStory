@@ -21,8 +21,28 @@ export const getFullUrl = (url) => {
 export const getThumbUrl = (url) => {
     if (!url) return '';
     const raw = String(url).trim();
-    if (raw.startsWith('http') || raw.startsWith('blob:') || raw.startsWith('data:')) return raw;
-    
+    if (raw.startsWith('blob:') || raw.startsWith('data:')) return raw;
+
+    if (raw.startsWith('http')) {
+        const isAliyun = raw.includes('aliyuncs.com');
+        const isTencent = raw.includes('myqcloud.com');
+        const isQiniu = raw.includes('clouddn.com') || raw.includes('qiniucs.com');
+        
+        if (isAliyun && !raw.includes('x-oss-process')) {
+            const sep = raw.includes('?') ? '&' : '?';
+            return `${raw}${sep}x-oss-process=image/resize,m_lfit,w_256/quality,q_80/format,webp`;
+        }
+        if (isTencent && !raw.includes('imageMogr2')) {
+            const sep = raw.includes('?') ? '&' : '?';
+            return `${raw}${sep}imageMogr2/thumbnail/256x/format/webp/quality/80`;
+        }
+        if (isQiniu && !raw.includes('imageMogr2')) {
+            const sep = raw.includes('?') ? '&' : '?';
+            return `${raw}${sep}imageMogr2/thumbnail/256x/format/webp/quality/80`;
+        }
+        return raw;
+    }
+
     let normalizedPath = raw;
     if (normalizedPath.startsWith('/uploads/')) {
         normalizedPath = normalizedPath.replace('/uploads/', '');
@@ -755,13 +775,13 @@ export const collectMatchedSubjectImageUrlsFromPrompt = ({
 };
 
 export const resolveUnifiedVideoMode = (techObj = {}) => {
-    const rawMode = String(techObj?.video_mode_unified || techObj?.video_ref_submit_mode || techObj?.video_gen_mode || 'start').trim().toLowerCase();
+    const rawMode = String(techObj?.video_mode_unified || techObj?.video_ref_submit_mode || techObj?.video_gen_mode || 'start_end').trim().toLowerCase();
     if (rawMode === 'refs_video' || rawMode === 'entity_refs') return 'entity_refs';
-    return rawMode || 'start';
+    return rawMode || 'start_end';
 };
 
 export const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode = null, entityRefUrls = []) => {
-    const mode = String(explicitMode || resolveUnifiedVideoMode(techObj) || 'start').trim().toLowerCase();
+    const mode = String(explicitMode || resolveUnifiedVideoMode(techObj) || 'start_end').trim().toLowerCase();
     const refs = [];
     const startRef = String(shotLike?.image_url || '').trim();
     const endRef = String(techObj?.end_frame_url || '').trim();

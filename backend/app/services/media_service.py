@@ -5998,8 +5998,8 @@ class MediaGenerationService:
             "image",
         )
 
-        def _is_runninghub_vidu_q2_video_endpoint() -> bool:
-            return "/vidu/" in endpoint_lower and ("q2-pro" in endpoint_lower or "q2-pro-fast" in endpoint_lower)
+        def _is_runninghub_vidu_video_endpoint() -> bool:
+            return "/vidu/" in endpoint_lower
 
         def _runninghub_video_duration_allowed_values() -> List[int]:
             endpoint_rules = [
@@ -6079,17 +6079,17 @@ class MediaGenerationService:
             return str(mapped or raw).strip() or None
 
         def _set_audio_flags(payload_obj: Dict[str, Any]):
-            if _is_runninghub_vidu_q2_video_endpoint():
-                if _pick_tool_value("bgm") is not None:
-                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("bgm"), True)
+            if _is_runninghub_vidu_video_endpoint():
+                if _pick_tool_value("audio") is not None:
+                    payload_obj["audio"] = _normalize_bool(_pick_tool_value("audio"), True)
                 elif _pick_tool_value("sound") is not None:
-                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("sound"), True)
+                    payload_obj["audio"] = _normalize_bool(_pick_tool_value("sound"), True)
                 elif _pick_tool_value("generateAudio") is not None:
-                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("generateAudio"), False)
-                elif _pick_tool_value("audio") is not None:
-                    payload_obj["bgm"] = _normalize_bool(_pick_tool_value("audio"), False)
+                    payload_obj["audio"] = _normalize_bool(_pick_tool_value("generateAudio"), False)
+                elif _pick_tool_value("bgm") is not None:
+                    payload_obj["audio"] = _normalize_bool(_pick_tool_value("bgm"), True)
                 else:
-                    payload_obj["bgm"] = True
+                    payload_obj["audio"] = True
             else:
                 if "seedance" in endpoint_lower or "seedance" in model_lower:
                     av = _pick_tool_value("generateAudio") or _pick_tool_value("audio") or _pick_tool_value("sound")
@@ -6167,11 +6167,6 @@ class MediaGenerationService:
 
         if gen_type == "image":
             payload: Dict[str, Any] = {"prompt": prompt}
-        if callback_url and callback_url != "-1":
-            payload["callBackUrl"] = callback_url
-
-        if callback_url and callback_url != "-1":
-            payload["callBackUrl"] = callback_url
 
             if callback_url and callback_url != "-1":
                 payload["webhookUrl"] = callback_url
@@ -6219,6 +6214,22 @@ class MediaGenerationService:
                 mapped_aspect_ratio = self._map_aspect_ratio_to_allowed(explicit_aspect_ratio, allowed_aspect_ratio_values)
                 if mapped_aspect_ratio:
                     payload["aspectRatio"] = str(mapped_aspect_ratio).strip()
+
+            # Enforce resolution if endpoint explicitly requires it
+            if allowed_resolution_values and "resolution" not in payload:
+                payload["resolution"] = str(allowed_resolution_values[0])
+            
+            # Enforce aspectRatio if endpoint explicitly requires it
+            if allowed_aspect_ratio_values and "aspectRatio" not in payload and "size" not in payload and "resolution" not in payload:
+                payload["aspectRatio"] = str(allowed_aspect_ratio_values[0])
+
+            if "resolution" not in payload and "size" not in payload and "aspectRatio" not in payload:
+                if any(token in endpoint_lower for token in ("seedream", "rhart-image-n", "ultra")):
+                    payload["resolution"] = "1k"
+                elif "g-1.5" in endpoint_lower or "v1" in endpoint_lower:
+                    payload["aspectRatio"] = "16:9"
+                else:
+                    payload["resolution"] = "1k" # Safe fallback for resolution if empty
 
             for key in ["quality", "inputFidelity", "imageNum", "promptExtend", "sequentialImageGeneration", "maxImages", "toolsType", "chaos", "stylize", "weird", "raw", "iw", "sw", "sv", "model"]:
                 _set_if_present(payload, key, _pick_tool_value(key))
@@ -6279,10 +6290,10 @@ class MediaGenerationService:
         explicit_aspect_ratio = _pick_tool_value("aspectRatio", "aspect_ratio") or aspect_ratio
         explicit_size = _pick_tool_value("size")
         movement_amplitude = str(_pick_tool_value("movementAmplitude", "movement_amplitude", "motion_amplitude") or "").strip() or None
-        if not movement_amplitude and _is_runninghub_vidu_q2_video_endpoint():
+        if not movement_amplitude and _is_runninghub_vidu_video_endpoint():
             movement_amplitude = "auto"
         normalized_video_duration = _normalize_runninghub_video_duration(explicit_duration, duration)
-        normalized_video_resolution = _normalize_runninghub_video_resolution(explicit_resolution, "720p" if _is_runninghub_vidu_q2_video_endpoint() else None)
+        normalized_video_resolution = _normalize_runninghub_video_resolution(explicit_resolution, "720p" if _is_runninghub_vidu_video_endpoint() else None)
 
         if "video-edit" in endpoint_lower or "edit-video" in endpoint_lower or "video-extend" in endpoint_lower:
             source_video = video_refs[0] if video_refs else None

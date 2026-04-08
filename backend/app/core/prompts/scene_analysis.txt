@@ -449,9 +449,11 @@
 - **禁止混表**：`Subject Index` 与 `Part 2` 不得使用 Markdown 表格展示；请分别使用“编号列表/键值列表 + JSON”。
 
 ### Part 1: Scenes Table (Markdown)
-- `Split Reason` 必须首要说明该 Scene 在剧本中承担的主要类型/剧情定位（如：宏大开场/高光开场、发展、转折、高潮、回收、钩子等），以及对应的设计思路。随后说明该 Scene 为什么单独成立，指出本场主要承载的原剧本覆盖维度，例如对白、动作链、外观/着装变化、道具状态态变化、环境状态态变化、闪回桥接或语言信息落位；禁止只写“机位变化/方便分镜”这类空泛理由。
+- `Split Reason` 强制提取与输出约束：`Split Reason` 必须作为 `Core Scene Info` 的核心强制字段输出，绝不可省略。
+- `Split Reason` 内容要求：必须首要说明该 Scene 在剧本中承担的主要类型/剧情定位（如：宏大开场/高光开场、发展、转折、高潮、回收、钩子等），以及对应的设计思路。随后说明该 Scene 为什么单独成立，指出本场主要承载的原剧本覆盖维度，例如对白、动作链、外观/着装变化、道具状态态变化、环境状态态变化、闪回桥接或语言信息落位；禁止只写“机位变化/方便分镜”这类空泛理由。
+- 对话正反打强制约束：只要存在人物对话，原则上就必须具有人物对话正反打（Reverse Shots / OTS）的设计要求，并在 Scene 拆分、主体或环境构图中明确考虑反打环境的变化要求。如果某场对话确实不需要正反打，必须在 `Core Scene Info` 的 `Split Reason` 中明确说明不需要正反打的原因。若需要正反打且在同一 Scene 内完成，必须明确拆分出至少两个对应的环境变体（如 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`），在 `{Dependent Envs}` 中列出，并在 `{Beats}` 中通过标注绑定具体环境（如 `[使用 ENV:..._OTS_A]`）。
 - 若该 Scene 属于闪回/回忆段或承担闪回桥接，`Split Reason` 必须额外写出 `Transition Anchor`（如视线承接、物体特写、声音桥、动作延续、构图呼应），说明它如何从上一 Scene 接入并如何回接下一 Scene；禁止把闪回 Scene 写成无来源、无回路的孤立段落。
-- `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Scene Subjects}`, `{Beats}`。
+- `Core Scene Info` 至少包含：`{Stage}`, `{Environment Context}`, `{Layout}`, `{Axis}`, `{Observer View}`, `{Split Reason}`, `{Scene Subjects}`, `{Beats}`。
 - `Core Scene Info` 必须包含 `**{Env Anchor}**: ENV:[<Environment Name>]`，且该名称与本行 `Environment Name` 完全一致。
 - 当 `Environment Relation` 为 `REUSE:<EnvName>` 或 `VARIANT_OF:<EnvName>`（或存在 `visual_dependencies`）时，`Core Scene Info` 还必须包含 `**{Dependent Envs}**`，列出所有依赖环境（`ENV:[...]`）及关系说明。
 - `Original Script Text` 硬规则：每个 Scene 行都必须填写该场**真实对应的原始剧本文本片段**，用于后续逐场对照检查缺失；必须直接回填原文中的相关句子、段落或连续片段，禁止改写成摘要、解释、概括、占位或索引引用。
@@ -460,7 +462,7 @@
 - 二维背景显著变化必须新起 Scene。
 - 每行必须包含并满足：
   - `Episode ID`、`Scene ID`（`EPxx_SCyy` 一致性）
-  - `Environment Relation`：`NEW` / `REUSE:<EnvName>` / `VARIANT_OF:<EnvName>`
+  - `Environment Relation`：`NEW` / `REUSE:<EnvName>` / `VARIANT_OF:<EnvName>`。若是同场双环境（如正反打），填写 `<EnvName_1>, <EnvName_2>`。
   - `Base Environment Reference`
   - `Environment Delta`（`REUSE` 写 `None`/`No visual delta`）
   - `Entry State`、`Exit State`
@@ -473,7 +475,7 @@
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Original Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 作为【宏大开场/发展/高潮等剧情定位】，设计思路为【视觉及导演设计思路】。因{对白/动作/外观变化/状态态/环境/闪回}需独立承载；Transition Anchor={视线/动作余势/相似构图等}。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name}], ENV:[{Base Env Name}], PROP:[Prop]。<br>**{Beats}**:<br>1. {空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿，相对{Stage}偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]并看向其胸前，未接触；{环境交互} CHAR:[@Char A]坐在ENV:[Bed]边缘；{动作变化过程} CHAR:[@Char A]前倾半步并抬手，台词/字幕/音效:{原剧本对应内容}；-> {新状态态} 与CHAR:[@Char B]近距对峙。 | {Original} | `{Env Name}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
+| EP01 | EP01_SC01 | 1 | {Name} | {Times} | **{Env Anchor}**: ENV:[{Env Name}]（若含OTS变体则为多个，例如：ENV:[{Env Name_OTS_A}], ENV:[{Env Name_OTS_B}]）。<br>**{Dependent Envs}**: ENV:[{Base Env Name}]（{REUSE/VARIANT_OF，继承结构与材质锚点，仅写本场景变化项}）。<br>**{Stage} (核心舞台)**: 中文描述。<br>**{Environment Context}**: 中文描述。<br>**{Layout}**: 中文描述。<br>**{Axis}**: 中文描述（含观察方向与是否跨线）。<br>**{Observer View}**: 机位站位 + 朝向 + 轴线侧（e.g., 沿轴正向看向{Stage}）。<br>**{Split Reason}**: 作为【宏大开场/发展/高潮等剧情定位】，设计思路为【视觉及导演设计思路】。因{对白/动作/外观变化/状态态/环境/闪回}需独立承载；Transition Anchor={视线/动作余势/相似构图等}；反打说明={如无需正反打，说明原因，否则必须说明反打方向变化要求，例如：需要正反打，已拆分 ENV:..._OTS_A 和 ENV:..._OTS_B}。<br>**{Scene Subjects}**: CHAR:[@Char A], CHAR:[@Char B], ENV:[{Env Name_OTS_A}], ENV:[{Env Name_OTS_B}], PROP:[Prop]。<br>**{Beats}**:<br>1. [使用 ENV:{当前Beat所用环境}] {空间} CHAR:[@Char A]在ENV:[Bed]右侧边缘坐姿，相对{Stage}偏右；{主体关系} CHAR:[@Char A]侧对CHAR:[@Char B]... | {Original} | `{Env Name_OTS_A}, {Env Name_OTS_B}` | `NEW / REUSE / VARIANT_OF` | `{Base Env Name / Ref ID}` | `仅写相对变化项；REUSE=No visual delta` | {Entry Snapshot} | {Exit Snapshot} | `CHAR:[@Char A]`, `CHAR:[@Char B]` | `PROP:[Prop]` |
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）
 - **模板锁定**：Subject Index 每一行必须严格采用固定骨架，禁止改序、改键、增键、删键：

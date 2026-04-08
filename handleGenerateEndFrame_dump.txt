@@ -1,0 +1,506 @@
+const handleGenerateEndFrame = async (promptOverride = null, cfgOverride = null, extraProviderOptions = {}) => {
+        if (!editingShot) return;
+        const shotSnapshot = editingShot;
+        const targetShotId = shotSnapshot.id;
+        let createdImageJobId = '';
+        let keepRunningUi = false;
+        setShotGeneratingState(targetShotId, 'end', true);
+        abortGenerationRef.current = false;
+
+        const resolvedEntities = await awaitShotGenerationEntities();
+
+        const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
+        const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
+        const rawPrompt = promptOverride
+            || (resolvedPromptSubmitLang === 'cn'
+                ? (cnEndPrompt || shotSnapshot.end_frame || "End frame")
+                : (shotSnapshot.end_frame || cnEndPrompt || "End frame"));
+        const isManual = techNotes.manual_end_frame === true;
+
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
+
+        onLog?.('Generating End Frame...', 'info');
+
+        let success = false;
+        let attempts = 0;
+        const maxAttempts = 1;
+
+        while (!success && attempts < maxAttempts) {
+             if (abortGenerationRef.current) {
+                 onLog?.('End Frame generation stopped by user.', 'warning');
+                 break;
+             }
+
+             attempts++;
+             if (attempts > 1) {
+                 onLog?.(`Retrying End Frame (Attempt ${attempts}/${maxAttempts})...`, 'warning');
+                 showNotification(`Retrying End Frame (Attempt ${attempts}/${maxAttempts})...`, 'info');
+             }
+
+             try {
+                const tech = JSON.parse(shotSnapshot.technical_notes || '{}');
+                const uniqueRefs = getEndFrameVisibleRefs(shotSnapshot, rawPrompt, resolvedEntities);
+                if (extraProviderOptions && extraProviderOptions.auto_refs) {
+                    uniqueRefs.push(...extraProviderOptions.auto_refs);
+                    delete extraProviderOptions.auto_refs;
+                }
+
+                // NEW: Inject Global Context
+                const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
+                const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
+                const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
+                const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
+
+                const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, { function_name: 'generate_shot_images',
+                    project_id: projectId,
+                    episode_id: activeEpisode?.id,
+                    shot_id: targetShotId,
+                    shot_number: shotSnapshot.shot_id,
+                    shot_name: shotSnapshot.shot_name,
+                    prompt_language: resolvedPromptSubmitLang,
+                    asset_type: 'end_frame',
+                    ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
+                    ...(cfgOverride ? { cfg: cfgOverride } : {}),
+                    ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                    ...extraProviderOptions,
+                    negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
+                    on_job_created: (jobId) => {
+                        createdImageJobId = String(jobId || '').trim();
+                        setPendingImageJob(targetShotId, 'end', jobId);
+                        setShotGeneratingState(targetShotId, 'end', true);
+                    },
+                });
+                if (res && res.url) {
+                    try {
+                        await new Promise((resolve) => {
+                            const img = new Image();
+                            img.onload = () => {
+                                if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(res.url);
+                                resolve();
+                            };
+                            img.onerror = resolve;
+                            img.src = getFullUrl(res.url);
+                        });
+                    } catch (preloadErr) {}
+
+                    clearPendingImageJob(targetShotId, 'end');
+                    tech.end_frame_url = res.url;
+                    tech.video_gen_mode = 'start_end'; // Auto-switch to Start+End
+                    const newData = { technical_notes: JSON.stringify(tech), end_frame: rawPrompt };
+                    await onUpdateShot(targetShotId, newData);
+                    setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev));
+                    onLog?.('End Frame Generated', 'success');
+                    showNotification('End Frame Generated', 'success');
+                    refreshShotAssetsMeta();
+                    success = true;
+                } else {
+                     throw new Error("No image URL returned");
+                }
+            } catch (e) {
+                console.error(`Attempt ${attempts} failed:`, e);
+                if (isClientInterruptionError(e)) {
+                    const recovered = await tryRecoverShotMediaAfterInterruption({
+                        shotId: targetShotId,
+                        mediaKey: 'end',
+                    });
+                    if (recovered) {
+                        keepRunningUi = true;
+                        success = true;
+                        break;
+                    }
+                }
+                if (createdImageJobId) {
+                    clearPendingImageJob(targetShotId, 'end');
+                    createdImageJobId = '';
+                }
+                if (attempts >= maxAttempts) {
+                    onLog?.(`Generation failed after ${maxAttempts} attempts: ${e.message}`, 'error');
+                    showNotification(`Generation failed: ${e.message}`, 'error');
+                }
+            }
+        }
+        if (!keepRunningUi) {
+            clearPendingImageJob(targetShotId, 'end');
+            setShotGeneratingState(targetShotId, 'end', false);
+        }
+    };
+
+    const handleForceStopShotImage = useCallback(async (kind) => {
+        const stableKind = kind === 'end' ? 'end' : 'start';
+        const stableShotId = String(editingShot?.id || '').trim();
+        if (!stableShotId) return;
+        const pendingPayload = getPendingImageJobPayload(stableShotId, stableKind);
+        const isJointDiptych = pendingPayload?.mode === 'joint_diptych';
+
+        abortGenerationRef.current = true;
+        if (isJointDiptych) {
+            setShotGeneratingState(stableShotId, 'start', false);
+            setShotGeneratingState(stableShotId, 'end', false);
+    setShotGeneratingState(stableShotId, 'cropping', false);
+        } else {
+            setShotGeneratingState(stableShotId, stableKind, false);
+        }
+
+        const resolved = await syncShotMediaRuntimeState({
+            shotId: stableShotId,
+            mediaKey: stableKind,
+            releaseIfMissing: false,
+        });
+        const jobId = String(resolved?.jobId || '').trim();
+
+        if (!jobId) {
+            if (isJointDiptych) {
+                releaseShotJointDiptychUiByShotId(stableShotId);
+            } else {
+                releaseShotImageUiByShotId(stableShotId, stableKind);
+            }
+            onLog?.(t('已停止前端重试循环，并清除本地图片运行状态。未检测到可停止的后端图片任务。', 'Stopped local retry loop and cleared local image running state. No active backend image job found.'), 'warning');
+            return;
+        }
+
+        try {
+            const res = await stopGenerationJob('image', jobId, { force: true });
+            onLog?.(res?.message || t('已请求停止图片任务。', 'Image stop requested.'), 'warning');
+            showNotification(t('已请求停止图片任务', 'Image stop requested'), 'warning');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            if (isMissingJobError(e)) {
+                if (isJointDiptych) {
+                    releaseShotJointDiptychUiByShotId(stableShotId);
+                } else {
+                    releaseShotImageUiByShotId(stableShotId, stableKind);
+                }
+                onLog?.(t('后端图片任务已不存在，已清除本地运行状态。', 'Backend image job no longer exists. Cleared local running state.'), 'warning');
+                return;
+            }
+            onLog?.(`${t('停止图片任务失败', 'Failed to stop image task')}: ${detail}`, 'error');
+            showNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
+        } finally {
+            if (isJointDiptych) {
+                clearPendingJointDiptychImageJob(stableShotId);
+            } else {
+                clearPendingImageJob(stableShotId, stableKind);
+            }
+        }
+    }, [clearPendingImageJob, clearPendingJointDiptychImageJob, editingShot?.id, getPendingImageJobPayload, isMissingJobError, onLog, releaseShotImageUiByShotId, releaseShotJointDiptychUiByShotId, setShotGeneratingState, syncShotMediaRuntimeState, t]);
+
+    const handleSetEndFrameFromVideoLastFrame = useCallback(async () => {
+        if (!editingShot?.id) return;
+        const targetShotId = editingShot.id;
+        const videoUrlRaw = String(editingShot.video_url || '').trim();
+        if (!videoUrlRaw) {
+            onLog?.(t('当前镜头没有视频，无法提取尾帧。', 'No shot video found to extract the last frame.'), 'warning');
+            return;
+        }
+
+        const captureLastFrameBlob = (videoUrl) => new Promise((resolve, reject) => {
+            const video = document.createElement('video');
+
+            const cleanup = () => {
+                video.onloadedmetadata = null;
+                video.onseeked = null;
+                video.onerror = null;
+                video.src = '';
+            };
+
+            const fail = (errorLike) => {
+                cleanup();
+                reject(errorLike instanceof Error ? errorLike : new Error(String(errorLike || 'capture failed')));
+            };
+
+            const capture = () => {
+                try {
+                    const width = Number(video.videoWidth || 0);
+                    const height = Number(video.videoHeight || 0);
+                    if (!width || !height) {
+                        fail(new Error('video resolution unavailable'));
+                        return;
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        fail(new Error('canvas context unavailable'));
+                        return;
+                    }
+
+                    ctx.drawImage(video, 0, 0, width, height);
+                    canvas.toBlob((blob) => {
+                        cleanup();
+                        if (!blob) {
+                            reject(new Error('failed to encode frame image'));
+                            return;
+                        }
+                        resolve(blob);
+                    }, 'image/jpeg', 0.94);
+                } catch (e) {
+                    fail(e);
+                }
+            };
+
+            video.crossOrigin = 'anonymous';
+            video.preload = 'auto';
+            video.muted = true;
+            video.playsInline = true;
+            video.onerror = () => fail(new Error('video load error'));
+            video.onloadedmetadata = () => {
+                const duration = Number(video.duration || 0);
+                if (!Number.isFinite(duration) || duration <= 0) {
+                    capture();
+                    return;
+                }
+                const target = Math.max(0, duration - 0.05);
+                if (Math.abs((video.currentTime || 0) - target) < 0.01) {
+                    capture();
+                    return;
+                }
+                video.currentTime = target;
+            };
+            video.onseeked = capture;
+            video.src = getFullUrl(videoUrl);
+        });
+
+        setShotGeneratingState(targetShotId, 'end', true);
+        try {
+            const frameBlob = await captureLastFrameBlob(videoUrlRaw);
+            const frameFile = new File(
+                [frameBlob],
+                `shot_${targetShotId}_video_last_frame_${Date.now()}.jpg`,
+                { type: 'image/jpeg' }
+            );
+            const extractUploadIdempotencyKey = buildShotFrameAssetUploadIdempotencyKey({
+                operation: 'video_last_frame',
+                shotId: targetShotId,
+                frameRole: 'end',
+                sourceUrl: videoUrlRaw,
+            });
+
+            const uploaded = await uploadAsset(frameFile, {
+                project_id: projectId,
+                episode_id: activeEpisode?.id,
+                shot_id: targetShotId,
+                shot_number: editingShot.shot_id,
+                shot_name: editingShot.shot_name,
+                asset_type: 'end_frame',
+                source_asset_url: videoUrlRaw,
+                idempotency_key: extractUploadIdempotencyKey,
+            });
+            const extractedUrl = String(uploaded?.url || '').trim();
+            if (!extractedUrl) {
+                throw new Error('uploaded frame has no url');
+            }
+
+            const tech = JSON.parse(editingShot.technical_notes || '{}');
+            tech.end_frame_url = extractedUrl;
+            tech.video_gen_mode = 'start_end';
+            await persistEditingShotUpdates({ technical_notes: JSON.stringify(tech) });
+
+            onLog?.(t('已从视频提取最后一帧并设置为结束帧。', 'Last video frame extracted and set as end frame.'), 'success');
+            showNotification(t('已设置结束帧', 'End frame set from video'), 'success');
+        } catch (e) {
+            const detail = e?.message || 'unknown error';
+            onLog?.(`${t('提取视频尾帧失败', 'Failed to extract video last frame')}: ${detail}`, 'error');
+            showNotification(t('提取视频尾帧失败', 'Failed to extract video last frame'), 'error');
+        } finally {
+            setShotGeneratingState(targetShotId, 'end', false);
+        }
+    }, [editingShot, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
+
+    const isVoiceoverSyncEnabled = useMemo(() => {
+        try {
+            const tech = JSON.parse(editingShot?.technical_notes || '{}');
+            return Boolean(tech?.video_generate_voiceover);
+        } catch (e) {
+            return false;
+        }
+    }, [editingShot?.technical_notes]);
+
+    const setVoiceoverSyncEnabled = useCallback((enabled) => {
+        setEditingShot((prev) => {
+            if (!prev) return prev;
+            let tech = {};
+            try {
+                tech = JSON.parse(prev.technical_notes || '{}');
+                if (!tech || typeof tech !== 'object') tech = {};
+            } catch (e) {
+                tech = {};
+            }
+            tech.video_generate_voiceover = Boolean(enabled);
+            return { ...prev, technical_notes: JSON.stringify(tech) };
+        });
+    }, []);
+
+    const setShotVoiceGenerating = useCallback((shotId, value) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return;
+        setVoiceGeneratingByShot((prev) => {
+            if (value) return { ...prev, [stableShotId]: true };
+            const next = { ...prev };
+            delete next[stableShotId];
+            return next;
+        });
+    }, []);
+
+    const buildVoiceGenerationContext = (shot, basePromptOverride = null) => {
+        if (!shot) return null;
+        const tech = (() => {
+            try {
+                const parsed = JSON.parse(shot.technical_notes || '{}');
+                return parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (e) {
+                return {};
+            }
+        })();
+
+        const cnVideoPrompt = String(tech.video_prompt_cn || '').trim();
+        const rawPrompt = basePromptOverride
+            || (resolvedPromptSubmitLang === 'cn'
+                ? (cnVideoPrompt || getShotVideoPromptEn(shot) || 'Video motion')
+                : (getShotVideoPromptEn(shot) || cnVideoPrompt || 'Video motion'));
+        const isManual = tech.manual_video_prompt === true;
+        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
+        const finalPrompt = isManual
+            ? submitPrompt
+            : (submitPrompt + getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) }));
+
+        const projectLanguage = String(
+            activeEpisode?.episode_info?.e_global_info?.language
+            || activeEpisode?.episode_info?.language
+            || project?.global_info?.language
+            || ''
+        ).trim();
+        const voiceBuild = buildVoicePromptWithEntityContext(finalPrompt, entities, projectLanguage, uiLang);
+        const voicePrompt = String(voiceBuild.voicePrompt || '').trim();
+
+        return {
+            shot,
+            voicePrompt,
+            languageCode: voiceBuild.languageCode,
+            projectLanguage: projectLanguage || voiceBuild.languageCode,
+        };
+    };
+
+    const submitVoiceoverOnly = async (context) => {
+        const shot = context?.shot;
+        if (!shot?.id) return;
+
+        const targetShotId = shot.id;
+        const voicePrompt = String(context?.voicePrompt || '').trim();
+        const plannerSystemPrompt = String(context?.plannerSystemPrompt || '').trim();
+        const languageCode = String(context?.languageCode || '').trim() || 'en';
+        const projectLanguage = String(context?.projectLanguage || '').trim() || languageCode;
+
+        if (!voicePrompt) {
+            onLog?.(t('未检测到对白，已取消仅配音生成', 'No dialogue detected, canceled voice-only generation'), 'warning');
+            showNotification(t('未检测到可用于配音的对白', 'No dialogue available for voiceover'), 'warning');
+            return;
+        }
+
+        setShotVoiceGenerating(targetShotId, true);
+        try {
+            onLog?.(`${t('配音语言约束', 'Voice language constraint')}: ${languageCode}`, 'info');
+            onLog?.(t('开始仅生成配音...', 'Generating voiceover only...'), 'info');
+
+            const voiceRes = await generateVoice(voicePrompt, null, null, {
+                project_id: projectId,
+                shot_id: targetShotId,
+                shot_number: shot.shot_id,
+                shot_name: shot.shot_name,
+                asset_type: 'voiceover',
+                use_llm_param_planning: true,
+                planner_system_prompt: plannerSystemPrompt || undefined,
+                language_code: languageCode,
+                project_language: projectLanguage,
+            });
+
+            try {
+                const planMeta = voiceRes?.voiceover_plan_prompts || {};
+                const sysLen = String(planMeta?.system_prompt || '').length;
+                const userLen = String(planMeta?.user_prompt || '').length;
+                const src = String(planMeta?.template_source || 'unknown');
+                const effectiveLen = String(voiceRes?.effective_prompt || '').length;
+                onLog?.(
+                    `${t('配音规划返回', 'Voice planning response')}: source=${src}, sys=${sysLen}, user=${userLen}, effective=${effectiveLen}`,
+                    'info'
+                );
+            } catch (logErr) {
+                console.warn('Voice planning response log failed', logErr);
+            }
+
+            const voiceUrl = String(voiceRes?.url || '').trim();
+            if (!voiceUrl) {
+                onLog?.(t('配音生成完成但未返回音频 URL', 'Voiceover completed but no audio URL returned'), 'warning');
+                showNotification(t('配音生成完成但未返回音频 URL', 'Voiceover completed but no audio URL returned'), 'warning');
+                return;
+            }
+
+            let tech = {};
+            try {
+                const parsed = JSON.parse(shot.technical_notes || '{}');
+                tech = parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (e) {
+                tech = {};
+            }
+            const nextTech = { ...tech, voiceover_url: voiceUrl, voiceover_prompt: voicePrompt };
+            if (voiceRes?.metadata && typeof voiceRes.metadata === 'object') {
+                nextTech.voiceover_metadata = voiceRes.metadata;
+            }
+            const voiceUpdate = { technical_notes: JSON.stringify(nextTech) };
+            setEditingShot((prev) => {
+                if (!prev || prev.id !== targetShotId) return prev;
+                return { ...prev, ...voiceUpdate };
+            });
+
+            refreshShotAssetsMeta();
+            onLog?.(t('仅配音生成完成', 'Voice-only generation completed'), 'success');
+            showNotification(t('仅配音生成完成', 'Voice-only generation completed'), 'success');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            onLog?.(`${t('配音生成失败', 'Voiceover generation failed')}: ${detail}`, 'error');
+            showNotification(`${t('配音生成失败', 'Voiceover generation failed')}: ${detail}`, 'error');
+        } finally {
+            setShotVoiceGenerating(targetShotId, false);
+        }
+    };
+
+    const handleGenerateVoiceoverOnly = async () => {
+        if (!editingShot?.id) return;
+        const context = buildVoiceGenerationContext(editingShot);
+        if (!context) return;
+
+        if (isSuperuser) {
+            setVoicePromptConfirmModal({
+                open: true,
+                shotId: editingShot.id,
+                prompt: String(context.voicePrompt || ''),
+                systemPrompt: '',
+                loadingSystemPrompt: true,
+                languageCode: String(context.languageCode || ''),
+                projectLanguage: String(context.projectLanguage || ''),
+                submitting: false,
+            });
+            try {
+                const res = await fetchPrompt('voice_tts_planner_system.txt');
+                const systemPromptText = String(res?.content || '').trim();
+                setVoicePromptConfirmModal((prev) => ({
+                    ...prev,
+                    systemPrompt: systemPromptText,
+                    loadingSystemPrompt: false,
+                }));
+            } catch (e) {
+                onLog?.(t('读取配音系统提示词失败，已使用空白值', 'Failed to load voice planner system prompt; using blank value'), 'warning');
+                setVoicePromptConfirmModal((prev) => ({
+                    ...prev,
+                    loadingSystemPrompt: false,
+                }));
+            }
+            onLog?.(t('超级用户模式：请确认配音提示词后再提交。', 'Superuser mode: confirm voice prompt before submitting.'), 'info');
+            return;
+        }
+
+        await submitVoiceoverOnly(context);
+    };
+
+    
