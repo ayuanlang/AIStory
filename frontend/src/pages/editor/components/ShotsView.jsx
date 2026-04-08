@@ -7495,6 +7495,14 @@ const isCroppingThisShot = !!(shotState.cropping);
                             >
                                 {/* Image / Thumbnail */}
                                 <div className="aspect-video bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden">
+                                    
+                                    {/* Preload End Frame so it's cached exactly like the Start Frame when user opens the shot inspector */}
+                                    {getShotEndFrameUrl(shot) && (
+                                        <div className="absolute inset-0 opacity-0 pointer-events-none -z-10">
+                                            <SafeImage src={getShotEndFrameUrl(shot)} loading="lazy" />
+                                        </div>
+                                    )}
+
                                     {shot.video_url ? (
                                         <LazyHoverVideo
                                             key={shot.video_url}
@@ -8793,7 +8801,58 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                     );
                                                 };
 
-                                                const renderGenerationHistoryPanel = () => (
+                                                const renderGenerationHistoryPanel = () => {
+    const filteredHistory = shotGenerationHistory.filter((item) => {
+        const itemKind = resolveGenerationHistoryMediaKind(item);
+        
+        let targetType = modalType;
+        if (modalType === 'keyframe') { 
+             targetType = 'start'; 
+        }
+        
+        if (targetType === 'start') {
+            return ['start', 'image', 'subject'].includes(itemKind) || !['end', 'video'].includes(itemKind);
+        } else if (targetType === 'end') {
+            return itemKind === 'end';
+        } else if (targetType === 'video') {
+            return itemKind === 'video';
+        }
+        return true;
+    });
+        
+
+    const handleUseAsCurrent = async (item) => {
+        if (!item || !item.resultUrl || !editingShot) return;
+        const resultUrl = item.resultUrl;
+        
+        let updates = {};
+        if (modalType === 'start') {
+            updates = { image_url: resultUrl };
+        } else if (modalType === 'end') {
+            const tech = JSON.parse(editingShot.technical_notes || '{}');
+            tech['end_frame_url'] = resultUrl;
+            tech['end_frame_reused_from_start'] = false;
+            updates = { 'technical_notes': JSON.stringify(tech) };
+        } else if (modalType === 'video') {
+            updates = { 'video_url': resultUrl };
+        }
+        
+        try {
+            if (onUpdateShot) {
+                await onUpdateShot(editingShot.id, updates);
+            }
+            setEditingShot((prev) => {
+                if (!prev) return prev;
+                return { ...prev, ...updates };
+            });
+            showNotification(t('已选用为当前', 'Applied as current'), 'success');
+        } catch (e) {
+            if (onLog) onLog(`Failed to apply generated media: ${e.message}`, 'error');
+            showNotification(t('选用失败', 'Failed to apply'), 'error');
+        }
+    };
+
+    return (
                                                     <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
                                                         <div className="flex items-center justify-between gap-2">
                                                             <div>
@@ -8815,13 +8874,13 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                 <Loader2 className="h-4 w-4 animate-spin" />
                                                                 {t('正在加载镜头生成历史...', 'Loading shot generation history...')}
                                                             </div>
-                                                        ) : shotGenerationHistory.length === 0 ? (
+                                                        ) : filteredHistory.length === 0 ? (
                                                             <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
                                                                 {t('该分镜还没有生成历史。', 'No generation history for this shot yet.')}
                                                             </div>
                                                         ) : (
                                                             <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
-                                                                {shotGenerationHistory.map((item) => {
+                                                                {filteredHistory.map((item) => {
                                                                     const itemId = String(item?.job_id || item?.id || Math.random()).trim();
                                                                     const status = String(item?.status || '').trim().toLowerCase();
                                                                     const canPreview = Boolean(item?.resultUrl);
@@ -8875,7 +8934,16 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                                         </button>
                                                                                         <button
                                                                                             type="button"
-                                                                                            onClick={() => handleDeleteShotGenerationHistoryItem(item)}
+                                                                                            onClick={() => handleUseAsCurrent(item)}
+            disabled={isDeleting}
+            className="inline-flex items-center gap-1 rounded border border-blue-400/20 bg-blue-500/10 px-2 py-1 text-[11px] text-blue-100 hover:bg-blue-500/20 disabled:opacity-50"
+        >
+            <CheckCircle2 size={12} />
+            {t('选用', 'Apply')}
+        </button>
+        <button
+            type="button"
+            onClick={() => handleDeleteShotGenerationHistoryItem(item)}
                                                                                             disabled={isDeleting}
                                                                                             className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20 disabled:opacity-50"
                                                                                         >
@@ -8892,6 +8960,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                         )}
                                                     </div>
                                                 );
+                                                };
 
                                                 if (modalType === 'start') {
                                                     return (
