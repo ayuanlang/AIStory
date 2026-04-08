@@ -537,7 +537,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     )
 };
 
-export const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false, subjectGap = null, onSupplementSubjects = null, supplementingSubjects = false }) => {
+export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false, subjectGap = null, onSupplementSubjects = null, supplementingSubjects = false }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -784,6 +784,11 @@ export const SceneCard = ({ scene, entities, shotCount = 0, onClick, onGenerateS
                             <Film className="w-3 h-3" />
                             <span>{shotCount}</span>
                             <span className="opacity-80">{t('分镜', 'Shots')}</span>
+                            {shotDuration > 0 && (
+                                <span className="opacity-80 ml-0.5 border-l border-cyan-400/30 pl-1">
+                                    {Math.round(shotDuration * 10) / 10}s
+                                </span>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -904,6 +909,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     });
     const [scenes, setScenes] = useState([]);
     const [sceneShotCountMap, setSceneShotCountMap] = useState({});
+    const [sceneShotDurationMap, setSceneShotDurationMap] = useState({});
     const [sceneListLoading, setSceneListLoading] = useState(false);
     const [sceneSortMode, setSceneSortMode] = useState('updated_desc');
     const [sceneSortDirection, setSceneSortDirection] = useState('desc');
@@ -983,20 +989,27 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     const refreshSceneShotCounts = useCallback(async () => {
         if (!activeEpisode?.id) {
             setSceneShotCountMap({});
+            setSceneShotDurationMap({});
             return;
         }
         try {
             const rows = await fetchEpisodeShots(activeEpisode.id, { compact: true });
             const nextCounts = {};
+            const nextDurations = {};
             (Array.isArray(rows) ? rows : []).forEach((shot) => {
                 const sceneId = Number(shot?.scene_id || 0);
                 if (sceneId <= 0) return;
                 nextCounts[sceneId] = (nextCounts[sceneId] || 0) + 1;
+                
+                const dur = parseFloat(shot?.duration) || 0;
+                nextDurations[sceneId] = (nextDurations[sceneId] || 0) + dur;
             });
             setSceneShotCountMap(nextCounts);
+            setSceneShotDurationMap(nextDurations);
         } catch (e) {
             console.warn('Failed to refresh scene shot counts', e);
             setSceneShotCountMap({});
+            setSceneShotDurationMap({});
         }
     }, [activeEpisode?.id]);
 
@@ -4220,6 +4233,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                                     subjectGap={sceneSubjectGapMap.get(getSceneSubjectStatusKey(scene)) || null}
                                     supplementingSubjects={Boolean(sceneSubjectSupplementingMap[getSceneSubjectStatusKey(scene)]) || (sceneRegenerating && editingScene?.id === scene.id)}
                                     shotCount={Number(sceneShotCountMap?.[Number(scene?.id || 0)] || 0)}
+                                    shotDuration={sceneShotDurationMap?.[Number(scene?.id || 0)] || 0}
                                     uiLang={uiLang}
                                     generatingShots={isSceneAiShotsBusy(scene?.id)}
                                     selected={selectedSceneKeySet.has(sceneKey)}

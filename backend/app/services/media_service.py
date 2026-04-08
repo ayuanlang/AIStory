@@ -6819,8 +6819,8 @@ class MediaGenerationService:
             "submit_url": submit_url,
         }
 
-        with open("c:/AIStory/backend/aiclub_debug.log", "a", encoding="utf-8") as _df:
-            _df.write(f"[AICLUB DEBUG] provider={provider_name} model={model} gen_type={gen_type} submit_url={submit_url} payload={payload}\n")
+        import logging
+        logging.getLogger(__name__).info(f"[AICLUB DEBUG] provider={provider_name} model={model} gen_type={gen_type} submit_url={submit_url} payload={payload}")
 
         headers = {
             "Authorization": f"Bearer {api_key}",

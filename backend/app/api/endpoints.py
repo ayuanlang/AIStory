@@ -5675,8 +5675,11 @@ async def refine_prompt(
         tid = _submit_async(refine_prompt, user_id=current_user.id, kind="refine_prompt",
                             req=req, async_mode="0")
         return JSONResponse({"task_id": tid, "async": True})
+        
+    user_id = current_user.id
+        
     # 1. Get LLM Config
-    config = agent_service.get_active_llm_config(current_user.id)
+    config = agent_service.get_active_llm_config(user_id)
     if not config or not config.get("api_key"):
         raise HTTPException(status_code=400, detail="Active LLM Settings not found. Please configure and activate an LLM provider.")
         
@@ -5734,7 +5737,8 @@ async def refine_prompt(
         
         return {"refined_prompt": content}
     except Exception as e:
-        billing_service.log_failed_transaction(db, current_user.id, "llm_chat", config.get("provider"), model, str(e))
+        with SessionLocal() as error_db:
+            billing_service.log_failed_transaction(error_db, user_id, "llm_chat", config.get("provider"), model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Agent ---
@@ -17196,6 +17200,27 @@ class AdminStorageUsageUserOut(BaseModel):
     file_count: int
     bytes: int
 
+class AdminExpiredFileItem(BaseModel):
+    user_id: int
+    username: str
+    email: Optional[str] = None
+    filepath: str
+    size: int
+    modified_at: str
+
+class AdminExpiredFilesOut(BaseModel):
+    files: List[AdminExpiredFileItem]
+    total_size: int
+    total_count: int
+
+class AdminExpiredRemindRequest(BaseModel):
+    user_ids: Optional[List[int]] = None
+
+class AdminExpiredDeleteRequest(BaseModel):
+    user_ids: Optional[List[int]] = None
+
+class GenericMessageOut(BaseModel):
+    message: str
 
 class AdminStorageUsageOut(BaseModel):
     upload_root: str
@@ -17362,6 +17387,153 @@ def get_admin_storage_usage(
         total_files=int(total_files),
         users=users_out,
     )
+
+@router.get("/admin/storage-usage/expired", response_model=AdminExpiredFilesOut)
+def get_admin_expired_files(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can view storage usage")
+    
+    upload_root = Path(settings.UPLOAD_DIR)
+    if not upload_root.is_absolute():
+        upload_root = (Path(settings.BASE_DIR) / upload_root).resolve()
+    if not upload_root.exists() or not upload_root.is_dir():
+        return AdminExpiredFilesOut(files=[], total_size=0, total_count=0)
+
+    user_rows = db.query(User.id, User.username, User.email).all()
+    user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
+    expired_files = []
+    total_size, total_count = 0, 0
+    threshold = datetime.now() - timedelta(days=30)
+    threshold_ts = threshold.timestamp()
+
+    for child in upload_root.iterdir():
+        if not child.is_dir(): continue
+        try: user_id = int(child.name)
+        except: continue
+        
+        for root, _, files in os.walk(child):
+            for filename in files:
+                path = Path(root) / filename
+                if path.is_symlink(): continue
+                try: stat = path.stat()
+                except: continue
+                if stat.st_mtime < threshold_ts:
+                    info = user_map.get(user_id, {})
+                    expired_files.append({
+                        "user_id": user_id,
+                        "username": str(info.get("username", f"user_{user_id}")),
+                        "email": info.get("email"),
+                        "filepath": str(path.relative_to(upload_root)),
+                        "size": int(stat.st_size),
+                        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    })
+                    total_size += stat.st_size
+                    total_count += 1
+                    
+    expired_files.sort(key=lambda x: x["size"], reverse=True)
+    return AdminExpiredFilesOut(files=expired_files, total_size=total_size, total_count=total_count)
+
+@router.post("/admin/storage-usage/expired/remind", response_model=GenericMessageOut)
+def remind_admin_expired_files(
+    req: AdminExpiredRemindRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can do this")
+        
+    upload_root = Path(settings.UPLOAD_DIR)
+    if not upload_root.is_absolute():
+        upload_root = (Path(settings.BASE_DIR) / upload_root).resolve()
+    if not upload_root.exists() or not upload_root.is_dir():
+        return GenericMessageOut(message="No files found.")
+
+    user_rows = db.query(User.id, User.username, User.email).all()
+    user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
+    threshold = datetime.now() - timedelta(days=30)
+    threshold_ts = threshold.timestamp()
+    
+    users_to_remind = {}
+    for child in upload_root.iterdir():
+        if not child.is_dir(): continue
+        try: user_id = int(child.name)
+        except: continue
+        if req.user_ids is not None and user_id not in req.user_ids:
+            continue
+            
+        for root, _, files in os.walk(child):
+            for filename in files:
+                path = Path(root) / filename
+                if path.is_symlink(): continue
+                try: mtime = path.stat().st_mtime
+                except: continue
+                
+                if mtime < threshold_ts:
+                    info = user_map.get(user_id, {})
+                    if info.get("email"):
+                        if user_id not in users_to_remind:
+                            users_to_remind[user_id] = {"count": 0, "size": 0, "email": info["email"]}
+                        users_to_remind[user_id]["count"] += 1
+                        try:
+                            users_to_remind[user_id]["size"] += path.stat().st_size
+                        except: pass
+
+    reminded_count = 0
+    for u_id, stats in users_to_remind.items():
+        mb_size = stats["size"] / (1024*1024)
+        msg_content = f"<h1>Storage Lifecycle Exceeded</h1><p>Dear user,</p><p>You have {stats['count']} file(s) occupying {mb_size:.2f} MB that have exceeded the 30-day storage limit.</p><p>Please back them up. They will be removed within 3 working days.</p>"
+        try:
+            _send_email_via_runtime_smtp(stats["email"], "Action Required: Expired Files Deletion", msg_content, is_html=True)
+            reminded_count += 1
+        except Exception as e:
+            logger.error(f"Failed to send reminder email to {stats['email']}: {e}")
+            
+    return GenericMessageOut(message=f"Reminders sent to {reminded_count} users.")
+
+@router.post("/admin/storage-usage/expired/delete", response_model=GenericMessageOut)
+def delete_admin_expired_files(
+    req: AdminExpiredDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can do this")
+        
+    upload_root = Path(settings.UPLOAD_DIR)
+    if not upload_root.is_absolute():
+        upload_root = (Path(settings.BASE_DIR) / upload_root).resolve()
+    if not upload_root.exists() or not upload_root.is_dir():
+        return GenericMessageOut(message="No files found.")
+
+    threshold = datetime.now() - timedelta(days=30)
+    threshold_ts = threshold.timestamp()
+    deleted_count = 0
+    deleted_size = 0
+    for child in upload_root.iterdir():
+        if not child.is_dir(): continue
+        try: user_id = int(child.name)
+        except: continue
+        if req.user_ids is not None and user_id not in (req.user_ids or []):
+            continue
+            
+        for root, _, files in os.walk(child):
+            for filename in files:
+                path = Path(root) / filename
+                if path.is_symlink(): continue
+                try: stat = path.stat()
+                except: continue
+                if stat.st_mtime < threshold_ts:
+                    deleted_size += stat.st_size
+                    try:
+                        os.remove(path)
+                        deleted_count += 1
+                    except:
+                        pass
+                        
+    return GenericMessageOut(message=f"Deleted {deleted_count} files ({deleted_size / (1024*1024):.2f} MB).")
 
 # --- Assets ---
 
