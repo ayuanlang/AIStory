@@ -4207,15 +4207,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 if (!prev) return prev;
                 
                 if (type === 'video') {
-                    let t_obj = {};
-                    try {
-                        t_obj = JSON.parse(prev.technical_notes || '{}');
-                    } catch(e) { t_obj = {}; }
-                    if (!t_obj || typeof t_obj !== 'object') t_obj = {};
-                    t_obj.video_prompt_en = translated;
-                    return { ...prev, technical_notes: JSON.stringify(t_obj) };
-                } else {
-                    return { ...prev, [`${type}_frame`]: translated };
+                    return { ...prev, ...buildVideoPromptEnUpdates(translated) };
                 }
             });
 
@@ -4226,7 +4218,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         } finally {
             setTranslatingPromptField('');
         }
-    }, [editingShot, getEditingShotTech, onLog, t, translateText]);
+    }, [editingShot, getEditingShotTech, onLog, t, translateText, buildVideoPromptEnUpdates]);
 
     const translateKeyframeToChinese = useCallback(async (index) => {
         if (!editingShot || index < 0) return;
