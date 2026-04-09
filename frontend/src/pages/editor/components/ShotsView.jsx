@@ -1,5 +1,6 @@
 
 import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
+import PromptMentionTextarea from './PromptMentionTextarea';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
@@ -222,7 +223,7 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
     return (
         <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4 mt-3">
             <div className="text-[11px] text-muted-foreground uppercase font-bold mb-2">{userLang('脚本修改与重新生成', 'Modify Script & Regenerate')}</div>
-            <textarea
+            <PromptMentionTextarea entities={[]} uiLang={uiLang}
                 className="w-full h-24 bg-black/30 border border-white/10 rounded p-3 text-sm"
                 placeholder={userLang("输入剧本修改与重新生成指令（例如：把狗的颜色换成黑色）...", "Enter instructions to modify script and regenerate (e.g., change the dog's color to black)...")}
                 value={instruction}
@@ -7718,7 +7719,7 @@ const isCroppingThisShot = !!(shotState.cropping);
 
                             <div>
                                 <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
-                                <textarea 
+                                <PromptMentionTextarea entities={entities} uiLang={uiLang} 
                                     className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-20 focus:outline-none focus:border-primary/50"
                                     value={editingShot.shot_logic_cn || ''}
                                     onChange={(e) => setEditingShot({...editingShot, shot_logic_cn: e.target.value})}
@@ -7851,7 +7852,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 <div className="absolute inset-0 flex items-center justify-center opacity-20"><ImageIcon className="w-8 h-8"/></div>
                                             )}
                                         </div>
-                                        <textarea
+                                        <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('起始帧提示词（中文）...', 'Start Frame Prompt (CN)...') : t('起始帧提示词...', 'Start Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
@@ -8060,7 +8061,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             })()}
                                         </div>
                                         
-                                        <textarea
+                                        <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('结束帧提示词（中文）...', 'End Frame Prompt (CN)...') : t('结束帧提示词...', 'End Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
@@ -8216,7 +8217,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             );
                                         })()}
 
-                                        <textarea
+                                        <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}
@@ -8390,7 +8391,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
 
                                                 {/* Prompt Area */}
-                                                <textarea 
+                                                <PromptMentionTextarea entities={entities} uiLang={uiLang} 
                                                     className="w-full bg-black/20 border border-white/10 rounded p-1.5 text-[10px] h-[60px] focus:border-primary/50 outline-none resize-none"
                                                     placeholder={t('关键帧描述...', 'Keyframe Description...')}
                                                     value={kf.prompt}
@@ -8562,7 +8563,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                     }}
                                                     placeholder={t('列名', 'Column Name')}
                                                 />
-                                                <textarea
+                                                <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                                     className="bg-black/20 border border-white/10 rounded p-2 text-xs min-h-[60px]"
                                                     value={String(v ?? '')}
                                                     onChange={(e) => {
@@ -9064,7 +9065,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">
                                                                         {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
-                                                                    <textarea
+                                                                    <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                                                         className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={startPromptTextEn}
                                                                         onChange={(e) => {
@@ -9074,7 +9075,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
                                                                         {t('中文提示词', 'Prompt (CN)')}
                                                                     </div>
-                                                                    <textarea
+                                                                    <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                                                         className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={startPromptTextCn}
                                                                         onChange={(e) => {
@@ -9095,7 +9096,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         }}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={editingShot.start_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -9161,7 +9162,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">
                                                                         {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
-                                                                    <textarea
+                                                                    <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                                                         className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={endPromptTextEn}
                                                                         onChange={(e) => {
@@ -9171,7 +9172,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
                                                                         {t('中文提示词', 'Prompt (CN)')}
                                                                     </div>
-                                                                    <textarea
+                                                                    <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                                                         className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={endPromptTextCn}
                                                                         onChange={(e) => {
@@ -9190,7 +9191,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         onPromptUpdate={handleManualEndFrameInputChange}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={editingShot.end_frame || ''} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -9351,7 +9352,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                 <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
                                                                     {t('中文提示词', 'Prompt (CN)')}
                                                                 </div>
-                                                                <textarea
+                                                                <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                                                     className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                     value={videoPromptTextCn}
                                                                     onChange={(e) => {
@@ -9361,7 +9362,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                 <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
                                                                     {t('英文提示词', 'Prompt (EN)')}
                                                                 </div>
-                                                                <textarea
+                                                                <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                                                     className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                     value={videoPromptTextEn}
                                                                     onChange={(e) => {
@@ -9422,14 +9423,14 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                 })}
                                                             </div>
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                            <textarea className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
+                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
                                                                 const updated = [...localKeyframes];
                                                                 if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                 updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
                                                                 setLocalKeyframes(updated);
                                                             }} />
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
-                                                            <textarea
+                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                                                 className="w-full h-48 bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                 value={(tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : ''}
                                                                 onChange={(e) => {
@@ -9796,7 +9797,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 {(shot['Shot ID'] || shot.shot_id || `#${idx + 1}`)} · {(shot['Shot Name'] || shot.shot_name || t('未命名镜头', 'Untitled Shot'))}
                                             </div>
                                             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('内容', 'Content')}</div>
-                                            <textarea className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
+                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
                                                 const newData = [...shotReviewModal.data];
                                                 newData[idx] = { ...shot, "Video Content": e.target.value };
                                                 setShotReviewModal(prev => ({...prev, data: newData}));

@@ -2347,6 +2347,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return emptyReport;
         }
 
+        // 移除在剧本分析时自动进行实体补充的部分
+        return emptyReport;
+
         setAnalysisFlowStatus({
             phase: 'checking_scene_subjects',
             message: t('主体信息同步完毕！AI 正在查漏补缺，智能扫描并修复各分镜画面的上下文元素...', 'Scenes and subjects imported. Checking each scene for missing entities...'),
