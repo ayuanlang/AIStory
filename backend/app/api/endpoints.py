@@ -5406,6 +5406,10 @@ async def translate_text(
                             req=req, async_mode="0")
         return JSONResponse({"task_id": tid, "async": True})
     request_id = uuid.uuid4().hex[:12]
+    user_id = current_user.id
+    user_name = current_user.username
+
+
     started_at = datetime.utcnow()
     text = str(req.q or "")
     from_lang = str(req.from_lang or "en").strip() or "en"
@@ -5429,7 +5433,7 @@ async def translate_text(
     from_lang = lang_aliases.get(from_lang.lower(), from_lang.lower())
     to_lang = lang_aliases.get(to_lang.lower(), to_lang.lower())
 
-    llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    llm_config = agent_service.get_active_llm_config(user_id, category="LLM")
     if not llm_config or not llm_config.get("api_key"):
         raise HTTPException(status_code=400, detail="Active LLM Settings not found. Please configure and activate an LLM provider.")
 
@@ -5439,8 +5443,8 @@ async def translate_text(
     try:
         log_action(
             db,
-            user_id=current_user.id,
-            user_name=current_user.username,
+            user_id=user_id,
+            user_name=user_name,
             action="TRANSLATE_START",
             details=f"request_id={request_id}; from={from_lang}; to={to_lang}; chars={len(text)}; provider={provider}; model={model}"
         )
@@ -5448,7 +5452,7 @@ async def translate_text(
         logger.warning(f"[translate:{request_id}] failed to write START system log: {e}")
 
     logger.info(
-        f"[translate:{request_id}] start user_id={current_user.id} from={from_lang} to={to_lang} chars={len(text)} provider={provider} model={model}"
+        f"[translate:{request_id}] start user_id={user_id} from={from_lang} to={to_lang} chars={len(text)} provider={provider} model={model}"
     )
 
     if from_lang == to_lang:
@@ -5474,9 +5478,9 @@ async def translate_text(
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
             }
-            reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+            reservation_tx = billing_service.reserve_credits(db, user_id, "llm_chat", provider, model, reserve_details)
         else:
-            billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+            billing_service.check_balance(db, user_id, "llm_chat", provider, model)
     except HTTPException:
         raise
     except Exception as e:
@@ -5569,7 +5573,7 @@ async def translate_text(
             _apply_llm_routing_to_billing_details(deduct_details, llm_resp)
             billing_service.deduct_credits(
                 db,
-                current_user.id,
+                user_id,
                 "llm_chat",
                 provider,
                 model,
@@ -5578,13 +5582,13 @@ async def translate_text(
 
         elapsed_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
         logger.info(
-            f"[translate:{request_id}] success user_id={current_user.id} from={from_lang} to={to_lang} chars={len(text)} translated_chars={len(dst)} elapsed_ms={elapsed_ms}"
+            f"[translate:{request_id}] success user_id={user_id} from={from_lang} to={to_lang} chars={len(text)} translated_chars={len(dst)} elapsed_ms={elapsed_ms}"
         )
         try:
             log_action(
                 db,
-                user_id=current_user.id,
-                user_name=current_user.username,
+                user_id=user_id,
+                user_name=user_name,
                 action="TRANSLATE_SUCCESS",
                 details=f"request_id={request_id}; from={from_lang}; to={to_lang}; chars={len(text)}; translated_chars={len(dst)}; elapsed_ms={elapsed_ms}"
             )
@@ -5600,7 +5604,7 @@ async def translate_text(
                 pass
         billing_service.log_failed_transaction(
             db,
-            current_user.id,
+            user_id,
             "llm_chat",
             provider,
             model,
@@ -5617,8 +5621,8 @@ async def translate_text(
         try:
             log_action(
                 db,
-                user_id=current_user.id,
-                user_name=current_user.username,
+                user_id=user_id,
+                user_name=user_name,
                 action="TRANSLATE_FAILED",
                 details=f"request_id={request_id}; error={str(e.detail)[:300]}"
             )
@@ -5633,7 +5637,7 @@ async def translate_text(
                 pass
         billing_service.log_failed_transaction(
             db,
-            current_user.id,
+            user_id,
             "llm_chat",
             provider,
             model,
@@ -5650,8 +5654,8 @@ async def translate_text(
         try:
             log_action(
                 db,
-                user_id=current_user.id,
-                user_name=current_user.username,
+                user_id=user_id,
+                user_name=user_name,
                 action="TRANSLATE_FAILED",
                 details=f"request_id={request_id}; error={str(e)[:300]}"
             )
