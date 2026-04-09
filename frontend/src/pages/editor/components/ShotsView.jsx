@@ -4125,6 +4125,109 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [editingShot]);
 
+
+    const translateFieldToChinese = useCallback(async (type) => {
+        if (!editingShot) return;
+        const tech = getEditingShotTech() || {};
+        let source = '';
+        if (type === 'start') source = String(editingShot.start_frame || '');
+        else if (type === 'end') source = String(editingShot.end_frame || '');
+        else if (type === 'video') source = getShotVideoPromptEn(editingShot) || '';
+
+        source = source.trim();
+        if (!source) {
+            onLog?.(t('请先填写英文提示词', 'Please enter English prompt text first'), 'warning');
+            return;
+        }
+
+        const token = `${type}:to-cn`;
+        setTranslatingPromptField(token);
+        try {
+            const res = await translateText(source, 'auto', 'zh');
+            let translated = '';
+            if (typeof res === 'string') translated = res;
+            else if (res?.translated_text) translated = res.translated_text;
+
+            translated = translated.trim();
+            if (!translated) throw new Error('empty translation');
+
+            setEditingShot((prev) => {
+                if (!prev) return prev;
+                let t_obj = {};
+                try {
+                    t_obj = JSON.parse(prev.technical_notes || '{}');
+                } catch(e) { t_obj = {}; }
+                if (!t_obj || typeof t_obj !== 'object') t_obj = {};
+                
+                if (type === 'start') {
+                    t_obj.start_frame_cn = translated;
+                } else if (type === 'end') {
+                    t_obj.end_frame_cn = translated;
+                } else if (type === 'video') {
+                    t_obj.video_prompt_cn = translated;
+                }
+                return { ...prev, technical_notes: JSON.stringify(t_obj) };
+            });
+
+            onLog?.(t('已完成英译中', 'Translation finished'), 'success');
+        } catch (e) {
+            console.error(e);
+            onLog?.(`${t('翻译失败', 'Translation failed')}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setTranslatingPromptField('');
+        }
+    }, [editingShot, getEditingShotTech, getShotVideoPromptEn, onLog, t, translateText]);
+
+    const translateFieldToEnglish = useCallback(async (type) => {
+        if (!editingShot) return;
+        const tech = getEditingShotTech() || {};
+        let source = '';
+        if (type === 'start') source = String(tech.start_frame_cn || '');
+        else if (type === 'end') source = String(tech.end_frame_cn || '');
+        else if (type === 'video') source = String(tech.video_prompt_cn || '');
+
+        source = source.trim();
+        if (!source) {
+            onLog?.(t('请先填写中文提示词', 'Please enter Chinese prompt text first'), 'warning');
+            return;
+        }
+
+        const token = `${type}:to-en`;
+        setTranslatingPromptField(token);
+        try {
+            const res = await translateText(source, 'zh', 'en');
+            let translated = '';
+            if (typeof res === 'string') translated = res;
+            else if (res?.translated_text) translated = res.translated_text;
+
+            translated = translated.trim();
+            if (!translated) throw new Error('empty translation');
+
+            setEditingShot((prev) => {
+                if (!prev) return prev;
+                
+                if (type === 'video') {
+                    let t_obj = {};
+                    try {
+                        t_obj = JSON.parse(prev.technical_notes || '{}');
+                    } catch(e) { t_obj = {}; }
+                    if (!t_obj || typeof t_obj !== 'object') t_obj = {};
+                    t_obj.video_prompt_en = translated;
+                    return { ...prev, technical_notes: JSON.stringify(t_obj) };
+                } else {
+                    return { ...prev, [`${type}_frame`]: translated };
+                }
+            });
+
+            onLog?.(t('已完成中译英', 'Translation finished'), 'success');
+        } catch (e) {
+            console.error(e);
+            onLog?.(`${t('翻译失败', 'Translation failed')}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+        } finally {
+            setTranslatingPromptField('');
+        }
+    }, [editingShot, getEditingShotTech, onLog, t, translateText]);
+
     const translateKeyframeToChinese = useCallback(async (index) => {
         if (!editingShot || index < 0) return;
         const keyframe = localKeyframes[index];
