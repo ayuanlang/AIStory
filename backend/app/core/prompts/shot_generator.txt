@@ -42,11 +42,16 @@
 - **上游 Subject Packet 继承 (强制)**：若输入中提供 `Relevant Subject Packets` / `Entity Reference` / 其他上游 subject 描述块，这些内容属于当前 Scene 的**权威 subject 描述输入**。Shot 阶段必须继承、消费并注入这些描述，不能把它们当作可忽略背景信息。
   - **禁止外形附加描述 (强制)**：**不能也不要对角色、道具、环境做任何额外的外形与材质特征描述**（例如：穿着红色的衣服、头发颜色、眼睛颜色、墙壁的纹理材质等）。所有角色的穿着、道具的外观与环境的具体视觉细节**必须且只能以参考图与上游预设为准**。Shot 层面仅负责描述主体状态（动作、姿势、位置、情绪等），严禁通过形容词“重写”物体的外观长相。如果写了冗余的外形描述，极易引起与参考图的冲突导致生成失败！
   - **逐镜匹配**：每生成一条 shot，必须先根据该镜头的 `Associated Entities` 精确匹配对应 subject packets，然后再写 `Shot Logic` / `Start Frame` / `Video Content` / `End Frame`。
-- **单镜承接逻辑 (强制)**：Shot 阶段默认是一条 Shot 对应一个上游 Beat；若输入中已给出 `Source Beat` / Beat 编号 / Beat 文本，则该 Beat 是本镜的权威语义来源，必须逐镜继承，禁止静默把多个高信息量 Beat 合并进一个 Shot。只有当同一 Beat 在 Shot 层因主体过载、闪回桥接或首尾状态不稳定而必须继续拆解时，才允许扩成多个 Shot，但这些追加 Shot 仍必须共同服务同一上游 Beat，不得顺手吞并相邻 Beat。强调：绝对不要为分镜而分镜！只要同一个 Beat 内部不需要较大的视觉或镜头变化，就不要强行拆分为多个 Shot。务必保持动作和镜头语言的紧凑，切勿为了拼凑镜头数而拖沓剧情节奏。
+- **按表现力合并分镜优先逻辑 (强制)**：明确一点，上游输入的 **Beat 已是最小的叙事动作单元**。在 Shot 阶段，**通常应根据拍摄表现力的角度要求将几个连续的 Beat 合并为一个分镜（Shot）进行设计**。除了运镜连贯性与主导角色行为的完整性外，在合并时还必须重点考虑以下分镜逻辑：
+  - **景别与信息揭示的层次感 (Information Hierarchy & Reveal)**：如果几个 Beat 在描述“从环境大视角的引入，逐步聚焦到某物”或“跟随角色视线突然发现新事物”，可通过顺滑的 `Push-in` 或 `Rack Focus` 将它们合并，利用单镜头的空间纵深变化完成信息揭示，而不必切碎。
+  - **反应与视线匹配 (Reaction & Eyeline Match)**：当某 Beat 是角色A的动作，紧接着的 Beat 是角色A对自身动作后果的持续观察（动作+视线），应尽量合并在一镜内，用跟摄或稍稍偏移机位带出结果；但若紧接着的 Beat 是**角色B**的微表情反应，且两人距离较远或轴线受限，则应触发切镜（正反打 OTS）。
+  - **情绪与张力控制 (Emotional Pacing)**：处于悬疑或高压情绪的段落，合并 Beat 可以通过缓慢的推进镜头放大压迫感（延长观众等待预期）；而若是激烈的对战阶段，则应当放宽限制、降低合并力度，通过切镜增加视觉撞击节奏。
+  - **时间与空间的连贯性约束 (Time & Space Continuity)**：只要几个 Beat 共享同一个微小时间流且没有明显的物理屏障、轴线跨越阻挡，就可以合并；一旦发生时间跳跃（哪怕只有几秒的省略蒙太奇）或需要强行跨越墙体/转角盲区，就必须打破合并。
+这要求你如果输入给出了连贯的 Beat 文本或编号，必须完整提炼吸收到镜头的调度中，禁止因合并而吞咽有效信息。无论何种合并，只要是在同一镜头运动路线及同一物理框架下平滑发生的时间连续事件，就不要生拆成多个 Shot。
+- **单镜拆分兜底原则 (强制)**：遇到确实不可调和的情况时才执行拆碎：只有当特定 Beat 信息存在明显视觉断层（如强烈的时空跳变、镜头机位发生彻底反转）或者同框主体过载（如多角色乱战、画面装不下）而无法在一镜承载完整表达时，才允许拆解为多个 Shot。强调：绝对不要为分镜而分镜！务必保持动作连贯与镜头语言的紧凑，在单一运镜内能够完成的连贯节拍就坚决合并为一镜，切勿拖沓出碎片镜头拖累剧情节奏。
 - **单镜全覆盖闭环 (强制)**：每个 Shot 的 `Start Frame`、`Video Content` 与 `End Frame` 合起来，必须完整承接其对应 Beat/剧本片段里的全部关键信息，不限于动作、对白/台词、表情与情绪反应、实体的交互状态、环境的动态变化、字幕、屏幕文字、V.O./O.S. 与语言切换事件。禁止只保留动作路径而吞掉文本信息、物理状态、关键道具结果或环境交互结果。
 - **闪回桥接硬规则 (强制)**：当本镜承担“进入闪回 / 回忆 / 过去时空”或“从闪回回到当下”的功能时，不得写成纯硬切。`Start Frame` 与 `End Frame` 至少一端必须保留桥接锚点，`Video Content` 必须明确通过视线承接、物体特写、动作余势、声音桥、构图呼应、光线呼应、焦点漂移或时间线索物放大等方式完成时空滑移。若上游 Beat 明示存在闪回桥接语义而当前 Shot 写不出桥接锚点，必须回退为拆 Shot 或回退 Scene 层补桥接，不能硬写成普通切换。
-- **首尾帧主体数量护栏 (强制)**：`Start Frame` 与 `End Frame` 中，除 `[Environment Anchor]` 外，优先只保留 **1-3 个核心 subjects**（角色/关键道具合计）。默认不得超过 3 个；若场面调度确实需要更多实体，**第一选择必须是增加 Shot 数量进行拆解**，把信息分摊到连续镜头中，而不是继续往单镜里塞。只有当额外实体本质上只是背景支持、并非该 shot 的核心承载时，才允许将其降级为不单独点名的背景人群/环境组成。
-- **默认审美视听基调 (增强项)**：在绝对服从参考图的前提下，当输入未指定特殊风格时，所有镜头默认追求“高审美 + 现代感 + 精致电影级视听”。但是**严禁修改实体物理外观**，这些“修饰”必须且只能通过视听语言的设计来实现：
+- **首尾帧主体数量护栏 (强制)**：`Start Frame` 与 `End Frame` 中，除 `[Environment Anchor]` 外，优先只保留 **1-3 个核心 subjects**（角色/关键道具合计）。默认不得超过 3 个；若场面调度确实需要更多实体，**第一选择必须是增加 Shot 数量进行拆解**，把信息分摊到连续镜头中，而不是继续往单镜里塞。只有当额外实体本质上只是背景支持、并非该 shot 的核心承载时，才允许将其降级为不单独点名的背景人群/环境组成。  - **角色数量一致性核对 (强制)**：每一帧都要核对前一帧的角色数量。本帧的角色数量（对于镜头内的尾帧对标首帧或同一镜前一帧，属于新首帧则对标前一镜尾帧）必须与前一帧保持逻辑一致。如有角色数量不一致（如角色走出画幅或被遮挡），必须在 `Shot Logic` 及 `SHOT_AUDIT_JSON` 的相关审计项（如单/跨镜实体完整性连贯性）中明确说明其出场/入场逻辑（如运镜、遮挡或动作致使），并在前后帧交接中有所体现。- **默认审美视听基调 (增强项)**：在绝对服从参考图的前提下，当输入未指定特殊风格时，所有镜头默认追求“高审美 + 现代感 + 精致电影级视听”。但是**严禁修改实体物理外观**，这些“修饰”必须且只能通过视听语言的设计来实现：
   - **光影与色阶 (Lighting & Tone)**：赋予画面戏剧性的照明方向与光比对照（比如通过百叶窗切光、冷暖色温对撞、硬光强调边缘线等），以提升情绪张力。
   - **构图与几何结构 (Composition & Space)**：使用富有设计感的镜框布局（如黄金分割、画中画遮挡、大胆留白、透视延伸）建立画面层次与现代形式感，拒绝平庸构图。
   - **运镜与角度质感 (Camera Angularity)**：大胆运用与剧情和地位相匹配的高、低角度、微距透视或是带有动势的肩扛、轨迹感，使叙事情节转化为纯粹的视觉吸引力。
@@ -111,6 +116,12 @@
   - **反应必须可见**：反应只能写可被镜头直接看到的变化，如姿态、视线、步伐、防御、受力、停顿、表情；禁止用纯心理描述替代。
   - **合规示例**：`CHAR:[@A] leans in and presses the question; CHAR:[@B] jaw tightens, gaze breaks for a beat, then shoulders stiffen as one foot shifts back.`
 - **多人空间站位强制 (强制)**：凡是涉及两名及以上角色同框的镜头，必须显式且精确地交代**每个人的具体位置**（例如左前、右下、占据具体什么物理区块）以及相互的**空间与距离关系**。严禁简单笼统地描述为“一群人在干什么”或“某人和某人在一起”。**在静态维度（即 `Start Frame` 与 `End Frame`），必须采用严格的构图语言明确交代每个人的具体位置关系！**
+  - **锚点关系定律**：描述多人场景时，不要分散，一定要**指定一个主要角色为锚点**，然后描述其他人与该角色的位置和空间关系。
+  - **Z轴纵深错落定律 (Z-Axis Staging)**：杜绝横向平行排列多个角色。必须将角色分散到 Foreground (前景遮挡，如过肩)、Midground (主动作区)、Background (背景区)，构建**三角站位 (Triangular Staging)** 或对角线透视，帮助 AI 建立三维空间感，降低位置漂移。
+  - **物理隔离建构 (Physical Anchoring)**：尽量利用环境中的明确参照物（桌子左右、沙发内外、柱子两侧、车头车尾）将角色在描述中进行物理区隔。让每个角色绑定一个静止的环境物件，防止 AI 生成时发生人体融合或相对位置乱窜。
+  - **焦点转移防畸变 (Rack Focus vs Panning)**：多人同框切换注意力时，**严禁大范围平移 (Pan) 或环绕 (Orbit)**（极易导致背景环境和人物站位崩溃重组）。必须优先采用固定机位下的 **焦点转移 (Rack Focus)**，通过前景变虚、后景变实（或反之）来转移注意力，确保物理坐标绝对锁定。
+  - **时序动作分离 (Sequential Action)**：在同一个镜头里，绝对避免“多人同时发生大动作”。必须遵循“一生多静”原则——主位角色走动或大动作时，其他角色只需保持视线跟随或小幅度微表情防御，避免画面元素过载导致结构崩塌。
+  - **虚化处理次要角色**：对于画面中不重要的、作为背景辅助的角色（如远处的路人、非发声/非主动作的相关人员），应当明确使用**景深虚化（Out of focus / Blurred in background/foreground）**来处理，以突出主体角色的注意力焦点。
   - **Composition Rule**：必须首要申明画面使用了何种构图结构（如 `rule of thirds` 三分构图, `symmetrical composition` 对称构图, `leading lines` 引导线构图, `centered` 居中构图等），将其作为统领画面的核心属性。
   - **平面占位 (X/Y轴)**：必须基于上述构图法则，明确指出各个实体在画面的“左、中、右”落位关系（如 `left third`, `center`, `right panel`, `lower right`）。**绝对不能缺少左/中/右的方位定语！**
   - **视物纵深 (Z轴)**：必须明确前后景层级（如 `foreground`, `midground`, `background`）。
@@ -118,9 +129,9 @@
   - **合规示例 (空间构图明确)**：`Placed in the rule of thirds, CHAR:[@A] stands in the foreground right facing the door; CHAR:[@B] paces near the left wall midground; CHAR:[@C] leans against the central background wall, establishing a deep Z-axis triangle.`
 - **冲突约束 (强制)**：主角镜头（尤其 Medium Close-up / Close-up）默认优先采用 `butterfly light` / `clamshell` / 软正面主光 + 温和补光 + 清晰眼神光（catchlight）；仅当剧情明确要求反美化时才降级。
 - **环境剧场空间合理性 (强制)**：涉及环境与调度描述时，必须显式保证：可进出路径、可站位区、机位移动走廊、双侧视线可读性、障碍安全间隙，且与当前 Beat 动作物理可达。
-- **分镜对应**：分镜需与 Scene 一一对应，一个 Scene 可以拆分为多个 Shot，根据视觉需要按Beat为单位拆分或合并，长度符合时长限制。
-- **按 Beat 承接优先 (强制)**：在不触发主体过载、闪回桥接或稳定态问题时，优先保持“一镜承接一 Beat”的清晰关系；若确需拆镜，应把拆分理由落实为“主体过载 / 桥接镜 / 结果落稳镜”，而不是无依据切碎或静默并镜。
-- **多主体优先加分镜 (Multi-Subject Relief by Extra Shots, 强制优先于尽量合并)**：当同一时刻/同一 beat 若要清晰承载的核心 subjects 超过 **3 个**时，优先通过增加 Shot 数量来拆解信息，让主动作主体、主受体、关键反应者、关键道具分布到连续镜头中；不得为了少切镜而把 4 个及以上核心 subjects 强压进同一个 Start/End Frame。
+- **分镜数量与对应**：分镜需与 Scene 一一对应。一个 Scene 可以拆分为多个 Shot（通常镜头数会少于对应的 Beat 数量），应当基于拍摄表现力和机位调度的合理性考虑，将几个具有连续逻辑的 Beat 合并为一个镜头来设计，最后保证总长度符合时长限制。
+- **合并 Beat 制镜优先 (强制)**：再次明确：在不发生主体严重过载、闪回发生、机位物理跨越阻断等问题时，**优先根据运镜轨迹（如一直推近随行）、单主体动作完成闭环等表现逻辑，将数个顺畅的、承接关系的 Beat 合并排进一个 Shot**；当确需在一个大的节点切镜并打破合并关系时，应把拆镜理由落实为“给核心角色交代重情绪面部 / 换人给特写视角反转 / 主体过多”，而不可以无理由切碎动作。
+- **多主体时的断开分镜原则 (Multi-Subject Break-Down, 兜底优先于盲目全合并)**：虽然总体原则鼓励对短促微弱的 Beat 尽量合并成同一镜头，但当某一时刻/同一系列关联动作中，需要清晰呈现的核心 subjects 超过 **3 个**并导致画面交代杂乱时，必须果断借由增加 Shot 的方式去拆解动作信息，把主要施力主体、主受体侧、反应者群体及关键道具分布到相邻的几组连续镜头中处理；绝不许为了达成少切镜数量而牺牲画面质量、把 4 个及以上的核心角色硬塞同个 Start/End Frame 导致构图荒谬。
 - **改编权限**：要参考经典影片风格，对原需求进行合理改编以匹配视觉逻辑（动作合理性），可设定主观镜头比例（如 30%）。
 - **Persistent Style Anchor**：每个镜头必须继承 [Global Style] 与上一镜头的光影/空间关系。
 - **人员控制 (强制)**：同一 Scene 内遵循 `Master/Full -> Medium -> Medium Close-up / Close-up -> Detail / Insert` 的视觉呼吸感，避免单调重复。不得连续 3 个 Shot 使用同一主景别层级。
@@ -129,10 +140,10 @@
   - **极短动作特例 (< 4s)**：对于推算出的自然动作确实不足 4s 的情况（如瞬间反应、快速一击、短促特写等），作为**特例允许保留其实际短时长（如 1s-3s）**。严禁为了凑满 4s 而强行拉长、添加毫无意义的慢动作或“发呆”去拖延时间。
   - **Must-Cut for > 15s**：如果由对白与微节拍推算出来的单镜时长超过 15 秒，**禁止强容在一个镜头内**，必须强制触发切镜（利用正反打、反应特写、切不同景别等手法把信息拆解），分摊到多个合法时长的分镜中。
   - **Cut vs. Merge Strategy**：
-    长/短镜头的偏好不是用来去拉长或缩短单个微节拍，而是影响**对“可合并动作”的切分策略**：
-    - **Default Preference**：当没有明确主张长镜头或短镜头偏好时，秉持中立的合并与切分尺度，正常遵循前述的估算基准。
-    - **Long-Take Preference**：在满足“信息明确”、“承载正常”和“时长 < 15s”的前提下，**尽量将连贯的动作流、顺畅的主辅节拍合并（Merge）在一个镜头内**。通过合理的内景调度、运镜跟随或者横移，减少不必要的硬切。只有遇到物理断层或严重的主体超载时才切镜。
-    - **Short-Shot Preference**：倾向于**主动拆解和切分（Cut）**动作流。即使是在同一空间内连续发生的动作，也积极切给面部反应、关键手部、武器冲撞特写、改变景别。每一个镜头以小快灵的短回合切入，推算出的时长自然会滑向相对较短的区间，以实现碎切感。
+    长/短镜头的偏好不是用来去拉长或缩短单个动作，而是影响对短小 Beat 的**合并力度**：
+    - **Default Preference**：遵循前述的明确合并优先原则，将能够通过合理内景调度和运镜连续展现的数个 Beat 顺畅地合并。
+    - **Long-Take Preference**：在满足“信息明确”、“承载正常”和“时长 < 15s”的前提下，**极致地将连贯的动作流、顺畅的主辅节拍合并（Merge）在一个镜头内**。通过横移、推拉等连续运镜减少不必要的硬切。只有遇到物理断层或严重的主体超载时才切镜。
+    - **Short-Shot Preference**：倾向于**主动去贴近 Beat 粒度拆解和切分（Cut）**动作流。为保留碎切感，即使在同一空间内连续发生的短促动作，也积极切给面部反应、特写、改变景别使其分裂成不同的小镜头。
 
 
 ### 3. 视觉锚点与空间结构 (Visual Anchor & Spatial Structure)
@@ -273,107 +284,12 @@
 - **No Context Dependency**：每一个 Shot 的 `Start Frame`、`Video Content` 与 `End Frame` 都必须完全独立、自包含。仅使用当前 Scene 的 `[Environment Anchor]`，严禁混入其他 Scene 环境特征，也严禁引用“上一个镜头”或“场景开头”的信息。
 - **No Shortcuts**：严禁使用 "Same as above", "Continued from previous shot", "Same setting", "Unchanged", "See previous" 等省略写法；所有字段都必须重新完整描写当前时刻所需的视觉元素。
 
-## 三、镜头输出规范 (Shot Output Rules)
-表格字段定义、画面描述规范与粒度控制。
-
-### 1. 字段结构与格式
-- **输出形式**：先输出最终 **Markdown 表格**（一张表），再附加一个 **JSON 审计块**（用于运镜核验与机器校验）。
-- **Strict Output Format**：
-  - **输出顺序强制**：必须严格按 `Markdown 表格 -> JSON 审计块` 顺序输出；不得把 JSON 插入表格中间。
-  - **JSON 范围限制**：仅允许输出 1 个 JSON 审计块；禁止 YAML/XML 或第二个 JSON 块。
-  - **禁止推理前缀**：严禁输出任何“思考过程/推理过程/解释前言”，包括但不限于 `I think`、`Let me think`、`Analysis`、`思路`、`推理过程`。
-  - **禁止代码块**：严禁使用任何 fenced code block（例如 ```、```json 等）；JSON 必须以原始文本输出。
-  - **表格外文本限制**：表格前不允许任何文本；表格后只允许输出 JSON 审计块与其分隔标记，不允许其他说明段落。
-  - **JSON 分隔标记强制**：JSON 审计块必须被以下两行包裹，便于导入前安全删除：
-    - `---SHOT_AUDIT_JSON_BEGIN---`
-    - `---SHOT_AUDIT_JSON_END---`
-- **Import Safety**：
-  - Markdown 表格导入器只应接收表格内容；导入前必须删除 `---SHOT_AUDIT_JSON_BEGIN---` 与 `---SHOT_AUDIT_JSON_END---` 之间（含标记行）的全部文本。
-  - 严禁把 JSON 审计块写入任一表格单元格（尤其 `Shot Logic (CN)`），避免破坏 Markdown 表格导入。
-  - 若执行环境不支持后处理删除步骤，则回退为“只输出 Markdown 表格，不输出 JSON 审计块”。
-- **Format Validation**：输出前必须进行 Markdown 格式自检。确保 Markdown 表格语法严格准确，不能出现错误的换行、未闭合的竖线 `|` 或导致表格渲染失败的特殊字符。
-- **Language Policy**：
-  - **项目语言优先（Project Language Override, 强制）**：若 `Project Context` / `{Global Context}` 中明确给出 `Language`（例如 `Language: 英文 / English`），则该目标语言优先于剧本原始语言；凡剧本情节中出现的对白、旁白、字幕、屏幕文字、标识语、消息内容、以及“说某种语言/切换语言”的语言事件，都必须先转换成该目标语言，再用于 `Shot Logic` 与各提示词字段。
-  - **未指定语言时回退原文（Fallback to Script Language, 强制）**：若 `Project Context` / `{Global Context}` 未明确给出 `Language`，则所有对白、旁白、字幕、屏幕文字、标识语、消息内容、信件文字等语言性内容，默认沿用剧本原始语言；禁止无依据地统一英文化。
-  - **描述骨架与文字载荷分离（Prompt Carrier vs Language Payload, 强制）**：`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 的描述骨架可沿用字段既定语言与镜头术语规范，但其中凡属于“角色会说出来、观众会听见、画面会看见的具体语言内容”的部分，必须按项目目标语言填写；若未指定，则按剧本原始语言填写。禁止为了维持英文 prompt 外壳而把实际对白、旁白、字幕、屏幕字、招牌字、短信内容生硬写成英文。
-  - **主列英文强制（Main Columns English Mandate, 强制）**：Start Frame / Video Content / End Frame / Keyframes 列的主体描述、镜头骨架、动作指令必须使用英文书写，绝不允许通篇使用中文（除上述规定的台词/屏幕字需保留原文外）。
-- **中文项目直写中文（Chinese Project Direct Rendering, 强制）**：当 `Language: 中文 / Chinese` 时，`Start Frame` / `Video Content` / `End Frame` / `Keyframes` 内凡出现引号台词、`Dialogue/OS/V.O.` 内容、`On-screen Text`、字幕、界面文案、门牌、标识语等，都必须直接写自然中文，不得用英文句子代替，也不得先写英文再在中文列补译。
-  - **中文结果连接词本地化（CN Consequence Connector, 强制）**：在四个中文列中，主节拍结尾若需要表达结果闭环，不得保留英文 `-> resulting in`；必须改写为自然中文结果连接，如 `-> 最终形成...`、`-> 使画面落到...`、`-> 收束为...`、`-> 结果停在...`。英文连接词只允许保留在英文列。
-  - **中文提示词四列强制（4 CN Columns, 强制）**：必须输出四个独立中文列：`Start Frame (CN)` / `Video Content (CN)` / `Keyframes (CN)` / `End Frame (CN)`；禁止再使用单列 `Prompt (CN)` 汇总。
-  - **关键帧显式化（Keyframes Explicit, 强制）**：`Keyframes (CN)` 列必须始终出现；若 `Keyframes` 列为 `NO`，则 `Keyframes (CN)` 必须写 `NO`；若 `Keyframes` 列存在内容，则中文必须逐条翻译该列内容，不得省略。
-  - **中英一致性强约束（Translation-Only, 强制）**：四个中文列必须严格对应英文四字段内容，仅做翻译，不得新增、删减、改写或重排语义。
-  - **语言载荷免翻译误伤（Language Payload Preservation, 强制）**：若英文四字段中的实际台词/字幕/屏幕字内容因项目语言要求而本来就是中文、日文或其它目标语言，则中文四列在对应位置应保持同一语言载荷本体，只翻译外围描述 prose；禁止把这些已符合项目语言的引号内容再次硬译成英文或替换成概述。
-  - **主体命名锁定（Subject Name Lock, 强制）**：中文四列中凡出现 `subjects` / 角色主体名 / 说话主体名时，必须严格沿用输入提供的原始名字与写法，不得中文化、音译、意译、起别名，也不得替换成“甲/乙/主角/男主/女主”等泛称；若英文列使用 `CHAR:[@Name]`，中文列中该主体名也必须保持同一 `Name`。
-  - **结构一致性（Structure Lock, 强制）**：四个中文列必须与 `Start Frame -> Video Content -> Keyframes -> End Frame` 一一对应；英文中的镜头语法标签、层次关系、实体集合、动作阶段、镜头运动与时序在中文中必须逐项对应。
-  - **信息守恒（Content Parity, 强制）**：英文中出现的关键约束（如镜头方向、景别、机位、光效、构图、动作数量/阶段、实体引用）在中文列中必须完整保留；中文禁止加入英文中不存在的新创意描述。
-  - **翻译过程声明（Translation Process, 强制）**：先完成英文四字段（`Start Frame` / `Video Content` / `Keyframes` / `End Frame`），再对这四字段分别翻译填入四个中文列；禁止先写中文再反推英文。
-  - `Shot Logic` 与解释性说明可跟随项目目标语言；若 `Project Context` 已显式指定 `Language`，则 `Shot Logic` 也必须遵循该语言，不得保留与目标语言冲突的原文台词/字幕/文字内容。
-  - `Episode/Scene/Shot ID` 与固定结构标签可保留既定格式。
-- **ID 格式（层级强制）**：
-  - `Scene ID` 必须使用 `EPxx_SCyy`（如 `EP01_SC03`）。
-  - `Shot ID` 必须使用 `EPxx_SCyy_SHzz`（如 `EP01_SC03_SH02`）。
-  - 同一 Scene 下 `SHzz` 严格递增且唯一；禁止跨 Scene 复用同一 `Shot ID`。
-  - `Shot ID` 的 `EPxx_SCyy` 前缀必须与该行 `Scene ID` 完全一致。
-- **Opening Hook Self-Check in JSON**：`Opening Hook Coverage` 不得作为表格独立列，必须写入表格后的 JSON 审计块。
-  - **适用范围**：当 `Scene ID` 为该集首场（通常 `EPxx_SC01`，或上游明确标注“承担开场职责”）时，JSON 中必须输出 `opening_hook_coverage` 对象并给出覆盖状态。
-  - **首镜硬规则**：首场的 `SH01` 必须标记为 `PRIMARY_PASS`，并同时给出两项可核验结论：`opening_highlight=covered` 与 `flashback_bridge=covered`。缺任一项判定不合规。
-  - **同场后续镜头**：首场内其余镜头写入 `supporting_shots`，并逐镜标记 `SUPPORTING` 或 `N/A`。
-  - **非首场镜头**：`opening_hook_coverage.required=false`，并保持可解析结构。
-- **必填项**：所有字段全填，无省略。
-- **Entity Closure**：`Associated Entities` 列必须作为该镜头的“实体清单”，用于下游一致性与引用：
-  - **包含规则**：凡在 `Start Frame` / `Video Content` / `End Frame` 英文描述中出现过的任何方括号实体（`[ ... ]`），都必须出现在 `Associated Entities` 中。
-  - **排除规则**：`Associated Entities` 中列出的实体，必须至少在 Start/Video/End 三者之一里出现（作为画面锚点/参与动作/最终状态）。禁止把“本镜头没出现”的实体塞进清单。
-  - **环境强制**：每一行 `Associated Entities` 必须包含 `[Environment Anchor]`。
-  - **Subject Count Cap**：`Associated Entities` 中除 `[Environment Anchor]` 外，优先只保留 **不超过 3 个 subjects**。若镜头内确有更多实体参与，仍只列对首尾帧构图与动作承接真正关键的 1-3 个核心 subjects；背景群众、非关键陪体、纯氛围陪衬不得一并塞入清单。
-  - **一致性**：实体名必须与输入实体（Linked Characters/Key Props/Environment Anchor）大小写与括号内容完全一致。
-  - **逐字符继承**：`Associated Entities` 中每个实体名必须与上游权威实体名逐字符一致（含大小写与分隔符）；禁止等价改写（如大小写变化、`_`/`-`/空格互换、简写或翻译变体）。
-  - **禁止状态拼接**：`Associated Entities` 里只能填写实体名本体，禁止在 Shot 阶段临时写成“实体名 + 状态/姿态/备注”组合，如 `Officer Valerius wounded`、`Officer_Valerius alert`、`[Officer Valerius | angry]`。原因是下游实体识别需要先锁定“谁”，状态应写在 `Shot Logic` / `Start Frame` / `Video Content` / `End Frame` 中；若把状态焊进名字，会把“同一实体的当前状态”误变成“另一个名字不同的新实体”，导致匹配歧义与资产断链。
-  - **正式版本新增路径**：如果业务上确实需要把“同一基础实体的不同资产版本”当成不同实体使用，例如不同 costume / age-up / injury version / monster form / battle-damage variant，则必须回到上游实体层正式新增实体，并给出稳定、唯一、可长期复用的权威名字（例如 `Officer Valerius (Wounded Version)` 作为正式资产名）。Shot 阶段只允许逐字符引用这个上游新增后的正式名字，禁止现场临时拼接一个新后缀来冒充新实体。
-  - **Packet Consumption Closure**：`Associated Entities` 一旦确定，该镜头必须消费对应的 `Relevant Subject Packets` / `Entity Reference`。凡 packet 中与当前镜头动作、构图、状态、空间关系直接相关的描述，都必须在 Shot Logic 与 Start/Video/End 中得到承接；禁止 `Associated Entities` 只列名不继承描述。
-
-### 2. 画面描述规范 (Visual Description)
-必须在描述中包含这些信息维度，避免歧义，但不要求机械标签化输出。
-- **信息维度（自然融入 prose）**：优先将以下信息写成自然语言中的连续短句；只有在需要消歧时，才允许使用 `{Tag: Value}`。
-  - 观察者落位：exact observer placement relative to [Environment Anchor]
-  - 观察朝向：gaze vector from anchor to target/cardinal direction
-  - 镜头形态：shot size + angle + framing/stability
-  - 画质约束：Noise/Grain Strategy + Anti-Copy Constraint from references
-  - 光照结构：Style, Source
-  - `{Composition: Placement, Depth}`
-- **Dimension Completeness Gate**：每一行 Shot 在最终输出前，必须对 `Shot Logic (CN)`、`Start Frame`、`Video Content`、`End Frame` 四段分别执行一次内部维度验收；该检查只作为内部门禁，不得把 checklist 或“已通过/未通过”字样输出到最终表格。
-  - **Opening Hook JSON Gate**：若当前行为集首场（`EPxx_SC01` 或承担开场职责），JSON 审计块中的 `opening_hook_coverage.sh01_status` 必须为 `PRIMARY_PASS`，且同时包含 `opening_highlight=covered` 与 `flashback_bridge=covered`。
-  - **First-Second Hook Coupling**：当 `opening_hook_coverage.sh01_status=PRIMARY_PASS` 时，`Shot Logic (CN)` 与 `Video Content` 必须可见承接“首秒抓取”证据；若缺失，必须先重写镜头再输出。
-  - **Start Frame 最低维度槽位**：`[Global Style]`、`Viewpoint Anchor`、`Viewing Direction`、`Viewpoint Setup`、`Focal Length`、`Framing/Angle`、`Composition Rule`（明确交代构图法则，如三分/对称/引导线等）、`Noise/Grain Strategy`、`Anti-Copy Constraint`、`Lighting Structure`、`Single-Canvas/Shared-Space Guard`、`Layers`、每个可见核心角色的 `Viewer-Relative Facing`、多人同框时的 `多人空间站位关系（必须在空间上使用 rule of thirds, left/center/right, foreground/background 等构图术语穷举锁死每一个人的具体位置点）`。任一缺失即判该字段无效。
-  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、微节拍节奏必须可推导满足“默认约 2s/微节拍，且单个微节拍落在 1s - 3s”的时长护栏、所有可见角色的可见反应/状态变化、`Lighting Blueprint（光线说明）`（必须写清主光来源/方向、明暗趋势、色温倾向，以及必要时的变化理由）、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
-  - **End Frame 最低维度槽位**：`[Global Style]`、最终 `Viewpoint Anchor`、最终 `Viewing Direction`、最终 `Viewpoint Setup`、重算后的 `Composition Rule`、重算后的 `Layers`、每个可见核心角色的最终朝向、多人同框时的最终 `多人空间站位关系（必须再次使用平面与纵深构图术语校验每个人的最终物理停靠点）`、动作后视觉证据、与 Start/Video 可推导的一致性。任一缺失即判该字段无效。
-  - **Shot Logic (CN) 最低维度槽位**：`镜头类型分析（必须显式交代当前属于何种镜头类型，如建置镜头、关系镜头、情绪特写等，并明确说明该镜头实际使用了哪种基础/高级运镜，若无则说明理由）`、`前镜转镜逻辑 (明确交代如何承接上一镜尾帧及转镜的运镜逻辑，甚至硬切的理由)`、`简略时长分配说明（例如“P1约2s，对白约2s”，详细计算见JSON审计块）`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验（校验跨镜与单镜首尾间角色是否凭空增减）`、`多人空间站位与朝向核验` 十项必须齐全；若输入已给出 Source Beat 或当前镜头承担闪回桥接/全覆盖闭环职责，逻辑稿中还必须显式反映该镜头承接的是哪个 Beat、覆盖了哪些关键信息、是否存在桥接锚点。任一缺失即判该字段无效。
-  - **Cinematography Verification Slot**：运镜核验信息不得写入 `Shot Logic (CN)` 或任何表格列；必须输出到表格后的 JSON 审计块中。
-  - **CN JSON Verification Template**：JSON 审计块必须包含以下字段：
-    - `scene_id`: `EPxx_SCyy`
-    - `opening_hook_coverage`: 对象；至少包含 `required`、`sh01_status`、`opening_highlight`、`flashback_bridge`、`supporting_shots`
-    - `checks`: 数组，固定七项：`情境开场`、`景别切换链`、`表情特写覆盖`、`道具特写覆盖`、`高级运镜配置`、`朝向逻辑连贯`、`多人空间站位`
-    - 每个 `checks[]` 元素必须包含：`name`、`status`(`pass`/`fail`)、`evidence_shot_ids`(数组)、`evidence_note`
-    - `duration_estimations`: 数组，记录每个镜头的详细推算过程。每个元素包含：`shot_id`、`calculation`(如"P1(XX)2s + P2(YY)1s = 3s")、`total`
-    - `conclusion`: `pass` 或 `fail`
-    - `import_note`: 固定写 `remove this JSON block before markdown table import`
-  - **填写口径**：
-    - 每一项都必须带可追溯 `Shot ID`，禁止只写“已覆盖”而不给依据。
-    - `evidence_note` 必须是可核验镜头事实（景别、运镜、表情证据、道具状态变化），禁止抽象空话。
-    - 若同一项由多个镜头共同完成，必须在 `evidence_shot_ids` 中列出全部关键 `Shot ID`。
-  - **合规 JSON 示例（必须满足七项全通过，且含高级运镜）**：
-    - `---SHOT_AUDIT_JSON_BEGIN---`
-    - `{"scene_id":"EP03_SC05","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"情境开场","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"EWS 建置 + Crane Down from high to eye-level，前中后景与行动路径可读；主光从右后上方进入并保持空间层次"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02","EP03_SC05_SH03","EP03_SC05_SH04"],"evidence_note":"EWS/WS -> Medium OTS -> Medium Close-up -> Insert，并伴随对比度由环境建置到人物反应逐步提升"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH03"],"evidence_note":"CHAR:[@Lin] 眼周紧绷、下颌收紧、呼吸短停；眼神光稳定可读"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH04"],"evidence_note":"PROP:[Evidence Key] 从 closed -> open，锁芯亮起；局部冷光强调金属纹理"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02"],"evidence_note":"Crane Down 建置空间规模；Rack Focus 切换信息主次；光线从环境主光平滑过渡到人物主光"},{"name":"朝向逻辑连贯","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"首帧侧视连贯"},{"name":"多人空间站位","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"三人站位符合Z轴纵深分布且彼此没有视线阻挡"}],"duration_estimations":[{"shot_id":"EP03_SC05_SH01","calculation":"无对白。P1建置行动1.5s+P2入点反应1s=2.5s","total":2.5}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}`
-    - `---SHOT_AUDIT_JSON_END---`
-  - **核验失败处理**：若七项任一为“未通过”，必须先重排分镜再输出最终表格，禁止带着未通过项直接输出。
-- **No Partial Pass-Through**：只要四段中的任一字段未通过维度检查，该 Shot 整行不得输出到最终表格；必须先完成修正，再重新执行同一轮维度检查。
-- **Critical Execution Order**：
-  1. **Classify Shot Type**: 判断镜头类型（Single/Standard/Multi-Keyframe）。
+## 三、十一步核心制片工作流 (11-Step Critical Execution Workflow)
+1. **Classify Shot Type**: 判断镜头类型（Single/Standard/Multi-Keyframe）。
   2. **Resolve Shot Subject Packets**: 先根据当前拟定的 `Associated Entities`，从输入里的 `Relevant Subject Packets` / `Entity Reference` 中精确取出本镜对应的角色/道具/环境描述，建立本镜专用 subject 约束集。
-  3. **Resolve Beat Contract**: 先确认当前 Shot 对应的上游 Beat / `Source Beat` / 剧本文本片段，列出该 Beat 必须被本镜承接的关键信息：动作、对白、表情/情绪、外观/着装、道具状态、环境状态、字幕/屏幕文字、V.O./O.S.、语言事件，以及是否存在闪回桥接。
-     - **上游 Beat 格式说明**：上游 `{Beats}` 只提供空间落位、主体关系、环境交互、动作编排与状态流转信息，**不包含任何镜头语言**（机位、景别、镜高/俯仰、运镜）。所有"怎么拍"决策由本阶段（`shot_generator`）独立完成。
-     - **`[校对: ...]` 标注消费**：若上游 Beat 末尾附有 `[校对: ...]`，表示该 Beat 已修正原剧本不合理动作，Shot 阶段应以修正后版本为准，不得回退到原始不合理动作。
-     - **`[状态触发: ...]` 标注消费**：若上游 Beat 包含 `[状态触发: ...]`，表示该 Beat 的动作导致实体发生外观/着装/道具/环境状态变化（如角色换装、道具损毁）。Shot 阶段必须在对应时间点切换到触发后的新实体名（如从 `CHAR:[@Lin_Trench]` 切换到 `CHAR:[@Lin_NoCoat]`），并确保后续 Shot 继续使用新实体名。
-     - **`{环境交互}` 槽位消费**：上游 Beat 的 `{环境交互}` 描述角色与环境/道具实体的物理接触关系（坐/靠/推/按/拿），Shot 阶段必须将这些交互可见化为 `Start Frame` / `Video Content` / `End Frame` 中的具体空间关系与接触状态。
+  3. **Resolve Beat Contract**: 确认当前 Shot 对应的上游 Beat（如 `Source Beat` 或剧本文本片段），提取必须被本镜承接的剧情关键信息。
+     - **承接状态与动作**：直接消费上游给出的实体状态（包括 `[状态触发: ...]` 导致的新实体名切换）、`{环境交互}`（物理接触与落位）等动作逻辑，不得回退或篡改上游已校对的编排。
+     - **补充镜头语言**：只专注在由本阶段决定的“怎么拍”——独立设计恰当的机位、景别与运镜，并将上述所有抽象交互动作彻底转化为 `Start Frame` / `Video Content` / `End Frame` 里的全景可见画面要素。
     4. **Draft Shot Logic (Planning Blueprint)**: **Critical Step**. 在编写具体的英文视觉描述前，**必须先用中文规划**好首帧状态、视频动作演化及尾帧结果的逻辑链，并确保它已吸收本镜 subject packets 中的状态、依赖、空间拓扑、Beat 覆盖义务与动作限制。这是确保物理与时空连贯的**思考草稿**。
       - 该草稿必须同时完成“运镜丰富性核验预案”：先明确本 Scene 的情境开场镜头编号、景别切换链、表情特写镜头、道具特写镜头、高级运镜镜头与用途，再进入 Start/Video/End 编写。
   5. **Define Viewpoint Physics**: 明确机位物理关系（内/外，高/低，距离）。
@@ -390,6 +306,7 @@
     - **Corrective Action**: 只要在 Video Content 提及了某实体 {Entity}，请务必检查 Start/End Frame 是否包含了该实体。如果都没有，**强制**将该实体的最终状态写入 End Frame。
     - **Rule: Entity List Closure**：完成整行输出前，执行 **三-1 Associated Entities 闭环 (Entity Closure)** 的清单核对（以该段为唯一权威标准）。
 
+## 四、四大核心字段语法字典 (Start Frame / Video Content / End Frame / Keyframes)
 #### A. 分镜类型判别 (Shot Type Classification)
 - **1. Single Frame (Keyframe Only)**:
   - 极短、完全静止或强调瞬间状态的镜头；`Keyframes` 填写 `NO`。
@@ -660,7 +577,6 @@
   2.  **{Viewpoint Anchor} + {Viewing Direction} + {Viewpoint Setup} (Final State)**：分别明确动作结束时的最终观察位置、观察方向与景别/角度。若 Video Content 包含运镜（如 Dolly In），End Frame 的景别与角度必须体现运动后的结果（如从 Medium 变 Close-up）。
     3.  **{Layers & Subject Recalculation} (Full Recursion)**：
         - **Full Structure**: 必须重新构建 `{Foreground}`, `{Midground}`, `{Background}` 层级。
-        - **End Frame Core Subject Compression**：End Frame 中被显式点名并完整展开的核心 subjects 默认上限也为 **3 个**（不含环境锚点）。若结尾场面涉及更多人/物，必须只保留承接动作结果最关键的 1-3 个主体，其余退为未点名背景信息。
         - **Subject Info Update**: 针对核心角色，必须按 Start Frame「Standard Static Syntax」公式完整重绘最终状态（各字段反映动作执行后结果）。
           - **Facing Mandatory Check**：`New Facing` 必须是可判定枚举值（同 Start Frame 枚举）；若 Video Content 存在转身动作，End Frame 朝向必须与动作结果一致。
         - **State Recalculation**:
@@ -685,6 +601,10 @@
 - **Consistency Check**：
     - **位移闭环**: 若 Video Content 描述 "Viewpoint tracks backward"，End Frame 的 `Shot Size` 必须变宽 (Wider) 或 `Position` 距离变远。
     - **状态闭环**: Start Frame (Standing) -> Video Content (Sit down) -> End Frame **MUST BE** (Sitting). 严禁状态回滚。
+    - **多人空间拓扑锁定 (Multi-Person Spatial Topology Lock)**：
+      - *相对位置守恒*：如果 Start Frame 中 A 在前左，B 在后右，且 Video Content 中没有发生明确的相互穿行（Cross paths）或机位大幅度反转（如越轴、180度环绕），则 End Frame 中 A 必须仍在 B 的相对应侧区域，前后层级关系不变。
+      - *由于运镜导致的画幅裁切 (Occlusion Math)*：如果机位向某角色推进并放大景别（如全景变近景），Start Frame 中较远的背景角色在 End Frame 必定由于透视规律被挤出画幅或被完全虚化，绝不能在空间被压缩后还生硬地挤在画面里。
+      - *无瞬移/无消失锁 (No Teleportation)*：Start Frame 中拥有独立描绘且在本镜中未写明 `exits frame`、`walks away` 或被镜头完全避开的角色，在 End Frame 里必须依然存在。
   - **Lens-Subject Facing Continuity**：严控机位与角色的空间关系！如果 `Start Frame` 中角色大面积是背对镜头（`Back to Lens`）或侧对面（`Profile`），在没有明确发生【① 角色转身动作的微节拍】或【② 明确跨越人物轴线的环绕运镜（Orbit/Arc）】的情况下，`Video Content` 演变过程及 `End Frame` **绝对不能**毫无过程地突变成能够看清正脸（`Facing Viewer`）的画面。严禁角色瞬间转身或机位瞬移穿透人物。必须在后续的 `SHOT_AUDIT_JSON_BEGIN` 的审计对象中显式验算此朝向逻辑是否违规跳变，任何无视初始视线受限的强制正脸行为都会导致整段失败。发生正常的合法 Front ↔ Reverse 变向，也必须说明转向或运镜过程。
   - **Dynamic Handoff Closure**：若本镜 End Frame 为动态态，则下一镜必须满足：完整 Start Frame 重写 + 前 1-2 个微节拍完成承接说明 + 在 2 镜内回到稳定态。
   - **风格参数闭环**: Start/Video/End 的光源结构、焦段策略、颗粒控制必须可推导一致（允许“有动机变化”，禁止“无动机跳变”）。
@@ -692,7 +612,6 @@
 
 #### E. 动作逻辑 (Shot Logic) {中文输出}<200字
 - **定义**：这是对镜头时空演变的**中文逻辑规划 (Blueprint)**。用于验证从起点到终点的物理可行性及动作密度。
-- **Relative Quantification Rule**：同 **一-1.5 相对量化总则 (Relative Quantification Policy)**，Shot Logic 与英文描述均使用相对参照，避免绝对物理数值。
 - **强制格式**：
   - **镜头类型分析**：本镜头所属类型 = {Establishing Shot / Master Shot / Emotion Shot / Action Shot / Insert Shot / POV Shot}；并用 1 句中文说明选择理由：如何用此镜头类型来指导本镜头的景别与运镜逻辑（必须与「二、镜头类型规则」映射一致）；最后明确说明实际使用了哪种运镜，若两者皆未使用则说明为何不用。
   - **前镜转镜逻辑**：必须显式说明当前分镜是如何承接前一分镜的尾帧内容进行转镜的，并简述转镜的运镜逻辑。如果是硬切，必须说明硬切的理由（如强调情绪反差、视角立刻切断等）；如果是第一镜则填“本场首镜”。
@@ -709,14 +628,50 @@
 - **分隔符**：六部分内容必须用 `<br>` 换行分隔。
 - Shot Name的语言与提供的剧本一致。
 
-
-
-### 3. 表格输出模板
+## 五、系统输出格式与检查 (Output Format & System Checks)
+### 5.1 MD表与JSON输出格式规范
+- **输出形式**：先输出最终 **Markdown 表格**（一张表），再附加一个 **JSON 审计块**（用于运镜核验与机器校验）。
+- **Strict Output Format**：
+  - **输出顺序强制**：必须严格按 `Markdown 表格 -> JSON 审计块` 顺序输出；不得把 JSON 插入表格中间。
+  - **JSON 范围限制**：仅允许输出 1 个 JSON 审计块；禁止 YAML/XML 或第二个 JSON 块。
+  - **禁止推理前缀**：严禁输出任何“思考过程/推理过程/解释前言”，包括但不限于 `I think`、`Let me think`、`Analysis`、`思路`、`推理过程`。
+  - **禁止代码块**：严禁使用任何 fenced code block（例如 ```、```json 等）；JSON 必须以原始文本输出。
+  - **表格外文本限制**：表格前不允许任何文本；表格后只允许输出 JSON 审计块与其分隔标记，不允许其他说明段落。
+  - **JSON 分隔标记强制**：JSON 审计块必须被以下两行包裹，便于导入前安全删除：
+    - `---SHOT_AUDIT_JSON_BEGIN---`
+    - `---SHOT_AUDIT_JSON_END---`
+- **Import Safety**：
+  - Markdown 表格导入器只应接收表格内容；导入前必须删除 `---SHOT_AUDIT_JSON_BEGIN---` 与 `---SHOT_AUDIT_JSON_END---` 之间（含标记行）的全部文本。
+  - 严禁把 JSON 审计块写入任一表格单元格（尤其 `Shot Logic (CN)`），避免破坏 Markdown 表格导入。
+  - 若执行环境不支持后处理删除步骤，则回退为“只输出 Markdown 表格，不输出 JSON 审计块”。
+- **Format Validation**：输出前必须进行 Markdown 格式自检。确保 Markdown 表格语法严格准确，不能出现错误的换行、未闭合的竖线 `|` 或导致表格渲染失败的特殊字符。
+- **Language Policy**: 强制遵循第一部分《1.0 语言处理与一致性锁死 (Global Language Policy)》的全部规则，包括主列英文描述辅以真实对白、保留对应语言环境及中文列严格翻译约束。
+- **ID 格式（层级强制）**：
+  - `Scene ID` 必须使用 `EPxx_SCyy`（如 `EP01_SC03`）。
+  - `Shot ID` 必须使用 `EPxx_SCyy_SHzz`（如 `EP01_SC03_SH02`）。
+  - 同一 Scene 下 `SHzz` 严格递增且唯一；禁止跨 Scene 复用同一 `Shot ID`。
+  - `Shot ID` 的 `EPxx_SCyy` 前缀必须与该行 `Scene ID` 完全一致。
+- **Opening Hook Self-Check in JSON**：`Opening Hook Coverage` 不得作为表格独立列，必须写入表格后的 JSON 审计块。
+  - **适用范围**：当 `Scene ID` 为该集首场（通常 `EPxx_SC01`，或上游明确标注“承担开场职责”）时，JSON 中必须输出 `opening_hook_coverage` 对象并给出覆盖状态。
+  - **首镜硬规则**：首场的 `SH01` 必须标记为 `PRIMARY_PASS`，并同时给出两项可核验结论：`opening_highlight=covered` 与 `flashback_bridge=covered`。缺任一项判定不合规。
+  - **同场后续镜头**：首场内其余镜头写入 `supporting_shots`，并逐镜标记 `SUPPORTING` 或 `N/A`。
+  - **非首场镜头**：`opening_hook_coverage.required=false`，并保持可解析结构。
+- **必填项**：所有字段全填，无省略。
+- **Entity Closure**：`Associated Entities` 列必须作为该镜头的“实体清单”，用于下游一致性与引用：
+  - **包含规则**：凡在 `Start Frame` / `Video Content` / `End Frame` 英文描述中出现过的任何方括号实体（`[ ... ]`），都必须出现在 `Associated Entities` 中。
+  - **排除规则**：`Associated Entities` 中列出的实体，必须至少在 Start/Video/End 三者之一里出现（作为画面锚点/参与动作/最终状态）。禁止把“本镜头没出现”的实体塞进清单。
+  - **环境强制**：每一行 `Associated Entities` 必须包含 `[Environment Anchor]`。
+  - **一致性**：实体名必须与输入实体（Linked Characters/Key Props/Environment Anchor）大小写与括号内容完全一致。
+  - **逐字符继承**：`Associated Entities` 中每个实体名必须与上游权威实体名逐字符一致（含大小写与分隔符）；禁止等价改写（如大小写变化、`_`/`-`/空格互换、简写或翻译变体）。
+  - **禁止状态拼接**：`Associated Entities` 里只能填写实体名本体，禁止在 Shot 阶段临时写成“实体名 + 状态/姿态/备注”组合，如 `Officer Valerius wounded`、`Officer_Valerius alert`、`[Officer Valerius | angry]`。原因是下游实体识别需要先锁定“谁”，状态应写在 `Shot Logic` / `Start Frame` / `Video Content` / `End Frame` 中；若把状态焊进名字，会把“同一实体的当前状态”误变成“另一个名字不同的新实体”，导致匹配歧义与资产断链。
+  - **正式版本新增路径**：如果业务上确实需要把“同一基础实体的不同资产版本”当成不同实体使用，例如不同 costume / age-up / injury version / monster form / battle-damage variant，则必须回到上游实体层正式新增实体，并给出稳定、唯一、可长期复用的权威名字（例如 `Officer Valerius (Wounded Version)` 作为正式资产名）。Shot 阶段只允许逐字符引用这个上游新增后的正式名字，禁止现场临时拼接一个新后缀来冒充新实体。
+  - **Packet Consumption Closure**：`Associated Entities` 一旦确定，该镜头必须消费对应的 `Relevant Subject Packets` / `Entity Reference`。凡 packet 中与当前镜头动作、构图、状态、空间关系直接相关的描述，都必须在 Shot Logic 与 Start/Video/End 中得到承接；禁止 `Associated Entities` 只列名不继承描述。
+### 5.3 MD表格模板规范
 - 仅按上一节字段定义输出最终 Markdown 表格；在表格结束后，按规则附加 1 个 JSON 审计块（用于运镜核验）。
 - JSON 审计块必须放在 `---SHOT_AUDIT_JSON_BEGIN---` 与 `---SHOT_AUDIT_JSON_END---` 之间。
 - 导入 Markdown 表格前，必须先删除该 JSON 审计块（含分隔标记），再执行表格导入。
 运镜”等动作，不因数值细节而失真。
-### 4. 唯一完整合规示例（必须保留）
+### 5.4 唯一完整合规示例
 - **作用**：仅用于校对字段顺序、语言约束、实体闭环、英中对照与 Markdown 表格格式；真实输出时必须替换为当前 Scene 的实体、环境、剧情与时长，不得照抄示例内容。
 - **范围**：只保留这一个完整示例，前文其他规则仍为最高约束；若示例与规则冲突，以规则为准，并应先修正规则再修正示例，确保两者长期一致。
 
@@ -729,8 +684,46 @@
 | EP01_SC03_SH05 | 巡警介入(三人站位示例) | EP01_SC03 | 镜头类型分析：多人关系展示镜/建置镜。实际使用基础运镜：缓慢横移（展示空间纵深结构）；实际使用高级运镜：无。<br>前镜转镜逻辑：承接两人对峙凝滞，硬切回大全景揭示新角色入场。<br>预估：时长 5s，主节拍 2 个。<br>简略时长分配说明：P1(背景走近)约3s，P2(两人转头)约2s。<br>承接 Beat：承接巡警打破对峙的转折点。<br>动态：slow lateral truck。<br>首帧：A与B在前侧保持对峙，C（巡警）在后方背景处的路灯下。<br>过程：(P1) C 沿路边向他们走近，形成清晰的三人前后结构；(P2) A 与 B 循声转头看向后方的 C。<br>尾帧：A、B在前景/中景，C在后方，三人形成明确的三角站位；稳定态：是，近景收束：否。<br>校验：实体完整性通过；【重点：多人空间站位强制执行通过，明确了A在左前、B在右前、C在后方几十米路灯下的三维物理透视关系】。 | [Global Style]. From a chest-height observer position further down the Environment Anchor roadside, looking screen-left along the street to encompass the ongoing standoff and a new arrival, the frame holds a wide 35mm eye-level setup showing one continuous street perspective. **Layers**: {Foreground} CHAR:[@Character A] Medium Shot, Rule of Thirds Left, Profile Right, still pressing the line. {Midground} CHAR:[@Character B] Medium Shot, Rule of Thirds Right, Profile Left, hand tense on PROP:[Bag]. {Background} CHAR:[@Cop C] Full Body, Center frame but deep in the background depth, Facing Viewer, separated from A and B by about 10 meters near a glowing streetlamp of ENV:[Environment Anchor]. | **{Viewpoint Movement}**: Along ENV:[Environment Anchor] sidewalk, viewpoint trucks left slowly to shift the perspective and reveal the depth between the front pair and the background approach. **Action**: (P1) In the background, CHAR:[@Cop C] walks **steadily** **towards the foreground pair** **covering several meters**, boots clicking on the asphalt; (P2) Syncing with the footfalls, both CHAR:[@Character A] and CHAR:[@Character B] break their locked standoff and turn their heads **sharply** **towards the deep background** **a half-turn**, dropping their immediate conflict -> resulting in all three figures locked in a clear triangular spatial relationship across the dark street. | 5 | NO | [Global Style]. From the trucked observer position, still looking screen-left down the street, the wide 35mm frame maintains deep depth of field to keep all three figures locked in the same continuous roadside space. **Layers**: {Foreground} CHAR:[@Character A] Medium Shot, Rule of Thirds Left, Back to Lens (turned toward background). {Midground} CHAR:[@Character B] Medium Shot, Rule of Thirds Right, Back to Lens, still clutching PROP:[Bag]. {Background} CHAR:[@Cop C] Medium Full Shot, Center frame, Facing Viewer, now closer but still distinct in the deeper street plane of ENV:[Environment Anchor]. | [Global Style]. 从 Environment Anchor 原路边更远处的胸口高度观察位置出发，视线朝画面左侧顺着街道看过去，将前方的对峙与新来者收入眼底，画面为 35mm 的广角平视构图，展现出同在一个街道透视中。 **Layers**: {Foreground} CHAR:[@Character A] 中景，左三分，侧面朝右，依然压在界线上。 {Midground} CHAR:[@Character B] 中景，右三分，侧面朝左，手紧抓 PROP:[Bag]。 {Background} CHAR:[@Cop C] 全身景，画面居中但处于纵深背景处，面向镜头，与前方两人相距约十几米，站在 ENV:[Environment Anchor] 发亮的路灯下。 | **{Viewpoint Movement}**: 沿着 ENV:[Environment Anchor] 人行道，机位向左缓慢横移，改变透视并展现出前景两人与后方来者之间的空间纵深。 **Action**: (P1) 在背景处，CHAR:[@Cop C] 迈着稳健的步伐 **朝前景两人走来** **拉近了几米距离**，靴子踩在柏油路上；(P2) 伴随脚步声，CHAR:[@Character A] 与 CHAR:[@Character B] 同时打破了先前的对峙，将头 **猛地** **转向深纵深背景** **转了半圈**，放下了眼前的冲突 -> 最终三人在这条暗街上形成了一个明确清晰的三角空间物理站位。 | NO | [Global Style]. 从横移后的观察位置出发，视线依然朝画面左侧顺着街道看，35mm 广角构图保持了较深景深，确保三个角色都锁在同一个连续的路边空间里。 **Layers**: {Foreground} CHAR:[@Character A] 中景，左三分，背对镜头（已转向背景）。 {Midground} CHAR:[@Character B] 中景，右三分，背对镜头，仍紧抓 PROP:[Bag]。 {Background} CHAR:[@Cop C] 中全景，画面居中，面向镜头，距离更近了但依然处于 ENV:[Environment Anchor] 清晰的后方街道平面上。 | [@Character A], [@Character B], [@Cop C], [Environment Anchor], [Bag] |
 
 
+```json
 ---SHOT_AUDIT_JSON_BEGIN---
-{"scene_id":"EP01_SC03","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"情境开场","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"共享空间建立镜作为开场，路面纵深与行动路径清晰"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP01_SC03_SH01","EP01_SC03_SH02","EP01_SC03_SH03","EP01_SC03_SH04"],"evidence_note":"Medium Full -> OTS Medium/MCU -> Reverse OTS Medium/MCU -> Detail/Close-up"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP01_SC03_SH03","EP01_SC03_SH04"],"evidence_note":"A 的压迫表情与 B 的脆弱防守（如左眼落下并反光的物理真实泪珠）均有可见面部证据"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP01_SC03_SH04"],"evidence_note":"PROP:[Bag] 包带抓握与手部锁紧状态被特写承接"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP01_SC03_SH03"],"evidence_note":"Reverse OTS 作为高级视角切换，用于对话信息重心转移"},{"name":"朝向逻辑连贯","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"无人物正面突变或视点偏移跳跃，朝向结构守恒"},{"name":"多人空间站位","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"多人场景具有严格的相对坐标设定，未出现站位瞬移隐患"}],"duration_estimations":[{"shot_id":"EP01_SC03_SH01","calculation":"无对白。P1(A切入急停)1.5s + P2(B后倾反应)1s + 对峙停顿1.5s = 4s","total":4},{"shot_id":"EP01_SC03_SH02","calculation":"含对白紧凑计算。P1(压近与质问)并行取最大值约3s + P2(视线滑开避让)1s + 压迫停顿1s = 5s","total":5},{"shot_id":"EP01_SC03_SH03","calculation":"含对白。P1(急促辩解台词)2s + P2(A凝视压迫)2s = 4s","total":4},{"shot_id":"EP01_SC03_SH04","calculation":"无对白。P1(微反应)1s + P2(落泪)2s + 脆弱防守定格1s = 4s","total":4}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}
+{"scene_id":"EP01_SC03","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"情境开场","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"共享空间建立镜作为开场，路面纵深与行动路径清晰"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP01_SC03_SH01","EP01_SC03_SH02","EP01_SC03_SH03","EP01_SC03_SH04"],"evidence_note":"Medium Full -> OTS Medium/MCU -> Reverse OTS Medium/MCU -> Detail/Close-up"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP01_SC03_SH03","EP01_SC03_SH04"],"evidence_note":"A 的压迫表情与 B 的脆弱防守（如左眼落下并反光的物理真实泪珠）均有可见面部证据"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP01_SC03_SH04"],"evidence_note":"PROP:[Bag] 包带抓握与手部锁紧状态被特写承接"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP01_SC03_SH03"],"evidence_note":"Reverse OTS 作为高级视角切换，用于对话信息重心转移"},{"name":"朝向逻辑连贯","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"无人物正面突变或视点偏移跳跃，朝向结构守恒"},{"name":"多人空间站位","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"多人场景具有严格的相对坐标设定，未出现站位瞬移隐患"},{"name":"角色数量守恒逻辑","status":"pass","evidence_shot_ids":["EP01_SC03_SH01"],"evidence_note":"单镜和跨镜首尾帧角色数逻辑一致，如有变动也有合理的进出场逻辑"}],"duration_estimations":[{"shot_id":"EP01_SC03_SH01","calculation":"无对白。P1(A切入急停)1.5s + P2(B后倾反应)1s + 对峙停顿1.5s = 4s","total":4},{"shot_id":"EP01_SC03_SH02","calculation":"含对白紧凑计算。P1(压近与质问)并行取最大值约3s + P2(视线滑开避让)1s + 压迫停顿1s = 5s","total":5},{"shot_id":"EP01_SC03_SH03","calculation":"含对白。P1(急促辩解台词)2s + P2(A凝视压迫)2s = 4s","total":4},{"shot_id":"EP01_SC03_SH04","calculation":"无对白。P1(微反应)1s + P2(落泪)2s + 脆弱防守定格1s = 4s","total":4}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}
 ---SHOT_AUDIT_JSON_END---
+```
 
 *******************请按以上规则，对以下完整剧本分析，要完整分析：
+
+### 5.2 最终检查验证流 (Verification Gate)
+必须在描述中包含这些信息维度，避免歧义，但不要求机械标签化输出。
+- **信息维度（自然融入 prose）**：优先将以下信息写成自然语言中的连续短句；只有在需要消歧时，才允许使用 `{Tag: Value}`。
+  - 观察者落位：exact observer placement relative to [Environment Anchor]
+  - 观察朝向：gaze vector from anchor to target/cardinal direction
+  - 镜头形态：shot size + angle + framing/stability
+  - 画质约束：Noise/Grain Strategy + Anti-Copy Constraint from references
+  - 光照结构：Style, Source
+  - `{Composition: Placement, Depth}`
+- **Dimension Completeness Gate**：每一行 Shot 在最终输出前，必须对 `Shot Logic (CN)`、`Start Frame`、`Video Content`、`End Frame` 四段分别执行一次内部维度验收；该检查只作为内部门禁，不得把 checklist 或“已通过/未通过”字样输出到最终表格。
+  - **Opening Hook JSON Gate**：若当前行为集首场（`EPxx_SC01` 或承担开场职责），JSON 审计块中的 `opening_hook_coverage.sh01_status` 必须为 `PRIMARY_PASS`，且同时包含 `opening_highlight=covered` 与 `flashback_bridge=covered`。
+  - **First-Second Hook Coupling**：当 `opening_hook_coverage.sh01_status=PRIMARY_PASS` 时，`Shot Logic (CN)` 与 `Video Content` 必须可见承接“首秒抓取”证据；若缺失，必须先重写镜头再输出。
+  - **Start Frame 最低维度槽位**：`[Global Style]`、`Viewpoint Anchor`、`Viewing Direction`、`Viewpoint Setup`、`Focal Length`、`Framing/Angle`、`Composition Rule`（明确交代构图法则，如三分/对称/引导线等）、`Noise/Grain Strategy`、`Anti-Copy Constraint`、`Lighting Structure`、`Single-Canvas/Shared-Space Guard`、`Layers`、每个可见核心角色的 `Viewer-Relative Facing`、多人同框时的 `多人空间站位关系（必须在空间上使用 rule of thirds, left/center/right, foreground/background 等构图术语穷举锁死每一个人的具体位置点）`。任一缺失即判该字段无效。
+  - **Video Content 最低维度槽位**：`Viewpoint Movement 起点->终点`、`Direction Chain`、`2-3 个主节拍中的动作闭环`、每个主节拍的 `Quantification`、微节拍节奏必须可推导满足“默认约 2s/微节拍，且单个微节拍落在 1s - 3s”的时长护栏、所有可见角色的可见反应/状态变化、`Lighting Blueprint（光线说明）`（必须写清主光来源/方向、明暗趋势、色温倾向，以及必要时的变化理由）、光照/焦距/颗粒连续性（若切换焦距，必须写成可推导的起点->终点，如 `35mm push-in resolving into 50mm close pressure`）、若存在台词则包含说话者与听者反应、若存在闪回/回切则包含桥接方式与桥接锚点、且整段必须能覆盖该 Beat 的关键文本/造型/道具/环境信息。任一缺失即判该字段无效。
+  - **End Frame 最低维度槽位**：`[Global Style]`、最终 `Viewpoint Anchor`、最终 `Viewing Direction`、最终 `Viewpoint Setup`、重算后的 `Composition Rule`、重算后的 `Layers`、每个可见核心角色的最终朝向、多人同框时的最终 `多人空间站位关系（必须再次使用平面与纵深构图术语校验每个人的最终物理停靠点）`、动作后视觉证据、与 Start/Video 可推导的一致性。任一缺失即判该字段无效。
+  - **Shot Logic (CN) 最低维度槽位**：`镜头类型分析（必须显式交代当前属于何种镜头类型，如建置镜头、关系镜头、情绪特写等，并明确说明该镜头实际使用了哪种基础/高级运镜，若无则说明理由）`、`前镜转镜逻辑 (明确交代如何承接上一镜尾帧及转镜的运镜逻辑，甚至硬切的理由)`、`简略时长分配说明（例如“P1约2s，对白约2s”，详细计算见JSON审计块）`、`动态`、`首帧`、`过程`、`尾帧`、`稳定态/近景收束判定`、`实体完整性校验（校验跨镜与单镜首尾间角色是否凭空增减）`、`多人空间站位与朝向核验` 十项必须齐全；若输入已给出 Source Beat 或当前镜头承担闪回桥接/全覆盖闭环职责，逻辑稿中还必须显式反映该镜头承接的是哪个 Beat、覆盖了哪些关键信息、是否存在桥接锚点。任一缺失即判该字段无效。
+  - **Cinematography Verification Slot**：运镜核验信息不得写入 `Shot Logic (CN)` 或任何表格列；必须输出到表格后的 JSON 审计块中。
+  - **CN JSON Verification Template**：JSON 审计块必须包含以下字段：
+    - `scene_id`: `EPxx_SCyy`
+    - `opening_hook_coverage`: 对象；至少包含 `required`、`sh01_status`、`opening_highlight`、`flashback_bridge`、`supporting_shots`
+    - `checks`: 数组，固定八项：`情境开场`、`景别切换链`、`表情特写覆盖`、`道具特写覆盖`、`高级运镜配置`、`朝向逻辑连贯`、`多人空间站位`、`角色数量守恒逻辑`
+    - 每个 `checks[]` 元素必须包含：`name`、`status`(`pass`/`fail`)、`evidence_shot_ids`(数组)、`evidence_note`
+    - `duration_estimations`: 数组，记录每个镜头的详细推算过程。每个元素包含：`shot_id`、`calculation`(如"P1(XX)2s + P2(YY)1s = 3s")、`total`
+    - `conclusion`: `pass` 或 `fail`
+    - `import_note`: 固定写 `remove this JSON block before markdown table import`
+  - **填写口径**：
+    - 每一项都必须带可追溯 `Shot ID`，禁止只写“已覆盖”而不给依据。
+    - `evidence_note` 必须是可核验镜头事实（景别、运镜、表情证据、道具状态变化），禁止抽象空话。
+    - 若同一项由多个镜头共同完成，必须在 `evidence_shot_ids` 中列出全部关键 `Shot ID`。
+  - **合规 JSON 示例（必须满足七项全通过，且含高级运镜）**：
+    - `---SHOT_AUDIT_JSON_BEGIN---`
+    - `{"scene_id":"EP03_SC05","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"情境开场","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"EWS 建置 + Crane Down from high to eye-level，前中后景与行动路径可读；主光从右后上方进入并保持空间层次"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02","EP03_SC05_SH03","EP03_SC05_SH04"],"evidence_note":"EWS/WS -> Medium OTS -> Medium Close-up -> Insert，并伴随对比度由环境建置到人物反应逐步提升"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH03"],"evidence_note":"CHAR:[@Lin] 眼周紧绷、下颌收紧、呼吸短停；眼神光稳定可读"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH04"],"evidence_note":"PROP:[Evidence Key] 从 closed -> open，锁芯亮起；局部冷光强调金属纹理"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02"],"evidence_note":"Crane Down 建置空间规模；Rack Focus 切换信息主次；光线从环境主光平滑过渡到人物主光"},{"name":"朝向逻辑连贯","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"首帧侧视连贯"},{"name":"多人空间站位","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"三人站位符合Z轴纵深分布且彼此没有视线阻挡"},{"name":"角色数量守恒逻辑","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"首尾帧角色数一致，且单景特写因运镜遮挡其他角色时有明确镜头推近的合理解释"}],"duration_estimations":[{"shot_id":"EP03_SC05_SH01","calculation":"无对白。P1建置行动1.5s+P2入点反应1s=2.5s","total":2.5}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}`
+    - `---SHOT_AUDIT_JSON_END---`
+  - **核验失败处理**：若七项任一为“未通过”，必须先重排分镜再输出最终表格，禁止带着未通过项直接输出。
+- **No Partial Pass-Through**：只要四段中的任一字段未通过维度检查，该 Shot 整行不得输出到最终表格；必须先完成修正，再重新执行同一轮维度检查。

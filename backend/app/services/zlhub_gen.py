@@ -543,7 +543,7 @@ async def _handle_zlhub_generation(self, gen_type, prompt, config, ref_image=Non
         endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "").strip()
         model = str(config.get("model") or "").strip()
         if not endpoint:
-            return {"error": f"{provider_name} endpoint missing from system configuration", "submit_failed": True}
+            endpoint = "/models/{model}:generateContent" if "v1beta" in base_url or "v1" in base_url else "/v1beta/models/{model}:generateContent"
         if not model:
             return {"error": f"{provider_name} runtime model missing from system configuration", "submit_failed": True}
 
