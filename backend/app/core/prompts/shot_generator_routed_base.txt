@@ -467,21 +467,7 @@
     - `{"scene_id":"EP03_SC05","opening_hook_coverage":{"required":false,"sh01_status":"N/A","opening_highlight":"N/A","flashback_bridge":"N/A","supporting_shots":[]},"checks":[{"name":"情境开场","status":"pass","evidence_shot_ids":["EP03_SC05_SH01"],"evidence_note":"EWS 建置 + Crane Down from high to eye-level，前中后景与行动路径可读"},{"name":"景别切换链","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02","EP03_SC05_SH03","EP03_SC05_SH04"],"evidence_note":"EWS/WS -> Medium OTS -> Medium Close-up -> Insert"},{"name":"表情特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH03"],"evidence_note":"CHAR:[@Lin] 眼周紧绷、下颌收紧、呼吸短停"},{"name":"道具特写覆盖","status":"pass","evidence_shot_ids":["EP03_SC05_SH04"],"evidence_note":"PROP:[Evidence Key] 从 closed -> open，锁芯亮起"},{"name":"高级运镜配置","status":"pass","evidence_shot_ids":["EP03_SC05_SH01","EP03_SC05_SH02"],"evidence_note":"Crane Down 建置空间规模；Rack Focus 切换信息主次"}],"conclusion":"pass","import_note":"remove this JSON block before markdown table import"}`
     - `---SHOT_AUDIT_JSON_END---`
   - **核验失败处理**：若五项任一为“未通过”，必须先重排分镜再输出最终表格，禁止带着未通过项直接输出。
-- **维度门禁触发后禁止带病输出 (No Partial Pass-Through, 强制)**：只要四段中的任一字段未通过维度检查，该 Shot 整行不得输出到最终表格；必须先完成重写，再重新执行同一轮维度检查。
-- **重写机制 (Rewrite Protocol, 强制)**：维度缺失时不得只在原句末尾机械补一个短语糊弄过关，必须按缺口范围重写对应字段，并同步修正受影响的上下游字段。
-  - **字段级定向重写 (Targeted Rewrite)**：若仅 `Start Frame` 缺维度，则完整重写 `Start Frame`，并回看 `Video Content` / `End Frame` 是否仍与新的起始状态一致；若不一致，必须一并改写相关字段。
-  - **动态链重写 (Motion-Chain Rewrite)**：若 `Video Content` 缺少量化、反应链、方向链或结果闭环，必须整体重写 `Video Content`，不得只插入单个补丁短句；必要时同步重写 `End Frame` 与 `Shot Logic` 的过程/尾帧描述。
-  - **终态重写 (Outcome Rewrite)**：若 `End Frame` 缺少终态朝向、视觉证据或与前文不闭环，必须完整重写 `End Frame`，不得以“same as start”或局部差分补丁代替。
-  - **整行回炉 (Full-Row Regeneration)**：若完成一轮字段级重写后仍有任一字段未通过维度检查，则丢弃该 Shot 当前整行草稿，回到 `Shot Logic (CN)` 重新规划并整行重生一次；禁止在失败草稿上无上限叠补丁。
-  - **重写上限 (Rewrite Limit)**：同一 Shot 最多允许 `1 次字段级重写 + 1 次整行回炉`。若第二次仍不通过，必须优先简化镜头设计、减少主节拍或收窄运镜复杂度后再生成，不能硬保留复杂但缺维度的版本。
-- **复杂度降级梯度 (Complexity Downgrade Ladder, 强制)**：若同一 Shot 在完成 `1 次字段级重写 + 1 次整行回炉` 后仍未通过维度检查，必须按以下固定顺序降级，不得跳级乱改：
-  - **Level 1**：删除装饰性风格修辞、可选氛围语、非关键微细节，保留全部核心维度槽位。
-  - **Level 2**：减少可选主节拍/次级角色响应复杂度，收窄运镜术语数量，优先保留空间关系与动作闭环。
-  - **Level 3**：将镜头收束为单一清晰目标的基础版本，仅保留必要机位、朝向、主体关系、光照、画质与结果状态；绝不允许为了简化而删除身份锚点、状态承接或单画布约束。
-- **失败重写示例 (Failure -> Rewrite -> Downgraded Good, 强制参照)**：
-  - **Bad**：`[Global Style]. Medium shot of CHAR:[@A] and CHAR:[@B] fighting in ENV:[Arena].` → 缺 `Viewpoint Anchor / Viewing Direction / Focal Length / Facing / Single-Canvas Guard / 动作闭环`。
-  - **Rewrite**：先补全完整首尾与动作链；若仍失败，不要继续叠补丁。
-  - **Downgraded Good**：`[Global Style]. From a chest-height observer position at the arena edge, looking diagonally across both fighters, the frame holds a medium 35mm eye-level view with one continuous floor plane and one uninterrupted background depth. Controlled side light keeps both silhouettes readable. **Layers**: {Foreground} Empty. {Midground} CHAR:[@A] 3/4 View Right, guard raised, facing CHAR:[@B]; CHAR:[@B] 3/4 View Left, weight set back. {Background} ENV:[Arena].`
+- **维度门禁触发后禁止带病输出 (No Partial Pass-Through, 强制)**：只要四段中的任一字段未通过维度检查，该 Shot 整行不得输出到最终表格；必须先完成修正，再重新执行同一轮维度检查。
 - **特别重要：执行顺序调整 (Critical Execution Order)**：
   1. **Classify Shot Type**: 判断镜头类型（Single/Standard/Multi-Keyframe）。
   2. **Resolve Shot Subject Packets**: 先根据当前拟定的 `Associated Entities`，从输入里的 `Relevant Subject Packets` / `Entity Reference` 中精确取出本镜对应的角色/道具/环境描述，建立本镜专用 subject 约束集。
@@ -497,9 +483,9 @@
   7. **Generate Duration**: 先按“1 微节拍约 2s”估算微节拍总数，再反推主节拍容量，最后确定总时长（根据动作密度自然估算并受 6s - 10s 约束）。
   8. **Generate Video Content**: 根据 Logic 规划与 Duration 填充每一秒的动作，并消费本镜 subject packets 里的动作特征、空间条件、状态变化、依赖链与 Beat 覆盖义务；若存在闪回/回切，必须在此写清桥接方式而非硬切跳变。
   9. **Generate End Frame**: 根据 Video Content 的最终结果生成结束状态，并回写本镜涉及 subject 的结果状态；若为闪回桥接镜，终帧必须明确桥接后的新时空是否已稳定成立。
-  10. **Run Dimension Completeness Gate**: 对 `Shot Logic (CN)` / `Start Frame` / `Video Content` / `End Frame` 执行维度验收，并额外检查该 Shot 是否完整覆盖对应 Beat 的关键信息、是否保留必需桥接锚点；缺项即触发下方重写机制，不得直接输出。
+  10. **Run Dimension Completeness Gate**: 对 `Shot Logic (CN)` / `Start Frame` / `Video Content` / `End Frame` 执行维度验收，并额外检查该 Shot 是否完整覆盖对应 Beat 的关键信息、是否保留必需桥接锚点；缺项即触发重新修正，不得直接输出。
   10.1 **Run Opening Hook Coverage Gate**: 若当前 Scene 为每集首场，先检查 JSON 审计对象 `opening_hook_coverage`：`sh01_status` 必须 `PRIMARY_PASS` 且同时声明 `opening_highlight=covered + flashback_bridge=covered`，否则直接回到 Shot Logic 重写。
-  11. **Rewrite If Needed, Then Recheck**: 先做字段级定向重写；仍失败则整行回炉重生；重写后必须重新执行同一套维度检查，直到通过后才能输出。
+  11. **Rewrite If Needed, Then Recheck**: 先做字段级定向修正；若失败则整行回炉重生；修正后必须重新执行同一套维度检查，直到通过后才能输出。
   - **Entity Integrity Check (角色/实体完整性检查)**:
     - **Rule: No Mystery Guests**. 在 `Video Content` 中发生的任何主动行为主体，**必须**显式地出现在 `Start Frame` (开始画面) 或者 `End Frame` (结束画面) 的描述中。
     - **Logic**: 视频生成模型需要首尾帧作为视觉锚点。如果提示词里写了 "John 举起了手"，但 Start Frame 和 End Frame 都没有提到 "John"，模型可能会凭空捏造一个陌生人作为 actor，或导致动作失效。
