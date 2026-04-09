@@ -9185,6 +9185,24 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                             updateTechField('start_frame_cn', e.target.value);
                                                                         }}
                                                                     />
+                                                                    <div className="flex items-center gap-2 mt-2 mb-4">
+                                                                        {renderDetailActionButton({
+                                                                            label: t('翻译成中文', 'To Chinese'),
+                                                                            busyLabel: t('翻译中...', 'Translating...'),
+                                                                            onClick: () => translateFieldToChinese('start'),
+                                                                            disabled: translatingPromptField.startsWith('start:'),
+                                                                            busy: translatingPromptField === 'start:to-cn',
+                                                                            variant: 'warning'
+                                                                        })}
+                                                                        {renderDetailActionButton({
+                                                                            label: t('翻译成英文', 'To English'),
+                                                                            busyLabel: t('翻译中...', 'Translating...'),
+                                                                            onClick: () => translateFieldToEnglish('start'),
+                                                                            disabled: translatingPromptField.startsWith('start:'),
+                                                                            busy: translatingPromptField === 'start:to-en',
+                                                                            variant: 'secondary'
+                                                                        })}
+                                                                    </div>
 
                                                                     <AdvancedModifyFrame
                                                                         uiLang={uiLang}
@@ -9282,6 +9300,24 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                             updateTechField('end_frame_cn', e.target.value);
                                                                         }}
                                                                     />
+                                                                    <div className="flex items-center gap-2 mt-2 mb-4">
+                                                                        {renderDetailActionButton({
+                                                                            label: t('翻译成中文', 'To Chinese'),
+                                                                            busyLabel: t('翻译中...', 'Translating...'),
+                                                                            onClick: () => translateFieldToChinese('end'),
+                                                                            disabled: translatingPromptField.startsWith('end:'),
+                                                                            busy: translatingPromptField === 'end:to-cn',
+                                                                            variant: 'warning'
+                                                                        })}
+                                                                        {renderDetailActionButton({
+                                                                            label: t('翻译成英文', 'To English'),
+                                                                            busyLabel: t('翻译中...', 'Translating...'),
+                                                                            onClick: () => translateFieldToEnglish('end'),
+                                                                            disabled: translatingPromptField.startsWith('end:'),
+                                                                            busy: translatingPromptField === 'end:to-en',
+                                                                            variant: 'secondary'
+                                                                        })}
+                                                                    </div>
 
                                                                     <AdvancedModifyFrame
                                                                         uiLang={uiLang}
@@ -9472,6 +9508,24 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(e.target.value) });
                                                                     }}
                                                                 />
+                                                                <div className="flex items-center gap-2 mt-2 mb-4">
+                                                                    {renderDetailActionButton({
+                                                                        label: t('翻译成中文', 'To Chinese'),
+                                                                        busyLabel: t('翻译中...', 'Translating...'),
+                                                                        onClick: () => translateFieldToChinese('video'),
+                                                                        disabled: translatingPromptField.startsWith('video:'),
+                                                                        busy: translatingPromptField === 'video:to-cn',
+                                                                        variant: 'warning'
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('翻译成英文', 'To English'),
+                                                                        busyLabel: t('翻译中...', 'Translating...'),
+                                                                        onClick: () => translateFieldToEnglish('video'),
+                                                                        disabled: translatingPromptField.startsWith('video:'),
+                                                                        busy: translatingPromptField === 'video:to-en',
+                                                                        variant: 'secondary'
+                                                                    })}
+                                                                </div>
                                                                 <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
