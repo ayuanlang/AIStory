@@ -445,6 +445,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [projectCreateOptions, setProjectCreateOptions] = useState(PROJECT_CREATE_DEFAULT_OPTIONS);
     const [newType, setNewType] = useState('');
     const [newCountryRegion, setNewCountryRegion] = useState('');
+    const [newExpectedDuration, setNewExpectedDuration] = useState('60');
     const [newLanguage, setNewLanguage] = useState('');
     const [newBasePositioning, setNewBasePositioning] = useState('');
     const [newAspectRatio, setNewAspectRatio] = useState('');
@@ -745,6 +746,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         setNewReviewerUsers('');
         setNewType('');
         setNewCountryRegion('');
+        setNewExpectedDuration('60');
         setNewLanguage('');
         setNewBasePositioning('');
         setNewAspectRatio('');
@@ -799,6 +801,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 script_title: title,
                 type: String(newType || '').trim(),
                 country_region: String(newCountryRegion || '').trim(),
+                expected_duration: String(newExpectedDuration || '').trim(),
                 language: String(newLanguage || '').trim(),
                 base_positioning: String(newBasePositioning || '').trim(),
                 era: String(newEra || '').trim(),
@@ -1816,6 +1819,17 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                                 <option value=""></option>
                                                                 {projectCreateOptions.country_region.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
                                                             </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('预期时长(秒)', 'Expected Duration (s)')}</label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none"
+                                                    value={newExpectedDuration}
+                                                    onChange={(e) => setNewExpectedDuration(e.target.value)}
+                                                    placeholder="60"
+                                                />
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('语言', 'Language')}</label>

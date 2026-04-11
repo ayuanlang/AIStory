@@ -1,4 +1,4 @@
-
+﻿
 import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
 import PromptMentionTextarea from './PromptMentionTextarea';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -256,6 +256,9 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
 
 export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3 }) => {
     const functionApiConfigs = useFunctionApis();
+        const aspectParts = parseAspectRatioParts(getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9');
+    const isPortrait = aspectParts && aspectParts.heightPart > aspectParts.widthPart;
+    
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
@@ -7642,7 +7645,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 onClick={() => setEditingShot(shot)}
                             >
                                 {/* Image / Thumbnail */}
-                                <div className="aspect-video bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden">
+                                <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden`}>
                                     
                                     {/* Preload End Frame so it's cached exactly like the Start Frame when user opens the shot inspector */}
                                     {getShotEndFrameUrl(shot) && (
@@ -7900,7 +7903,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
                                             </div>
                                         )}
-                                        <div className={`aspect-video bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('start')}>
+                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('start')}>
                                             {currentGeneratingState.start && (
                                                 <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
                                                     <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
@@ -8068,7 +8071,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
                                             </div>
                                         )}
-                                        <div className={`aspect-video bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('end')}>
+                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('end')}>
                                             {currentGeneratingState.end && (
                                                 <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
                                                     <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
@@ -8270,7 +8273,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         </div>
 
                                         <div 
-                                            className="aspect-video bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center"
+                                            style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center`}
                                             onClick={() => openAssetDetailModal('video')}
                                         >
                                             {currentGeneratingState.video && (
@@ -8432,7 +8435,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
 
                                                 {/* Image Area */}
-                                                <div className="aspect-video bg-black rounded border border-white/10 relative overflow-hidden group/image cursor-pointer flex items-center justify-center" onClick={() => openAssetDetailModal('keyframe', idx)}>
+                                                <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black rounded border border-white/10 relative overflow-hidden group/image cursor-pointer flex items-center justify-center`} onClick={() => openAssetDetailModal('keyframe', idx)}>
                                                     {kf.url ? (
                                                         <>
                                                             <SafeImage

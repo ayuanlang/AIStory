@@ -154,7 +154,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
-export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images", promptText = "", onPickMedia = null, useSequenceLogic = false, storageKey = "ref_image_urls", additionalAutoRefs = [], strictPromptOnly = false, onFindPrevFrame = null, uiLang = 'zh' }) => {
+export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images", promptText = "", onPickMedia = null, useSequenceLogic = false, storageKey = "ref_image_urls", additionalAutoRefs = [], strictPromptOnly = false, onFindPrevFrame = null, uiLang = 'zh', isPortrait = false }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [selectedImage, setSelectedImage] = useState(null);
     const tech = JSON.parse(shot.technical_notes || '{}');
@@ -486,10 +486,10 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                     </div>
                 </div>
                 
-                <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar min-h-[90px]">
+                <div className={`flex gap-2 pb-2 custom-scrollbar ${isPortrait ? 'flex-col overflow-y-auto max-h-[220px] h-full' : 'overflow-x-auto min-h-[90px]'}`}>
                     {/* 1. Active Refs (Selected) */}
                     {activeRefs.map((url, idx) => (
-                        <div key={url + idx} className="relative group shrink-0 w-[140px] aspect-video bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in" onClick={() => setSelectedImage(url)}>
+                        <div key={url + idx} className={`relative group shrink-0 ${isPortrait ? 'w-full aspect-[4/3]' : 'w-[140px] aspect-video'} bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in`} onClick={() => setSelectedImage(url)}>
                             {(url.toLowerCase().endsWith('.mp4') || url.toLowerCase().endsWith('.webm')) ? (
                                 <LazyHoverVideo
                                     src={url}
@@ -525,7 +525,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                                     handleAdd(url);
                                 }
                             }, { shotId: shot?.id })}
-                            className="shrink-0 w-[50px] aspect-video bg-white/5 hover:bg-white/10 border border-white/10 border-dashed rounded flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-white transition-colors"
+                            className={`shrink-0 ${isPortrait ? 'w-full py-4' : 'w-[50px] aspect-video'} bg-white/5 hover:bg-white/10 border border-white/10 border-dashed rounded flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-white transition-colors`}
                             title={t('从素材中选择', 'Pick from Assets')}
                         >
                             <Plus className="w-5 h-5"/>
@@ -911,8 +911,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     const [sceneShotCountMap, setSceneShotCountMap] = useState({});
     const [sceneShotDurationMap, setSceneShotDurationMap] = useState({});
     const [sceneListLoading, setSceneListLoading] = useState(false);
-    const [sceneSortMode, setSceneSortMode] = useState('updated_desc');
-    const [sceneSortDirection, setSceneSortDirection] = useState('desc');
     const [selectedSceneKeys, setSelectedSceneKeys] = useState([]);
     const [entities, setEntities] = useState([]);
     const [sceneSubjectSupplementingMap, setSceneSubjectSupplementingMap] = useState({});
@@ -1339,30 +1337,8 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
 
     const filteredScenes = useMemo(() => {
         const base = [...(scenes || [])];
-
-        if (sceneSortMode === 'hierarchy') {
-            base.sort((a, b) => {
-                const ka = getSceneOrderKey(a);
-                const kb = getSceneOrderKey(b);
-                const cmp = ka.localeCompare(kb, undefined, { numeric: true, sensitivity: 'base' });
-                if (cmp !== 0) return cmp;
-                return String(a?.id || '').localeCompare(String(b?.id || ''), undefined, { numeric: true, sensitivity: 'base' });
-            });
-            if (sceneSortDirection === 'desc') base.reverse();
-            return base;
-        }
-
-        base.sort((a, b) => {
-            const ta = getSceneUpdatedAtMs(a);
-            const tb = getSceneUpdatedAtMs(b);
-            if (tb !== ta) return tb - ta;
-            const ka = getSceneOrderKey(a);
-            const kb = getSceneOrderKey(b);
-            return ka.localeCompare(kb, undefined, { numeric: true, sensitivity: 'base' });
-        });
-        if (sceneSortDirection === 'asc') base.reverse();
         return base;
-    }, [scenes, sceneSortMode, sceneSortDirection]);
+    }, [scenes]);
 
     useEffect(() => {
         const validKeys = new Set((scenes || []).map(getSceneSelectionKey));
@@ -3265,6 +3241,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
             `Project Title: ${project?.title || ''}`,
             `Episode Title: ${activeEpisode?.title || ''}`,
             projectInfo?.script_title ? `Script Title: ${projectInfo.script_title}` : '',
+            projectInfo?.expected_duration ? `Expected Duration: ${projectInfo.expected_duration}s` : '',
             projectInfo?.series_episode ? `Series Episode: ${projectInfo.series_episode}` : '',
             projectInfo?.type ? `Type: ${projectInfo.type}` : '',
             projectInfo?.base_positioning ? `Base Positioning: ${projectInfo.base_positioning}` : '',
@@ -4115,31 +4092,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
 
             <div className="mb-3 shrink-0 rounded-xl border border-white/10 bg-black/25 p-2.5 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5">
-                        <button
-                            onClick={() => setSceneSortMode('updated_desc')}
-                            className={`h-7 w-7 inline-flex items-center justify-center rounded border ${sceneSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
-                            title={t('按修改时间排序', 'Sort by modified time')}
-                            aria-label={t('按修改时间排序', 'Sort by modified time')}
-                        >
-                            <RefreshCw className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                            onClick={() => setSceneSortMode('hierarchy')}
-                            className={`h-7 w-7 inline-flex items-center justify-center rounded border ${sceneSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
-                            title={t('按集/场景/镜头排序', 'Sort by episode/scene/shot')}
-                            aria-label={t('按集/场景/镜头排序', 'Sort by episode/scene/shot')}
-                        >
-                            <LayoutList className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                            onClick={() => setSceneSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                            className="h-7 w-7 inline-flex items-center justify-center rounded border bg-white/5 text-white border-white/10 hover:bg-white/10"
-                            title={sceneSortDirection === 'asc' ? t('当前升序，点击切换为降序', 'Currently ascending, click to switch to descending') : t('当前降序，点击切换为升序', 'Currently descending, click to switch to ascending')}
-                            aria-label={sceneSortDirection === 'asc' ? t('切换到降序', 'Switch to descending') : t('切换到升序', 'Switch to ascending')}
-                        >
-                            <ArrowUp className={`w-3.5 h-3.5 transition-transform ${sceneSortDirection === 'asc' ? '' : 'rotate-180'}`} />
-                        </button>
+                    <div className="flex items-center gap-1.5 flex-1">
                         <button
                             onClick={toggleSelectAllFiltered}
                             disabled={filteredScenes.length === 0}
@@ -4149,6 +4102,15 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                         >
                             {allFilteredSelected ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
                         </button>
+                        
+                        <div className="ml-2 flex items-center gap-4 text-[11px] text-muted-foreground whitespace-nowrap">
+                            <span>
+                                {t('所有场景总分镜数', 'Total Shots')}: <span className="text-white font-medium">{Object.values(sceneShotCountMap || {}).reduce((sum, count) => sum + count, 0)}</span>
+                            </span>
+                            <span>
+                                {t('所有场景总分镜时长', 'Total Duration')}: <span className="text-white font-medium">{Math.round(Object.values(sceneShotDurationMap || {}).reduce((sum, duration) => sum + duration, 0) * 10) / 10}s</span>
+                            </span>
+                        </div>
                     </div>
 
                     <div className="text-[11px] text-muted-foreground px-2 py-1 rounded border border-white/10 bg-white/5">

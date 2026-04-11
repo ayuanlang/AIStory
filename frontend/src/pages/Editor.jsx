@@ -830,6 +830,7 @@ const Editor = ({
             const base = candidate || obj;
             const payload = {
                 script_title: toText(pickValue(base, ['script_title', 'title', '项目标题'])),
+                expected_duration: toText(pickValue(base, ['expected_duration', '预期时长(秒)', '预期时长'])) || "60",
                 type: toText(pickValue(base, ['type', 'project_type', '类型'])),
                 language: toText(pickValue(base, ['language', 'lang', '语言'])),
                 base_positioning: toText(pickValue(base, ['base_positioning', 'positioning', '定位'])),

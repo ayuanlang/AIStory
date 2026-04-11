@@ -17766,9 +17766,19 @@ def get_unreferenced_asset_ids(
         return False
 
     generated_assets_count = 0
+    is_source_ids: set[int] = set()
+    is_dependent_ids: set[int] = set()
+
+    url_to_id = {asset.url: asset.id for asset in assets if asset.url}
 
     for asset in assets:
         meta = _meta_dict(asset.meta_info)
+        src_url = meta.get("source_asset_url") or meta.get("sourceUrl") or meta.get("base_image")
+        if _has_value(src_url):
+            is_dependent_ids.add(asset.id)
+            if src_url in url_to_id:
+                is_source_ids.add(url_to_id[src_url])
+
         if not _is_model_generated_asset(meta):
             continue
 
@@ -17784,6 +17794,8 @@ def get_unreferenced_asset_ids(
         "referenced_ids": sorted(referenced_ids),
         "total_assets": len(assets),
         "generated_assets": generated_assets_count,
+        "is_source_ids": sorted(list(is_source_ids)),
+        "is_dependent_ids": sorted(list(is_dependent_ids)),
     }
 
 import imageio
@@ -21133,6 +21145,16 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
         for field in ["shot_number", "shot_id", "project_id", "episode_id", "asset_type", "entity_id", "entity_name", "subject_name", "subject_type", "entity_type", "source_asset_url", "idempotency_key"]:
             val = get_attr(req, field)
             if val: meta[field] = val
+
+        # Map reference URLs to source_asset_url for asset dependency tracking
+        if not meta.get("source_asset_url"):
+            for ref_field in ["ref_image_url", "ref_video_urls", "last_frame_url", "base_image", "seed_image"]:
+                ref_val = get_attr(req, ref_field)
+                if ref_val:
+                    actual_url = ref_val[0] if isinstance(ref_val, list) and len(ref_val) > 0 else ref_val
+                    if isinstance(actual_url, str) and actual_url.startswith("http"):
+                        meta["source_asset_url"] = actual_url
+                        break
 
         if get_attr(req, "asset_type"): meta["frame_type"] = get_attr(req, "asset_type")
         if get_attr(req, "category"): meta["category"] = get_attr(req, "category")

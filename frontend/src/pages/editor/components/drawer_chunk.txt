@@ -1,0 +1,1970 @@
+             {/* Edit Shot Drawer/Modal */}
+             <AnimatePresence>
+                {editingShot && (
+                    <motion.div 
+                        initial={{ x: '100%' }}
+                        animate={{ x: 0 }}
+                        exit={{ x: '100%' }}
+                        className="absolute top-0 right-0 w-full h-full bg-[#09090b] border-l border-white/10 z-50 overflow-y-auto shadow-2xl flex flex-col"
+                    >
+                        {/* Notification Toast for Edit Shot */}
+                        {notification && (
+                            <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-[200] px-6 py-3 rounded-lg shadow-2xl border font-bold flex items-center gap-2 animate-in slide-in-from-top-4 fade-in duration-300 ${
+                                notification.type === 'success' ? 'bg-green-500/90 text-white border-green-400' : 'bg-red-500/90 text-white border-red-400'
+                            }`}>
+                                {notification.type === 'success' ? <CheckCircle size={18} /> : <Info size={18} />}
+                                {notification.message}
+                            </div>
+                        )}
+
+                        <div className="p-3 sm:p-4 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 sticky top-0 bg-[#09090b] z-10">
+                            <h3 className="font-bold text-lg flex items-center gap-2">
+                                {t('编辑镜头', 'Edit Shot')} {editingShot.shot_id}
+                                {editingShot.shot_name && <span className="text-base font-normal text-muted-foreground">- {editingShot.shot_name}</span>}
+                            </h3>
+                            <div className="flex items-center gap-2">
+                                <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型', 'Image Model')} />
+                                <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型', 'Video Model')} />
+                                <button
+                                    onClick={() => {
+                                        const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+                                        window.location.assign(`/settings?tab=default-api-activation&return_to=${returnTo}`);
+                                    }}
+                                    className="p-2 hover:bg-white/10 text-white rounded-lg border border-white/10 transition-colors"
+                                    title={t('打开生成设置', 'Open Generation Settings')}
+                                >
+                                    <SettingsIcon className="w-5 h-5" />
+                                </button>
+                                <button onClick={() => setEditingShot(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
+                            </div>
+                        </div>
+                        <div className="p-4 sm:p-6 space-y-6">
+
+                            <div>
+                                <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
+                                <PromptMentionTextarea entities={entities} uiLang={uiLang} 
+                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-20 focus:outline-none focus:border-primary/50"
+                                    value={editingShot.shot_logic_cn || ''}
+                                    onChange={(e) => setEditingShot({...editingShot, shot_logic_cn: e.target.value})}
+                                    placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
+                                />
+                            </div>
+                            
+                            {/* 1. Workflow / Media Assets */}
+                            <div className="space-y-6">
+                                
+                                {/* 3 Column Layout: Start | End | Video */}
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                                    {/* Start Frame */}
+                                    <div className="space-y-2">
+                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
+                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                                {t('起始帧', 'Start Frame')}
+                                            </div>
+                                            <div className="flex flex-wrap items-center justify-end gap-1">
+                                                <button
+                                                    onClick={() => openAssetDetailModal('start')}
+                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
+                                                >
+                                                    {t('详情', 'Detail')}
+                                                </button>
+                                                <button 
+                                                    onClick={async () => {
+                                                        if (isShotFrameActionLocked('start')) {
+                                                            notifyShotFrameActionLocked('start');
+                                                            return;
+                                                        }
+                                                        openMediaPicker(async (url) => {
+                                                            const newData = { image_url: url };
+                                                            setEditingShot(prev => ({...prev, ...newData}));
+                                                            // Auto-save user selection to ensure it counts as "latest selected"
+                                                            await onUpdateShot(editingShot.id, newData);
+                                                            onLog?.('Start Frame Image set', 'success');
+                                                        }, { shotId: editingShot.id, shotFrameType: 'start' });
+                                                    }}
+                                                    disabled={isShotFrameActionLocked('start')}
+                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                    title={isShotFrameActionLocked('start') ? t('起始帧任务运行中，不能更换图片', 'Start frame job is running; image changes are disabled') : t('设置起始帧图片', 'Set start frame image')}
+                                                >
+                                                    <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
+                                                </button>
+                                                {currentGeneratingState.start && (
+                                                    <button 
+                                                        onClick={() => handleForceStopShotImage('start')}
+                                                        className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30"
+                                                        title={t('停止重试循环', 'Stop Retry Loop')}
+                                                    >
+                                                        <div className="w-2 h-2 bg-current rounded-[1px]" />
+                                                        {t('停止', 'Stop')}
+                                                    </button>
+                                                )}
+                                                <button 
+                                                    onClick={() => generateAssetWithLang('start')} 
+                                                    disabled={currentShotGenerating}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                >
+                                                    {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentShotGenerating ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleGenerateShotDiptychFrames(shotImageCfgValue)}
+                                                    disabled={currentShotGenerating}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating ? 'bg-violet-500/10 text-violet-200/40 cursor-wait' : 'bg-violet-500/20 text-violet-200 hover:bg-violet-500/30'}`}
+                                                    title={t('把起始帧与结束帧提示词拼成两宫格生图后自动拆分回填', 'Generate a two-panel composite from the start/end prompts, then split and apply both frames automatically')}
+                                                >
+                                                    {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Layers className="w-3 h-3"/>}
+                                                    {currentShotGenerating ? t('联生中...', 'Joint...') : t('首尾联生', 'Joint')}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        {currentGeneratingState.start && (
+                                            <div className="rounded-lg border border-amber-400/40 bg-amber-500/12 px-3 py-2 text-[11px] text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]">
+                                                <div className="flex items-center gap-2 font-bold uppercase tracking-[0.12em] text-amber-100">
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                    {t('起始帧生成中', 'Start Frame In Progress')}
+                                                </div>
+                                                <div className="mt-1 text-amber-50/75">
+                                                    {t('当前预览会在生成完成后自动刷新，替换与删除入口已锁定。', 'This preview will refresh automatically when generation completes. Replace and delete actions are locked.')}
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className={`aspect-video bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('start')}>
+                                            {currentGeneratingState.start && (
+                                                <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
+                                                    <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
+                                                        <Loader2 className="w-7 h-7 animate-spin text-amber-200"/>
+                                                    </div>
+                                                    <div className="px-6 text-center">
+                                                        <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成起始帧', 'Generating Start Frame')}</div>
+                                                        <div className="mt-1 text-[11px] text-white/75">{t('生成完成后会自动更新这里的画面', 'The preview here will update automatically when generation completes')}</div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {editingShot.image_url ? (
+                                                <>
+                                                    <SafeImage
+                                                        src={editingShot.image_url}
+                                                        className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90 transition-opacity" 
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            openAssetDetailModal('start');
+                                                        }}
+                                                        alt={t('起始帧', 'Start Frame')}
+                                                    />
+                                                    <button 
+                                                        onClick={async (e) => {
+                                                            e.stopPropagation();
+                                                            if (isShotFrameActionLocked('start')) {
+                                                                notifyShotFrameActionLocked('start');
+                                                                return;
+                                                            }
+                                                            if(!await confirmUiMessage("Delete Start Frame image?")) return;
+                                                            const newData = { image_url: "" };
+                                                            await onUpdateShot(editingShot.id, newData);
+                                                            setEditingShot(prev => ({...prev, ...newData}));
+                                                            onLog?.('Start Frame Image removed', 'info');
+                                                        }}
+                                                        disabled={isShotFrameActionLocked('start')}
+                                                        className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500/80 text-white rounded-md opacity-0 group-hover:opacity-100 transition-all z-20 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        title={isShotFrameActionLocked('start') ? t('起始帧任务运行中，不能删除图片', 'Start frame job is running; image removal is disabled') : t('删除起始帧', 'Delete Start Frame')}
+                                                    >
+                                                        <Trash2 className="w-3 h-3"/>
+                                                    </button>
+                                                </>
+                                            ) : (
+                                                <div className="absolute inset-0 flex items-center justify-center opacity-20"><ImageIcon className="w-8 h-8"/></div>
+                                            )}
+                                        </div>
+                                        <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
+                                            placeholder={shotPromptDisplayLang === 'cn' ? t('起始帧提示词（中文）...', 'Start Frame Prompt (CN)...') : t('起始帧提示词...', 'Start Frame Prompt...')}
+                                            value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
+                                            onChange={(e) => {
+                                                const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                tech.manual_start_frame = true;
+                                                if (shotPromptDisplayLang === 'cn') {
+                                                    tech.start_frame_cn = e.target.value;
+                                                    setEditingShot({...editingShot, technical_notes: JSON.stringify(tech)});
+                                                } else {
+                                                    setEditingShot({...editingShot, start_frame: e.target.value, technical_notes: JSON.stringify(tech)});
+                                                }
+                                            }}
+                                        />
+                                        <ReferenceManager 
+                                            shot={editingShot} 
+                                            entities={entities} 
+                                            onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
+                                            title={t('参考图（起始帧）', 'Refs (Start)')}
+                                            promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
+                                            uiLang={uiLang}
+                                            onPickMedia={openMediaPicker}
+                                            storageKey="ref_image_urls"
+                                            strictPromptOnly={true}
+                                            onFindPrevFrame={() => {
+                                                // Logic to find PREVIOUS shot end frame
+                                                const idx = shots.findIndex(s => s.id === editingShot.id);
+                                                if (idx > 0) {
+                                                    try {
+                                                        const prev = shots[idx-1];
+                                                        const t = JSON.parse(prev.technical_notes || '{}');
+                                                        const url = t.end_frame_url || prev.video_url || prev.image_url;
+                                                        if (url) {
+                                                            onLog?.("Found previous shot frame: " + prev.shot_id, "success");
+                                                            return url;
+                                                        } else {
+                                                            onLog?.("Previous shot has no media.", "warning");
+                                                            return null;
+                                                        }
+                                                    } catch(e) { return null; }
+                                                } else {
+                                                    onLog?.("This is the first shot.", "info");
+                                                    return null;
+                                                }
+                                            }}
+                                        />
+                                    </div>
+
+
+                                    {/* End Frame */}
+                                    <div className="space-y-2">
+                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
+                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                                {t('结束帧', 'End Frame')}
+                                            </div>
+                                            <div className="flex flex-wrap items-center justify-end gap-1">
+                                                <button
+                                                    onClick={() => openAssetDetailModal('end')}
+                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
+                                                >
+                                                    {t('详情', 'Detail')}
+                                                </button>
+                                                <button 
+                                                    onClick={() => {
+                                                        if (isShotFrameActionLocked('end')) {
+                                                            notifyShotFrameActionLocked('end');
+                                                            return;
+                                                        }
+                                                        openMediaPicker(async (url) => {
+                                                            const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                            tech.end_frame_url = url;
+                                                            const updates = { technical_notes: JSON.stringify(tech) };
+                                                            await persistEditingShotUpdates(updates);
+                                                        }, { shotId: editingShot.id, shotFrameType: 'end' });
+                                                    }}
+                                                    disabled={isShotFrameActionLocked('end')}
+                                                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                    title={isShotFrameActionLocked('end') ? t('结束帧任务运行中，不能更换图片', 'End frame job is running; image changes are disabled') : t('设置结束帧图片', 'Set end frame image')}
+                                                >
+                                                    <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
+                                                </button>
+                                                <button
+                                                    onClick={handleSetEndFrameFromVideoLastFrame}
+                                                    disabled={!editingShot.video_url || currentShotGenerating}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${(!editingShot.video_url || currentShotGenerating) ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                                    title={t('从当前视频提取最后一帧', 'Extract last frame from current video')}
+                                                >
+                                                    <Video className="w-3 h-3"/> {t('取视频尾帧', 'Last Frame')}
+                                                </button>
+                                                {currentGeneratingState.end && (
+                                                    <button 
+                                                        onClick={() => handleForceStopShotImage('end')}
+                                                        className="text-[10px] px-2 py-0.5 rounded flex items-center gap-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30"
+                                                        title={t('停止重试循环', 'Stop Retry Loop')}
+                                                    >
+                                                        <div className="w-2 h-2 bg-current rounded-[1px]" />
+                                                        {t('停止', 'Stop')}
+                                                    </button>
+                                                )}
+                                                <button 
+                                                    onClick={() => generateAssetWithLang('end')} 
+                                                    disabled={currentShotGenerating}
+                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating ? 'bg-sky-500/10 text-sky-300/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'}`}
+                                                >
+                                                    {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentShotGenerating ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        {currentGeneratingState.end && (
+                                            <div className="rounded-lg border border-amber-400/40 bg-amber-500/12 px-3 py-2 text-[11px] text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]">
+                                                <div className="flex items-center gap-2 font-bold uppercase tracking-[0.12em] text-amber-100">
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                    {t('结束帧生成中', 'End Frame In Progress')}
+                                                </div>
+                                                <div className="mt-1 text-amber-50/75">
+                                                    {t('当前预览会在生成完成后自动刷新，替换与删除入口已锁定。', 'This preview will refresh automatically when generation completes. Replace and delete actions are locked.')}
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className={`aspect-video bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('end')}>
+                                            {currentGeneratingState.end && (
+                                                <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
+                                                    <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
+                                                        <Loader2 className="w-7 h-7 animate-spin text-amber-200"/>
+                                                    </div>
+                                                    <div className="px-6 text-center">
+                                                        <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成结束帧', 'Generating End Frame')}</div>
+                                                        <div className="mt-1 text-[11px] text-white/75">{t('生成完成后会自动更新这里的画面', 'The preview here will update automatically when generation completes')}</div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {(() => {
+                                                const prompt = editingShot.end_frame || '';
+                                                let endUrl = null;
+                                                let endFrameReusedFromStart = false;
+                                                try {
+                                                    const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                    endUrl = tech.end_frame_url;
+                                                    endFrameReusedFromStart = tech.end_frame_reused_from_start === true;
+                                                } catch(e){}
+
+                                                const normalizedEndPrompt = String(prompt || '').trim().toUpperCase();
+                                                const isSameAsStart = endFrameReusedFromStart || ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt);
+
+                                                if (!endUrl && isSameAsStart && editingShot.image_url) {
+                                                     return (
+                                                        <div className="relative w-full h-full group/mirror">
+                                                            <SafeImage
+                                                                src={editingShot.image_url}
+                                                                className="max-w-full max-h-full object-contain opacity-60 group-hover/mirror:opacity-100 transition-opacity cursor-pointer"
+                                                                title={t('结束帧当前配置为复用起始帧', 'End frame is currently configured to reuse the start frame')}
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    openAssetDetailModal('end');
+                                                                }}
+                                                            />
+                                                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-30 group-hover/mirror:opacity-0 transition-opacity">
+                                                                <span className="bg-black/50 text-white text-[9px] px-2 py-1 rounded">{t('复用起始帧', 'REUSE START FRAME')}</span>
+                                                            </div>
+                                                        </div>
+                                                     )
+                                                }
+
+                                                if (endUrl) {
+                                                    return (
+                                                        <>
+                                                            <SafeImage
+                                                                src={endUrl}
+                                                                className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    openAssetDetailModal('end');
+                                                                }}
+                                                            />
+                                                            <button 
+                                                                onClick={async (e) => {
+                                                                    e.stopPropagation();
+                                                                    if (isShotFrameActionLocked('end')) {
+                                                                        notifyShotFrameActionLocked('end');
+                                                                        return;
+                                                                    }
+                                                                    if(!await confirmUiMessage("Delete End Frame image?")) return;
+                                                                    const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                                    tech.end_frame_url = "";
+                                                                    // We also track explicit deletion to avoid auto-regenerating from Start Frame immediately if user doesn't want it
+                                                                    if (!tech.deleted_ref_urls) tech.deleted_ref_urls = [];
+                                                                    tech.deleted_ref_urls.push(endUrl);
+                                                                    
+                                                                    const newData = { technical_notes: JSON.stringify(tech) };
+                                                                    await onUpdateShot(editingShot.id, newData);
+                                                                    setEditingShot(prev => ({...prev, ...newData}));
+                                                                    onLog?.('End Frame Image removed', 'info');
+                                                                }}
+                                                                disabled={isShotFrameActionLocked('end')}
+                                                                className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-red-500/80 text-white rounded-md opacity-0 group-hover:opacity-100 transition-all z-20 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                                title={isShotFrameActionLocked('end') ? t('结束帧任务运行中，不能删除图片', 'End frame job is running; image removal is disabled') : t('删除结束帧', 'Delete End Frame')}
+                                                            >
+                                                                <Trash2 className="w-3 h-3"/>
+                                                            </button>
+                                                        </>
+                                                    );
+                                                }
+
+                                                return <div className="absolute inset-0 flex items-center justify-center opacity-20"><ImageIcon className="w-8 h-8"/></div>;
+                                            })()}
+                                        </div>
+                                        
+                                        <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
+                                            placeholder={shotPromptDisplayLang === 'cn' ? t('结束帧提示词（中文）...', 'End Frame Prompt (CN)...') : t('结束帧提示词...', 'End Frame Prompt...')}
+                                            value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
+                                            onChange={(e) => {
+                                                if (shotPromptDisplayLang === 'cn') {
+                                                    const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                    tech.end_frame_cn = e.target.value;
+                                                    tech.manual_end_frame = true;
+                                                    setEditingShot({ ...editingShot, technical_notes: JSON.stringify(tech) });
+                                                } else {
+                                                    handleManualEndFrameInputChange(e.target.value);
+                                                }
+                                            }}
+                                        />
+                                        <ReferenceManager 
+                                            shot={editingShot} 
+                                            entities={entities} 
+                                            onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
+                                            title={t('参考图（结束帧）', 'Refs (End)')}
+                                            promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
+                                            uiLang={uiLang}
+                                            onPickMedia={openMediaPicker}
+                                            storageKey="end_ref_image_urls"
+                                            strictPromptOnly={true}
+                                        />
+                                    </div>
+
+                                    {/* Final Video Output (Moved Here) */}
+                                    <div className="space-y-2">
+                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
+                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                                {t('最终视频', 'Final Video')}
+                                            </div>
+                                            
+                                            <div className="flex flex-wrap items-center justify-end gap-1">
+                                                <label className="inline-flex items-center gap-1.5 text-[10px] text-white/80 whitespace-nowrap">
+                                                    <input
+                                                        type="checkbox"
+                                                        className="accent-sky-400"
+                                                        checked={isVoiceoverSyncEnabled}
+                                                        onChange={(e) => setVoiceoverSyncEnabled(e.target.checked)}
+                                                    />
+                                                    {t('配音', 'Voiceover')}
+                                                </label>
+                                                <button
+                                                    onClick={() => openAssetDetailModal('video')}
+                                                    className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
+                                                >
+                                                    {t('详情', 'Detail')}
+                                                </button>
+                                                <button 
+                                                    onClick={() => openMediaPicker((url) => {
+                                                        const changes = { video_url: url };
+                                                        onUpdateShot(editingShot.id, changes);
+                                                    }, { type: 'video' })}
+                                                    className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
+                                                    title={t('选择或上传视频', 'Select or Upload Video')}
+                                                >
+                                                    <Upload size={10} /> {t('设置', 'Set')}
+                                                </button>
+
+                                                {/* Shot-specific Final Video Mode */}
+                                                <select
+                                                    value={(() => {
+                                                        try {
+                                                            const t = JSON.parse(editingShot.technical_notes || '{}');
+                                                            return resolveUnifiedVideoMode(t);
+                                                        } catch(e) { return 'start_end'; }
+                                                    })()}
+                                                    onChange={(e) => {
+                                                        const nextMode = e.target.value;
+                                                        applyVideoModeToShot(nextMode).catch((err) => {
+                                                            console.error(err);
+                                                            showNotification(t('保存视频模式失败', 'Failed to save video mode'), 'error');
+                                                        });
+                                                    }}
+                                                    className="bg-black/40 border border-white/20 text-[10px] rounded px-1 py-0.5 text-white/70 outline-none hover:bg-white/5"
+                                                    title={t('最终视频生成模式', 'Final Video Generation Mode')}
+                                                >
+                                                    <option value="start_end">{t('起始+结束', 'Start+End')}</option>
+                                                    <option value="start">{t('仅起始', 'Start Only')}</option>
+                                                    <option value="end">{t('仅结束', 'End Only')}</option>
+                                                    <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
+                                                </select>
+
+                                                <button 
+                                                    onClick={() => generateAssetWithLang('video')} 
+                                                    disabled={currentShotGenerating}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating ? 'bg-primary/50 text-black/50 cursor-wait' : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30' }`}
+                                                >
+                                                    {currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>} 
+                                                    {currentShotGenerating ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleForceStopShotVideo(editingShot?.id)}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? 'bg-red-500/25 text-red-100' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                                                    title={t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job')}
+                                                >
+                                                    {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                    {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
+                                                </button>
+                                                <button
+                                                    onClick={handleGenerateVoiceoverOnly}
+                                                    disabled={currentVoiceGenerating}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentVoiceGenerating ? 'bg-emerald-500/10 text-emerald-200/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'}`}
+                                                >
+                                                    {currentVoiceGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                    {currentVoiceGenerating ? t('配音生成中...', 'Generating voiceover...') : t('仅生成配音', 'Generate Voiceover Only')}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div 
+                                            className="aspect-video bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center"
+                                            onClick={() => openAssetDetailModal('video')}
+                                        >
+                                            {currentGeneratingState.video && (
+                                                <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
+                                                    <Loader2 className="w-6 h-6 animate-spin text-primary"/>
+                                                    <span className="text-[10px] text-white/70 animate-pulse">{t('正在生成视频...', 'Generating Video...')}</span>
+                                                </div>
+                                            )}
+                                            {(editingShot.video_url) ? (
+                                                <ManagedVideoPlayer
+                                                    src={editingShot.video_url}
+                                                    poster={resolveShotVideoPosterUrl(editingShot)}
+                                                    className="max-w-full max-h-full object-contain"
+                                                    wrapperClassName="w-full h-full"
+                                                    preload="metadata"
+                                                    suspend={assetDetailModal.open && assetDetailModal.type === 'video'}
+                                                    uiLang={uiLang}
+                                                    onClick={(e) => e?.preventDefault?.()}
+                                                />
+                                            ) : (
+                                                <div className="absolute inset-0 flex items-center justify-center opacity-20 flex-col gap-2">
+                                                    <Video className="w-10 h-10"/>
+                                                    <span className="text-xs">{t('暂无视频', 'No Video')}</span>
+                                                </div>
+                                            )}
+                                             {(editingShot.video_url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none group-hover:bg-black/10"><Maximize2 className="text-white opacity-0 group-hover:opacity-100 drop-shadow-md"/></div>}
+                                        </div>
+                                        {(() => {
+                                            let voiceoverUrl = '';
+                                            try {
+                                                voiceoverUrl = String(JSON.parse(editingShot.technical_notes || '{}')?.voiceover_url || '').trim();
+                                            } catch (e) {}
+                                            if (!voiceoverUrl) return null;
+                                            return (
+                                                <div className="rounded border border-white/10 bg-black/20 p-2">
+                                                    <div className="text-[10px] uppercase font-bold text-muted-foreground mb-1">{t('配音预览', 'Voiceover Preview')}</div>
+                                                    <audio src={getFullUrl(voiceoverUrl)} controls className="w-full" />
+                                                </div>
+                                            );
+                                        })()}
+
+                                        <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
+                                            placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
+                                            value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}
+                                            onChange={(e) => {
+                                                const tech = JSON.parse(editingShot.technical_notes || '{}');
+                                                tech.manual_video_prompt = true;
+                                                if (shotPromptDisplayLang === 'cn') {
+                                                    tech.video_prompt_cn = e.target.value;
+                                                    setEditingShot({
+                                                        ...editingShot,
+                                                        technical_notes: JSON.stringify(tech),
+                                                    });
+                                                } else {
+                                                    setEditingShot({
+                                                        ...editingShot,
+                                                        ...buildVideoPromptEnUpdates(e.target.value),
+                                                        technical_notes: JSON.stringify(tech),
+                                                    });
+                                                }
+                                            }}
+                                        />
+                                        <ReferenceManager 
+                                            shot={editingShot} 
+                                            entities={entities} 
+                                            onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
+                                            title={t('参考图（实体）', 'Refs (Entity)')}
+                                            promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`}
+                                            uiLang={uiLang}
+                                            onPickMedia={openMediaPicker}
+                                            storageKey="video_ref_image_urls"
+                                            strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}
+                                        />
+                                    </div>
+                                </div>
+
+
+                                {/* Keyframes Section (Enhanced) */}
+                                <div className="space-y-4 border-t border-white/10 pt-4">
+                                     <div className="flex justify-between items-center">
+                                        <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                            {t('关键帧（时间线）', 'Keyframes (Timeline)')}
+                                            <span className="bg-white/10 text-white px-1.5 rounded-full text-[9px]">
+                                                {localKeyframes.length}
+                                            </span>
+                                        </div>
+                                        <button 
+                                            onClick={() => {
+                                                const newTime = `${(localKeyframes.length + 1) * 1.0}s`;
+                                                const newKf = { 
+                                                    id: Date.now(), 
+                                                    time: newTime, 
+                                                    prompt: "[Global Style] ...", 
+                                                    url: "" 
+                                                };
+                                                const newList = [...localKeyframes, newKf];
+                                                setLocalKeyframes(newList);
+                                                // Trigger save logic? Maybe wait for edit?
+                                                // auto-save structure
+                                                // reconstructKeyframes(newList); // Optional, maybe let user edit first
+                                            }}
+                                            className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded flex items-center gap-1"
+                                        >
+                                            <Plus className="w-3 h-3"/> {t('新增关键帧', 'Add Keyframe')}
+                                        </button>
+                                    </div>
+                                    
+                                    <div className="flex gap-4 overflow-x-auto pb-4 min-h-[160px] snap-x">
+                                        {localKeyframes.length === 0 && (
+                                            <div className="text-xs text-muted-foreground italic p-2 w-full text-center border-dashed border border-white/10 rounded">
+                                                {t('尚未定义关键帧。新增一个以开始复杂运动规划。', 'No keyframes defined. Add one to start complex motion planning.')}
+                                            </div>
+                                        )}
+                                        {localKeyframes.map((kf, idx) => (
+                                            <div key={idx} className="relative w-[280px] flex-shrink-0 bg-black/20 rounded border border-white/10 p-2 space-y-2 snap-center group">
+                                                {/* Header */}
+                                                <div className="flex justify-between items-center text-[10px]">
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="text-muted-foreground font-bold">T=</span>
+                                                        <input 
+                                                            className="bg-transparent border-b border-white/10 w-12 text-center focus:border-primary outline-none text-white"
+                                                            value={kf.time}
+                                                            onChange={(e) => {
+                                                                const updated = [...localKeyframes];
+                                                                updated[idx].time = e.target.value;
+                                                                setLocalKeyframes(updated);
+                                                            }}
+                                                            onBlur={() => reconstructKeyframes(localKeyframes)}
+                                                        />
+                                                    </div>
+                                                    <div className="flex gap-1">
+                                                        <button
+                                                            onClick={() => openAssetDetailModal('keyframe', idx)}
+                                                            className="px-1.5 py-0.5 bg-white/10 hover:bg-white/20 text-white rounded"
+                                                        >
+                                                            {t('详情', 'Detail')}
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => generateAssetWithLang('keyframe', idx)} 
+                                                            className="px-1.5 py-0.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded flex items-center gap-1"
+                                                            disabled={kf.loading || currentShotGenerating}
+                                                        >
+                                                            {kf.loading || currentShotGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                                            {t('生成', 'Generate')}
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => {
+                                                                const updated = [...localKeyframes];
+                                                                updated.splice(idx, 1);
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            }}
+                                                            className="p-1 hover:bg-red-500/20 text-muted-foreground hover:text-red-500 rounded transition-colors"
+                                                        >
+                                                            <Trash2 className="w-3 h-3"/>
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Image Area */}
+                                                <div className="aspect-video bg-black rounded border border-white/10 relative overflow-hidden group/image cursor-pointer flex items-center justify-center" onClick={() => openAssetDetailModal('keyframe', idx)}>
+                                                    {kf.url ? (
+                                                        <>
+                                                            <SafeImage
+                                                                src={kf.url}
+                                                                className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    openAssetDetailModal('keyframe', idx);
+                                                                }}
+                                                            />
+                                                            <button 
+                                                                onClick={async (e) => {
+                                                                    e.stopPropagation();
+                                                                    if(!await confirmUiMessage("Remove image?")) return;
+                                                                    const updated = [...localKeyframes];
+                                                                    updated[idx].url = "";
+                                                                    setLocalKeyframes(updated);
+                                                                    reconstructKeyframes(updated);
+                                                                }}
+                                                                className="absolute top-1 right-1 bg-black/60 text-white p-1 rounded opacity-0 group-hover/image:opacity-100 transition-opacity"
+                                                            >
+                                                                <Trash2 className="w-3 h-3"/>
+                                                            </button>
+                                                        </>
+                                                    ) : (
+                                                        <div className="absolute inset-0 flex items-center justify-center opacity-20">
+                                                            <ImageIcon className="w-6 h-6"/>
+                                                        </div>
+                                                    )}
+                                                    
+                                                    {/* Quick Set Button Overlay */}
+                                                    <div className="absolute bottom-1 right-1 opacity-0 group-hover/image:opacity-100 transition-opacity">
+                                                        <button 
+                                                            onClick={() => openMediaPicker((url) => {
+                                                                const updated = [...localKeyframes];
+                                                                updated[idx].url = url;
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            })}
+                                                            className="bg-black/60 hover:bg-white/20 text-white text-[9px] px-1.5 py-0.5 rounded flex items-center gap-1 backdrop-blur-sm"
+                                                        >
+                                                            <Upload className="w-2.5 h-2.5"/> Set
+                                                        </button>
+                                                    </div>
+
+                                                    {kf.loading && (
+                                                        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
+                                                            <Loader2 className="w-5 h-5 animate-spin text-primary"/>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Prompt Area */}
+                                                <PromptMentionTextarea entities={entities} uiLang={uiLang} 
+                                                    className="w-full bg-black/20 border border-white/10 rounded p-1.5 text-[10px] h-[60px] focus:border-primary/50 outline-none resize-none"
+                                                    placeholder={t('关键帧描述...', 'Keyframe Description...')}
+                                                    value={kf.prompt}
+                                                    onChange={(e) => {
+                                                        const updated = [...localKeyframes];
+                                                        updated[idx].prompt = e.target.value;
+                                                        setLocalKeyframes(updated);
+                                                    }}
+                                                    onBlur={() => reconstructKeyframes(localKeyframes)}
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+
+                                {/* Video Result - REMOVED from here, moved up */}
+                            </div>
+
+
+                            {/* 3. Associated Entities */}
+                            <div className="space-y-3 pt-4 border-t border-white/10">
+                                <h4 className="text-sm font-bold text-primary flex items-center gap-2"><Users className="w-4 h-4"/> Associated Entities</h4>
+                                <div className="bg-black/20 border border-white/10 rounded-xl p-4 flex gap-4 overflow-x-auto min-h-[100px] items-center">
+                                    {(() => {
+                                        const cleanName = (s) => String(s || '')
+                                            .replace(/[\[\]【】"''“”‘’]/g, '')
+                                            .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
+                                            .replace(/^@+/, '')
+                                            .trim();
+                                        const normalizeForMatch = (s) => cleanName(s)
+                                            .replace(/[_\-]+/g, ' ')
+                                            .replace(/\s+/g, ' ')
+                                            .trim()
+                                            .toLowerCase();
+                                        const rawNames = (editingShot.associated_entities || '').split(/[,，]/);
+                                        const names = rawNames.map(cleanName).filter(Boolean);
+                                        const normalizedNames = names.map(normalizeForMatch).filter(Boolean);
+                                        
+                                        // Match entity names (English or Chinese)
+                                        const matches = entities.filter(e => normalizedNames.some(n => {
+                                            const cn = normalizeForMatch(e.name || '');
+                                            let en = normalizeForMatch(e.name_en || '');
+
+                                            // Fallback: Try to extract English name from description if name_en is empty
+                                            if (!en && e.description) {
+                                                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
+                                                if (enMatch && enMatch[1]) {
+                                                    const complexEn = enMatch[1].trim();
+                                                    en = normalizeForMatch(complexEn.split(/(?:\s+role:|\s+archetype:|\s+appearance:|\n|,)/)[0]); 
+                                                }
+                                            }
+
+                                            // Exact match check first for better precision
+                                            if (cn === n || en === n) return true;
+                                            
+                                            // Check CN name match (both directions)
+                                            if (cn && (cn.includes(n) || n.includes(cn))) return true;
+                                            // Check EN name match (both directions)
+                                            if (en && (en.includes(n) || n.includes(en))) return true;
+                                            return false;
+                                        }));
+
+                                        // New Feature: Scene Environment Matching
+                                        // Attempt to find current scene environment/location and add to matches if not already there
+                                        let envMatches = [];
+                                        if (selectedSceneId && selectedSceneId !== 'all') {
+                                            // Find current scene from user selection
+                                            const currentScene = scenes.find(s => s.id == selectedSceneId);
+                                            if (currentScene) {
+                                                // Extract location from scene (e.g., "[废弃展区内部 (主视角)]")
+                                                // Clean brackets like [ ]
+                                                const rawLoc = cleanName((currentScene.location || currentScene.environment_name || '').replace(/[\[\]]/g, ''));
+                                                const rawLocNorm = normalizeForMatch(rawLoc);
+                                                
+                                                if (rawLocNorm) {
+                                                    // console.log("Matching Env:", rawLoc);
+                                                    const envs = entities.filter(e => {
+                                                        // Filter for Environment type entities primarily, but allow others
+                                                        // if (e.type !== 'environment') return false; 
+                                                        
+                                                        const cn = normalizeForMatch(e.name || '');
+                                                        let en = normalizeForMatch(e.name_en || '');
+                                                        // Fallback EN extract
+                                                        if (!en && e.description) {
+                                                            const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
+                                                            if (enMatch && enMatch[1]) en = normalizeForMatch(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]); 
+                                                        }
+
+                                                        // Use looser matching for descriptions/anchors
+                                                        // Is the Location string contained in Entity Name? or vice versa?
+                                                        if (cn && (cn.includes(rawLocNorm) || rawLocNorm.includes(cn))) return true;
+                                                        if (en && (en.includes(rawLocNorm) || rawLocNorm.includes(en))) return true;
+                                                        
+                                                        return false;
+                                                    });
+                                                    // console.log("Found Envs:", envs);
+                                                    envMatches = envs.filter(env => !matches.find(m => m.id === env.id)); // Dedup
+                                                }
+                                            }
+                                        }
+
+                                        const allMatches = [...matches, ...envMatches];
+                                        
+                                        if (allMatches.length === 0) return (
+                                            <div className="text-xs text-muted-foreground w-full text-center break-words p-2">
+                                                No entities matched tags: "{names.join(', ')}". 
+                                                <br/>
+                                                <span className="opacity-50 text-[10px] block mt-1">
+                                                    Available({entities.length}): {entities.map(e => `${e.name}${e.name_en ? `/${e.name_en}` : ''}`).slice(0, 15).join(', ')}
+                                                </span>
+                                            </div>
+                                        );
+                                        
+                                        return allMatches.map((e, idx) => (
+                                            <div key={e.id} className="flex flex-col items-center gap-2 min-w-[70px]">
+                                                <div className="w-14 h-14 rounded-full overflow-hidden border border-white/20 bg-black/50 relative">
+                                                    {e.image_url ? <SafeImage src={e.image_url} className="w-full h-full object-contain object-center" fallback={<Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>} /> : <Users className="w-6 h-6 m-auto absolute inset-0 text-muted-foreground opacity-50"/>}
+                                                </div>
+                                                <span className="text-[10px] text-center line-clamp-1 w-full opacity-80">{e.name}</span>
+                                            </div>
+                                        ));
+                                    })()}
+                                </div>
+                                {/* Association Tags Input Removed as requested */}
+                            </div>
+
+                            {/* Metadata */}
+                            <div className="space-y-3 pt-4 border-t border-white/10">
+                                <div className="flex items-center justify-between gap-2">
+                                    <h4 className="text-sm font-bold text-primary flex items-center gap-2">
+                                        <Info className="w-4 h-4" />
+                                        {t('扩展列（导入入库）', 'Extra Columns (Imported)')}
+                                    </h4>
+                                    <button
+                                        onClick={() => {
+                                            const next = { ...(editingShotExtraColumns || {}) };
+                                            let seed = 1;
+                                            while (Object.prototype.hasOwnProperty.call(next, `extra_col_${seed}`)) seed += 1;
+                                            next[`extra_col_${seed}`] = '';
+                                            setEditingShotExtraColumns(next);
+                                        }}
+                                        className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded flex items-center gap-1"
+                                    >
+                                        <Plus className="w-3 h-3" /> {t('新增列', 'Add Column')}
+                                    </button>
+                                </div>
+
+                                {Object.keys(editingShotExtraColumns || {}).length === 0 ? (
+                                    <div className="text-xs text-muted-foreground bg-black/20 border border-white/10 rounded p-3">
+                                        {t('暂无扩展列。若 markdown 中有新增列，导入后会出现在这里并可编辑。', 'No extra columns yet. If markdown contains new columns, they will appear here and be editable.')}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {Object.entries(editingShotExtraColumns || {}).map(([k, v]) => (
+                                            <div key={`extra-col-${k}`} className="grid grid-cols-[minmax(180px,1fr)_minmax(320px,2fr)_auto] gap-2 items-start">
+                                                <input
+                                                    className="bg-black/20 border border-white/10 rounded p-2 text-xs"
+                                                    value={k}
+                                                    onChange={(e) => {
+                                                        const nextKey = String(e.target.value || '').trim();
+                                                        const current = { ...(editingShotExtraColumns || {}) };
+                                                        const curVal = current[k];
+                                                        delete current[k];
+                                                        if (nextKey) {
+                                                            current[nextKey] = curVal;
+                                                        }
+                                                        setEditingShotExtraColumns(current);
+                                                    }}
+                                                    placeholder={t('列名', 'Column Name')}
+                                                />
+                                                <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                                    className="bg-black/20 border border-white/10 rounded p-2 text-xs min-h-[60px]"
+                                                    value={String(v ?? '')}
+                                                    onChange={(e) => {
+                                                        const current = { ...(editingShotExtraColumns || {}) };
+                                                        current[k] = e.target.value;
+                                                        setEditingShotExtraColumns(current);
+                                                    }}
+                                                    placeholder={t('列值', 'Column Value')}
+                                                />
+                                                <button
+                                                    onClick={() => {
+                                                        const current = { ...(editingShotExtraColumns || {}) };
+                                                        delete current[k];
+                                                        setEditingShotExtraColumns(current);
+                                                    }}
+                                                    className="p-2 hover:bg-red-500/20 text-muted-foreground hover:text-red-400 rounded"
+                                                    title={t('删除列', 'Delete Column')}
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10 text-xs text-muted-foreground">
+                                <InputGroup label="Shot Number" value={editingShot.shot_id} onChange={(v) => { setEditingShot({...editingShot, shot_id: v}) }} />
+                                <InputGroup label="Duration (s)" value={editingShot.duration} onChange={v => setEditingShot({...editingShot, duration: v})} />
+                            </div>
+
+                            <button 
+                                onClick={async () => {
+                                    try {
+                                        await updateShot(editingShot.id, editingShot);
+                                        setShots(shots.map(s => s.id === editingShot.id ? editingShot : s));
+                                        setEditingShot(null);
+                                        onLog?.("Shot updated.", "success");
+                                    } catch(e) {
+                                        onLog?.("Update failed.", "error");
+                                    }
+                                }}
+                                className="w-full py-4 bg-primary text-black font-bold rounded-lg hover:bg-primary/90 mt-4"
+                            >
+                                Save Changes
+                            </button>
+
+                            {assetDetailModal.open && (
+                                <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                                    <div className="w-full max-w-7xl h-[94vh] bg-[#09090b] border border-white/10 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+                                        <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                                            <h4 className="font-bold text-white flex items-center gap-2">
+                                                <Info className="w-4 h-4 text-primary" />
+                                                {assetDetailModal.type === 'start' && t('起始帧详情', 'Start Frame Detail')}
+                                                {assetDetailModal.type === 'end' && t('结束帧详情', 'End Frame Detail')}
+                                                {assetDetailModal.type === 'video' && t('视频详情', 'Video Detail')}
+                                                {assetDetailModal.type === 'keyframe' && t('关键帧详情', 'Keyframe Detail')}
+                                            </h4>
+                                            <button onClick={closeAssetDetailModal} className="p-2 hover:bg-white/10 rounded-full"><X className="w-4 h-4"/></button>
+                                        </div>
+
+                                        <div className="flex-1 overflow-auto p-4">
+                                            {(() => {
+                                                let tech = {};
+                                                try { tech = JSON.parse(editingShot.technical_notes || '{}'); } catch (e) {}
+                                                const updateTechField = (key, value) => {
+                                                    const nextTech = { ...tech, [key]: value };
+                                                    setEditingShot(prev => ({ ...(prev || {}), technical_notes: JSON.stringify(nextTech) }));
+                                                };
+                                                const showCnPrompt = shotPromptDisplayLang === 'cn';
+                                                const startPromptTextCn = String(tech.start_frame_cn || '');
+                                                const startPromptTextEn = String(editingShot.start_frame || '');
+                                                const endPromptTextCn = String(tech.end_frame_cn || '');
+                                                const endPromptTextEn = String(editingShot.end_frame || '');
+                                                const videoPromptTextCn = String(tech.video_prompt_cn || '');
+                                                const videoPromptTextEn = getShotVideoPromptEn(editingShot);
+                                                const modalType = assetDetailModal.type;
+                                                const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;
+                                                const endFrameUrl = String(tech.end_frame_url || '');
+                                                const showImageCfgControl = modalType === 'start' || modalType === 'end' || modalType === 'keyframe';
+                                                const currentImageCfgValue = clampShotImageCfg(shotImageCfgValue, shotImageCfgDefault);
+                                                const imageCfgControl = showImageCfgControl ? (
+                                                    <div className="space-y-3 rounded-lg border border-amber-400/20 bg-amber-500/5 p-4">
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div>
+                                                                <div className="text-[11px] text-amber-200 uppercase font-bold">{t('本次生图强度', 'Image Prompt Strength')}</div>
+                                                                <div className="text-xs text-gray-300 mt-1">
+                                                                    {t('只影响当前这次生图，不会改动你的全局 Settings。', 'This only affects the current image generation and will not change your global Settings.')}
+                                                                </div>
+                                                            </div>
+                                                            <div className="px-2 py-1 rounded bg-black/30 border border-white/10 text-sm font-mono text-amber-100">
+                                                                {currentImageCfgValue.toFixed(1)}
+                                                            </div>
+                                                        </div>
+                                                        <input
+                                                            type="range"
+                                                            min={SHOT_IMAGE_CFG_MIN}
+                                                            max={SHOT_IMAGE_CFG_MAX}
+                                                            step={SHOT_IMAGE_CFG_STEP}
+                                                            value={currentImageCfgValue}
+                                                            onChange={(e) => setShotImageCfgValue(clampShotImageCfg(e.target.value, shotImageCfgDefault))}
+                                                            className="w-full accent-amber-400"
+                                                        />
+                                                        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                                            <span>{t('更自由，更容易出氛围', 'Looser, more atmospheric')}</span>
+                                                            <span>{t('更贴近提示词，但可能更硬', 'Closer to prompt, but can feel stiffer')}</span>
+                                                        </div>
+                                                        <div className="text-xs text-gray-300 leading-6">
+                                                            {t(
+                                                                `默认值 ${shotImageCfgDefault.toFixed(1)} 来自你的 Settings。想临时提高细节贴合度时，可以往右拖一点；如果画面开始发硬、过度堆细节，就往左收回。`,
+                                                                `Default ${shotImageCfgDefault.toFixed(1)} comes from your Settings. Drag right when you want tighter prompt adherence; drag left if the image starts to feel rigid or over-detailed.`
+                                                            )}
+                                                        </div>
+                                                        <div className="flex justify-end">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setShotImageCfgValue(shotImageCfgDefault)}
+                                                                className="text-xs px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-white/80"
+                                                            >
+                                                                {t('恢复默认', 'Reset to Default')}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ) : null;
+
+                                                let detailUrl = '';
+                                                let detailType = 'image';
+                                                if (modalType === 'start') {
+                                                    detailUrl = String(editingShot.image_url || '');
+                                                    detailType = 'image';
+                                                } else if (modalType === 'end') {
+                                                    detailUrl = endFrameUrl;
+                                                    detailType = 'image';
+                                                } else if (modalType === 'video') {
+                                                    detailUrl = String(editingShot.video_url || '');
+                                                    detailType = 'video';
+                                                } else {
+                                                    detailUrl = String(keyframe?.url || '');
+                                                    detailType = 'image';
+                                                }
+
+                                                const linkedAsset = resolveShotAssetByUrl(detailUrl, detailType);
+                                                const linkedAssetDetail = buildShotAssetDetail(linkedAsset, detailType, detailUrl);
+                                                const linkedAssetMeta = linkedAssetDetail.rawMeta;
+                                                const shotConfiguredDuration = String(editingShot?.duration ?? '').trim();
+
+                                                const renderAssetMetaPanel = (assetDetail = linkedAssetDetail, rawMeta = linkedAssetMeta, titleText = t('资产元数据', 'Asset Metadata')) => (
+                                                    <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
+                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{titleText}</div>
+                                                        {shotAssetsMetaLoading && (
+                                                            <div className="text-xs text-muted-foreground flex items-center gap-1">
+                                                                <Loader2 className="w-3 h-3 animate-spin" />
+                                                                {t('加载中...', 'Loading...')}
+                                                            </div>
+                                                        )}
+                                                        <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('分辨率', 'Resolution')}</div>
+                                                                <div className="text-white/90">{assetDetail.resolution || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('画幅比', 'Aspect Ratio')}</div>
+                                                                <div className="text-white/90">{assetDetail.aspectRatio || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('文件大小', 'File Size')}</div>
+                                                                <div className="text-white/90">{assetDetail.fileSize || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('格式', 'Format')}</div>
+                                                                <div className="text-white/90">{assetDetail.format || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('时长', 'Duration')}</div>
+                                                                <div className="text-white/90">{assetDetail.duration || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('来源', 'Source')}</div>
+                                                                <div className="text-white/90">{assetDetail.source || '-'}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">Provider</div>
+                                                                <div className="text-white/90">
+                                                                    {assetDetail.providerAlias || assetDetail.provider || '-'}
+                                                                    {assetDetail.providerAlias && assetDetail.provider ? (
+                                                                        <span className="ml-1 text-[10px] text-muted-foreground font-mono">({assetDetail.provider})</span>
+                                                                    ) : null}
+                                                                </div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] text-muted-foreground uppercase">Model</div>
+                                                                <div className="text-white/90">{assetDetail.model || '-'}</div>
+                                                            </div>
+                                                            <div className="col-span-2">
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('文件名', 'Filename')}</div>
+                                                                <div className="text-white/90 break-all">{assetDetail.filename || assetDetail.url.split('/').pop() || '-'}</div>
+                                                            </div>
+                                                            <div className="col-span-2">
+                                                                <div className="text-[10px] text-muted-foreground uppercase">{t('创建时间', 'Created At')}</div>
+                                                                <div className="text-white/90">{assetDetail.createdAt || '-'}</div>
+                                                            </div>
+                                                        </div>
+                                                        {rawMeta && Object.keys(rawMeta).length > 0 && (
+                                                            <details className="pt-1">
+                                                                <summary className="text-[10px] uppercase text-muted-foreground cursor-pointer">{t('原始元数据', 'Raw Metadata')}</summary>
+                                                                <pre className="mt-2 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(rawMeta, null, 2)}</pre>
+                                                            </details>
+                                                        )}
+                                                    </div>
+                                                );
+
+                                                const renderInfoPanel = (titleText, rows = []) => (
+                                                    <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{titleText}</div>
+                                                        <div className="grid grid-cols-1 gap-2 text-xs">
+                                                            {rows.map((row, idx) => (
+                                                                <div key={`${titleText}-${idx}`}>
+                                                                    <div className="text-[10px] text-muted-foreground uppercase">{row.label}</div>
+                                                                    <div className={`text-white/90 ${row.breakAll ? 'break-all' : ''}`}>{row.value || '-'}</div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                );
+
+                                                const renderDetailActionButton = ({
+                                                    label,
+                                                    busyLabel,
+                                                    onClick,
+                                                    disabled = false,
+                                                    busy = false,
+                                                    variant = 'primary',
+                                                    title,
+                                                }) => {
+                                                    const variantClassMap = {
+                                                        primary: busy
+                                                            ? 'bg-sky-500/10 text-sky-300/50 cursor-wait'
+                                                            : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30',
+                                                        secondary: disabled
+                                                            ? 'bg-white/10 text-white/40 cursor-not-allowed'
+                                                            : 'bg-white/10 text-white/80 hover:bg-white/20',
+                                                        success: busy
+                                                            ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait'
+                                                            : 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30',
+                                                        warning: disabled
+                                                            ? 'bg-amber-500/10 text-amber-300/50 cursor-not-allowed'
+                                                            : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30',
+                                                        danger: disabled
+                                                            ? 'bg-red-500/10 text-red-300/50 cursor-not-allowed'
+                                                            : 'bg-red-500/20 text-red-200 hover:bg-red-500/30',
+                                                    };
+
+                                                    return (
+                                                        <button
+                                                            onClick={onClick}
+                                                            disabled={disabled}
+                                                            title={title}
+                                                            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${variantClassMap[variant] || variantClassMap.primary}`}
+                                                        >
+                                                            {busy ? busyLabel : label}
+                                                        </button>
+                                                    );
+                                                };
+
+                                                const renderFrameGeneratingNotice = (frameType) => {
+                                                    const stableType = frameType === 'end' ? 'end' : 'start';
+                                                    const isRunning = Boolean(currentGeneratingState?.[stableType]);
+                                                    if (!isRunning) return null;
+
+                                                    return (
+                                                        <div className="rounded-lg border border-amber-400/40 bg-amber-500/12 px-3 py-3 text-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]">
+                                                            <div className="flex items-start gap-3">
+                                                                <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-amber-200" />
+                                                                <div className="min-w-0">
+                                                                    <div className="text-xs font-bold tracking-[0.12em] uppercase text-amber-100">
+                                                                        {stableType === 'end'
+                                                                            ? t('结束帧生成中', 'End Frame In Progress')
+                                                                            : t('起始帧生成中', 'Start Frame In Progress')}
+                                                                    </div>
+                                                                    <div className="mt-1 text-[11px] leading-5 text-amber-50/80">
+                                                                        {stableType === 'end'
+                                                                            ? t('当前已锁定结束帧替换、删除与手动回填入口，生成完成后会自动刷新这里的预览。', 'End frame replacement, deletion, and manual apply actions are locked until generation finishes. This preview will refresh automatically when the result is ready.')
+                                                                            : t('当前已锁定起始帧替换、删除与手动回填入口，生成完成后会自动刷新这里的预览。', 'Start frame replacement, deletion, and manual apply actions are locked until generation finishes. This preview will refresh automatically when the result is ready.')}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                };
+
+                                                const renderGenerationHistoryPanel = () => {
+    const filteredHistory = shotGenerationHistory.filter((item) => {
+        const itemKind = resolveGenerationHistoryMediaKind(item);
+        
+        let targetType = modalType;
+        if (modalType === 'keyframe') { 
+             targetType = 'start'; 
+        }
+        
+        if (targetType === 'start') {
+            return ['start', 'image', 'subject'].includes(itemKind) || !['end', 'video'].includes(itemKind);
+        } else if (targetType === 'end') {
+            return itemKind === 'end';
+        } else if (targetType === 'video') {
+            return itemKind === 'video';
+        }
+        return true;
+    });
+        
+
+    const handleUseAsCurrent = async (item) => {
+        if (!item || !item.resultUrl || !editingShot) return;
+        const resultUrl = item.resultUrl;
+        
+        let updates = {};
+        if (modalType === 'start') {
+            updates = { image_url: resultUrl };
+        } else if (modalType === 'end') {
+            const tech = JSON.parse(editingShot.technical_notes || '{}');
+            tech['end_frame_url'] = resultUrl;
+            tech['end_frame_reused_from_start'] = false;
+            updates = { 'technical_notes': JSON.stringify(tech) };
+        } else if (modalType === 'video') {
+            updates = { 'video_url': resultUrl };
+        }
+        
+        try {
+            if (onUpdateShot) {
+                await onUpdateShot(editingShot.id, updates);
+            }
+            setEditingShot((prev) => {
+                if (!prev) return prev;
+                return { ...prev, ...updates };
+            });
+            showNotification(t('已选用为当前', 'Applied as current'), 'success');
+        } catch (e) {
+            if (onLog) onLog(`Failed to apply generated media: ${e.message}`, 'error');
+            showNotification(t('选用失败', 'Failed to apply'), 'error');
+        }
+    };
+
+    return (
+                                                    <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div>
+                                                                <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
+                                                                <div className="text-[11px] text-muted-foreground">{t('显示该分镜最近的首帧、尾帧与视频生成记录。', 'Recent start frame, end frame, and video generation records for this shot.')}</div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => fetchShotGenerationHistory(editingShot)}
+                                                                disabled={shotGenerationHistoryLoading || !editingShot?.id}
+                                                                className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
+                                                            >
+                                                                <RefreshCw className={shotGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
+                                                                {t('刷新', 'Refresh')}
+                                                            </button>
+                                                        </div>
+                                                        {shotGenerationHistoryLoading ? (
+                                                            <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-6 text-xs text-muted-foreground">
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                                {t('正在加载镜头生成历史...', 'Loading shot generation history...')}
+                                                            </div>
+                                                        ) : filteredHistory.length === 0 ? (
+                                                            <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
+                                                                {t('该分镜还没有生成历史。', 'No generation history for this shot yet.')}
+                                                            </div>
+                                                        ) : (
+                                                            <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                                                                {filteredHistory.map((item) => {
+                                                                    const itemId = String(item?.job_id || item?.id || Math.random()).trim();
+                                                                    const status = String(item?.status || '').trim().toLowerCase();
+                                                                    const canPreview = Boolean(item?.resultUrl);
+                                                                    const isVideoItem = item?.mediaKind === 'video' || String(item?.kind || '').trim().toLowerCase() === 'video';
+                                                                    const createdText = item?.created_at ? new Date(item.created_at).toLocaleString() : '-';
+                                                                    const isDeleting = shotGenerationHistoryDeletingId === itemId;
+                                                                    return (
+                                                                        <div key={itemId} className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                                                                            <div className="flex gap-3">
+                                                                                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-black/40 flex items-center justify-center">
+                                                                                    {canPreview ? (
+                                                                                        isVideoItem ? (
+                                                                                            <LazyHoverVideo
+                                                                                                src={item.resultUrl}
+                                                                                                className="h-full w-full"
+                                                                                                mediaClassName="h-full w-full object-cover"
+                                                                                                muted
+                                                                                                playsInline
+                                                                                                preload="metadata"
+                                                                                                playOnHover={false}
+                                                                                            />
+                                                                                        ) : (
+                                                                                            <SafeImage src={item.resultUrl} className="h-full w-full object-cover" fallback={<ImageIcon className="h-5 w-5 opacity-40" />} />
+                                                                                        )
+                                                                                    ) : isVideoItem ? (
+                                                                                        <Video className="h-5 w-5 opacity-40" />
+                                                                                    ) : (
+                                                                                        <ImageIcon className="h-5 w-5 opacity-40" />
+                                                                                    )}
+                                                                                </div>
+                                                                                <div className="min-w-0 flex-1 space-y-1">
+                                                                                    <div className="flex items-start justify-between gap-2">
+                                                                                        <div className="min-w-0">
+                                                                                            <div className="truncate text-sm font-semibold text-white">{item.displayLabel}</div>
+                                                                                            <div className="text-[11px] text-muted-foreground truncate">{item.shotName || editingShot?.shot_name || editingShot?.shot_number || '-'}</div>
+                                                                                        </div>
+                                                                                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : status === 'failed' ? 'bg-red-500/15 text-red-200' : status === 'canceled' ? 'bg-slate-500/20 text-slate-200' : 'bg-amber-500/15 text-amber-100'}`}>
+                                                                                            {status || 'unknown'}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                    <div className="text-[11px] text-muted-foreground">{createdText}</div>
+                                                                                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={() => canPreview && window.open(getFullUrl(item.resultUrl), '_blank', 'noopener,noreferrer')}
+                                                                                            disabled={!canPreview}
+                                                                                            className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
+                                                                                        >
+                                                                                            <ExternalLink size={12} />
+                                                                                            {t('查看', 'Open')}
+                                                                                        </button>
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={() => handleUseAsCurrent(item)}
+            disabled={isDeleting}
+            className="inline-flex items-center gap-1 rounded border border-blue-400/20 bg-blue-500/10 px-2 py-1 text-[11px] text-blue-100 hover:bg-blue-500/20 disabled:opacity-50"
+        >
+            <CheckCircle2 size={12} />
+            {t('选用', 'Apply')}
+        </button>
+        <button
+            type="button"
+            onClick={() => handleDeleteShotGenerationHistoryItem(item)}
+                                                                                            disabled={isDeleting}
+                                                                                            className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                                                                                        >
+                                                                                            {isDeleting ? <Loader2 className="animate-spin" size={12} /> : <Trash2 size={12} />}
+                                                                                            {isDeleting ? t('删除中', 'Deleting') : t('删除记录', 'Delete Record')}
+                                                                                        </button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                                };
+
+                                                if (modalType === 'start') {
+                                                    return (
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
+                                                            <div className="space-y-3">
+                                                                <div className={`h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex items-center justify-center relative transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`}>
+                                                                    {currentGeneratingState.start && (
+                                                                        <div className="absolute inset-0 z-10 bg-black/68 flex items-center justify-center flex-col gap-3">
+                                                                            <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
+                                                                                <Loader2 className="w-7 h-7 animate-spin text-amber-200" />
+                                                                            </div>
+                                                                            <div className="text-center px-6">
+                                                                                <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成起始帧', 'Generating Start Frame')}</div>
+                                                                                <div className="mt-1 text-xs text-white/75">{t('生成完成后将自动刷新当前预览', 'This preview will refresh automatically when generation completes')}</div>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                    {editingShot.image_url ? <SafeImage src={editingShot.image_url} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                </div>
+                                                                {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
+                                                                    { label: t('图片 URL', 'Image URL'), value: editingShot.image_url || '-', breakAll: true },
+                                                                    { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0) },
+                                                                ])}
+                                                                {renderAssetMetaPanel(linkedAssetDetail, linkedAssetMeta, t('素材元信息', 'Asset Metadata'))}
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                {renderFrameGeneratingNotice('start')}
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成起始帧', 'Generate Start Frame'),
+                                                                        busyLabel: t('起始帧生成中...', 'Generating Start Frame...'),
+                                                                        onClick: () => generateAssetWithLang('start', -1, { cfg: currentImageCfgValue }),
+                                                                        disabled: currentShotGenerating,
+                                                                        busy: currentShotGenerating,
+                                                                        variant: 'primary',
+                                                                    })}
+                                                                    {renderPromptLangMenu('start')}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('裁边', 'Trim Edges'),
+                                                                        busyLabel: t('裁边处理中...', 'Trimming...'),
+                                                                        onClick: () => openFrameTrimModal('start'),
+                                                                        disabled: !editingShot.image_url || currentShotGenerating,
+                                                                        busy: frameTrimModal.open && frameTrimModal.type === 'start' && frameTrimModal.saving,
+                                                                        variant: 'secondary',
+                                                                        title: t('裁去当前起始帧四周边缘并回填', 'Trim the current start frame edges and apply the result'),
+                                                                    })}
+                                                                </div>
+                                                                <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">
+                                                                        {t('英文提示词', 'Prompt (EN)')}
+                                                                    </div>
+                                                                    <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={startPromptTextEn}
+                                                                        onChange={(e) => {
+                                                                            setEditingShot({...editingShot, start_frame: e.target.value});
+                                                                        }}
+                                                                    />
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
+                                                                        {t('中文提示词', 'Prompt (CN)')}
+                                                                    </div>
+                                                                    <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={startPromptTextCn}
+                                                                        onChange={(e) => {
+                                                                            updateTechField('start_frame_cn', e.target.value);
+                                                                        }}
+                                                                    />
+                                                                    <div className="flex items-center gap-2 mt-2 mb-4">
+                                                                        {renderDetailActionButton({
+                                                                            label: t('翻译成中文', 'To Chinese'),
+                                                                            busyLabel: t('翻译中...', 'Translating...'),
+                                                                            onClick: () => translateFieldToChinese('start'),
+                                                                            disabled: translatingPromptField.startsWith('start:'),
+                                                                            busy: translatingPromptField === 'start:to-cn',
+                                                                            variant: 'warning'
+                                                                        })}
+                                                                        {renderDetailActionButton({
+                                                                            label: t('翻译成英文', 'To English'),
+                                                                            busyLabel: t('翻译中...', 'Translating...'),
+                                                                            onClick: () => translateFieldToEnglish('start'),
+                                                                            disabled: translatingPromptField.startsWith('start:'),
+                                                                            busy: translatingPromptField === 'start:to-en',
+                                                                            variant: 'secondary'
+                                                                        })}
+                                                                    </div>
+
+                                                                    <AdvancedModifyFrame
+                                                                        uiLang={uiLang}
+                                                                        type="start"
+                                                                        promptText={startPromptTextEn}
+                                                                        currentImage={editingShot.image_url}
+                                                                        currentGenerating={currentShotGenerating}
+                                                                        currentImageCfgValue={currentImageCfgValue}
+                                                                        onGenerateAsset={generateAssetWithLang}
+                                                                        onPromptUpdate={(v) => {
+                                                                            setEditingShot({...editingShot, start_frame: v});
+                                                                        }}
+                                                                    />
+                                                                </div>
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                {imageCfgControl}
+                                                                {renderGenerationHistoryPanel()}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                if (modalType === 'end') {
+                                                    return (
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
+                                                            <div className="space-y-3">
+                                                                <div className={`h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex items-center justify-center relative transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`}>
+                                                                    {currentGeneratingState.end && (
+                                                                        <div className="absolute inset-0 z-10 bg-black/68 flex items-center justify-center flex-col gap-3">
+                                                                            <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
+                                                                                <Loader2 className="w-7 h-7 animate-spin text-amber-200" />
+                                                                            </div>
+                                                                            <div className="text-center px-6">
+                                                                                <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成结束帧', 'Generating End Frame')}</div>
+                                                                                <div className="mt-1 text-xs text-white/75">{t('生成完成后将自动刷新当前预览', 'This preview will refresh automatically when generation completes')}</div>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                    {endFrameUrl ? <SafeImage src={endFrameUrl} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                </div>
+                                                                {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
+                                                                    { label: t('结束帧 URL', 'End Frame URL'), value: endFrameUrl || '-', breakAll: true },
+                                                                    { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0) },
+                                                                ])}
+                                                                {renderAssetMetaPanel(linkedAssetDetail, linkedAssetMeta, t('素材元信息', 'Asset Metadata'))}
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                {renderFrameGeneratingNotice('end')}
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成结束帧', 'Generate End Frame'),
+                                                                        busyLabel: t('结束帧生成中...', 'Generating End Frame...'),
+                                                                        onClick: () => generateAssetWithLang('end', -1, { cfg: currentImageCfgValue }),
+                                                                        disabled: currentShotGenerating,
+                                                                        busy: currentShotGenerating,
+                                                                        variant: 'primary',
+                                                                    })}
+                                                                    {renderPromptLangMenu('end')}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('裁边', 'Trim Edges'),
+                                                                        busyLabel: t('裁边处理中...', 'Trimming...'),
+                                                                        onClick: () => openFrameTrimModal('end'),
+                                                                        disabled: !endFrameUrl || currentShotGenerating,
+                                                                        busy: frameTrimModal.open && frameTrimModal.type === 'end' && frameTrimModal.saving,
+                                                                        variant: 'secondary',
+                                                                        title: t('裁去当前结束帧四周边缘并回填', 'Trim the current end frame edges and apply the result'),
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('提取视频尾帧', 'Extract Video Last Frame'),
+                                                                        busyLabel: t('提取视频尾帧', 'Extract Video Last Frame'),
+                                                                        onClick: handleSetEndFrameFromVideoLastFrame,
+                                                                        disabled: !editingShot.video_url || currentShotGenerating,
+                                                                        variant: 'warning',
+                                                                        title: t('从当前视频提取最后一帧', 'Extract last frame from current video'),
+                                                                    })}
+                                                                </div>
+                                                                <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">
+                                                                        {t('英文提示词', 'Prompt (EN)')}
+                                                                    </div>
+                                                                    <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={endPromptTextEn}
+                                                                        onChange={(e) => {
+                                                                            handleManualEndFrameInputChange(e.target.value);
+                                                                        }}
+                                                                    />
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
+                                                                        {t('中文提示词', 'Prompt (CN)')}
+                                                                    </div>
+                                                                    <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        value={endPromptTextCn}
+                                                                        onChange={(e) => {
+                                                                            updateTechField('end_frame_cn', e.target.value);
+                                                                        }}
+                                                                    />
+                                                                    <div className="flex items-center gap-2 mt-2 mb-4">
+                                                                        {renderDetailActionButton({
+                                                                            label: t('翻译成中文', 'To Chinese'),
+                                                                            busyLabel: t('翻译中...', 'Translating...'),
+                                                                            onClick: () => translateFieldToChinese('end'),
+                                                                            disabled: translatingPromptField.startsWith('end:'),
+                                                                            busy: translatingPromptField === 'end:to-cn',
+                                                                            variant: 'warning'
+                                                                        })}
+                                                                        {renderDetailActionButton({
+                                                                            label: t('翻译成英文', 'To English'),
+                                                                            busyLabel: t('翻译中...', 'Translating...'),
+                                                                            onClick: () => translateFieldToEnglish('end'),
+                                                                            disabled: translatingPromptField.startsWith('end:'),
+                                                                            busy: translatingPromptField === 'end:to-en',
+                                                                            variant: 'secondary'
+                                                                        })}
+                                                                    </div>
+
+                                                                    <AdvancedModifyFrame
+                                                                        uiLang={uiLang}
+                                                                        type="end"
+                                                                        promptText={endPromptTextEn}
+                                                                        currentImage={endFrameUrl}
+                                                                        currentGenerating={currentShotGenerating}
+                                                                        currentImageCfgValue={currentImageCfgValue}
+                                                                        onGenerateAsset={generateAssetWithLang}
+                                                                        onPromptUpdate={handleManualEndFrameInputChange}
+                                                                    />
+                                                                </div>
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                {imageCfgControl}
+                                                                {renderGenerationHistoryPanel()}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                if (modalType === 'video') {
+                                                    const pendingVideoJobId = getPendingVideoJobId(editingShot?.id);
+                                                    const isStoppingCurrentVideo = Boolean(stoppingVideoByShot[String(editingShot?.id || '')]);
+                                                    const voiceoverUrl = String(tech.voiceover_url || '').trim();
+                                                    const rawVoiceoverPrompt = String(tech.voiceover_prompt || '').trim();
+                                                    const llmDialogueBackfillText = String(
+                                                        tech.voiceover_dialogue_text || tech.voiceover_dialogue || ''
+                                                    ).trim() || extractDialogueOnlyFromPrompt(rawVoiceoverPrompt) || rawVoiceoverPrompt;
+                                                    const voiceAsset = resolveShotAssetByUrl(voiceoverUrl, 'audio');
+                                                    const voiceAssetDetail = buildShotAssetDetail(voiceAsset, 'audio', voiceoverUrl);
+                                                    const voiceAssetMeta = voiceAssetDetail.rawMeta;
+                                                    const voicePersistedMeta = (tech.voiceover_metadata && typeof tech.voiceover_metadata === 'object') ? tech.voiceover_metadata : null;
+                                                    const voicePlanMeta = (tech.voiceover_plan && typeof tech.voiceover_plan === 'object') ? tech.voiceover_plan : null;
+                                                    const hasVoiceAssetMeta = Boolean(voiceAssetMeta && Object.keys(voiceAssetMeta).length > 0);
+                                                    const hasVoicePersistedMeta = Boolean(voicePersistedMeta && Object.keys(voicePersistedMeta).length > 0);
+                                                    const resolvedVoiceMeta = hasVoiceAssetMeta ? voiceAssetMeta : voicePersistedMeta;
+                                                    return (
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
+                                                            <div className="space-y-3">
+                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center relative">
+                                                                    {currentGeneratingState.video && (
+                                                                        <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
+                                                                            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                                                                            <span className="text-xs text-white/80">{t('正在生成视频...', 'Generating Video...')}</span>
+                                                                        </div>
+                                                                    )}
+                                                                    {editingShot.video_url ? (
+                                                                        <ManagedVideoPlayer
+                                                                            src={editingShot.video_url}
+                                                                            poster={resolveShotVideoPosterUrl(editingShot)}
+                                                                            className="max-w-full max-h-full object-contain"
+                                                                            wrapperClassName="w-full h-full"
+                                                                            preload="metadata"
+                                                                            uiLang={uiLang}
+                                                                        />
+                                                                    ) : <Video className="w-8 h-8 opacity-30" />}
+                                                                </div>
+                                                                <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
+                                                                <div className="text-xs text-muted-foreground break-all">{t('配音 URL', 'Voice URL')}: {String(tech.voiceover_url || '') || '-'}</div>
+                                                                <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('素材实际时长', 'Asset Duration')}</div>
+                                                                    <div className="text-sm text-white">{linkedAssetDetail.duration || '-'}</div>
+                                                                    <div className="text-[11px] text-muted-foreground">
+                                                                        {t('这里显示当前视频素材元数据里的实际时长。', 'This is the actual duration read from the current video asset metadata.')}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('Shot 配置时长（秒）', 'Shot Duration Setting (s)')}</div>
+                                                                    <input
+                                                                        type="number"
+                                                                        min="0"
+                                                                        step="0.1"
+                                                                        value={shotConfiguredDuration}
+                                                                        onChange={(e) => setEditingShot(prev => ({ ...(prev || {}), duration: e.target.value }))}
+                                                                        className="w-full bg-black/30 border border-white/10 rounded p-2 text-sm text-white"
+                                                                        placeholder="5"
+                                                                    />
+                                                                    <div className="text-[11px] text-muted-foreground">
+                                                                        {t('保存后会写回当前 shot 的 Duration 字段，并作为后续视频生成默认时长。', 'Saving writes back to the shot Duration field and uses it as the default for later video generation.')}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="text-xs text-muted-foreground">{t('模式', 'Mode')}: {resolveUnifiedVideoMode(tech)}</div>
+                                                                {(voiceoverUrl || llmDialogueBackfillText) && (
+                                                                    <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
+                                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('配音预览', 'Voiceover Preview')}</div>
+                                                                        {voiceoverUrl ? (
+                                                                            <SafeAudio src={voiceoverUrl} controls className="w-full" fallback={<div className="text-xs text-muted-foreground">{t('配音文件不可用', 'Voiceover file unavailable')}</div>} />
+                                                                        ) : (
+                                                                            <div className="text-xs text-muted-foreground">{t('暂无配音音频', 'No voiceover audio yet')}</div>
+                                                                        )}
+                                                                        {llmDialogueBackfillText && (
+                                                                            <div className="space-y-1 pt-1">
+                                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold">
+                                                                                    {t('大模型抽取对话回填', 'LLM Dialogue Backfill')}
+                                                                                </div>
+                                                                                <textarea
+                                                                                    className="w-full min-h-[92px] bg-black/40 border border-white/10 rounded p-2 text-xs leading-relaxed text-white/90 resize-y"
+                                                                                    value={llmDialogueBackfillText}
+                                                                                    readOnly
+                                                                                />
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                )}
+                                                                {voiceoverUrl && renderAssetMetaPanel(voiceAssetDetail, resolvedVoiceMeta, t('配音元信息', 'Voice Metadata'))}
+                                                                {voicePlanMeta && !hasVoiceAssetMeta && !hasVoicePersistedMeta && (
+                                                                    <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
+                                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('配音规划参数', 'Voice Planning Metadata')}</div>
+                                                                        <pre className="mt-1 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(voicePlanMeta, null, 2)}</pre>
+                                                                    </div>
+                                                                )}
+                                                                {renderAssetMetaPanel()}
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成视频', 'Generate Video'),
+                                                                        busyLabel: t('视频生成中...', 'Generating Video...'),
+                                                                        onClick: () => generateAssetWithLang('video'),
+                                                                        disabled: currentShotGenerating,
+                                                                        busy: currentShotGenerating,
+                                                                        variant: 'primary',
+                                                                    })}
+                                                                    {renderPromptLangMenu('video')}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成配音', 'Generate Voiceover'),
+                                                                        busyLabel: t('配音生成中...', 'Generating Voiceover...'),
+                                                                        onClick: handleGenerateVoiceoverOnly,
+                                                                        disabled: currentVoiceGenerating,
+                                                                        busy: currentVoiceGenerating,
+                                                                        variant: 'success',
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('强制停止', 'Force Stop'),
+                                                                        busyLabel: t('停止中...', 'Stopping...'),
+                                                                        onClick: () => handleForceStopShotVideo(editingShot?.id),
+                                                                        disabled: false,
+                                                                        busy: isStoppingCurrentVideo,
+                                                                        variant: 'danger',
+                                                                        title: t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job'),
+                                                                    })}
+                                                                </div>
+                                                                <label className="inline-flex items-center gap-2 text-xs text-white/80">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="accent-sky-400"
+                                                                        checked={isVoiceoverSyncEnabled}
+                                                                        onChange={(e) => setVoiceoverSyncEnabled(e.target.checked)}
+                                                                    />
+                                                                    {t('配音', 'Voiceover')}
+                                                                </label>
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('生成模式', 'Generation Mode')}</div>
+                                                                    <select
+                                                                        value={resolveVideoModeFromTech(tech)}
+                                                                        onChange={(e) => {
+                                                                            const nextMode = e.target.value;
+                                                                            applyVideoModeToShot(nextMode).catch((err) => {
+                                                                                console.error(err);
+                                                                                showNotification(t('保存视频模式失败', 'Failed to save video mode'), 'error');
+                                                                            });
+                                                                        }}
+                                                                        className="bg-black/40 border border-white/20 text-[10px] rounded px-2 py-1 text-white/80 outline-none hover:bg-white/5"
+                                                                    >
+                                                                        <option value="start_end">{t('起始+结束', 'Start+End')}</option>
+                                                                        <option value="start">{t('仅起始', 'Start Only')}</option>
+                                                                        <option value="end">{t('仅结束', 'End Only')}</option>
+                                                                        <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
+                                                                    </select>
+                                                                </div>
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
+                                                                    {t('中文提示词', 'Prompt (CN)')}
+                                                                </div>
+                                                                <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                                                    className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    value={videoPromptTextCn}
+                                                                    onChange={(e) => {
+                                                                        updateTechField('video_prompt_cn', e.target.value);
+                                                                    }}
+                                                                />
+                                                                <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">
+                                                                    {t('英文提示词', 'Prompt (EN)')}
+                                                                </div>
+                                                                <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                                                    className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    value={videoPromptTextEn}
+                                                                    onChange={(e) => {
+                                                                        setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(e.target.value) });
+                                                                    }}
+                                                                />
+                                                                <div className="flex items-center gap-2 mt-2 mb-4">
+                                                                    {renderDetailActionButton({
+                                                                        label: t('翻译成中文', 'To Chinese'),
+                                                                        busyLabel: t('翻译中...', 'Translating...'),
+                                                                        onClick: () => translateFieldToChinese('video'),
+                                                                        disabled: translatingPromptField.startsWith('video:'),
+                                                                        busy: translatingPromptField === 'video:to-cn',
+                                                                        variant: 'warning'
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('翻译成英文', 'To English'),
+                                                                        busyLabel: t('翻译中...', 'Translating...'),
+                                                                        onClick: () => translateFieldToEnglish('video'),
+                                                                        disabled: translatingPromptField.startsWith('video:'),
+                                                                        busy: translatingPromptField === 'video:to-en',
+                                                                        variant: 'secondary'
+                                                                    })}
+                                                                </div>
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
+                                                                {renderGenerationHistoryPanel()}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                return (
+                                                    <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
+                                                        <div className="space-y-3">
+                                                            <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
+                                                                {keyframe?.url ? <SafeImage src={keyframe.url} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                            </div>
+                                                            {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
+                                                                { label: t('关键帧时间', 'Keyframe Time'), value: keyframe?.time || '-' },
+                                                                { label: t('关键帧 URL', 'Keyframe URL'), value: keyframe?.url || '-', breakAll: true },
+                                                            ])}
+                                                            {renderAssetMetaPanel()}
+                                                        </div>
+                                                        <div className="space-y-3">
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <input className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs w-20" value={keyframe?.time || ''} onChange={(e) => {
+                                                                    const updated = [...localKeyframes];
+                                                                    if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                    updated[assetDetailModal.keyframeIndex].time = e.target.value;
+                                                                    setLocalKeyframes(updated);
+                                                                }} />
+                                                                {renderDetailActionButton({
+                                                                    label: t('生成关键帧', 'Generate Keyframe'),
+                                                                    busyLabel: t('关键帧生成中...', 'Generating Keyframe...'),
+                                                                    onClick: () => generateAssetWithLang('keyframe', assetDetailModal.keyframeIndex, { cfg: currentImageCfgValue }),
+                                                                    disabled: !!keyframe?.loading || currentShotGenerating,
+                                                                    busy: !!keyframe?.loading || currentShotGenerating,
+                                                                    variant: 'primary',
+                                                                })}
+                                                                {renderPromptLangMenu('keyframe')}
+                                                                {renderDetailActionButton({
+                                                                    label: t('翻译成中文', 'To Chinese'),
+                                                                    busyLabel: t('翻译中...', 'Translating...'),
+                                                                    onClick: () => translateKeyframeToChinese(assetDetailModal.keyframeIndex),
+                                                                    disabled: translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`),
+                                                                    busy: translatingPromptField === `keyframe:${assetDetailModal.keyframeIndex}:to-cn`,
+                                                                    variant: 'warning',
+                                                                })}
+                                                                {renderDetailActionButton({
+                                                                    label: t('翻译成英文', 'To English'),
+                                                                    busyLabel: t('翻译中...', 'Translating...'),
+                                                                    onClick: () => translateKeyframeToEnglish(assetDetailModal.keyframeIndex),
+                                                                    disabled: translatingPromptField.startsWith(`keyframe:${assetDetailModal.keyframeIndex}:`),
+                                                                    busy: translatingPromptField === `keyframe:${assetDetailModal.keyframeIndex}:to-en`,
+                                                                    variant: 'secondary',
+                                                                })}
+                                                            </div>
+                                                            <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
+                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
+                                                                const updated = [...localKeyframes];
+                                                                if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
+                                                                setLocalKeyframes(updated);
+                                                            }} />
+                                                            <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
+                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                                                className="w-full h-48 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                value={(tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : ''}
+                                                                onChange={(e) => {
+                                                                    const nextMap = { ...(tech.keyframe_prompt_cn_map || {}) };
+                                                                    if (keyframe?.time) nextMap[keyframe.time] = e.target.value;
+                                                                    updateTechField('keyframe_prompt_cn_map', nextMap);
+                                                                }}
+                                                                placeholder={t('填写关键帧中文对照提示词...', 'Add Chinese counterpart prompt for keyframe...')}
+                                                            />
+                                                            <RefineControl originalText={keyframe?.prompt || ''} onUpdate={(v) => {
+                                                                const updated = [...localKeyframes];
+                                                                if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                updated[assetDetailModal.keyframeIndex].prompt = v;
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            }} type="image" currentImage={keyframe?.url || ''} onImageUpdate={(url) => {
+                                                                const updated = [...localKeyframes];
+                                                                if (!updated[assetDetailModal.keyframeIndex]) return;
+                                                                updated[assetDetailModal.keyframeIndex].url = url;
+                                                                setLocalKeyframes(updated);
+                                                                reconstructKeyframes(updated);
+                                                            }} projectId={projectId} shotId={editingShot.id} assetType={`keyframe_${assetDetailModal.keyframeIndex}`} featureInjector={injectEntityFeatures} onPickMedia={openMediaPicker} />
+                                                            {imageCfgControl}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+
+                                        <div className="p-4 border-t border-white/10 flex items-center justify-end gap-2 bg-black/20">
+                                            <button onClick={closeAssetDetailModal} className="px-4 py-2 rounded hover:bg-white/10 text-sm">{t('关闭', 'Close')}</button>
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        if (assetDetailModal.type === 'keyframe') {
+                                                            await reconstructKeyframes(localKeyframes);
+                                                        } else {
+                                                            const patch = buildAssetDetailSavePatch(editingShot, assetDetailModal.type);
+                                                            if (Object.keys(patch).length > 0) {
+                                                                await onUpdateShot(editingShot.id, patch);
+                                                            }
+                                                        }
+                                                        onLog?.(t('详情修改已保存', 'Detail changes saved'), 'success');
+                                                        closeAssetDetailModal();
+                                                    } catch (e) {
+                                                        onLog?.(t('保存失败', 'Save failed'), 'error');
+                                                    }
+                                                }}
+                                                className="px-4 py-2 rounded bg-primary text-black font-bold hover:bg-primary/90 text-sm"
+                                            >
+                                                {t('保存', 'Save')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {frameTrimModal.open && (
+                                <div className="fixed inset-0 z-[130] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+                                    <div className="w-full max-w-5xl bg-[#09090b] border border-white/10 rounded-xl shadow-2xl overflow-hidden flex flex-col">
+                                        <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                                            <div>
+                                                <h4 className="font-bold text-white flex items-center gap-2">
+                                                    <Crop className="w-4 h-4 text-primary" />
+                                                    {frameTrimModal.type === 'end'
+                                                        ? t('结束帧裁边', 'End Frame Trim')
+                                                        : t('起始帧裁边', 'Start Frame Trim')}
+                                                </h4>
+                                                <div className="text-xs text-muted-foreground mt-1">
+                                                    {t('调整四边裁切比例，保存后会生成新素材并自动回填当前帧。', 'Adjust the trim on each edge. Saving will create a new asset and apply it to the current frame.')}
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={frameTrimModal.saving ? undefined : closeFrameTrimModal}
+                                                disabled={frameTrimModal.saving}
+                                                className="p-2 hover:bg-white/10 rounded-full disabled:opacity-50"
+                                            >
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_380px] gap-0">
+                                            <div className="p-4 border-b xl:border-b-0 xl:border-r border-white/10 bg-black/30">
+                                                <div className="relative min-h-[420px] h-[52vh] rounded-lg border border-white/10 bg-black/60 overflow-hidden flex items-center justify-center">
+                                                    <img
+                                                        src={getFullUrl(frameTrimModal.sourceUrl)}
+                                                        alt={frameTrimModal.type === 'end' ? 'End frame trim preview' : 'Start frame trim preview'}
+                                                        className="max-w-full max-h-full object-contain"
+                                                    />
+                                                    <div
+                                                        className="absolute border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.62)] transition-all duration-150"
+                                                        style={{
+                                                            top: `${normalizeFrameTrimMargins(frameTrimModal).topPct}%`,
+                                                            right: `${normalizeFrameTrimMargins(frameTrimModal).rightPct}%`,
+                                                            bottom: `${normalizeFrameTrimMargins(frameTrimModal).bottomPct}%`,
+                                                            left: `${normalizeFrameTrimMargins(frameTrimModal).leftPct}%`,
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="p-4 space-y-4 bg-[#101012]">
+                                                <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-white/80 space-y-2">
+                                                    <div className="font-semibold text-white">{t('当前裁切结果', 'Current Trim Result')}</div>
+                                                    <div>{t('保留宽度', 'Remaining Width')}: {normalizeFrameTrimMargins(frameTrimModal).widthPct.toFixed(1)}%</div>
+                                                    <div>{t('保留高度', 'Remaining Height')}: {normalizeFrameTrimMargins(frameTrimModal).heightPct.toFixed(1)}%</div>
+                                                </div>
+
+                                                {[
+                                                    ['topPct', t('上边', 'Top')],
+                                                    ['rightPct', t('右边', 'Right')],
+                                                    ['bottomPct', t('下边', 'Bottom')],
+                                                    ['leftPct', t('左边', 'Left')],
+                                                ].map(([key, label]) => (
+                                                    <div key={key} className="space-y-2">
+                                                        <div className="flex items-center justify-between text-xs">
+                                                            <span className="text-white/85 font-medium">{label}</span>
+                                                            <span className="text-primary font-mono">{clampFrameTrimPercent(frameTrimModal[key]).toFixed(1)}%</span>
+                                                        </div>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="45"
+                                                            step="0.5"
+                                                            value={clampFrameTrimPercent(frameTrimModal[key])}
+                                                            onChange={(e) => updateFrameTrimMargin(key, e.target.value)}
+                                                            disabled={frameTrimModal.saving}
+                                                            className="w-full accent-primary"
+                                                        />
+                                                    </div>
+                                                ))}
+
+                                                <div className="grid grid-cols-2 gap-2 pt-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setFrameTrimModal((prev) => ({ ...prev, topPct: 0, rightPct: 0, bottomPct: 0, leftPct: 0 }))}
+                                                        disabled={frameTrimModal.saving}
+                                                        className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm text-white/85 disabled:opacity-50"
+                                                    >
+                                                        {t('重置', 'Reset')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={applyFrameTrimToShot}
+                                                        disabled={frameTrimModal.saving}
+                                                        className="px-3 py-2 rounded-md bg-primary text-black font-bold text-sm hover:bg-primary/90 disabled:opacity-60"
+                                                    >
+                                                        {frameTrimModal.saving ? t('保存中...', 'Saving...') : t('保存并回填', 'Save and Apply')}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </motion.div>
+                )}
+             </AnimatePresence>
+

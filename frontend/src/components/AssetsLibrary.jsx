@@ -371,7 +371,8 @@ const buildGroupingContext = (asset) => {
 };
 
 
-const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelected, onToggleSelect, onReportError, t }) => {
+const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelected, onToggleSelect, onReportError, t, isSource, isDependent }) => {
+    // console.log(`AssetItem render - id: ${asset.id}, isSource: ${isSource}, isDependent: ${isDependent}`);
     const cardRef = useRef(null);
     const videoRef = React.useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -454,6 +455,22 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
             onMouseLeave={handleMouseLeave}
              className={`group relative aspect-square bg-card rounded-xl border overflow-hidden cursor-pointer transition-all hover:scale-[1.02] shadow-sm transform-gpu ${isSelected ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-black' : 'border-white/5 hover:border-primary/50'}`}
         >
+            {/* Always visible dependency badges at the top-left */}
+            <div className="absolute top-2 left-2 z-50 flex flex-col gap-1 pointer-events-none">
+                {isDependent && (
+                    <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-purple-300/40 text-purple-200 bg-purple-500/80 backdrop-blur-sm shadow-sm pointer-events-auto" title={t('基于其它资产生成', 'Derived from other assets')}>
+                        <LinkIcon size={10} />
+                        {t('有依赖', 'Has Dependency')}
+                    </span>
+                )}
+                {isSource && (
+                    <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-emerald-300/40 text-emerald-200 bg-emerald-500/80 backdrop-blur-sm shadow-sm pointer-events-auto" title={t('作为其它资产的源', 'Source for other assets')}>
+                        <LinkIcon size={10} />
+                        {t('被依赖', 'Depended')}
+                    </span>
+                )}
+            </div>
+
             {isError ? (
                 <div className="w-full h-full flex flex-col items-center justify-center bg-white/5 text-muted-foreground gap-2">
                     <AlertTriangle size={24} className="opacity-50" />
@@ -530,6 +547,8 @@ const AssetsLibrary = () => {
     const t = (zh, en) => tUI(uiLang, zh, en);
     const { addLog } = useLog();
     const [assets, setAssets] = useState([]);
+    const [isSourceIds, setIsSourceIds] = useState(new Set());
+    const [isDependentIds, setIsDependentIds] = useState(new Set());
     const [filter, setFilter] = useState('all'); // all, image, video
     const [groupBy, setGroupBy] = useState('none'); // none, project, subject, shot
     const [sortOrder, setSortOrder] = useState('desc'); // desc (newest first), asc (oldest first)
@@ -686,6 +705,17 @@ const AssetsLibrary = () => {
                 return { ...a, meta_info: meta || {} };
             });
             setAssets(cleanData);
+
+            try {
+                const depPayload = await fetchUnreferencedAssetIds();
+                if (depPayload) {
+                    setIsSourceIds(new Set((depPayload.is_source_ids || []).map(Number)));
+                    setIsDependentIds(new Set((depPayload.is_dependent_ids || []).map(Number)));
+                }
+            } catch(e) {
+                console.warn('Failed to load dependency metadata', e);
+            }
+
             addLog(`Loaded ${cleanData.length} assets from library.`);
         } catch (e) {
             console.error("Failed to load assets", e);
@@ -1203,6 +1233,8 @@ const AssetsLibrary = () => {
                                         onToggleSelect={toggleSelect}
                                         onReportError={handleReportError}
                                         t={t}
+                                        isSource={isSourceIds.has(Number(asset.id))}
+                                        isDependent={isDependentIds.has(Number(asset.id))}
                                     />
                                 ))}
                             </div>
