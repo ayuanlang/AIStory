@@ -160,7 +160,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
     const IMAGE_JOB_CACHE_PURGE_MARKER_KEY = `aistory.imageJobCachePurge.${IMAGE_JOB_CACHE_PURGE_VERSION}`;
     const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
-    const SUBJECT_BATCH_RUNTIME_STALE_MS = 1000 * 60;
+    const SUBJECT_BATCH_RUNTIME_STALE_MS = 1000 * 60 * 5;
     const SUBJECT_BATCH_WATCHDOG_INTERVAL_MS = 1000 * 5;
     const SUBJECT_IMAGE_JOB_OWNER_PAGE = 'subject-library';
     const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
@@ -498,7 +498,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
         }
 
-        setSubjectImageJobs((prev) => {
+        updateSubjectImageJobsAndStorage((prev) => {
             const next = { ...(prev || {}) };
             delete next[stableEntityId];
             return next;
@@ -524,7 +524,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const stableEntityId = String(entityId || '').trim();
         if (!stableEntityId) return;
 
-        setSubjectImageJobs(prev => ({
+        updateSubjectImageJobsAndStorage(prev => ({
             ...(prev || {}),
             [stableEntityId]: {
                 ...(prev?.[stableEntityId] || {}),
@@ -537,7 +537,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const stableEntityId = String(entityId || '').trim();
         if (!stableEntityId) return;
 
-        setSubjectImageJobs(prev => {
+        updateSubjectImageJobsAndStorage(prev => {
             const next = { ...(prev || {}) };
             delete next[stableEntityId];
             return next;
@@ -581,7 +581,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             : subjectBatchGenerateActiveJobsRef.current;
 
         targetMap.set(stableEntityId, stableJobId);
-        setSubjectImageJobs(prev => ({
+        updateSubjectImageJobsAndStorage(prev => ({
             ...(prev || {}),
             [stableEntityId]: {
                 ...(prev?.[stableEntityId] || {}),
@@ -617,7 +617,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             await stopGenerationJob('image', stableJobId, { force: true });
         }));
 
-        setSubjectImageJobs(prev => {
+        updateSubjectImageJobsAndStorage(prev => {
             const next = { ...(prev || {}) };
             entries.forEach(([entityId]) => {
                 delete next[String(entityId)];
@@ -629,7 +629,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [stopGenerationJob]);
 
     const clearPendingSubjectBatchImagePlaceholders = useCallback(() => {
-        setSubjectImageJobs(prev => {
+        updateSubjectImageJobsAndStorage(prev => {
             const next = { ...(prev || {}) };
             let changed = false;
 
@@ -707,6 +707,27 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     }, [normalizeSubjectImageJobs, subjectImageJobStorageKey]);
 
+    const updateSubjectImageJobsAndStorage = useCallback((updater) => {
+        setSubjectImageJobs(prev => {
+            const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater };
+            writeSubjectImageJobsStorage(next);
+            return next;
+        });
+        // Run against local storage immediately to ensure state persists after component unmounts
+        if (!subjectImageJobStorageKey) return;
+        try {
+            const raw = localStorage.getItem(subjectImageJobStorageKey);
+            let current = {};
+            if (raw) {
+                current = JSON.parse(raw);
+            }
+            const next = typeof updater === 'function' ? updater(current) : { ...current, ...updater };
+            writeSubjectImageJobsStorage(next);
+        } catch {
+            // ignore
+        }
+    }, [setSubjectImageJobs, subjectImageJobStorageKey, writeSubjectImageJobsStorage]);
+
     useEffect(() => {
         if (!window?.localStorage) return;
         try {
@@ -744,7 +765,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             window.__AISTORY_SUBJECT_BATCH_RUNTIME__.reconstruct = createSubjectBatchTaskState();
             emitSubjectBatchRuntime();
         }
-        setSubjectImageJobs({});
+        updateSubjectImageJobsAndStorage({});
         setStoppingSubjectImageJobs({});
     }, [createSubjectBatchTaskState, emitSubjectBatchRuntime]);
 
@@ -1206,7 +1227,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     ]);
 
     useEffect(() => {
-        setSubjectImageJobs(readSubjectImageJobsStorage());
+        updateSubjectImageJobsAndStorage(readSubjectImageJobsStorage());
     }, [readSubjectImageJobsStorage]);
 
     useEffect(() => {
@@ -1425,7 +1446,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 }
 
                 if (isActivePoll() && Object.keys(statusUpdates).length > 0) {
-                    setSubjectImageJobs(prev => {
+                    updateSubjectImageJobsAndStorage(prev => {
                         const base = { ...(prev || {}) };
                         let changed = false;
                         for (const [entityId, patch] of Object.entries(statusUpdates)) {
@@ -1447,7 +1468,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 }
 
                 if (isActivePoll() && completed.length > 0) {
-                    setSubjectImageJobs(prev => {
+                    updateSubjectImageJobsAndStorage(prev => {
                         const next = { ...(prev || {}) };
                         completed.forEach((entityId) => {
                             delete next[String(entityId)];
@@ -2109,7 +2130,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 subjectBatchReconstructSessionRef.current = '';
             }
             subjectBatchReconstructActiveJobsRef.current.clear();
-            setSubjectImageJobs(prev => {
+            updateSubjectImageJobsAndStorage(prev => {
                 const next = { ...(prev || {}) };
                 targets.forEach((entity) => {
                     const stableEntityId = String(entity?.id || '').trim();
@@ -2734,7 +2755,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             if (!jobId) throw new Error('Missing image job id');
 
             if (isMountedRef.current) {
-                setSubjectImageJobs(prev => ({
+                updateSubjectImageJobsAndStorage(prev => ({
                     ...(prev || {}),
                     [String(targetEntityId)]: {
                         jobId,
@@ -2775,7 +2796,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setGenerating(false);
 
         if (!jobId) {
-            setSubjectImageJobs(prev => {
+            updateSubjectImageJobsAndStorage(prev => {
                 const next = { ...(prev || {}) };
                 delete next[String(targetEntityId)];
                 return next;
@@ -2813,7 +2834,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             });
         }
 
-        setSubjectImageJobs(prev => {
+        updateSubjectImageJobsAndStorage(prev => {
             const next = { ...(prev || {}) };
             delete next[String(targetEntityId)];
             return next;
@@ -2917,7 +2938,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         updateGenerateBatchRuntimeState(true, { current: 0, total: toGenerate.length, status: 'Initializing...' });
         const batchStartedAt = Date.now();
-        setSubjectImageJobs(prev => {
+        updateSubjectImageJobsAndStorage(prev => {
             const next = { ...(prev || {}) };
             toGenerate.forEach((entity) => {
                 const stableEntityId = String(entity?.id || '').trim();
@@ -3177,7 +3198,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         ),
                         'error'
                     );
-                    setSubjectImageJobs(prev => {
+                    updateSubjectImageJobsAndStorage(prev => {
                         const stableEntityId = String(entity?.id || '').trim();
                         const existing = prev?.[stableEntityId];
                         if (!stableEntityId || !existing || String(existing?.jobId || '').trim()) {
@@ -3211,7 +3232,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 subjectBatchGenerateSessionRef.current = '';
             }
             subjectBatchGenerateActiveJobsRef.current.clear();
-            setSubjectImageJobs(prev => {
+            updateSubjectImageJobsAndStorage(prev => {
                 const next = { ...(prev || {}) };
                 toGenerate.forEach((entity) => {
                     const stableEntityId = String(entity?.id || '').trim();
@@ -3391,34 +3412,32 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     <button
                         onClick={handleBatchAnalyzeExistingSubjects}
                         disabled={isBatchAnalyzingEntities || isBatchGeneratingEntities || isBatchReconstructingEntities || isReconstructingEntity || isAnalyzingEntity}
-                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-indigo-400/20"
+                        className="p-2 text-xs font-bold uppercase rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 flex items-center justify-center disabled:opacity-50 transition-all border border-indigo-400/20"
                         title={t('仅批量对“用户上传图片”执行提示词反推并反写信息', 'Batch prompt reverse user-uploaded subject images only and write back metadata')}
                     >
                         {isBatchAnalyzingEntities ? (
                             <>
-                                <RefreshCw className="animate-spin" size={12} />
-                                {t('批量反推中', 'Batch Prompt Reversing')} {batchAnalyzeProgress ? `${batchAnalyzeProgress.current}/${batchAnalyzeProgress.total}` : '...'}
+                                <RefreshCw className="animate-spin" size={14} />
                             </>
                         ) : (
                             <>
-                                <Sparkles size={12} /> {t('批量提示词反推', 'Batch Prompt Reverse')}
+                                <Sparkles size={14} />
                             </>
                         )}
                     </button>
                     <button
                         onClick={handleBatchAnalyzeAndReconstructSubjects}
                         disabled={isBatchReconstructingEntities || isBatchAnalyzingEntities || isBatchGeneratingEntities || isReconstructingEntity || isAnalyzingEntity}
-                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-violet-500/20 hover:bg-violet-500/30 text-violet-100 flex items-center gap-2 disabled:opacity-50 transition-all border border-violet-400/20"
+                        className="p-2 text-xs font-bold uppercase rounded-md bg-violet-500/20 hover:bg-violet-500/30 text-violet-100 flex items-center justify-center disabled:opacity-50 transition-all border border-violet-400/20"
                         title={t('仅对用户上传图片执行：批量参考生图', 'Batch reference image generation for user-uploaded images only')}
                     >
                         {isBatchReconstructingEntities ? (
                             <>
-                                <RefreshCw className="animate-spin" size={12} />
-                                {t('批量参考生图中', 'Batch Reference Generating')} {batchReconstructProgress ? `${batchReconstructProgress.current}/${batchReconstructProgress.total}` : '...'}
+                                <RefreshCw className="animate-spin" size={14} />
                             </>
                         ) : (
                             <>
-                                <Wand2 size={12} /> {t('批量参考生图', 'Batch Reference Generate')}
+                                <Wand2 size={14} />
                             </>
                         )}
                     </button>
@@ -3458,17 +3477,38 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6 w-full">
                 
                 
-                {entities.map((entity, entityIndex) => {
-                    const trackedJob = subjectImageJobs[String(entity.id)];
-                    const isBatchPending = !trackedJob && isBatchGeneratingEntities && !entity.image_url;
-                    const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
-                    const hasRunningSubjectImageJob = Boolean(trackedJob) || isBatchPending;
-                    return (
-                    <div
-                        key={entity.id}
-                        onClick={() => { setViewingEntity(entity); setViewingEntityTab('generate'); setAdvancedInstruction(''); }}
-                        className="bg-card border border-white/10 rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all min-h-[260px] flex flex-col"
-                    >
+                {(() => {
+                    const dependedKeys = new Set();
+                    (allEntities || entities || []).forEach(ent => {
+                        const deps = parseVisualDependencies(ent?.visual_dependencies);
+                        if (deps && deps.length > 0) {
+                            deps.forEach(dep => {
+                                const key = normalizeSubjectKeyForDeps(dep);
+                                if (key) dependedKeys.add(key);
+                            });
+                        }
+                    });
+
+                    return entities.map((entity, entityIndex) => {
+                        const trackedJob = subjectImageJobs[String(entity.id)];
+                        const isBatchPending = !trackedJob && isBatchGeneratingEntities && !entity.image_url;
+                        const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
+                        const hasRunningSubjectImageJob = Boolean(trackedJob) || isBatchPending;
+                        return (
+                        <div
+                            key={entity.id}
+                            onClick={() => { setViewingEntity(entity); setViewingEntityTab('generate'); setAdvancedInstruction(''); }}
+                            className={`bg-card border rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all min-h-[260px] flex flex-col ${(() => {
+                                const deps = parseVisualDependencies(entity.visual_dependencies);
+                                const hasDependencies = deps && deps.length > 0;
+                                const isDependedOn = dependedKeys.has(normalizeSubjectKeyForDeps(entity.name)) || (entity.name_en && dependedKeys.has(normalizeSubjectKeyForDeps(entity.name_en)));
+                                const isCharacter = entity.type === 'character';
+                                if (hasDependencies || isDependedOn) {
+                                    return (hasDependencies && isCharacter) ? 'border-amber-500/40 shadow-[0_0_10px_rgba(245,158,11,0.05)]' : (isDependedOn && !hasDependencies ? 'border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.05)]' : 'border-sky-500/40 shadow-[0_0_10px_rgba(14,165,233,0.05)]');
+                                }
+                                return 'border-white/10';
+                            })()}`}
+                        >
                         <div className="relative aspect-video w-full overflow-hidden bg-black">
                             {(trackedJob || isBatchPending) && (
                                 <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
@@ -3571,7 +3611,32 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         </div>
 
                         <div className="p-3 border-t border-white/10 flex-1 flex flex-col">
-                            <div className="font-bold text-white capitalize truncate">{entity.name}</div>
+                            <div className="flex items-start justify-between gap-2">
+                                <div className="font-bold text-white capitalize truncate">{entity.name}</div>
+                                {(() => {
+                                    const dependencies = parseVisualDependencies(entity.visual_dependencies);
+                                    const hasDependencies = dependencies && dependencies.length > 0;
+                                    const isDependedOn = dependedKeys.has(normalizeSubjectKeyForDeps(entity.name)) || (entity.name_en && dependedKeys.has(normalizeSubjectKeyForDeps(entity.name_en)));
+                                    const isCharacter = entity.type === 'character';
+
+                                    return (hasDependencies || isDependedOn) ? (
+                                        <div className="flex items-center gap-1.5 shrink-0 overflow-hidden">
+                                            {hasDependencies && (
+                                                <span className={`shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${isCharacter ? 'border-amber-300/40 text-amber-200 bg-amber-500/20' : 'border-sky-300/40 text-sky-200 bg-sky-500/20'}`} title={dependencies.join(', ')}>
+                                                    <LinkIcon size={10} />
+                                                    {isCharacter ? t('角色依赖', 'Role Dependency') : t('有依赖', 'Has Dependency')}
+                                                </span>
+                                            )}
+                                            {isDependedOn && (
+                                                <span className="shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-emerald-300/40 text-emerald-200 bg-emerald-500/20" title={t('作为其它资产的源', 'Source for other assets')}>
+                                                    <LinkIcon size={10} />
+                                                    {t('被依赖', 'Depended')}
+                                                </span>
+                                            )}
+                                        </div>
+                                    ) : null;
+                                })()}
+                            </div>
                             <div className="text-[10px] text-white/55 uppercase tracking-[0.16em] mt-1">{subTab}</div>
                             <div className="mt-3 text-[10px] text-white/45 uppercase tracking-[0.16em]">{t('Subject介绍', 'Subject Intro')}</div>
                             <div className="text-xs text-white/70 mt-1 line-clamp-3 leading-relaxed min-h-[3.5rem]">
@@ -3580,7 +3645,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         </div>
                     </div>
                     );
-                })}
+                })})()}
 
                 {entityListLoading && entities.length === 0 && Array.from({ length: 8 }).map((_, idx) => (
                     <div
