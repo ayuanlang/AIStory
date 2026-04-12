@@ -7831,8 +7831,12 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 {/* 3 Column Layout: Start | End | Video */}
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                     {/* Start Frame */}
-                                    <div className="space-y-2">
-                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
+
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[350px] overflow-hidden' : 'space-y-2'}>
+
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1' : ''}`}>
+
+                                            <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('起始帧', 'Start Frame')}
                                             </div>
@@ -7965,7 +7969,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 }
                                             }}
                                         />
-                                        <ReferenceManager 
+                                        </div>
+                                        <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                            <ReferenceManager 
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
@@ -7996,13 +8002,25 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                     return null;
                                                 }
                                             }}
-                                        />
+                                         isPortrait={isPortrait}
+/>
+                                        </div>
                                     </div>
 
 
                                     {/* End Frame */}
-                                    <div className="space-y-2">
-                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
+
+
+
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[350px] overflow-hidden' : 'space-y-2'}>
+
+
+
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1' : ''}`}>
+
+
+
+                                            <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('结束帧', 'End Frame')}
                                             </div>
@@ -8174,7 +8192,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 }
                                             }}
                                         />
-                                        <ReferenceManager 
+                                        </div>
+                                        <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                            <ReferenceManager 
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
@@ -8184,7 +8204,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             onPickMedia={openMediaPicker}
                                             storageKey="end_ref_image_urls"
                                             strictPromptOnly={true}
-                                        />
+                                         isPortrait={isPortrait}
+/>
+                                        </div>
                                     </div>
 
                                     {/* Final Video Output (Moved Here) */}
@@ -8337,7 +8359,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 }
                                             }}
                                         />
-                                        <ReferenceManager 
+                                        </div>
+                                        <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                            <ReferenceManager 
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
@@ -8347,7 +8371,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             onPickMedia={openMediaPicker}
                                             storageKey="video_ref_image_urls"
                                             strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}
-                                        />
+                                         isPortrait={isPortrait}
+/>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -9212,7 +9238,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         }}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                </div>
+                                                                <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                                                    <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -9228,8 +9256,10 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     {currentGeneratingState.end && (
                                                                         <div className="absolute inset-0 z-10 bg-black/68 flex items-center justify-center flex-col gap-3">
                                                                             <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
-                                                                                <Loader2 className="w-7 h-7 animate-spin text-amber-200" />
-                                                                            </div>
+                                                                                <Loader2 className="w-7 h-7 animate-spin text-amber-200"  isPortrait={isPortrait}
+/>
+                                                                </div>
+                                                            </div>
                                                                             <div className="text-center px-6">
                                                                                 <div className="text-sm font-bold uppercase tracking-[0.16em] text-amber-100">{t('正在生成结束帧', 'Generating End Frame')}</div>
                                                                                 <div className="mt-1 text-xs text-white/75">{t('生成完成后将自动刷新当前预览', 'This preview will refresh automatically when generation completes')}</div>
@@ -9325,7 +9355,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         onPromptUpdate={handleManualEndFrameInputChange}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                </div>
+                                                                <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                                                    <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -9412,8 +9444,10 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                                     className="w-full min-h-[92px] bg-black/40 border border-white/10 rounded p-2 text-xs leading-relaxed text-white/90 resize-y"
                                                                                     value={llmDialogueBackfillText}
                                                                                     readOnly
-                                                                                />
-                                                                            </div>
+                                                                                 isPortrait={isPortrait}
+/>
+                                                                </div>
+                                                            </div>
                                                                         )}
                                                                     </div>
                                                                 )}
@@ -9521,7 +9555,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
+                                                                </div>
+                                                                <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                                                    <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>
@@ -9680,8 +9716,10 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                             bottom: `${normalizeFrameTrimMargins(frameTrimModal).bottomPct}%`,
                                                             left: `${normalizeFrameTrimMargins(frameTrimModal).leftPct}%`,
                                                         }}
-                                                    />
-                                                </div>
+                                                     isPortrait={isPortrait}
+/>
+                                                                </div>
+                                                            </div>
                                             </div>
 
                                             <div className="p-4 space-y-4 bg-[#101012]">
