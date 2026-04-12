@@ -7831,7 +7831,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 {/* 3 Column Layout: Start | End | Video */}
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                     {/* Start Frame */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[350px] overflow-hidden' : 'space-y-2'}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[540px] xl:max-h-[600px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
                                             <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
@@ -7904,7 +7904,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
                                             </div>
                                         )}
-                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[260px] lg:h-[300px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('start')}>
+                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[340px] xl:h-[380px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('start')}>
                                             {currentGeneratingState.start && (
                                                 <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
                                                     <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
@@ -7952,7 +7952,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             )}
                                         </div>
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[72px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('起始帧提示词（中文）...', 'Start Frame Prompt (CN)...') : t('起始帧提示词...', 'Start Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             onChange={(e) => {
@@ -8005,7 +8005,7 @@ const isCroppingThisShot = !!(shotState.cropping);
 
 
                                     {/* End Frame */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[350px] overflow-hidden' : 'space-y-2'}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[540px] xl:max-h-[600px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
                                             <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
@@ -8076,7 +8076,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
                                             </div>
                                         )}
-                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[260px] lg:h-[300px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('end')}>
+                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[340px] xl:h-[380px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('end')}>
                                             {currentGeneratingState.end && (
                                                 <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
                                                     <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
@@ -8165,7 +8165,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         </div>
                                         
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[72px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('结束帧提示词（中文）...', 'End Frame Prompt (CN)...') : t('结束帧提示词...', 'End Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             onChange={(e) => {
@@ -8196,7 +8196,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                     </div>
 
                                     {/* Final Video Output (Moved Here) */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[350px] overflow-hidden' : 'space-y-2'}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[540px] xl:max-h-[600px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
                                             <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
@@ -8282,7 +8282,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         </div>
 
                                         <div 
-                                            style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[260px] lg:h-[300px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center`}
+                                            style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[340px] xl:h-[380px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center`}
                                             onClick={() => openAssetDetailModal('video')}
                                         >
                                             {currentGeneratingState.video && (
@@ -8325,7 +8325,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         })()}
 
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[60px]"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[72px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}
                                             onChange={(e) => {
