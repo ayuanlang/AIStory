@@ -454,7 +454,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         <>
             {renderModal()}
             <div className="space-y-2 pb-4 border-b border-white/10 mb-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col items-start gap-1 pb-1">
                      <h4 className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-2">
                         {title}
                         {isVideoManualOverride && (
