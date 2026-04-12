@@ -5081,32 +5081,86 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "llm_fallback_warnings": llm_fallback_warnings_loop,
             }
 
+        # Check cache
+        skip_step1 = False
+        cached_result_1 = ""
+        script_hash = ""
+        
+        req_text = getattr(request, "text", "")
+        if req_text:
+            script_hash = hashlib.sha256(req_text.encode("utf-8")).hexdigest()
+
+        ep_id = getattr(request, "episode_id", None)
+        if ep_id:
+            ep_cache = db.query(Episode).filter(Episode.id == ep_id).first()
+            if ep_cache and script_hash:
+                exist_res = ep_cache.ai_scene_analysis_result or ""
+                if f"<!-- script_hash: {script_hash} -->" in exist_res:
+                    if "### Subject Index" in exist_res and "```json" not in exist_res.lower() and '"characters": [' not in exist_res:
+                        skip_step1 = True
+                        cached_result_1 = exist_res
+
         _release_db_connection(db, "analyze_scene_llm_call")
 
         # 1. First Call
-        loop1_res = await _run_loop(messages)
-        result_content_1 = loop1_res["result_content"]
-        
-        # 2. Parse Subject Index
-        import re
-        subject_index_match = re.search(r"###\s*Subject\s*Index\n(.*?)(?=\n###|\Z)", result_content_1, flags=re.DOTALL | re.IGNORECASE)
-        parsed_subject_index = subject_index_match.group(1).strip() if subject_index_match else ""
-        
-        # 3. Create target_messages_2
-        try:
-            entity_design_skill = _resolve_prompt_text("skill:scene_analysis_feature_stack/entity_design.md")
-        except Exception as e:
-            logger.warning(f"Failed to load entity_design prompt, using default: {e}")
-            entity_design_skill = "Provide detailed Entity Designs based on the subject index."
+        if skip_step1:
+            loop1_res = {
+                "result_content": cached_result_1,
+                "segments_meta": [],
+                "usage_total": {},
+                "resolved_llm_routing": {},
+                "finish_reason": "stop",
+                "continuation_stopped_by_max_segments": False,
+                "output_char_cap_reached": False,
+                "continuation_reason_counts": {},
+                "continuation_by_structure": 0,
+                "provider_limit_hints": [],
+                "llm_fallback_warnings": []
+            }
+            result_content_1 = cached_result_1
+            
+            # 2. Parse Subject Index
+            import re
+            subject_index_match = re.search(r"###\s*Subject\s*Index\n(.*?)(?=\n###|\Z)", result_content_1, flags=re.DOTALL | re.IGNORECASE)
+            parsed_subject_index = subject_index_match.group(1).strip() if subject_index_match else ""
+            
+            # 3. Create target_messages_2
+            try:
+                entity_design_skill = _resolve_prompt_text("skill:scene_analysis_feature_stack/entity_design.md")
+            except Exception as e:
+                logger.warning(f"Failed to load entity_design prompt, using default: {e}")
+                entity_design_skill = "Provide detailed Entity Designs based on the subject index."
 
-        target_messages_2 = list(messages)
-        target_messages_2.append({"role": "assistant", "content": result_content_1})
-        target_messages_2.append({"role": "user", "content": f"Proceed to Phase 2 Entity Design.\n\nExtracted Subject Index:\n{parsed_subject_index}\n\nStrictly follow these guidelines:\n{entity_design_skill}"})
-        loop2_res = await _run_loop(target_messages_2)
-        result_content_2 = loop2_res["result_content"]
-        
-        # 5. Combine results
-        result_content = result_content_1 + "\n\n" + result_content_2
+            target_messages_2 = list(messages)
+            target_messages_2.append({"role": "assistant", "content": result_content_1})
+            target_messages_2.append({"role": "user", "content": f"Proceed to Phase 2 Entity Design.\n\nExtracted Subject Index:\n{parsed_subject_index}\n\nStrictly follow these guidelines:\n{entity_design_skill}"})
+            loop2_res = await _run_loop(target_messages_2)
+            result_content_2 = loop2_res["result_content"]
+            
+            # 5. Combine results
+            result_content = result_content_1 + "\n\n" + result_content_2
+            
+        else:
+            loop1_res = await _run_loop(messages)
+            result_content_1 = loop1_res["result_content"]
+            if script_hash:
+                result_content_1 = f"<!-- script_hash: {script_hash} -->\n" + result_content_1
+            
+            loop2_res = {
+                "result_content": "",
+                "segments_meta": [],
+                "usage_total": {},
+                "resolved_llm_routing": {},
+                "finish_reason": loop1_res.get("finish_reason", "stop"),
+                "continuation_stopped_by_max_segments": False,
+                "output_char_cap_reached": False,
+                "continuation_reason_counts": {},
+                "continuation_by_structure": 0,
+                "provider_limit_hints": [],
+                "llm_fallback_warnings": []
+            }
+            result_content_2 = ""
+            result_content = result_content_1
 
         # Expose all merged loop variables so the rest of the endpoint works seamlessly
         segments_meta = loop1_res["segments_meta"] + loop2_res["segments_meta"]
