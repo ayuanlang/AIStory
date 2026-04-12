@@ -374,8 +374,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             : pickFirstNonEmpty(enCandidates);
     }, [shotPromptDisplayLang]);
     const [scenes, setScenes] = useState([]);
-    const [shotSortMode, setShotSortMode] = useState('updated_desc');
-    const [shotSortDirection, setShotSortDirection] = useState('desc');
     const [selectedSceneId, setSelectedSceneId] = useState('all');
     const [sceneCodeFilter, setSceneCodeFilter] = useState('');
     const [shotIdFilter, setShotIdFilter] = useState('');
@@ -476,6 +474,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+    const [showBatchGenerateMenu, setShowBatchGenerateMenu] = useState(false);
     const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
@@ -692,9 +691,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         try {
             await deleteGenerationJob(kind, jobId);
             await fetchShotGenerationHistory(editingShot);
-            onLog?.(t('镜头历史任务记录已删除。', 'Shot history item deleted.'), 'warning');
+            onLog?.(t('分镜历史任务记录已删除。', 'Shot history item deleted.'), 'warning');
         } catch (e) {
-            onLog?.(t('删除镜头历史失败：', 'Failed to delete shot history item: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
+            onLog?.(t('删除分镜历史失败：', 'Failed to delete shot history item: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
         } finally {
             setShotGenerationHistoryDeletingId('');
         }
@@ -1705,7 +1704,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (resolved?.state !== 'running') return false;
 
         const mediaLabel = stableMediaKey === 'video'
-            ? t('视频', 'Video')
+            ? t('批量视频', 'Batch Video')
             : stableMediaKey === 'end'
                 ? t('结束帧', 'End Frame')
                 : t('起始帧', 'Start Frame');
@@ -3633,6 +3632,31 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setHasShotInitialLoadCompleted(false);
     }, [activeEpisode?.id]);
 
+    const lastReboundEpisodeRef = useRef(null);
+    useEffect(() => {
+        if (!activeEpisode?.id || !projectId) return;
+        if (lastReboundEpisodeRef.current === activeEpisode.id) return;
+        
+        lastReboundEpisodeRef.current = activeEpisode.id;
+        const runSilentRebind = async () => {
+            try {
+                const res = await rebindShotMediaAssets({
+                    project_id: Number(projectId),
+                    episode_id: Number(activeEpisode.id),
+                    limit: 10000,
+                });
+                const rebound = Number(res?.bound || 0);
+                if (rebound > 0) {
+                    onLog?.(`[Background] Media rebind finished: bound ${rebound}.`, 'success');
+                    refreshShots();
+                }
+            } catch (e) {
+                console.warn('Silent background rebind failed:', e);
+            }
+        };
+        runSilentRebind();
+    }, [activeEpisode?.id, projectId, refreshShots, onLog]);
+
     useEffect(() => {
         if (!activeEpisode?.id) return;
         let cancelled = false;
@@ -4479,7 +4503,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const handleDeleteSelectedShots = useCallback(async () => {
         const targetIds = (selectedShotIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
         if (targetIds.length === 0) {
-            onLog?.(t('请先选择要删除的镜头。', 'Select shots to delete first.'), 'warning');
+            onLog?.(t('请先选择要删除的分镜。', 'Select shots to delete first.'), 'warning');
             return;
         }
 
@@ -4493,7 +4517,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             await refreshShots();
         } catch (e) {
             console.error(e);
-            onLog?.(t('删除选中镜头失败', 'Failed to delete selected shots'), 'error');
+            onLog?.(t('删除选中分镜失败', 'Failed to delete selected shots'), 'error');
             await refreshShots();
         }
     }, [selectedShotIds, onLog, refreshShots, t]);
@@ -4544,7 +4568,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         for (let line of lines) {
              const trimmed = line.trim();
              if (!trimmed.includes('|')) continue;
-             if (trimmed.includes('Shot No') || trimmed.includes('Shot ID') || trimmed.includes('镜头ID') || trimmed.includes('---')) continue;
+             if (trimmed.includes('Shot No') || trimmed.includes('Shot ID') || trimmed.includes('分镜ID') || trimmed.includes('---')) continue;
              
              const cols = trimmed.split('|').map(c => c.trim());
              if (cols.length > 0 && cols[0] === '') cols.shift();
@@ -4752,7 +4776,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
              // Check for possible header row by keywords
              const normLine = line.toLowerCase();
              const isHeader = line.includes('|') && (
-                 normLine.includes('shot no') || normLine.includes('shot id') || normLine.includes('镜头id') || normLine.includes('scene id')
+                 normLine.includes('shot no') || normLine.includes('shot id') || normLine.includes('分镜id') || normLine.includes('scene id')
              );
              
              // Process Row splitting logic consistently for Header and Data
@@ -4811,8 +4835,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                      }
 
                      const shotData = {
-                         shot_id: useMap ? getVal(['shotid', 'shotno', '镜头id', 'id'], 0) : clean(cols[0]),
-                         shot_name: useMap ? getVal(['shotname', 'name', '镜头名称'], 1) : clean(cols[1]),
+                         shot_id: useMap ? getVal(['shotid', 'shotno', '分镜id', 'id'], 0) : clean(cols[0]),
+                         shot_name: useMap ? getVal(['shotname', 'name', '分镜名称'], 1) : clean(cols[1]),
                          
                          scene_code: extractedSceneCode,
                          
@@ -5857,7 +5881,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const targetShotId = editingShot.id;
         const videoUrlRaw = String(editingShot.video_url || '').trim();
         if (!videoUrlRaw) {
-            onLog?.(t('当前镜头没有视频，无法提取尾帧。', 'No shot video found to extract the last frame.'), 'warning');
+            onLog?.(t('当前分镜没有视频，无法提取尾帧。', 'No shot video found to extract the last frame.'), 'warning');
             return;
         }
 
@@ -6486,13 +6510,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const jobId = String(resolved?.jobId || '').trim();
         if (!jobId) {
             releaseShotVideoUiByShotId(stableShotId);
-            onLog?.(t('未找到后端视频任务，已清除当前镜头的本地运行状态。', 'No live backend video job was found. Cleared local running state for this shot.'), 'warning');
+            onLog?.(t('未找到后端视频任务，已清除当前分镜的本地运行状态。', 'No live backend video job was found. Cleared local running state for this shot.'), 'warning');
             showNotification(t('已清除本地视频运行状态', 'Local video running state cleared'), 'warning');
             return;
         }
 
         const confirmed = await confirmUiMessage(t(
-            `确认强制停止该镜头视频任务？\njob_id: ${jobId}`,
+            `确认强制停止该分镜视频任务？\njob_id: ${jobId}`,
             `Force stop this shot video task?\njob_id: ${jobId}`
         ));
         if (!confirmed) return;
@@ -6508,7 +6532,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const detailLower = String(detail).toLowerCase();
             if (detailLower.includes('job not found') || detailLower.includes('not found')) {
                 releaseShotVideoUiByShotId(stableShotId);
-                onLog?.(t('后端任务已不存在，已清除当前镜头的本地运行状态。', 'Backend job no longer exists. Cleared local running state for this shot.'), 'warning');
+                onLog?.(t('后端任务已不存在，已清除当前分镜的本地运行状态。', 'Backend job no longer exists. Cleared local running state for this shot.'), 'warning');
                 showNotification(t('后端任务不存在，已解除锁定', 'Backend job missing, lock cleared'), 'warning');
                 return;
             }
@@ -6687,13 +6711,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         });
 
         if (targetShots.length === 0) {
-            alert(t('当前所有镜头都已有起始帧和结束帧。', 'All shots already have start and end frames.'));
+            alert(t('当前所有分镜都已有起始帧和结束帧。', 'All shots already have start and end frames.'));
             return;
         }
 
         const ok = await confirmUiMessage(
             t(
-                `将为 ${targetShots.length} 个镜头批量生成缺失关键帧。系统会按依赖关系分批执行，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个，并对每个 shot 按“先起始帧、后结束帧”的顺序执行。是否继续？`,
+                `将为 ${targetShots.length} 个分镜批量生成缺失关键帧。系统会按依赖关系分批执行，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个，并对每个 shot 按“先起始帧、后结束帧”的顺序执行。是否继续？`,
                 `Generate missing keyframes for ${targetShots.length} shots. The scheduler will respect dependencies, run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave, and process each shot in start-frame then end-frame order. Continue?`
             )
         );
@@ -6831,7 +6855,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     failed += 1;
                     onLog?.(
                         t(
-                            `镜头批量关键帧失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                            `分镜批量关键帧失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
                             `Shot keyframe batch failed: ${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
                         ),
                         'error'
@@ -6896,13 +6920,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         });
 
         if (targetShots.length === 0) {
-            alert(t('当前没有适合首尾联生的镜头。仅会处理起始帧和结束帧都缺失、且结束帧不复用起始帧的镜头。', 'No shots are eligible for joint start/end generation. Only shots missing both start and end frames, with a distinct end frame prompt, are included.'));
+            alert(t('当前没有适合首尾联生的分镜。仅会处理起始帧和结束帧都缺失、且结束帧不复用起始帧的分镜。', 'No shots are eligible for joint start/end generation. Only shots missing both start and end frames, with a distinct end frame prompt, are included.'));
             return;
         }
 
         const ok = await confirmUiMessage(
             t(
-                `将为 ${targetShots.length} 个镜头批量执行首尾联生。系统会本地并发调度，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个镜头，只处理起始帧和结束帧都缺失、且结束帧不复用起始帧的镜头。是否继续？`,
+                `将为 ${targetShots.length} 个分镜批量执行首尾联生。系统会本地并发调度，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个分镜，只处理起始帧和结束帧都缺失、且结束帧不复用起始帧的分镜。是否继续？`,
                 `Run joint start/end diptych generation for ${targetShots.length} shots. The local scheduler will run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave and only include shots missing both start and end frames whose end prompt is not configured to reuse the start frame. Continue?`
             )
         );
@@ -7000,7 +7024,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     failed += 1;
                     onLog?.(
                         t(
-                            `镜头批量首尾联生失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                            `分镜批量首尾联生失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
                             `Shot joint diptych batch failed: ${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
                         ),
                         'error'
@@ -7105,7 +7129,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     : rawAssetType === 'end_frame'
                         ? t('结束帧', 'End Frame')
                         : rawAssetType === 'video'
-                            ? t('视频', 'Video')
+                            ? t('批量视频', 'Batch Video')
                             : ''
             );
 
@@ -7210,7 +7234,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setBatchProgress((prev) => ({
                 ...prev,
                 stopRequested: true,
-                status: res?.message || prev.status || t('已强制停止当前镜头批处理。', 'Current shot batch force-stopped.'),
+                status: res?.message || prev.status || t('已强制停止当前分镜批处理。', 'Current shot batch force-stopped.'),
                 currentAssetLabel: prev.currentAssetLabel || '',
                 mode: 'videos-backend',
             }));
@@ -7235,7 +7259,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
 
         if (!Array.isArray(shots) || shots.length === 0) {
-            const msg = t('当前没有可批量处理的镜头。请先在 Scenes 中生成并应用镜头，或选择包含镜头的场景。', 'No shots available for batch processing. Generate/apply shots from Scenes first, or select a scene that has shots.');
+            const msg = t('当前没有可批量处理的分镜。请先在 Scenes 中生成并应用分镜，或选择包含分镜的场景。', 'No shots available for batch processing. Generate/apply shots from Scenes first, or select a scene that has shots.');
             onLog?.(msg, 'warning');
             alert(msg);
             return;
@@ -7249,7 +7273,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const targetShots = mode === 'videos' ? getBatchVideoEligibleShots(shots) : shots;
         if (mode === 'videos' && targetShots.length === 0) {
-            const msg = t('当前没有可批量生成视频的镜头。需要至少已有一张首尾帧，且当前没有视频。', 'No eligible shots for batch video generation. Each shot must already have at least one start/end frame and must not already have a video.');
+            const msg = t('当前没有可批量生成视频的分镜。需要至少已有一张首尾帧，且当前没有视频。', 'No eligible shots for batch video generation. Each shot must already have at least one start/end frame and must not already have a video.');
             onLog?.(msg, 'warning');
             alert(msg);
             return;
@@ -7257,7 +7281,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const ok = mode === 'videos'
             ? await confirmUiMessage(t(
-                `将为 ${targetShots.length} 个镜头批量生成视频。只会提交至少已有一张首尾帧、且当前没有视频的镜头；后端会按你的账号等级并发执行。是否继续？`,
+                `将为 ${targetShots.length} 个分镜批量生成视频。只会提交至少已有一张首尾帧、且当前没有视频的分镜；后端会按你的账号等级并发执行。是否继续？`,
                 `Generate videos for ${targetShots.length} shots. Only shots that already have at least one start/end frame and do not already have a video will be submitted; the backend will run them concurrently based on your user level. Continue?`
             ))
             : true;
@@ -7268,8 +7292,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const targetShotIds = targetShots.map((shot) => shot.id).filter(Boolean);
             if (targetShotIds.length === 0) {
                 const msg = mode === 'videos'
-                    ? t('当前没有可批量生成视频的镜头。需要至少已有一张首尾帧，且当前没有视频。', 'No eligible shots for batch video generation. Each shot must already have at least one start/end frame and must not already have a video.')
-                    : t('当前镜头尚未保存到数据库，无法批量执行。请先保存镜头。', 'Current shots are not saved to database yet, cannot run batch. Please save shots first.');
+                    ? t('当前没有可批量生成视频的分镜。需要至少已有一张首尾帧，且当前没有视频。', 'No eligible shots for batch video generation. Each shot must already have at least one start/end frame and must not already have a video.')
+                    : t('当前分镜尚未保存到数据库，无法批量执行。请先保存分镜。', 'Current shots are not saved to database yet, cannot run batch. Please save shots first.');
                 onLog?.(msg, 'warning');
                 alert(msg);
                 return;
@@ -7360,21 +7384,25 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [activeEpisode?.episode_number, activeEpisode?.title, activeEpisode?.id, sceneCodeById]);
 
     const sortedShots = useMemo(() => {
-        const rows = [...(shots || [])];
-        if (shotSortMode === 'hierarchy') {
-            rows.sort((a, b) => getShotHierarchyKey(a).localeCompare(getShotHierarchyKey(b), undefined, { numeric: true, sensitivity: 'base' }));
-            if (shotSortDirection === 'desc') rows.reverse();
-            return rows;
-        }
-        rows.sort((a, b) => {
-            const ta = getShotUpdatedAtMs(a);
-            const tb = getShotUpdatedAtMs(b);
-            if (tb !== ta) return tb - ta;
-            return getShotHierarchyKey(a).localeCompare(getShotHierarchyKey(b), undefined, { numeric: true, sensitivity: 'base' });
+        return [...(shots || [])].sort((a, b) => {
+            const sceneIdxA = (scenes || []).findIndex(s => String(s.id) === String(a.scene_id));
+            const sceneIdxB = (scenes || []).findIndex(s => String(s.id) === String(b.scene_id));
+            
+            if (sceneIdxA !== -1 && sceneIdxB !== -1 && sceneIdxA !== sceneIdxB) {
+                return sceneIdxA - sceneIdxB;
+            }
+            
+            const sceneA = a.scene_no || a.scene_id || "";
+            const sceneB = b.scene_no || b.scene_id || "";
+            if (sceneA !== sceneB) {
+                return String(sceneA).localeCompare(String(sceneB), undefined, {numeric: true, sensitivity: 'base'});
+            }
+            
+            const shotA = a.shot_no || a.shot_id || a.id || "";
+            const shotB = b.shot_no || b.shot_id || b.id || "";
+            return String(shotA).localeCompare(String(shotB), undefined, {numeric: true, sensitivity: 'base'});
         });
-        if (shotSortDirection === 'asc') rows.reverse();
-        return rows;
-    }, [shots, shotSortMode, shotSortDirection, getShotUpdatedAtMs, getShotHierarchyKey]);
+    }, [shots, scenes]);
 
     const selectedShotIdSet = useMemo(
         () => new Set((selectedShotIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
@@ -7422,7 +7450,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (total <= 0) return '';
         const current = Number(batchProgress?.current || 0);
         const shotSuffix = batchProgress?.currentShotLabel
-            ? t(`（镜头 ${batchProgress.currentShotLabel}）`, ` (Shot ${batchProgress.currentShotLabel})`)
+            ? t(`（分镜 ${batchProgress.currentShotLabel}）`, ` (Shot ${batchProgress.currentShotLabel})`)
             : '';
         const assetSuffix = batchProgress?.currentAssetLabel
             ? t(`（资源 ${batchProgress.currentAssetLabel}）`, ` (Asset ${batchProgress.currentAssetLabel})`)
@@ -7455,7 +7483,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
              <div className="flex justify-between items-center mb-6 shrink-0">
                 <div className="flex items-center gap-4">
                     <h2 className="text-2xl font-bold flex items-center gap-2">
-                        {t('镜头管理', 'Shot Manager')}
+                        {t('分镜管理', 'Shot Manager')}
                         <span className="text-sm font-normal text-muted-foreground ml-2">({shots.length})</span>
                         {hasActiveGeneration && (
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30 flex items-center gap-1">
@@ -7479,21 +7507,21 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         <button 
                             onClick={handleDeleteAllShots}
                             className="ml-2 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded text-xs border border-red-500/20"
-                            title={t('删除当前显示的全部镜头', 'Delete All Displayed Shots')}
+                            title={t('删除当前显示的全部分镜', 'Delete All Displayed Shots')}
                         >
                             <Trash2 className="w-3 h-3"/>
                         </button>
                         <button
                             onClick={() => toggleSelectAllVisibleShots(true)}
                             className="ml-2 px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded text-xs border border-white/20"
-                            title={t('全选当前显示镜头', 'Select all visible shots')}
+                            title={t('全选当前显示分镜', 'Select all visible shots')}
                         >
                             {t('全选', 'Select All')}
                         </button>
                         <button
                             onClick={() => toggleSelectAllVisibleShots(false)}
                             className="ml-1 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-white/80 rounded text-xs border border-white/10"
-                            title={t('清空已选镜头', 'Clear selected shots')}
+                            title={t('清空已选分镜', 'Clear selected shots')}
                         >
                             {t('清空', 'Clear')}
                         </button>
@@ -7501,46 +7529,63 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             onClick={handleDeleteSelectedShots}
                             disabled={(selectedShotIds || []).length === 0}
                             className="ml-1 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded text-xs border border-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={t('删除已选镜头', 'Delete selected shots')}
+                            title={t('删除已选分镜', 'Delete selected shots')}
                         >
                             {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
                         </button>
-                        <div className="relative inline-flex items-center ml-2 border border-white/20 rounded overflow-hidden">
-                             <button
-                                onClick={handleManualRebindMediaSlots}
-                                disabled={isManualRebindingMedia || isBatchGenerating || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${isManualRebindingMedia ? 'bg-white/20 text-white/80 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('手动回填历史媒体关联（只补空槽位）', 'Manual historical media rebind (fills empty slots only)')}
-                            >
-                                {isManualRebindingMedia ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3"/>}
-                                <span>{t('回填', 'Rebind')}</span>
-                            </button>
-                             <button 
-                                onClick={handleBatchGenerate}
-                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                title={t('批量生成缺失的起始/结束帧', 'Batch Generate Missing Start/End Frames')}
-                            >
-                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('补帧', 'Frames')}</span>
-                            </button>
-                            <button 
-                                onClick={handleBatchGenerateJointDiptych}
-                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                title={t('按镜头批量执行首尾联生', 'Batch Generate Joint Start/End Diptychs')}
-                            >
-                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <PanelsTopLeft className="w-3 h-3"/>}
-                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('首尾联生', 'Joint')}</span>
-                            </button>
-                            <button 
+                        <div className="relative inline-flex items-center ml-2 border border-white/20 rounded z-[900]">
+                             <div className="relative flex items-stretch h-full bg-primary/10 border-r border-white/20 group">
+                                <button
+                                    onClick={handleBatchGenerate}
+                                    disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                    className={`px-3 py-1.5 text-xs flex items-center justify-center gap-1 transition-all h-full ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'text-primary hover:bg-primary/20'}`}
+                                    title={t('先首帧后尾帧批量生成/补帧', 'Batch Generate Missing Start/End Frames')}
+                                >
+                                    {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                    <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('批量生成分镜', 'Batch Generate Shots')}</span>
+                                </button>
+                                <div 
+                                    className={`relative flex items-stretch h-full ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 cursor-wait' : 'hover:bg-primary/20'}`}
+                                    onMouseEnter={() => setShowBatchGenerateMenu(true)}
+                                    onMouseLeave={() => setShowBatchGenerateMenu(false)}
+                                >
+                                    <button
+                                        disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                        className="px-1.5 py-1.5 h-full flex items-center justify-center border-l border-white/10 disabled:opacity-50"
+                                    >
+                                        <ChevronDown className="w-3 h-3 text-primary" />
+                                    </button>
+                                    {showBatchGenerateMenu && !isBatchGenerating && !isShotBatchStarting && !isStoppingShotBatch && (
+                                        <div className="absolute top-full right-0 pt-1 z-[999]">
+                                            <div className="w-44 bg-gray-900 border border-white/20 rounded shadow-xl overflow-hidden flex flex-col cursor-auto">
+                                                <button
+                                                    onClick={() => { setShowBatchGenerateMenu(false); handleBatchGenerate(); }}
+                                                    className="w-full text-left px-3 py-2 text-xs text-white hover:bg-white/10 flex items-center justify-between"
+                                                >
+                                                    <span>{t('先首帧后尾帧', 'Start then End')}</span>
+                                                    <span className="text-[10px] text-muted-foreground ml-2">(默认)</span>
+                                                </button>
+                                                <div className="h-px bg-white/10 w-full" />
+                                                <button
+                                                    onClick={() => { setShowBatchGenerateMenu(false); handleBatchGenerateJointDiptych(); }}
+                                                    className="w-full text-left px-3 py-2 text-xs text-white hover:bg-white/10 flex items-center gap-2"
+                                                >
+                                                    <PanelsTopLeft className="w-3 h-3 text-muted-foreground"/>
+                                                    <span>{t('首尾联生', 'Joint Start/End')}</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            <button
                                 onClick={handleBatchGenerateVideo}
                                 disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
                                 className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                title={t('批量生成视频（仅处理已有首尾帧且当前无视频的镜头）', 'Batch Generate Videos (only shots with existing start/end frames and no current video)')}
+                                title={t('批量生成视频（仅处理已有首尾帧且当前无视频的分镜）', 'Batch Generate Videos (only shots with existing start/end frames and no current video)')}
                             >
                                 {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>}
-                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('视频', 'Video')}</span>
+                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('批量视频', 'Batch Video')}</span>
                             </button>
                             {isBatchGenerating && (
                                 <button
@@ -7561,29 +7606,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                     </div>
 
-                    <div className="flex items-center gap-1 ml-2">
-                        <button
-                            onClick={() => setShotSortMode('updated_desc')}
-                            className={`px-3 py-1.5 rounded text-xs border ${shotSortMode === 'updated_desc' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
-                            title={t('按修改时间排序', 'Sort by modified time')}
-                        >
-                            {t('时间', 'Modified')}
-                        </button>
-                        <button
-                            onClick={() => setShotSortMode('hierarchy')}
-                            className={`px-3 py-1.5 rounded text-xs border ${shotSortMode === 'hierarchy' ? 'bg-primary/20 text-primary border-primary/30' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}
-                            title={t('按集/场景/镜头排序', 'Sort by episode/scene/shot')}
-                        >
-                            {t('层级', 'Hierarchy')}
-                        </button>
-                        <button
-                            onClick={() => setShotSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                            className="px-3 py-1.5 rounded text-xs border bg-white/5 text-white border-white/10 hover:bg-white/10"
-                            title={t('切换排序方向', 'Toggle sort direction')}
-                        >
-                            {shotSortDirection === 'asc' ? t('升序', 'Asc') : t('降序', 'Desc')}
-                        </button>
-                    </div>
                 </div>
                 
                 <div className="flex items-center gap-2">
@@ -7630,7 +7652,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         {isShotsLoading && !hasShotInitialLoadCompleted && sortedShots.length === 0 && (
                             <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-primary/20 rounded-xl bg-primary/5">
                                 <Loader2 className="w-12 h-12 mb-4 animate-spin text-primary" />
-                                <p>{t('镜头预装入中...', 'Preloading shots...')}</p>
+                                <p>{t('分镜预装入中...', 'Preloading shots...')}</p>
                             </div>
                         )}
                         {sortedShots.map((shot, idx) => {
@@ -7681,7 +7703,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                     <label
                                         className="absolute top-2 right-2 z-20 flex items-center justify-center w-5 h-5 rounded bg-black/60 border border-white/30 shadow"
                                         onClick={(e) => e.stopPropagation()}
-                                        title={t('选择镜头', 'Select shot')}
+                                        title={t('选择分镜', 'Select shot')}
                                     >
                                         <input
                                             type="checkbox"
@@ -7734,15 +7756,15 @@ const isCroppingThisShot = !!(shotState.cropping);
                         {sortedShots.length === 0 && !isShotsLoading && hasShotInitialLoadCompleted && (
                             <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
                                 <Film className="w-12 h-12 mb-4 opacity-20" />
-                                <p>{t('该场景暂无镜头。', 'No shots in this scene.')}</p>
-                                <button className="text-primary text-sm hover:underline mt-2" onClick={() => setIsImportOpen(true)}>{t('导入镜头表', 'Import Shots Table')}</button>
+                                <p>{t('该场景暂无分镜。', 'No shots in this scene.')}</p>
+                                <button className="text-primary text-sm hover:underline mt-2" onClick={() => setIsImportOpen(true)}>{t('导入分镜表', 'Import Shots Table')}</button>
                             </div>
                         )}
                      </div>
                  ) : (
                      <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
                          <Clapperboard className="w-16 h-16 mb-4 opacity-20" />
-                         <p className="text-lg font-medium">{t('选择一个场景来管理镜头', 'Select a Scene to manage shots')}</p>
+                         <p className="text-lg font-medium">{t('选择一个场景来管理分镜', 'Select a Scene to manage shots')}</p>
                          <p className="text-sm opacity-50 max-w-md text-center mt-2">
                             Available scenes are loaded from the database. <br/>
                             If your list is empty, make sure you have created scenes in the "Scenes" tab.
@@ -7794,7 +7816,7 @@ const isCroppingThisShot = !!(shotState.cropping);
 
                         <div className="p-3 sm:p-4 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 sticky top-0 bg-[#09090b] z-10">
                             <h3 className="font-bold text-lg flex items-center gap-2">
-                                {t('编辑镜头', 'Edit Shot')} {editingShot.shot_id}
+                                {t('编辑分镜', 'Edit Shot')} {editingShot.shot_id}
                                 {editingShot.shot_name && <span className="text-base font-normal text-muted-foreground">- {editingShot.shot_name}</span>}
                             </h3>
                             <div className="flex items-center gap-2">
@@ -7816,12 +7838,12 @@ const isCroppingThisShot = !!(shotState.cropping);
                         <div className="p-4 sm:p-6 space-y-6">
 
                             <div>
-                                <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
+                                <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('分镜逻辑（中文）', 'Shot Logic (CN)')}</label>
                                 <PromptMentionTextarea entities={entities} uiLang={uiLang} 
                                     className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-20 focus:outline-none focus:border-primary/50"
                                     value={editingShot.shot_logic_cn || ''}
                                     onChange={(e) => setEditingShot({...editingShot, shot_logic_cn: e.target.value})}
-                                    placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
+                                    placeholder={t('分镜逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
                                 />
                             </div>
                             
@@ -8265,7 +8287,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 <button
                                                     onClick={() => handleForceStopShotVideo(editingShot?.id)}
                                                     className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? 'bg-red-500/25 text-red-100' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
-                                                    title={t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job')}
+                                                    title={t('强制停止当前分镜的视频生成任务', 'Force stop current shot video job')}
                                                 >
                                                     {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                                     {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
@@ -9035,7 +9057,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                         {shotGenerationHistoryLoading ? (
                                                             <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-6 text-xs text-muted-foreground">
                                                                 <Loader2 className="h-4 w-4 animate-spin" />
-                                                                {t('正在加载镜头生成历史...', 'Loading shot generation history...')}
+                                                                {t('正在加载分镜生成历史...', 'Loading shot generation history...')}
                                                             </div>
                                                         ) : filteredHistory.length === 0 ? (
                                                             <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
@@ -9464,7 +9486,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         disabled: false,
                                                                         busy: isStoppingCurrentVideo,
                                                                         variant: 'danger',
-                                                                        title: t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job'),
+                                                                        title: t('强制停止当前分镜的视频生成任务', 'Force stop current shot video job'),
                                                                     })}
                                                                 </div>
                                                                 <label className="inline-flex items-center gap-2 text-xs text-white/80">
@@ -9820,7 +9842,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium flex items-center gap-2"
                             >
                                 {shotPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Wand2 size={16}/>}
-                                {shotPromptModal.loading ? t('生成中...', 'Generating...') : t('生成镜头', 'Generate Shots')}
+                                {shotPromptModal.loading ? t('生成中...', 'Generating...') : t('生成分镜', 'Generate Shots')}
                             </button>
                         </div>
 
@@ -9836,14 +9858,14 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 type="text"
                                 value={shotIdFilter}
                                 onChange={(e) => setShotIdFilter(e.target.value)}
-                                placeholder={t('筛选镜头ID（EPxx_SCyy_SHzz）', 'Filter Shot ID (EPxx_SCyy_SHzz)')}
+                                placeholder={t('筛选分镜ID（EPxx_SCyy_SHzz）', 'Filter Shot ID (EPxx_SCyy_SHzz)')}
                                 className="bg-black/40 border border-white/20 rounded px-2.5 py-1.5 text-xs w-full sm:w-auto sm:min-w-[220px] text-white"
                             />
                             <button
                                 onClick={() => { setSceneCodeFilter(''); setShotIdFilter(''); }}
                                 className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 rounded text-[11px] text-white border border-white/10"
                             >
-                                {t('清除镜头筛选', 'Clear Shot Filters')}
+                                {t('清除分镜筛选', 'Clear Shot Filters')}
                             </button>
                         </div>
                     </div>
@@ -9906,7 +9928,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         ? editingShot
                                         : (shots || []).find((item) => item?.id === targetShotId);
                                     if (!shot) {
-                                        showNotification(t('未找到镜头，无法提交配音生成', 'Shot not found, cannot submit voice generation'), 'error');
+                                        showNotification(t('未找到分镜，无法提交配音生成', 'Shot not found, cannot submit voice generation'), 'error');
                                         return;
                                     }
 
@@ -9945,7 +9967,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                 <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
                     <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-[90vw] h-[90vh] flex flex-col shadow-2xl">
                          <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/40">
-                            <h3 className="font-bold flex items-center gap-2"><TableIcon size={16} className="text-primary"/> {t('审核 AI 生成镜头', 'Review AI Generated Shots')}</h3>
+                            <h3 className="font-bold flex items-center gap-2"><TableIcon size={16} className="text-primary"/> {t('审核 AI 生成分镜', 'Review AI Generated Shots')}</h3>
                             <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted-foreground bg-yellow-500/10 text-yellow-500 px-2 py-1 rounded">{t('暂存区', 'Staging Area')}</span>
                                 <button onClick={() => setShotReviewModal({open: false, sceneId: null, data: null, loading: false})}><X size={18}/></button>
@@ -9958,7 +9980,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                     {(shotReviewModal.data || []).map((shot, idx) => (
                                         <div key={`review-mobile-${idx}`} className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2.5">
                                             <div className="text-[11px] font-bold text-white/90 truncate">
-                                                {(shot['Shot ID'] || shot.shot_id || `#${idx + 1}`)} · {(shot['Shot Name'] || shot.shot_name || t('未命名镜头', 'Untitled Shot'))}
+                                                {(shot['Shot ID'] || shot.shot_id || `#${idx + 1}`)} · {(shot['Shot Name'] || shot.shot_name || t('未命名分镜', 'Untitled Shot'))}
                                             </div>
                                             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('内容', 'Content')}</div>
                                             <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
@@ -9989,8 +10011,8 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 <table className="hidden md:table w-full min-w-[900px] text-xs text-left border-collapse">
                                     <thead className="sticky top-0 bg-[#252525] z-10 shadow-md">
                                         <tr>
-                                            <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('镜头 ID', 'Shot ID')}</th>
-                                            <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('镜头名称', 'Shot Name')}</th>
+                                            <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('分镜 ID', 'Shot ID')}</th>
+                                            <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('分镜名称', 'Shot Name')}</th>
                                             <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('内容', 'Content')}</th>
                                             <th className="p-2 border-b border-white/10 font-bold text-white/70">{t('时长', 'Duration')}</th>
                                             <th className="hidden md:table-cell p-2 border-b border-white/10 font-bold text-white/70">{t('关联实体', 'Entities')}</th>
@@ -10072,15 +10094,15 @@ const isCroppingThisShot = !!(shotState.cropping);
                             </button>
                              <button 
                                 onClick={async () => {
-                                    if(!await confirmUiMessage(t('应用这些镜头吗？这会替换现有镜头。', 'Apply these shots? This will replace existing shots.'))) return;
+                                    if(!await confirmUiMessage(t('应用这些分镜吗？这会替换现有分镜。', 'Apply these shots? This will replace existing shots.'))) return;
                                     setShotReviewModal(prev => ({...prev, loading: true}));
                                     try {
                                         await applySceneAIResult(shotReviewModal.sceneId, { content: shotReviewModal.data });
-                                        onLog?.(t('镜头已应用到数据库。', 'Shots applied to database.'), "success");
+                                        onLog?.(t('分镜已应用到数据库。', 'Shots applied to database.'), "success");
                                         setShotReviewModal({open: false, sceneId: null, data: null, loading: false});
                                         if (typeof refreshShots === 'function') refreshShots();
                                     } catch(e) {
-                                        onLog?.(t('应用镜头失败: ', 'Failed to apply shots: ') + e.message, "error");
+                                        onLog?.(t('应用分镜失败: ', 'Failed to apply shots: ') + e.message, "error");
                                         setShotReviewModal(prev => ({...prev, loading: false}));
                                     }
                                 }}
