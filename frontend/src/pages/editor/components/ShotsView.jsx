@@ -7831,8 +7831,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 {/* 3 Column Layout: Start | End | Video */}
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                     {/* Start Frame */}
-                                    <div className="space-y-2">
-                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[350px] overflow-hidden' : 'space-y-2'}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1' : ''}`}>
+                                            <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('起始帧', 'Start Frame')}
                                             </div>
@@ -7965,7 +7966,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 }
                                             }}
                                         />
-                                        <ReferenceManager 
+                                        </div>
+                                        <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                            <ReferenceManager isPortrait={isPortrait} 
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
@@ -7997,12 +8000,14 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 }
                                             }}
                                         />
+                                        </div>
                                     </div>
 
 
                                     {/* End Frame */}
-                                    <div className="space-y-2">
-                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[350px] overflow-hidden' : 'space-y-2'}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1' : ''}`}>
+                                            <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('结束帧', 'End Frame')}
                                             </div>
@@ -8174,7 +8179,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 }
                                             }}
                                         />
-                                        <ReferenceManager 
+                                        </div>
+                                        <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                            <ReferenceManager isPortrait={isPortrait} 
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
@@ -8185,11 +8192,13 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             storageKey="end_ref_image_urls"
                                             strictPromptOnly={true}
                                         />
+                                        </div>
                                     </div>
 
                                     {/* Final Video Output (Moved Here) */}
-                                    <div className="space-y-2">
-                                        <div className="flex min-h-[52px] items-start justify-between gap-2">
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[350px] overflow-hidden' : 'space-y-2'}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1' : ''}`}>
+                                            <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                 {t('最终视频', 'Final Video')}
                                             </div>
@@ -8337,7 +8346,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 }
                                             }}
                                         />
-                                        <ReferenceManager 
+                                        </div>
+                                        <div className={isPortrait ? "w-[74px] lg:w-[86px] shrink-0 pt-0 flex flex-col h-full overflow-hidden" : "w-full"}>
+                                            <ReferenceManager isPortrait={isPortrait} 
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
@@ -8348,6 +8359,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             storageKey="video_ref_image_urls"
                                             strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}
                                         />
+                                        </div>
                                     </div>
                                 </div>
 
