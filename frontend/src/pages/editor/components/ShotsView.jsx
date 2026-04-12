@@ -7831,7 +7831,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 {/* 3 Column Layout: Start | End | Video */}
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                     {/* Start Frame */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[540px] xl:max-h-[600px] overflow-hidden' : 'space-y-2'}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
                                             <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
@@ -7904,7 +7904,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
                                             </div>
                                         )}
-                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[340px] xl:h-[380px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('start')}>
+                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[420px] 2xl:h-[480px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('start')}>
                                             {currentGeneratingState.start && (
                                                 <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
                                                     <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
@@ -8005,7 +8005,7 @@ const isCroppingThisShot = !!(shotState.cropping);
 
 
                                     {/* End Frame */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[540px] xl:max-h-[600px] overflow-hidden' : 'space-y-2'}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
                                             <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
@@ -8076,7 +8076,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
                                             </div>
                                         )}
-                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[340px] xl:h-[380px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('end')}>
+                                        <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[420px] 2xl:h-[480px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border relative group overflow-hidden cursor-pointer flex items-center justify-center transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`} onClick={() => openAssetDetailModal('end')}>
                                             {currentGeneratingState.end && (
                                                 <div className="absolute inset-0 bg-black/68 z-10 flex items-center justify-center flex-col gap-3">
                                                     <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
@@ -8196,7 +8196,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                     </div>
 
                                     {/* Final Video Output (Moved Here) */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[540px] xl:max-h-[600px] overflow-hidden' : 'space-y-2'}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
                                             <div className="flex min-h-[52px] items-start justify-between gap-2">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
@@ -8282,7 +8282,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         </div>
 
                                         <div 
-                                            style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[340px] xl:h-[380px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center`}
+                                            style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "h-[420px] 2xl:h-[480px] w-auto mx-auto shrink-0" : "aspect-video w-full"} bg-black rounded border border-white/10 relative group overflow-hidden cursor-pointer flex items-center justify-center`}
                                             onClick={() => openAssetDetailModal('video')}
                                         >
                                             {currentGeneratingState.video && (
