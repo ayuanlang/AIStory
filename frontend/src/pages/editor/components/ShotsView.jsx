@@ -7972,7 +7972,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
-                                            title={t('参考图（起始帧）', 'Refs (Start)')}
+                                            title={t('参考图', 'Refs')}
                                             promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
@@ -8185,7 +8185,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
-                                            title={t('参考图（结束帧）', 'Refs (End)')}
+                                            title={t('参考图', 'Refs')}
                                             promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
@@ -8352,7 +8352,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             shot={editingShot} 
                                             entities={entities} 
                                             onUpdate={(updates) => { persistEditingShotUpdates(updates); }} 
-                                            title={t('参考图（实体）', 'Refs (Entity)')}
+                                            title={t('参考图', 'Refs')}
                                             promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
@@ -9224,7 +9224,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         }}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（起始帧）', 'Refs (Start)')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -9337,7 +9337,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         onPromptUpdate={handleManualEndFrameInputChange}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（结束帧）', 'Refs (End)')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -9533,7 +9533,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图（实体）', 'Refs (Entity)')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>
