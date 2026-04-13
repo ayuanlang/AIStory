@@ -3244,6 +3244,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
                 const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
                 onLog?.(`[Asset Gen Tracking] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+            }
+
+        } catch (error) {
+            console.error("Asset generation step failed:", error);
+            onLog?.(`Asset generation failed: ${error.message}`);
+        }
+
         return emptyReport;
     }, [
         projectId, llmRawResultContent, llmResultContent, activeEpisode, t, onLog,

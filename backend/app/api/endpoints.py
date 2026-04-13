@@ -2344,8 +2344,8 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
         request_mode = str(req_context.get("mode") or "").strip().lower()
         if request_mode != "joint_diptych" and normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
             _register_asset_helper(db, current_user.id, normalized_url, req_context, normalized_meta)
-            _bind_generated_media_to_shot(db, current_user, req_context, normalized_url, oss_uploaded_success=False)
-            _bind_generated_media_to_entity(db, current_user, req_context, normalized_url, oss_uploaded_success=False)
+            _bind_generated_media_to_shot(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
+            _bind_generated_media_to_entity(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
         elif request_mode != "joint_diptych" and normalized_url:
             logger.warning(
                 "[ImageJob] skipped asset registration/bind for temporary provider url | job_id=%s user_id=%s url=%s entity_id=%s shot_id=%s",
