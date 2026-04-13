@@ -680,13 +680,15 @@ const Editor = ({
                     payload.props.push(item);
                 } else if (['environment', 'environments', 'env', 'scene', '场景', '环境'].includes(type)) {
                     payload.environments.push(item);
+                } else if (['poster', 'posters', 'cover', 'covers', '海报', '封面'].includes(type)) {
+                    payload.posters.push(item);
                 }
             }
             return payload;
         };
 
         const mergePayload = (base, patch) => {
-            const out = base || { characters: [], props: [], environments: [] };
+            const out = base || { characters: [], props: [], environments: [], posters: [] };
             const appendUnique = (target, incoming) => {
                 const seen = new Set(target.map((x) => JSON.stringify(x || {})));
                 for (const item of (incoming || [])) {
@@ -699,6 +701,7 @@ const Editor = ({
             appendUnique(out.characters, Array.isArray(patch?.characters) ? patch.characters : []);
             appendUnique(out.props, Array.isArray(patch?.props) ? patch.props : []);
             appendUnique(out.environments, Array.isArray(patch?.environments) ? patch.environments : []);
+            appendUnique(out.posters, Array.isArray(patch?.posters) ? patch.posters : []);
             return out;
         };
 
@@ -716,18 +719,21 @@ const Editor = ({
             const characters = pick(obj, ['characters', 'character', 'chars', 'roles', 'people', '人物', '角色']);
             const props = pick(obj, ['props', 'prop', 'items', '道具', '物件']);
             const environments = pick(obj, ['environments', 'environment', 'env', 'scenes', '场景', '环境']);
-            if (characters.length || props.length || environments.length) {
-                return { characters, props, environments };
+            const posters = pick(obj, ['poster', 'posters', 'cover', 'covers', '海报', '封面']);
+            if (characters.length || props.length || environments.length || posters.length) {
+                return { characters, props, environments, posters };
             }
 
             const byKeywordCharacters = deepFindArrayByKeywords(obj, ['character', 'role', 'cast', '角色', '人物']);
             const byKeywordProps = deepFindArrayByKeywords(obj, ['prop', 'item', 'object', '道具', '物件']);
             const byKeywordEnvironments = deepFindArrayByKeywords(obj, ['environment', 'scene', 'location', '场景', '环境']);
-            if (byKeywordCharacters.length || byKeywordProps.length || byKeywordEnvironments.length) {
+            const byKeywordPosters = deepFindArrayByKeywords(obj, ['poster', 'cover', '海报', '封面']);
+            if (byKeywordCharacters.length || byKeywordProps.length || byKeywordEnvironments.length || byKeywordPosters.length) {
                 return {
                     characters: byKeywordCharacters,
                     props: byKeywordProps,
                     environments: byKeywordEnvironments,
+                    posters: byKeywordPosters,
                 };
             }
 
@@ -1189,7 +1195,7 @@ const Editor = ({
 
     const getMergedEntitiesPayloadFromText = (inputText) => {
         const text = String(inputText || '');
-        const emptyPayload = { characters: [], props: [], environments: [] };
+        const emptyPayload = { characters: [], props: [], environments: [], posters: [] };
 
         const normalizeName = (item) => {
             const rawName = String(
@@ -1209,13 +1215,15 @@ const Editor = ({
         const hasAny = (payload) =>
             (Array.isArray(payload?.characters) && payload.characters.length > 0)
             || (Array.isArray(payload?.props) && payload.props.length > 0)
-            || (Array.isArray(payload?.environments) && payload.environments.length > 0);
+            || (Array.isArray(payload?.environments) && payload.environments.length > 0)
+            || (Array.isArray(payload?.posters) && payload.posters.length > 0);
 
         const mergePayload = (base, patch, onlyMissingTypes = false) => {
             const out = {
                 characters: Array.isArray(base?.characters) ? [...base.characters] : [],
                 props: Array.isArray(base?.props) ? [...base.props] : [],
                 environments: Array.isArray(base?.environments) ? [...base.environments] : [],
+                posters: Array.isArray(base?.posters) ? [...base.posters] : [],
             };
 
             const mergeList = (target, incoming) => {
@@ -1236,6 +1244,9 @@ const Editor = ({
             }
             if (!onlyMissingTypes || out.environments.length === 0) {
                 mergeList(out.environments, Array.isArray(patch?.environments) ? patch.environments : []);
+            }
+            if (!onlyMissingTypes || out.posters.length === 0) {
+                mergeList(out.posters, Array.isArray(patch?.posters) ? patch.posters : []);
             }
             return out;
         };
@@ -1288,7 +1299,7 @@ const Editor = ({
             );
         }
 
-        const importedSubjectCounts = { character: 0, prop: 0, environment: 0 };
+        const importedSubjectCounts = { character: 0, prop: 0, environment: 0, poster: 0 };
         const createdSubjectItems = [];
         const skippedSubjectItems = [];
         const importStats = {
@@ -1507,7 +1518,7 @@ const Editor = ({
                 try {
                     addLog("Processing Entities block...", "process");
                     let count = 0;
-                    const skippedExistingSubjectCounts = { character: 0, prop: 0, environment: 0 };
+                    const skippedExistingSubjectCounts = { character: 0, prop: 0, environment: 0, poster: 0 };
                     const logSkippedExistingSubject = (type, entityName, entityNameEn = '') => {
                         const normalizedType = String(type || '').trim().toLowerCase();
                         if (Object.prototype.hasOwnProperty.call(skippedExistingSubjectCounts, normalizedType)) {
@@ -1528,8 +1539,9 @@ const Editor = ({
                     const plannedCharacterCount = Array.isArray(data.characters) ? data.characters.length : 0;
                     const plannedPropCount = Array.isArray(data.props) ? data.props.length : 0;
                     const plannedEnvironmentCount = Array.isArray(data.environments) ? data.environments.length : 0;
+                    const plannedPosterCount = Array.isArray(data.posters) ? data.posters.length : 0;
                     addLog(
-                        `Entities block detected: character=${plannedCharacterCount}, prop=${plannedPropCount}, environment=${plannedEnvironmentCount}`,
+                        `Entities block detected: character=${plannedCharacterCount}, prop=${plannedPropCount}, environment=${plannedEnvironmentCount}, poster=${plannedPosterCount}`,
                         'info'
                     );
 
@@ -1746,22 +1758,93 @@ const Editor = ({
                             }
                         }
                     }
+
+                    // Posters
+                    if (data.posters && Array.isArray(data.posters)) {
+                        for (const poster of data.posters) {
+                                      const entityName = String(
+                                          poster?.name ||
+                                          poster?.subject_name_exact ||
+                                          poster?.subject_name ||
+                                          poster?.name_zh ||
+                                          poster?.name_en ||
+                                          ''
+                                      ).trim();
+                                      const entityNameEn = String(poster?.name_en || poster?.english_name || poster?.en_name || '').trim();
+                             if (!entityName) {
+                                          addLog('Skipped poster entity without name aliases (name/subject_name_exact/name_en).', 'warning');
+                                continue;
+                             }
+                             if (existingEntityMap.has(normalizeEntityKey('poster', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('poster', entityNameEn)))) {
+                                logSkippedExistingSubject('poster', entityName, entityNameEn);
+                                continue;
+                             }
+                             const desc = [
+                                          `Name (EN): ${entityNameEn || poster.name_en || ''}`,
+                                `Atmosphere: ${poster.atmosphere}`,
+                                `Visual Params: ${poster.visual_params}`,
+                                          `Description: ${poster.description_cn || poster.description || poster.narrative_description || ''}`,
+                                poster.generation_prompt_cn ? `Prompt (CN): ${poster.generation_prompt_cn}` : '',
+                                `Prompt: ${poster.generation_prompt_en}`,
+                                poster.negative_prompt_en ? `Negative Prompt: ${poster.negative_prompt_en}` : ''
+                            ].filter(Boolean).join('\n\n');
+
+                            try {
+                                const payload = {
+                                    name: entityName,
+                                    type: 'poster',
+                                    description: desc,
+                                    generation_prompt_cn: poster.generation_prompt_cn || '',
+                                    generation_prompt_en: poster.generation_prompt_en || '',
+                                    anchor_description: poster.anchor_description || '',
+
+                                    name_en: entityNameEn,
+                                    atmosphere: poster.atmosphere,
+                                    visual_params: poster.visual_params,
+                                    narrative_description: poster.description_cn,
+
+                                    visual_dependencies: parseVisualDependencies(poster.visual_dependencies),
+                                    dependency_strategy: poster.dependency_strategy || {},
+                                    custom_attributes: {
+                                        ...(poster.custom_attributes || {}),
+                                        ...(poster.negative_prompt_en ? { negative_prompt_en: poster.negative_prompt_en } : {}),
+                                    },
+                                };
+                                const created = await createEntity(id, payload);
+                                if (created?.id) {
+                                    knownEntities.push(created);
+                                    existingEntityMap.set(normalizeEntityKey('poster', entityName), created);
+                                    if (entityNameEn) existingEntityMap.set(normalizeEntityKey('poster', entityNameEn), created);
+                                    count++;
+                                    importedSubjectCounts.poster += 1;
+                                    createdSubjectItems.push({
+                                        type: 'poster',
+                                        name: entityName,
+                                        name_en: entityNameEn || '',
+                                        id: created.id,
+                                    });
+                                }
+                            } catch (err) {
+                                addLog(`Poster import failed (${entityName}): ${err?.message || err}`, 'warning');
+                            }
+                        }
+                    }
                     
                     if (count > 0) {
                         addLog(`Imported ${count} entities from block.`, "success");
-                        const skippedExistingTotal = skippedExistingSubjectCounts.character + skippedExistingSubjectCounts.prop + skippedExistingSubjectCounts.environment;
+                        const skippedExistingTotal = skippedExistingSubjectCounts.character + skippedExistingSubjectCounts.prop + skippedExistingSubjectCounts.environment + skippedExistingSubjectCounts.poster;
                         if (skippedExistingTotal > 0) {
                             addLog(
-                                `Reused existing subjects without overwrite: character=${skippedExistingSubjectCounts.character}, prop=${skippedExistingSubjectCounts.prop}, environment=${skippedExistingSubjectCounts.environment}.`,
+                                `Reused existing subjects without overwrite: character=${skippedExistingSubjectCounts.character}, prop=${skippedExistingSubjectCounts.prop}, environment=${skippedExistingSubjectCounts.environment}, poster=${skippedExistingSubjectCounts.poster}.`,
                                 'info'
                             );
                         }
                         changesMade = true;
                     } else {
-                        const skippedExistingTotal = skippedExistingSubjectCounts.character + skippedExistingSubjectCounts.prop + skippedExistingSubjectCounts.environment;
+                        const skippedExistingTotal = skippedExistingSubjectCounts.character + skippedExistingSubjectCounts.prop + skippedExistingSubjectCounts.environment + skippedExistingSubjectCounts.poster;
                         if (skippedExistingTotal > 0) {
                             addLog(
-                                `Entities block matched existing subjects only; no overwrite performed. Reused existing subjects: character=${skippedExistingSubjectCounts.character}, prop=${skippedExistingSubjectCounts.prop}, environment=${skippedExistingSubjectCounts.environment}.`,
+                                `Entities block matched existing subjects only; no overwrite performed. Reused existing subjects: character=${skippedExistingSubjectCounts.character}, prop=${skippedExistingSubjectCounts.prop}, environment=${skippedExistingSubjectCounts.environment}, poster=${skippedExistingSubjectCounts.poster}.`,
                                 'info'
                             );
                         } else {
@@ -2313,10 +2396,10 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
         if (changesMade) {
             setIsImportOpen(false);
 
-            const importedTotal = importedSubjectCounts.character + importedSubjectCounts.prop + importedSubjectCounts.environment;
+            const importedTotal = importedSubjectCounts.character + importedSubjectCounts.prop + importedSubjectCounts.environment + importedSubjectCounts.poster;
             if (importedTotal > 0) {
                 addLog(
-                    `Imported subjects summary: character=${importedSubjectCounts.character}, prop=${importedSubjectCounts.prop}, environment=${importedSubjectCounts.environment}.`,
+                    `Imported subjects summary: character=${importedSubjectCounts.character}, prop=${importedSubjectCounts.prop}, environment=${importedSubjectCounts.environment}, poster=${importedSubjectCounts.poster}.`,
                     'info'
                 );
             }
@@ -2378,7 +2461,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
             const importedScenesTotal = importStats.scenesCreated + importStats.scenesUpdated;
             const summaryLines = [
                 'Import Successful!',
-                `Subjects: total=${importedSubjectsTotal} (character=${importedSubjectCounts.character}, prop=${importedSubjectCounts.prop}, environment=${importedSubjectCounts.environment})`,
+                `Subjects: total=${importedSubjectsTotal} (character=${importedSubjectCounts.character}, prop=${importedSubjectCounts.prop}, environment=${importedSubjectCounts.environment}, poster=${importedSubjectCounts.poster})`,
                 `Subjects skipped as existing=${skippedSubjectsTotal}`,
                 `Scene subject auto-supplement: created=${autoSupplementCreatedTotal}, failed=${autoSupplementFailedTotal}`,
                 `Scenes: created=${importStats.scenesCreated}, updated=${importStats.scenesUpdated}, total=${importedScenesTotal}`,

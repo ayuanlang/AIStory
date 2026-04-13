@@ -4008,11 +4008,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "final_consistency_report": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Final\s+Consistency\s+Report\b"),
             }
             found_sections: Dict[str, bool] = {k: bool(p.search(text)) for k, p in checks.items()}
-            missing_sections = [k for k, present in found_sections.items() if not present]
+            # Disable forced structural continuation to support decoupled Phase 1 / Phase 2 prompts.
+            missing_sections = [] 
             return {
                 "found_sections": found_sections,
                 "missing_sections": missing_sections,
-                "structure_incomplete": bool(missing_sections),
+                "structure_incomplete": False,
             }
 
         def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
@@ -4929,7 +4930,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "SUFFIX (do not repeat):\n{suffix}"
         )
 
-\
         def _dedupe_overlap(existing: str, incoming: str) -> str:
             if not existing or not incoming:
                 return incoming
@@ -5057,9 +5057,19 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
                 continuation_reason_counts_loop[continuation_reason] = int(continuation_reason_counts_loop.get(continuation_reason) or 0) + 1
 
-                # Continuation does not require re-sending the whole script; keep only system + tail.
-                base_for_continue = system_only_messages or list(target_messages)
-                current_messages = list(base_for_continue) + [
+                logger.info(
+                    "[analyze_scene] LLM Continuation Triggered (seg_idx=%s) reason=%s missing_sections=%s part_usage=%s part_finish=%s accumulated_chars=%s",
+                    seg_idx,
+                    continuation_reason,
+                    missing_sections,
+                    part_usage,
+                    part_finish,
+                    len(accumulated),
+                )
+
+                # MUST re-send the whole script (target_messages) so the model knows the story.
+                # Do NOT drop the user message, otherwise it will hallucinate the ending.
+                current_messages = list(target_messages) + [
                     {"role": "assistant", "content": suffix},
                     {"role": "user", "content": continuation_instruction},
                 ]
@@ -5102,79 +5112,30 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         _release_db_connection(db, "analyze_scene_llm_call")
 
-        # 1. First Call
-        if skip_step1:
-            loop1_res = {
-                "result_content": cached_result_1,
-                "segments_meta": [],
-                "usage_total": {},
-                "resolved_llm_routing": {},
-                "finish_reason": "stop",
-                "continuation_stopped_by_max_segments": False,
-                "output_char_cap_reached": False,
-                "continuation_reason_counts": {},
-                "continuation_by_structure": 0,
-                "provider_limit_hints": [],
-                "llm_fallback_warnings": []
-            }
-            result_content_1 = cached_result_1
+        # 1. Execute required Phase based on mode natively
+        is_entity_design_phase = (effective_scene_analysis_mode == "entity_design")
+        
+        # Execute the LLM loop generically for all modes
+        loop1_res = await _run_loop(messages)
+        result_content_1 = loop1_res.get("result_content", "")
+        
+        # In phase 1, attach script_hash for future reference if needed
+        if not is_entity_design_phase and script_hash:
+            result_content_1 = f"<!-- script_hash: {script_hash} -->\n" + result_content_1
             
-            # 2. Parse Subject Index
-            import re
-            subject_index_match = re.search(r"###\s*Subject\s*Index\n(.*?)(?=\n###|\Z)", result_content_1, flags=re.DOTALL | re.IGNORECASE)
-            parsed_subject_index = subject_index_match.group(1).strip() if subject_index_match else ""
-            
-            # 3. Create target_messages_2
-            try:
-                entity_design_skill = _resolve_prompt_text("skill:scene_analysis_feature_stack/entity_design.md")
-            except Exception as e:
-                logger.warning(f"Failed to load entity_design prompt, using default: {e}")
-                entity_design_skill = "Provide detailed Entity Designs based on the subject index."
+        result_content = result_content_1
 
-            target_messages_2 = list(messages)
-            target_messages_2.append({"role": "assistant", "content": result_content_1})
-            target_messages_2.append({"role": "user", "content": f"Proceed to Phase 2 Entity Design.\n\nExtracted Subject Index:\n{parsed_subject_index}\n\nStrictly follow these guidelines:\n{entity_design_skill}"})
-            loop2_res = await _run_loop(target_messages_2)
-            result_content_2 = loop2_res["result_content"]
-            
-            # 5. Combine results
-            result_content = result_content_1 + "\n\n" + result_content_2
-            
-        else:
-            loop1_res = await _run_loop(messages)
-            result_content_1 = loop1_res["result_content"]
-            if script_hash:
-                result_content_1 = f"<!-- script_hash: {script_hash} -->\n" + result_content_1
-            
-            loop2_res = {
-                "result_content": "",
-                "segments_meta": [],
-                "usage_total": {},
-                "resolved_llm_routing": {},
-                "finish_reason": loop1_res.get("finish_reason", "stop"),
-                "continuation_stopped_by_max_segments": False,
-                "output_char_cap_reached": False,
-                "continuation_reason_counts": {},
-                "continuation_by_structure": 0,
-                "provider_limit_hints": [],
-                "llm_fallback_warnings": []
-            }
-            result_content_2 = ""
-            result_content = result_content_1
-
-        # Expose all merged loop variables so the rest of the endpoint works seamlessly
-        segments_meta = loop1_res["segments_meta"] + loop2_res["segments_meta"]
-        usage_total = _merge_usage(loop1_res["usage_total"], loop2_res["usage_total"])
-        resolved_llm_routing = loop2_res["resolved_llm_routing"] or loop1_res["resolved_llm_routing"]
-        finish_reason = loop2_res["finish_reason"]
-        continuation_stopped_by_max_segments = loop1_res["continuation_stopped_by_max_segments"] or loop2_res["continuation_stopped_by_max_segments"]
-        output_char_cap_reached = loop1_res["output_char_cap_reached"] or loop2_res["output_char_cap_reached"]
-        continuation_reason_counts = dict(loop1_res["continuation_reason_counts"])
-        for k, v in loop2_res["continuation_reason_counts"].items():
-            continuation_reason_counts[k] = continuation_reason_counts.get(k, 0) + v
-        continuation_by_structure = loop1_res["continuation_by_structure"] + loop2_res["continuation_by_structure"]
-        provider_limit_hints = list(set(loop1_res["provider_limit_hints"] + loop2_res["provider_limit_hints"]))
-        llm_fallback_warnings = list(set(loop1_res["llm_fallback_warnings"] + loop2_res["llm_fallback_warnings"]))
+        # Expose all loop variables so the rest of the endpoint works seamlessly
+        segments_meta = loop1_res.get("segments_meta", [])
+        usage_total = loop1_res.get("usage_total", {})
+        resolved_llm_routing = loop1_res.get("resolved_llm_routing", {})
+        finish_reason = loop1_res.get("finish_reason", "stop")
+        continuation_stopped_by_max_segments = loop1_res.get("continuation_stopped_by_max_segments", False)
+        output_char_cap_reached = loop1_res.get("output_char_cap_reached", False)
+        continuation_reason_counts = dict(loop1_res.get("continuation_reason_counts", {}))
+        continuation_by_structure = loop1_res.get("continuation_by_structure", 0)
+        provider_limit_hints = list(set(loop1_res.get("provider_limit_hints", [])))
+        llm_fallback_warnings = list(set(loop1_res.get("llm_fallback_warnings", [])))
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
 
@@ -5268,7 +5229,20 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 _require_project_access(db, episode.project_id, auth_user)
             if not episode:
                 raise HTTPException(status_code=404, detail="Episode not found")
-            episode.ai_scene_analysis_result = result_content
+            if effective_scene_analysis_mode == "entity_design":
+                episode.ai_entity_design_result = result_content
+                logger.info(
+                    "[analyze_scene] Saved ai_entity_design_result to episode_id=%s chars=%s",
+                    episode_id,
+                    len(result_content or ""),
+                )
+            else:
+                episode.ai_scene_analysis_result = result_content
+                logger.info(
+                    "[analyze_scene] Saved ai_scene_analysis_result to episode_id=%s chars=%s",
+                    episode_id,
+                    len(result_content or ""),
+                )
             saved_to_episode = True
             debug_meta["saved_to_episode"] = True
             debug_meta["saved_episode_id"] = episode_id
@@ -5277,11 +5251,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             except Exception:
                 db.rollback()
                 raise
-            logger.info(
-                "[analyze_scene] Saved ai_scene_analysis_result to episode_id=%s chars=%s",
-                episode_id,
-                len(result_content or ""),
-            )
         else:
             debug_meta["saved_to_episode"] = False
         
@@ -9580,6 +9549,7 @@ class EpisodeCreate(BaseModel):
     script_content: Optional[str] = ""
     episode_info: Optional[Dict] = {}
     ai_scene_analysis_result: Optional[str] = None
+    ai_entity_design_result: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeUpdate(BaseModel):

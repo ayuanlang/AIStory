@@ -163,6 +163,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [rawContent, setRawContent] = useState('');
     const [llmResultContent, setLlmResultContent] = useState('');
     const [llmRawResultContent, setLlmRawResultContent] = useState('');
+    const [llmAssetRawResultContent, setLlmAssetRawResultContent] = useState('');
     const [analysisRuntimeMeta, setAnalysisRuntimeMeta] = useState(null);
     const [isRawMode, setIsRawMode] = useState(false);
     const [analysisAttentionNotes, setAnalysisAttentionNotes] = useState('');
@@ -1463,7 +1464,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             let promptContent = '';
             try {
-                const promptRes = await fetchPrompt('subject_generation.txt');
+                const promptRes = await fetchPrompt('skills/scene_analysis_feature_stack/entity_design.md');
                 promptContent = promptRes?.content || '';
             } catch {
                 try {
@@ -1471,7 +1472,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     promptContent = fallbackRes?.content || '';
                 } catch {
                     try {
-                        const fallbackRes2 = await fetchPrompt('scene_analysis.txt');
+                        const fallbackRes2 = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning.md');
                         promptContent = fallbackRes2?.content || '';
                     } catch {
                         promptContent = '';
@@ -2259,7 +2260,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return { ok: true, tableText, warning };
     };
 
-    const doImportText = async (text, importType = 'auto') => {
+    const doImportText = async (text, importType = 'auto', importOptions = {}) => {
         if (typeof onImportText !== 'function') {
             if (onLog) onLog('Import is not available in this context.', 'warning');
             return false;
@@ -2276,8 +2277,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            await onImportText(payload, importType);
-            return true;
+            const importResult = await onImportText(payload, importType, importOptions);
+            return importResult || true;
         } catch (e) {
             if (onLog) onLog(`Import failed: ${e.message}`, 'error');
             alert(t('导入失败：', 'Import failed: ') + (e?.message || e));
@@ -2304,7 +2305,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             setAnalysisFlowStatus({
-                phase: 'importing',
+                phase: 'saving_scenes',
                 message: t('推演完成：已成功获取 AI 的导演级解析框架，正在为您结构化导入至工作台...', 'LLM response received, auto-importing...'),
             });
 
@@ -2327,134 +2328,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
-    const runPostImportSceneSubjectPipeline = useCallback(async (importReport, options = {}) => {
-        const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
-        const emptyReport = {
-            checkedSceneCount: importedSceneRows.length,
-            missingSceneCount: 0,
-            missingItemCount: 0,
-            missingSceneReports: [],
-            supplementReport: {
-                createdItems: [],
-                skippedItems: [],
-                failedItems: [],
-                sceneReports: [],
-                countsByType: { character: 0, prop: 0, environment: 0 },
-            },
-        };
+    
 
-        if (!projectId || importedSceneRows.length === 0) {
-            return emptyReport;
-        }
-
-        // 移除在剧本分析时自动进行实体补充的部分
-        return emptyReport;
-
-        setAnalysisFlowStatus({
-            phase: 'checking_scene_subjects',
-            message: t('主体信息同步完毕！AI 正在查漏补缺，智能扫描并修复各分镜画面的上下文元素...', 'Scenes and subjects imported. Checking each scene for missing entities...'),
-        });
-
-        const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
-        let latestEntities = await fetchEntities(projectId).catch(() => []);
-        const missingSceneReports = [];
-        const supplementReport = {
-            createdItems: [],
-            skippedItems: [],
-            failedItems: [],
-            sceneReports: [],
-            countsByType: { character: 0, prop: 0, environment: 0 },
-        };
-
-        for (const scene of importedSceneRows) {
-            const latestEntityPool = mergeEntityPoolWithSubjectIndex(latestEntities, authoritativeSubjectText);
-            const currentMissing = findMissingSceneSubjectRefs(scene, latestEntityPool);
-            if (!Array.isArray(currentMissing) || currentMissing.length === 0) continue;
-
-            const sceneNo = String(scene?.scene_no || '').trim();
-            const sceneName = String(scene?.scene_name || '').trim();
-            const sceneLabel = sceneNo || sceneName || `#${scene?.id || 'unknown'}`;
-            const normalizedSceneReport = {
-                sceneId: Number(scene?.id || 0) || null,
-                sceneNo,
-                sceneName,
-                missing: currentMissing,
-            };
-            missingSceneReports.push({
-                scene,
-                missing: currentMissing,
-                normalized: normalizedSceneReport,
-            });
-
-            const details = currentMissing.map((ref) => {
-                const conflicts = findCrossTypeEntityMatches(latestEntityPool, ref?.name, ref?.type);
-                const conflictLabel = conflicts.length > 0
-                    ? ` | cross_type_matches=${conflicts.map((c) => `${c?.type || 'unknown'}:${c?.name || c?.name_en || c?.id || 'unknown'}`).join(';')}`
-                    : '';
-                return `${ref.type}:${ref.name} [field=${ref.sourceField || '-'}]${conflictLabel}`;
-            });
-            onLog?.(`[SceneSubjectGap] scene=${sceneLabel} -> ${details.join(' || ')}`, 'warning');
-
-            setAnalysisFlowStatus({
-                phase: 'supplementing_scene_subjects',
-                message: t(
-                    `场景 ${sceneLabel} 存在 ${currentMissing.length} 个缺失实体，正在复用场景补实体流程逐个补充...`,
-                    `Scene ${sceneLabel} has ${currentMissing.length} missing entities. Reusing the scene supplement flow now...`
-                ),
-            });
-
-            const sceneSupplementReport = await createMissingSceneSubjectPlaceholders({
-                projectId,
-                sceneRows: [scene],
-                existingEntities: latestEntityPool,
-                onLog,
-            });
-
-            if (sceneSupplementReport) {
-                supplementReport.createdItems.push(...(Array.isArray(sceneSupplementReport.createdItems) ? sceneSupplementReport.createdItems : []));
-                supplementReport.skippedItems.push(...(Array.isArray(sceneSupplementReport.skippedItems) ? sceneSupplementReport.skippedItems : []));
-                supplementReport.failedItems.push(...(Array.isArray(sceneSupplementReport.failedItems) ? sceneSupplementReport.failedItems : []));
-                supplementReport.sceneReports.push(...(Array.isArray(sceneSupplementReport.sceneReports) ? sceneSupplementReport.sceneReports : []));
-                supplementReport.countsByType.character += Number(sceneSupplementReport?.countsByType?.character || 0);
-                supplementReport.countsByType.prop += Number(sceneSupplementReport?.countsByType?.prop || 0);
-                supplementReport.countsByType.environment += Number(sceneSupplementReport?.countsByType?.environment || 0);
-            }
-
-            latestEntities = await fetchEntities(projectId).catch(() => latestEntities);
-        }
-
-        const missingItemCount = missingSceneReports.reduce((sum, item) => sum + Number(item?.missing?.length || 0), 0);
-        if (missingSceneReports.length === 0) {
-            onLog?.('Post-import scene entity check passed: no missing scene subjects detected. Supplement step skipped.', 'success');
-            return {
-                ...emptyReport,
-                checkedSceneCount: importedSceneRows.length,
-            };
-        }
-
-        onLog?.(
-            `Post-import scene entity check found missing subjects in ${missingSceneReports.length} scene(s), total missing items=${missingItemCount}.`,
-            'warning'
-        );
-
-        const createdCount = Number(supplementReport?.createdItems?.length || 0);
-        const skippedCount = Number(supplementReport?.skippedItems?.length || 0);
-        const failedCount = Number(supplementReport?.failedItems?.length || 0);
-
-        onLog?.(
-            `Post-import scene entity supplement summary: missing_scenes=${missingSceneReports.length}, missing_items=${missingItemCount}, created=${createdCount}, skipped=${skippedCount}, failed=${failedCount}.`,
-            failedCount > 0 ? 'warning' : 'success'
-        );
-
-        return {
-            checkedSceneCount: importedSceneRows.length,
-            missingSceneCount: missingSceneReports.length,
-            missingItemCount,
-            missingSceneReports: missingSceneReports.map((item) => item.normalized),
-            supplementReport: supplementReport || emptyReport.supplementReport,
-            pendingUserConfirmation: false,
-        };
-    }, [onLog, projectId, t]);
+    
 
     const parseMarkdownTable = (text) => {
         if (!text || typeof text !== 'string') return null;
@@ -2882,19 +2758,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return () => { mounted = false; };
     }, [isEpisodeOnePage, projectId]);
 
-    const selectedReuseSubjectAssets = useMemo(() => {
-        if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
-        const selected = new Set((selectedReuseSubjectIds || []).map(v => String(v)));
-        return availableSubjectAssets
-            .filter(asset => selected.has(String(asset.id)))
-            .map(asset => ({
-                id: asset.id,
-                name: asset.name || '',
-                type: asset.type || '',
-                description: asset.description || asset.narrative_description || '',
-                anchor_description: asset.anchor_description || '',
-            }));
-    }, [availableSubjectAssets, selectedReuseSubjectIds]);
+    
 
     const reuseSubjectTypeOptions = useMemo(() => {
         const types = new Set();
@@ -2972,7 +2836,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await onUpdateEpisodeInfo(activeEpisode.id, { ai_scene_analysis_result: content || '' });
         } catch (e) {
             console.error("Failed to persist LLM result", e);
-            if (onLog) onLog(`Failed to save LLM result: ${e.message}`, "error");
+            if (onLog) onLog(`Failed to save LLM result: ${e.message}`);
         }
     };
 
@@ -2982,6 +2846,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const llmRawAutoSaveTimerRef = useRef(null);
     const llmRawAutoSaveArmedRef = useRef(false);
     const analysisResumeInFlightRef = useRef(false);
+    const phase2ResolverRef = useRef(null);
     const analysisStopRequestedRef = useRef(false);
     const analysisRunInFlightRef = useRef(false);
     const autoImportRunningRef = useRef(false);
@@ -3182,6 +3047,196 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (settled) return resolvedValue;
         throw new Error('AI Script Analysis timed out while waiting for async task result.');
     }, [onLog, t, waitForEpisodeAnalysisResultUpdate]);
+
+    const selectedReuseSubjectAssets = useMemo(() => {
+        if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
+        const selected = new Set((selectedReuseSubjectIds || []).map(v => String(v)));
+        return availableSubjectAssets
+            .filter(asset => selected.has(String(asset.id)))
+            .map(asset => ({
+                id: asset.id,
+                name: asset.name || '',
+                type: asset.type || '',
+                description: asset.description || asset.narrative_description || '',
+                anchor_description: asset.anchor_description || '',
+            }));
+    }, [availableSubjectAssets, selectedReuseSubjectIds]);
+
+    const runPostImportSceneSubjectPipeline = useCallback(async (importReport, options = {}) => {
+        const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
+        const emptyReport = {
+            checkedSceneCount: importedSceneRows.length,
+            missingSceneCount: 0,
+            missingItemCount: 0,
+            missingSceneReports: [],
+            supplementReport: {
+                createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
+                countsByType: { character: 0, prop: 0, environment: 0 },
+            },
+        };
+
+        if (!projectId || importedSceneRows.length === 0) {
+            return emptyReport;
+        }
+
+        const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
+        let subjectIndexText = "";
+
+        onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
+
+        // Try to match the block wrapped by at least 5 dashes: ---------
+        const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
+        if (dashMatch && dashMatch[1].trim()) {
+            subjectIndexText = dashMatch[1].trim();
+            onLog?.(`[Asset Gen Tracking] Extracted Subject Index wrapped by dashes (length: ${subjectIndexText.length})`);
+        } else {
+            // Fallback to header matching if dashes are not found
+            const match = authoritativeSubjectText.match(/(?:###?|##)\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
+            if (match) {
+                subjectIndexText = match[0];
+                onLog?.(`[Asset Gen Tracking] Extracted Subject Index via header (length: ${subjectIndexText.length})`);
+            } else {
+                subjectIndexText = authoritativeSubjectText;
+                onLog?.(`[Asset Gen Tracking] Failed to find Subject Index header or dashes! Using fallback full text for asset generation.`, 'warning');
+            }
+        }
+
+        if (!subjectIndexText.trim()) {
+            console.log("No Subject Index found in the analysis result. Skipping asset generation.");
+            return emptyReport;
+        }
+
+        setAnalysisFlowStatus({
+            phase: "generating_assets",
+            message: t("正在根据 Subject Index 生成设计资产...", "Generating design assets from Subject Index..."),
+        });
+
+        try {
+            onLog?.(`[Asset Gen Tracking] Preparing to fetch 'entity_design.md'`);
+            const promptRes = await fetchPrompt("skills/scene_analysis_feature_stack/entity_design.md").catch(() => null);
+            let promptContent = promptRes?.content || "";
+            if (!promptContent) {
+                onLog?.(`[Asset Gen Tracking] Warning: 'entity_design.md' prompt is empty or failed to load.`);
+            }
+
+            let finalPromptContent = promptContent;
+            let finalSubjectIndexText = subjectIndexText;
+
+            // Inject Project Info Context for Phase 2
+            const projectInfo = (project?.global_info && typeof project?.global_info === 'object') ? project.global_info : {};
+            const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
+            const getInfoValue = (aliases = []) => {
+                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
+                for (const [k, v] of Object.entries(projectInfo)) {
+                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
+                    const text = String(v || '').trim();
+                    if (text) return text;
+                }
+                return '';
+            };
+
+            const language = getInfoValue(['language', 'project_language', 'lang']);
+            const metaParts = [
+                'Project Context (prepend and treat as high-priority constraints for generating design assets):',
+                '[Basic Info]'
+            ];
+            const title = getInfoValue(['script_title', 'title']);
+            const episode = getInfoValue(['series_episode', 'episode']);
+            const type = getInfoValue(['type']);
+            const basePositioning = getInfoValue(['base_positioning']);
+            if (title) metaParts.push(`Title: ${title}`);
+            if (episode) metaParts.push(`Episode: ${episode}`);
+            if (type) metaParts.push(`Type: ${type}`);
+            if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
+            if (language) {
+                metaParts.push(`Language: ${language}`);
+            }
+
+            metaParts.push('[Technical & Visual Parameters]');
+            const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
+            const tone = getInfoValue(['tone', 'mood']);
+            const lighting = getInfoValue(['lighting', 'light']);
+            if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
+            if (tone) metaParts.push(`Tone: ${tone}`);
+            if (lighting) metaParts.push(`Lighting: ${lighting}`);
+            
+            const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
+            const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
+            if (eraField) metaParts.push(`Era / Period (年代): ${eraField}`);
+            if (regionField) metaParts.push(`Region / Country (国家地域): ${regionField}`);
+            
+            metaParts.push('Use this project context as first-class constraints before generating the subjects.');
+
+            if (Object.keys(projectInfo).length > 0) {
+                finalSubjectIndexText = `${metaParts.join('\n')}\n\n[Subject Index extracted from Phase 1]\n${finalSubjectIndexText}`;
+            }
+
+            if (isSuperuser) {
+                setSystemPrompt(finalPromptContent);
+                setUserPrompt(finalSubjectIndexText);
+                setShowAnalysisModal(true);
+                
+                onLog?.(`[Asset Gen Tracking] Waiting for Superuser to confirm entity_design prompt...`);
+                // Wait for the modal submit
+                const confirmed = await new Promise(resolve => {
+                    phase2ResolverRef.current = resolve;
+                });
+                
+                if (!confirmed || typeof confirmed !== 'object') {
+                    onLog?.(`[Asset Gen Tracking] Superuser aborted second pass phase.`);
+                    return emptyReport;
+                }
+                
+                finalPromptContent = confirmed.systemPrompt || finalPromptContent;
+                finalSubjectIndexText = confirmed.userPrompt || finalSubjectIndexText;
+            }
+
+            onLog?.(`[Asset Gen Tracking] Launching second LLM call for 'subject_generation'`);
+
+            const result = await awaitAnalyzeSceneWithRecovery(
+                () => analyzeScene(
+                    finalSubjectIndexText,
+                    finalPromptContent,
+                    null,
+                    activeEpisode?.id || null,
+                    analysisAttentionNotes,
+                    selectedReuseSubjectAssets,
+                    null,
+                    projectId,
+                    "subject_generation"
+                ),
+                { startedAt: Date.now(), baselineText: "" }
+            );
+
+            const analyzedText = extractAnalysisTextFromResult(result);        
+            setLlmAssetRawResultContent(analyzedText);
+
+            if (analyzedText) {
+                // Automatically import the generated subjects
+                const sceneImportReport = await doImportText(analyzedText, 'json', {
+                    onLog,
+                    projectId,
+                    episodeId: activeEpisode?.id,
+                });
+                onLog?.(`[Asset Gen Tracking] Asset import completed. Created: ${sceneImportReport?.createdEntities?.length}, Matched: ${sceneImportReport?.matchedEntities?.length}`);
+            }
+
+        } catch (error) {
+            console.error("Asset generation step failed:", error);
+            onLog?.(`Asset generation failed: ${error.message}`);
+        }
+
+        return emptyReport;
+    }, [
+        projectId, llmRawResultContent, llmResultContent, activeEpisode, t, onLog,
+        fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery,
+        analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
+        isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal
+    ]);
+
+    
+
+    
 
     const resumeAnalysisFromTaskMarker = useCallback(async (marker) => {
         if (!activeEpisode?.id || !marker?.taskId) return;
@@ -3448,7 +3503,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const handleSave = async () => {
         if (!activeEpisode) return;
-        if (onLog) onLog("Saving Script...", "process");
+        if (onLog) onLog("Saving Script...");
 
         let fullContent = rawContent;
 
@@ -3465,7 +3520,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         try {
             await onUpdateScript(activeEpisode.id, fullContent);
-            if (onLog) onLog(`Script saved. Length: ${fullContent.length}`, "success");
+            if (onLog) onLog(`Script saved. Length: ${fullContent.length}`);
             // If we just saved from Raw Mode, keep it in sync but don't force parse unless user wants to
             // Actually the Effect will trigger on activeEpisode update if we parent updates it? 
             // Usually onUpdateScript updates parent state? If so, useEffect runs. 
@@ -3473,7 +3528,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert("Script saved successfully!");
         } catch (e) {
              console.error(e);
-             if (onLog) onLog(`Script Save Failed: ${e.message}`, "error");
+             if (onLog) onLog(`Script Save Failed: ${e.message}`);
              alert(`Failed to save script: ${e.message}`);
         }
     };
@@ -4291,7 +4346,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (isAnalyzing || analysisRunInFlightRef?.current) {
-            onLog?.("Already analyzing, duplicate click prevented.", "warning");
+            onLog?.("Already analyzing, duplicate click prevented.");
             return;
         }
 
@@ -4330,7 +4385,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (isSuperuser) {
             // Fetch default prompt
             try {
-                const res = await fetchPrompt("scene_analysis.txt");
+                const res = await fetchPrompt("skills/scene_analysis_feature_stack/scene_planning.md");
                 setSystemPrompt(res.content);
                 
                 // Construct full user prompt with metadata visible
@@ -4604,7 +4659,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
-                phase: 'importing',
+                phase: 'saving_scenes',
                 message: t('重构完成：正在帮您解包为结构化工作流并推送到画板...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
@@ -4702,7 +4757,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     : t('分析完成：未检测到实体缺失，流程已结束。', 'Analysis completed: no missing entities detected, workflow finished.'),
             });
 
-            if (onLog) onLog("AI Analysis applied and saved.", "success");
+            if (onLog) onLog("AI Analysis applied and saved.");
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
@@ -4713,7 +4768,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (canceled) {
                 if (onLog) onLog('Analysis task canceled by user.', 'warning');
             } else {
-                if (onLog) onLog(`Analysis Failed: ${friendlyAnalysisError}`, "error");
+                if (onLog) onLog(`Analysis Failed: ${friendlyAnalysisError}`);
             }
             setAnalysisFlowStatus(
                 canceled
@@ -4779,7 +4834,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         let basePromptForSupplement = '';
         try {
-            const promptRes = await fetchPrompt('scene_analysis.txt');
+            const promptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning.md');
             basePromptForSupplement = String(promptRes?.content || '').trim();
         } catch {
             basePromptForSupplement = '';
@@ -4957,7 +5012,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
-                phase: 'importing',
+                phase: 'saving_scenes',
                 message: t('重构完成：正在帮您解包为结构化工作流并推送到画板...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
@@ -5065,7 +5120,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (canceled) {
                 if (onLog) onLog('Advanced analysis task canceled by user.', 'warning');
             } else {
-                if (onLog) onLog(`Advanced analysis failed: ${friendlyAnalysisError}`, "error");
+                if (onLog) onLog(`Advanced analysis failed: ${friendlyAnalysisError}`);
             }
             setAnalysisFlowStatus(
                 canceled
@@ -5185,15 +5240,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
-                        {[
+                                                                        {[
                             { key: 'autosaving', label: t('自动保存', 'Auto Save') },
-                            { key: 'analyzing', label: t('等待 LLM', 'Wait LLM') },
-                            { key: 'importing', label: t('导入场景/实体', 'Import Scenes/Subjects') },
-                            { key: 'checking_scene_subjects', label: t('检查场景缺失', 'Check Scene Gaps') },
-                            { key: 'supplementing_scene_subjects', label: t('补充缺失实体', 'Supplement Missing') },
+                            { key: 'analyzing', label: t('场景解析', 'Scene Planning') },
+                            { key: 'saving_scenes', label: t('保存结构', 'Import Structure') },
+                            { key: 'generating_assets', label: t('推演资产', 'Asset Generation') },
                             { key: 'completed', label: t('分析报告', 'Report') },
                         ].map((step, idx) => {
-                            const stepOrder = ['autosaving', 'analyzing', 'importing', 'checking_scene_subjects', 'supplementing_scene_subjects', 'completed'];
+                            const stepOrder = ['autosaving', 'analyzing', 'saving_scenes', 'generating_assets', 'completed'];
                             const phase = analysisFlowStatus.phase || 'idle';
                             const currentIndex = stepOrder.indexOf(phase);
                             const stepIndex = stepOrder.indexOf(step.key);
@@ -5782,14 +5836,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             )}
 
             {showAnalysisModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm" onClick={() => setShowAnalysisModal(false)}>
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm" onClick={() => {
+                    if (phase2ResolverRef.current) {
+                        phase2ResolverRef.current(false);
+                        phase2ResolverRef.current = null;
+                    }
+                    setShowAnalysisModal(false);
+                }}>
                     <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-6xl h-[90vh] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
                             <h3 className="text-lg font-bold flex items-center gap-2">
                                 <Wand2 className="w-5 h-5 text-purple-500" />
-                                Advanced AI Analysis (Superuser)
+                                {phase2ResolverRef.current ? "Asset Generation Prompt Preview (Superuser)" : "Advanced AI Analysis (Superuser)"}
                             </h3>
-                            <button onClick={() => setShowAnalysisModal(false)} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+                            <button onClick={() => {
+                                if (phase2ResolverRef.current) {
+                                    phase2ResolverRef.current(false);
+                                    phase2ResolverRef.current = null;
+                                }
+                                setShowAnalysisModal(false);
+                            }} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
@@ -5836,7 +5902,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 onClick={() => {
                                     const fullText = `[System Instruction]\n${systemPrompt}\n\n[User Input]\n${userPrompt}`;
                                     navigator.clipboard.writeText(fullText);
-                                    if(onLog) onLog(t('完整提示词已复制到剪贴板。', 'Copied full prompt to clipboard.'), "success");
+                                    if(onLog) onLog(t('完整提示词已复制到剪贴板。', 'Copied full prompt to clipboard.'));
                                     alert(t('完整提示词已复制！', 'Full prompt copied!'));
                                 }}
                                 className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg font-medium transition-colors text-white border border-white/10"
@@ -5844,7 +5910,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <Copy className="w-4 h-4" /> {t('复制完整提示词', 'Copy Full Prompt')}
                              </button>
                              <button 
-                                          onClick={() => executeAdvancedAnalysis(userPrompt, systemPrompt)}
+                                          onClick={() => {
+                                              if (phase2ResolverRef.current) {
+                                                  const resolver = phase2ResolverRef.current;
+                                                  phase2ResolverRef.current = null;
+                                                  resolver({ systemPrompt, userPrompt });
+                                              } else {
+                                                  executeAdvancedAnalysis(userPrompt, systemPrompt);
+                                              }
+                                              setShowAnalysisModal(false);
+                                          }}
                                 disabled={isAnalyzing}
                                 className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                              >

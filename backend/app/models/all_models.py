@@ -199,6 +199,7 @@ class Episode(Base):
 
     # Store AI Scene Analysis raw result separately (Markdown table / JSON), do NOT overwrite script_content
     ai_scene_analysis_result = Column(Text, nullable=True)
+    ai_entity_design_result = Column(Text, nullable=True)
     
     project = relationship("Project", back_populates="episodes")
     scenes = relationship("Scene", back_populates="episode", cascade="all, delete-orphan")
