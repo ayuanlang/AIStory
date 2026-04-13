@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound, Link as LinkIcon, Copy } from 'lucide-react';
 import { API_URL } from '@/config';
-import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getSystemSettings, getUserPreferences, selectSystemSetting, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
+import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
@@ -101,83 +101,6 @@ const THEMES = {
 const Settings = () => {
     const [uiLang, setUiLang] = useState(getUiLang());
     const t = (zh, en) => tUI(uiLang, zh, en);
-    const formatSamplePrices = (samplePrices) => {
-        const safe = (Array.isArray(samplePrices) ? samplePrices : [])
-            .map((v) => Number(v || 0))
-            .filter((v) => Number.isFinite(v) && v > 0);
-        if (safe.length === 0) {
-            return '-';
-        }
-        return safe.join(' / ');
-    };
-    const normalizePositiveNumber = (value) => {
-        const num = Number(value || 0);
-        return Number.isFinite(num) && num > 0 ? num : 0;
-    };
-    const pickFirst = (obj, keys = []) => {
-        for (const key of keys) {
-            if (obj && Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined && obj[key] !== null) {
-                return obj[key];
-            }
-        }
-        return undefined;
-    };
-    const buildPriceDisplay = (row) => {
-        const source = String(
-            pickFirst(row, ['avg_price_source', 'avgPriceSource', 'provider_price_source', 'providerPriceSource']) || ''
-        ).trim().toLowerCase();
-        const isMultiplierScore = source.includes('charge_multiplier_x100');
-        const avg = normalizePositiveNumber(
-            pickFirst(row, ['avg_price_estimate', 'avgPriceEstimate', 'provider_avg_price_estimate', 'providerAvgPriceEstimate'])
-        );
-        const rawSamples = pickFirst(row, ['sample_prices', 'samplePrices', 'provider_sample_prices', 'providerSamplePrices']);
-        const samples = (Array.isArray(rawSamples) ? rawSamples : [])
-            .map((v) => normalizePositiveNumber(v))
-            .filter((v) => v > 0);
-        const rangeMin = normalizePositiveNumber(
-            pickFirst(row, ['price_range_min', 'priceRangeMin', 'provider_price_range_min', 'providerPriceRangeMin'])
-        );
-        const rangeMax = normalizePositiveNumber(
-            pickFirst(row, ['price_range_max', 'priceRangeMax', 'provider_price_range_max', 'providerPriceRangeMax'])
-        );
-        const hasRange = rangeMin > 0 || rangeMax > 0;
-        const rangeLabelMin = rangeMin > 0 ? rangeMin : '-';
-        const rangeLabelMax = rangeMax > 0 ? rangeMax : '-';
-        const avgLabel = avg > 0 ? avg : '-';
-        const pretty = (value) => {
-            const num = Number(value || 0);
-            if (!Number.isFinite(num) || num <= 0) return '-';
-            if (!isMultiplierScore) return num;
-            const scaled = num / 100;
-            return Number.isInteger(scaled) ? String(scaled) : scaled.toFixed(2).replace(/\.00$/, '');
-        };
-
-        return {
-            avg,
-            avgLabel: pretty(avgLabel),
-            rangeMin,
-            rangeMax,
-            hasRange,
-            rangeLabelMin: pretty(rangeLabelMin),
-            rangeLabelMax: pretty(rangeLabelMax),
-            samples,
-            hasAny: avg > 0 || hasRange || samples.length > 0,
-            isMultiplierScore,
-        };
-    };
-    const formatBillingUnitType = (value) => {
-        const unit = String(value || '').trim().toLowerCase();
-        if (!unit) return '-';
-        const unitLabelMap = {
-            per_call: t('按次', 'Per Call'),
-            per_second: t('按秒', 'Per Second'),
-            per_minute: t('按分钟', 'Per Minute'),
-            per_token: t('按 Token', 'Per Token'),
-            per_1k_tokens: t('每 1K Token', 'Per 1K Tokens'),
-            per_million_tokens: t('每百万 Token', 'Per Million Tokens'),
-        };
-        return unitLabelMap[unit] || unit;
-    };
     const formatTransactionDateTime = (value) => {
         const raw = String(value || '').trim();
         if (!raw) return '-';
@@ -328,20 +251,7 @@ const Settings = () => {
     const [transactions, setTransactions] = useState([]);
     const [isBillingLoading, setIsBillingLoading] = useState(false);
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
-    const [systemSettings, setSystemSettings] = useState([]);
     const [functionApiConfigs, setFunctionApiConfigs] = useState([]);
-    const [isSystemSettingsLoading, setIsSystemSettingsLoading] = useState(false);
-    const [selectingSystemId, setSelectingSystemId] = useState(null);
-    const [selectedSystemCategory, setSelectedSystemCategory] = useState('All');
-    const [activeSettingSources, setActiveSettingSources] = useState({
-        LLM: 'none',
-        Image: 'none',
-        Video: 'none',
-        Vision: 'none',
-    });
-    const [apiStrategyByCategory, setApiStrategyByCategory] = useState({});
-    const [activeModeByCategory, setActiveModeByCategory] = useState({});
-    const [systemModeSelectionById, setSystemModeSelectionById] = useState({});
 
     // Unified Top Up entry: support /settings?tab=billing and cross-app 402 redirects.
     useEffect(() => {
@@ -679,239 +589,27 @@ const Settings = () => {
         }).finally(() => setIsBillingLoading(false));
     };
 
-    const loadSystemSettingsCatalog = async () => {
-        setIsSystemSettingsLoading(true);
+    const loadFunctionApiConfigs = async () => {
         try {
-            const [userRes, systemRes, funcConfigs] = await Promise.all([fetchMe(), getSystemSettings(), getFunctionApiConfigs().catch(()=>[])]);
+            const funcConfigs = await getFunctionApiConfigs();
             setFunctionApiConfigs(Array.isArray(funcConfigs) ? funcConfigs : []);
-            if (import.meta.env.DEV) {
-                const firstGroup = Array.isArray(systemRes) && systemRes.length > 0 ? systemRes[0] : null;
-                const firstModel = firstGroup && Array.isArray(firstGroup.models) && firstGroup.models.length > 0 ? firstGroup.models[0] : null;
-                // Dev-only visibility: confirm which backend is used and what pricing fields arrive.
-                console.debug('[Settings][SystemPricing] API_URL=', API_URL, 'group=', firstGroup, 'firstModelPricing=', firstModel ? {
-                    id: firstModel.id,
-                    provider: firstModel.provider,
-                    model: firstModel.model,
-                    avg_price_estimate: firstModel.avg_price_estimate,
-                    price_range_min: firstModel.price_range_min,
-                    price_range_max: firstModel.price_range_max,
-                    sample_prices: firstModel.sample_prices,
-                    avg_price_source: firstModel.avg_price_source,
-                } : null);
-            }
-            if (userRes && userRes.credits !== undefined) {
-                setUserCredits(userRes.credits);
-            }
-            setSystemSettings(Array.isArray(systemRes) ? systemRes : []);
         } catch (err) {
-            console.error("Failed to load system API settings", err);
-            setSystemSettings([]);
-        } finally {
-            setIsSystemSettingsLoading(false);
+            console.error("Failed to load function api configs", err);
+            setFunctionApiConfigs([]);
         }
     };
-
-    const normalizeApiStrategy = (value) => {
-        const raw = String(value || '').trim().toLowerCase();
-        if (raw === 'low_price_replace') return 'low_price_replace';
-        if (raw === 'fixed') return 'fixed';
-        return 'smart_default';
-    };
-
-    const normalizeModeValue = (value) => {
-        const text = String(value == null ? '' : value).trim();
-        return text;
-    };
-
-    const collectModeOptionsFromRow = (row) => {
-        const merged = Array.isArray(row?.mode_values) ? row.mode_values : [];
-        const out = [];
-        const seen = new Set();
-        for (const item of merged) {
-            const text = normalizeModeValue(item);
-            if (!text) continue;
-            const key = text.toLowerCase();
-            if (seen.has(key)) continue;
-            seen.add(key);
-            out.push(text);
-        }
-        return out;
-    };
-
-    const refreshActiveSettingSources = async () => {
-        try {
-            const all = await getSettings();
-            const next = {
-                LLM: 'none',
-                Image: 'none',
-                Video: 'none',
-                Vision: 'none',
-            };
-            const strategyMap = {};
-            const modeMap = {};
-            (all || []).forEach((item) => {
-                if (!item?.is_active || !item?.category) return;
-                const source = item?.config?.selection_source === 'system' || item?.config?.use_system_setting_id ? 'system' : 'user';
-                if (next[item.category] !== undefined) {
-                    next[item.category] = source;
-                }
-                strategyMap[item.category] = normalizeApiStrategy(item?.config?.api_strategy);
-                const activeMode = normalizeModeValue(item?.mode);
-                if (activeMode) {
-                    modeMap[item.category] = activeMode;
-                }
-            });
-            setActiveSettingSources(next);
-            setApiStrategyByCategory(strategyMap);
-            setActiveModeByCategory(modeMap);
-        } catch (err) {
-            console.error('Failed to refresh active setting sources', err);
-        }
-    };
-
-    const sourceBadgeClass = (source) => {
-        if (source === 'system') return 'bg-green-500/20 text-green-300 border-green-500/30';
-        if (source === 'user') return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
-        return 'bg-white/10 text-muted-foreground border-white/20';
-    };
-
-    const sourceBadgeText = (source) => {
-        if (source === 'system') return 'Source: System';
-        if (source === 'user') return 'Source: User';
-        return 'Source: Unset';
-    };
-
-    const categorizedSystemSettings = useMemo(() => {
-        // User default activation page only exposes runtime generation categories.
-        const categoryLabelMap = {
-            LLM: 'LLM',
-            Image: 'Image',
-            Video: 'Video',
-            Vision: 'Vision',
-        };
-        const preferredOrder = ['LLM', 'Image', 'Video', 'Vision'];
-        const visibleCategorySet = new Set(preferredOrder);
-
-        const grouped = (systemSettings || []).reduce((acc, item) => {
-            const rawCategory = String(item?.category || '').trim();
-            if (!visibleCategorySet.has(rawCategory)) {
-                return acc;
-            }
-            if (!acc[rawCategory]) acc[rawCategory] = [];
-            acc[rawCategory].push({ ...item, category: rawCategory });
-            return acc;
-        }, {});
-
-        const orderedKeys = [
-            ...preferredOrder.filter((cat) => grouped[cat]),
-            ...Object.keys(grouped)
-                .filter((cat) => !preferredOrder.includes(cat))
-                .sort((a, b) => a.localeCompare(b)),
-        ];
-
-        return orderedKeys.map((category) => {
-            const sourceGroups = grouped[category] || [];
-            const mergedByProvider = sourceGroups.reduce((bucket, item) => {
-                const providerKey = `${String(item?.provider || '').trim().toLowerCase()}::${String(item?.provider_alias || '').trim().toLowerCase()}`;
-                const currentModels = Array.isArray(item?.models) ? item.models : [];
-
-                if (!bucket[providerKey]) {
-                    bucket[providerKey] = {
-                        ...item,
-                        category,
-                        models: [...currentModels],
-                        shared_key_configured: !!item?.shared_key_configured,
-                    };
-                    return bucket;
-                }
-
-                const existing = bucket[providerKey];
-                existing.shared_key_configured = !!existing.shared_key_configured || !!item?.shared_key_configured;
-                if (!existing.provider_alias && item?.provider_alias) {
-                    existing.provider_alias = item.provider_alias;
-                }
-
-                const mergedModels = [...(Array.isArray(existing.models) ? existing.models : []), ...currentModels];
-                const dedupedModels = [];
-                const seenModelKeys = new Set();
-                for (const row of mergedModels) {
-                    const modelKey = `${String(row?.id ?? '')}::${String(row?.model ?? '').trim().toLowerCase()}`;
-                    if (seenModelKeys.has(modelKey)) continue;
-                    seenModelKeys.add(modelKey);
-                    dedupedModels.push(row);
-                }
-                existing.models = dedupedModels;
-                return bucket;
-            }, {});
-
-            const mergedGroups = Object.values(mergedByProvider)
-                .sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || '')));
-
-            return {
-                category,
-                label: categoryLabelMap[category] || category,
-                groups: mergedGroups,
-            };
-        }).filter((block) => (block.groups || []).length > 0);
-    }, [systemSettings]);
-
-
-    const visibleSystemSettings = useMemo(() => {
-        if (selectedSystemCategory === 'All') return categorizedSystemSettings;
-        return categorizedSystemSettings.filter((block) => block.category === selectedSystemCategory);
-    }, [categorizedSystemSettings, selectedSystemCategory]);
-
-    useEffect(() => {
-        setSystemModeSelectionById((prev) => {
-            const next = { ...(prev || {}) };
-            const validIds = new Set();
-
-            for (const categoryBlock of categorizedSystemSettings || []) {
-                const category = String(categoryBlock?.category || '').trim();
-                const activeMode = normalizeModeValue(activeModeByCategory?.[category]);
-
-                for (const group of categoryBlock?.groups || []) {
-                    for (const row of group?.models || []) {
-                        const rowId = Number(row?.id || 0);
-                        if (!rowId) continue;
-                        validIds.add(rowId);
-
-                        const modeOptions = collectModeOptionsFromRow(row);
-                        if (modeOptions.length === 0) {
-                            delete next[rowId];
-                            continue;
-                        }
-
-                        const current = normalizeModeValue(next[rowId]);
-                        const hasCurrent = current && modeOptions.some((opt) => opt.toLowerCase() === current.toLowerCase());
-                        if (hasCurrent) continue;
-
-                        const preferredActive =
-                            row?.is_active && activeMode
-                                ? modeOptions.find((opt) => opt.toLowerCase() === activeMode.toLowerCase())
-                                : '';
-
-                        next[rowId] = preferredActive || modeOptions[0];
-                    }
-                }
-            }
-
-            Object.keys(next).forEach((key) => {
-                if (!validIds.has(Number(key))) {
-                    delete next[key];
-                }
-            });
-
-            return next;
-        });
-    }, [categorizedSystemSettings, activeModeByCategory]);
 
     useEffect(() => {
         if (activeTab === 'usage') {
             refreshBilling();
         }
         if (activeTab === 'api_settings') {
-            loadSystemSettingsCatalog();
+            loadFunctionApiConfigs();
+            fetchMe().then(userRes => {
+                if (userRes && userRes.credits !== undefined) {
+                    setUserCredits(userRes.credits);
+                }
+            }).catch(err => console.error("Failed to load user credits", err));
         }
     }, [activeTab]);
 
@@ -1624,49 +1322,6 @@ const Settings = () => {
         addLog("Generation settings & credentials saved", "success");
     };
 
-    const handleSelectSystemSetting = async (setting, category, providerAlias = '', selectedMode = '') => {
-        if (!setting?.id) return;
-        setSelectingSystemId(setting.id);
-        try {
-            const chosenStrategy = normalizeApiStrategy(apiStrategyByCategory?.[category]);
-            const normalizedSelectedMode = normalizeModeValue(selectedMode);
-            const selected = await selectSystemSetting(
-                setting.id,
-                chosenStrategy,
-                normalizedSelectedMode || null,
-            );
-            if (selected?.category === 'LLM') {
-                const resolvedEndpoint = selected.base_url || setting.base_url || '';
-                setProvider(selected.provider || 'openai');
-                setEndpoint(resolvedEndpoint);
-                setModel(selected.model || '');
-                setApiKey('');
-                setLLMConfig({
-                    provider: selected.provider || 'openai',
-                    apiKey: '',
-                    endpoint: resolvedEndpoint,
-                    model: selected.model || ''
-                });
-            }
-            const providerLabel = formatProviderLabel(
-                selected?.provider || setting.provider,
-                providerAlias || selected?.provider_alias || setting.provider_alias,
-            );
-            const activeModeText = normalizeModeValue(selected?.mode) || normalizedSelectedMode;
-            const modeSuffix = activeModeText ? ` / mode=${activeModeText}` : '';
-            showNotification(`System setting activated: ${providerLabel} / ${selected?.model || setting.model || ''}${modeSuffix}`, 'success');
-            addLog(`Activated system API setting: ${providerLabel} (${selected?.category || setting.category}), strategy=${chosenStrategy}`, 'success');
-            await loadSystemSettingsCatalog();
-            await refreshActiveSettingSources();
-        } catch (err) {
-            console.error('Failed to select system setting', err);
-            const msg = err?.message || 'Failed to activate system setting';
-            showNotification(msg, 'error');
-        } finally {
-            setSelectingSystemId(null);
-        }
-    };
-
     const renderFields = () => {
         switch (provider) {
             case 'ollama':
@@ -2259,202 +1914,32 @@ const Settings = () => {
                 </div>
             ) : activeTab === 'api_settings' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="space-y-4">
-                        <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-4">
-                            <h2 className="text-2xl font-extrabold tracking-wide text-cyan-200">{t('默认 API 激活', 'Default API Activation')}</h2>
-                            <p className="text-xs text-cyan-100/80 mt-1">{t('仅用于当前用户选择每个类别的默认激活 API 配置。', 'Only used for current user default active API selection by category.')}</p>
-                        </div>
-                        <div className="bg-black/20 p-4 sm:p-6 rounded-xl border border-cyan-400/20 space-y-4 shadow-sm">
-                            <div className="flex items-center justify-between gap-3">
-                                <h3 className="text-base font-medium">{t('选择默认激活的 API 配置', 'Select Default Activated API Config')}</h3>
-                                <span className={`text-xs px-2 py-0.5 rounded border ${userCredits > 0 ? 'text-green-300 border-green-500/40 bg-green-500/10' : 'text-yellow-300 border-yellow-500/40 bg-yellow-500/10'}`}>
-                                    {t('积分', 'Credits')}: {userCredits}
-                                </span>
+                    <div className="rounded-xl border border-blue-400/30 bg-blue-500/10 p-4 relative">
+                            <div className="flex justify-between items-start md:items-center">
+                                <div>
+                                    <h2 className="text-2xl font-extrabold tracking-wide text-blue-200">{t('功能专属 API 默认激活', 'Function-specific API Default Activation')}</h2>
+                                    <p className="text-xs text-blue-100/80 mt-1">{t('选择各功能的默认 API，将保存到你的本地用户设置中。', 'Select default API for each function to save to your local preferences.')}</p>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        functionApiConfigs.forEach(funcConfig => {
+                                            const funcName = funcConfig.function_name;
+                                            const storageKey = 'func_api_' + funcName;
+                                            const apiList = funcConfig.api_settings || [];
+                                            if (apiList.length > 0) {
+                                                localStorage.setItem(storageKey, apiList[0].system_api_id);
+                                            } else {
+                                                localStorage.setItem(storageKey, '');
+                                            }
+                                        });
+                                        setFunctionApiConfigs([...functionApiConfigs]);
+                                        showNotification(t('已恢复系统默认（最高优先级配置）', 'Restored to system default (highest priority config)'), 'success');
+                                    }}
+                                    className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 text-blue-200 text-sm rounded-lg transition-colors mt-2 md:mt-0"
+                                >
+                                    {t('恢复系统默认', 'Restore System Default')}
+                                </button>
                             </div>
-                            <p className="text-xs text-muted-foreground">
-                                {t('在每个类别中选择一个默认激活配置。调用时将按你当前激活项生效。', 'Pick one default active config per category. Calls will use your currently active selection.')}
-                            </p>
-                            {!isSystemSettingsLoading && systemSettings.length > 0 && categorizedSystemSettings.length === 0 ? (
-                                <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-200">
-                                    {t('已读取到系统 API 数据，但当前提供方尚未配置可用共享密钥，所以默认激活列表为空。请到管理面板检查 provider key pool 或 system_api_settings.api_key。', 'System API data was loaded, but no provider currently has a usable shared key configured, so the activation list is empty. Check provider key pools or system_api_settings.api_key in the admin panel.')}
-                                </div>
-                            ) : null}
-
-                            <div className="grid grid-cols-1 gap-3 rounded-lg border border-white/10 bg-white/5 p-3">
-                                <div className="text-xs text-muted-foreground">
-                                    {t('用户 API 激活策略：智能选择（默认）先对默认激活 API 重试 3 次，再按同类候选依次尝试 3 个；固定 API 在失败重试 3 次后结束；低价替换在失败重试 3 次后按同类同 mode 的平均价格从低到高尝试前 3 个。', 'User API activation policy: Smart default (default) retries the selected API 3 times, then tries 3 same-category fallback APIs in order; Fixed retries selected API 3 times then exits; Low-price replace retries selected API 3 times then tries top 3 lowest average-price APIs in same category and mode.')}
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                    {['Image', 'Video'].map((policyCategory) => (
-                                        <div key={`policy-${policyCategory}`} className="flex items-center gap-2">
-                                            <span className="text-xs min-w-[64px] text-muted-foreground">{policyCategory}</span>
-                                            <select
-                                                value={apiStrategyByCategory?.[policyCategory] || 'smart_default'}
-                                                onChange={(e) => setApiStrategyByCategory((prev) => ({ ...prev, [policyCategory]: normalizeApiStrategy(e.target.value) }))}
-                                                className="w-full px-2 py-1.5 rounded border border-white/15 bg-black/30 text-xs"
-                                            >
-                                                <option value="smart_default">{t('智能选择', 'Smart default')}</option>
-                                                <option value="fixed">{t('固定 API', 'Fixed API')}</option>
-                                                <option value="low_price_replace">{t('低价替换', 'Low-price replace')}</option>
-                                            </select>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {!isSystemSettingsLoading && categorizedSystemSettings.length > 0 && (
-                                <div className="flex flex-wrap gap-2">
-                                    <button
-                                        onClick={() => setSelectedSystemCategory('All')}
-                                        className={`text-xs px-2.5 py-1 rounded border transition-colors ${selectedSystemCategory === 'All' ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-muted-foreground border-white/10 hover:text-white hover:bg-white/10'}`}
-                                    >
-                                        {t('全部', 'All')}
-                                    </button>
-                                    {categorizedSystemSettings.map((block) => (
-                                        <button
-                                            key={block.category}
-                                            onClick={() => setSelectedSystemCategory(block.category)}
-                                            className={`text-xs px-2.5 py-1 rounded border transition-colors ${selectedSystemCategory === block.category ? 'bg-primary/20 text-primary border-primary/40' : 'bg-white/5 text-muted-foreground border-white/10 hover:text-white hover:bg-white/10'}`}
-                                        >
-                                            {block.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
-
-                            {isSystemSettingsLoading ? (
-                                <div className="text-sm text-muted-foreground">{t('加载系统设置中...', 'Loading system settings...')}</div>
-                            ) : systemSettings.length === 0 ? (
-                                <div className="text-sm text-muted-foreground">{t('暂无系统 API 设置。', 'No system API settings available.')}</div>
-                            ) : visibleSystemSettings.length === 0 ? (
-                                <div className="text-sm text-muted-foreground">{t('所选类别下暂无设置。', 'No settings in selected category.')}</div>
-                            ) : (
-                                <div className="space-y-4">
-                                    {visibleSystemSettings.map((categoryBlock) => (
-                                        <div key={categoryBlock.category} className="space-y-3">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-sm font-semibold">{categoryBlock.label}</span>
-                                                <span className="text-[10px] px-2 py-0.5 rounded border border-white/20 text-muted-foreground">
-                                                    {categoryBlock.groups.length} {t(categoryBlock.groups.length > 1 ? '个提供方' : '个提供方', categoryBlock.groups.length > 1 ? 'Providers' : 'Provider')}
-                                                </span>
-                                            </div>
-
-                                            <div className="space-y-3">
-                                                {categoryBlock.groups.map((group, groupIndex) => {
-                                                    const providerPricing = buildPriceDisplay(group);
-                                                    return (
-                                                    <div key={`${group.category}-${group.provider}-${group.provider_alias || ''}-${groupIndex}`} className="border border-white/10 rounded-lg p-4 bg-white/5 space-y-3">
-                                                        <div className="flex flex-wrap items-center gap-2">
-                                                            <span className="text-sm font-semibold">{group.provider_alias || group.provider}</span>
-                                                            {group.provider_alias && (
-                                                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/20 text-muted-foreground font-mono">
-                                                                    {group.provider}
-                                                                </span>
-                                                            )}
-                                                            {group.shared_key_configured ? (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-green-500/30 text-green-300 bg-green-500/10">{t('共享密钥已就绪', 'Shared Key Ready')}</span>
-                                                            ) : (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded border border-yellow-500/30 text-yellow-300 bg-yellow-500/10">{t('无共享密钥', 'No Shared Key')}</span>
-                                                            )}
-                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
-                                                                {t('提供方均价', 'Provider Avg')}: {providerPricing.avgLabel}
-                                                            </span>
-                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-sky-400/30 bg-sky-500/10 text-sky-200">
-                                                                {t('提供方区间', 'Provider Range')}: {providerPricing.rangeLabelMin} ~ {providerPricing.rangeLabelMax}
-                                                            </span>
-                                                        </div>
-
-                                                        <div className="space-y-2">
-                                                            {(group.models || []).map((row, rowIndex) => (
-                                                                (() => {
-                                                                    const pricing = buildPriceDisplay(row);
-                                                                    const modeOptions = collectModeOptionsFromRow(row);
-                                                                    const selectedMode = normalizeModeValue(systemModeSelectionById?.[row?.id]);
-                                                                    const activeMode = normalizeModeValue(activeModeByCategory?.[categoryBlock.category]);
-                                                                    return (
-                                                                <div
-                                                                    key={`system-row-${group.category}-${group.provider}-${String(row?.id ?? '')}-${String(row?.model || '')}-${rowIndex}`}
-                                                                    className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded border border-white/10 bg-black/20"
-                                                                >
-                                                                    <div className="md:col-span-8 text-xs">
-                                                                        <div className="text-muted-foreground">{t('名称', 'Name')}</div>
-                                                                        <div className="font-mono break-all flex flex-wrap items-center gap-2">
-                                                                            <span>{row.name || '-'}</span>
-                                                                            {row.is_active && activeMode && (
-                                                                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-200">
-                                                                                    {t('当前 mode', 'Current mode')}: {activeMode}
-                                                                                </span>
-                                                                            )}
-                                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200">
-                                                                                {t('平均价格', 'Avg Price')}: {pricing.avgLabel}
-                                                                            </span>
-                                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-400/30 bg-amber-500/10 text-amber-200">
-                                                                                {t('计费类型', 'Billing Type')}: {formatBillingUnitType(row.billing_unit_type)}
-                                                                            </span>
-                                                                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-sky-400/30 bg-sky-500/10 text-sky-200">
-                                                                                {t('价格区间', 'Price Range')}: {pricing.rangeLabelMin} ~ {pricing.rangeLabelMax}
-                                                                            </span>
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="md:col-span-2 text-xs">
-                                                                        <div className="text-muted-foreground mb-1">{t('Mode', 'Mode')}</div>
-                                                                        {modeOptions.length > 0 ? (
-                                                                            <select
-                                                                                value={selectedMode || modeOptions[0]}
-                                                                                onChange={(e) => {
-                                                                                    const nextMode = normalizeModeValue(e.target.value);
-                                                                                    setSystemModeSelectionById((prev) => ({
-                                                                                        ...(prev || {}),
-                                                                                        [row.id]: nextMode,
-                                                                                    }));
-                                                                                }}
-                                                                                className="w-full px-2 py-1.5 rounded border border-white/15 bg-black/30 text-xs"
-                                                                            >
-                                                                                {modeOptions.map((opt) => (
-                                                                                    <option key={`${row.id}-mode-${opt}`} value={opt}>{opt}</option>
-                                                                                ))}
-                                                                            </select>
-                                                                        ) : (
-                                                                            <div className="text-muted-foreground">-</div>
-                                                                        )}
-                                                                    </div>
-                                                                    <div className="md:col-span-2 flex md:justify-end">
-                                                                        <div className="w-full md:w-auto flex gap-2 justify-end">
-                                                                            <button
-                                                                                onClick={(e) => {
-                                                                                    e.stopPropagation();
-                                                                                    handleSelectSystemSetting(
-                                                                                        row,
-                                                                                        categoryBlock.category,
-                                                                                        group.provider_alias || '',
-                                                                                        modeOptions.length > 0 ? (selectedMode || modeOptions[0]) : '',
-                                                                                    );
-                                                                                }}
-                                                                                disabled={!group.shared_key_configured || selectingSystemId === row.id || !!row.deprecated}
-                                                                                className="text-xs px-3 py-1.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                                            >
-                                                                                {selectingSystemId === row.id ? t('激活中...', 'Activating...') : (row.is_active ? t('已激活', 'Active') : t('使用此配置', 'Use This'))}
-                                                                            </button>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                                    );
-                                                                })()
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                    <div className="mt-8 rounded-xl border border-blue-400/30 bg-blue-500/10 p-4">
-                            <h2 className="text-2xl font-extrabold tracking-wide text-blue-200">{t('功能专属 API 默认激活', 'Function-specific API Default Activation')}</h2>
-                            <p className="text-xs text-blue-100/80 mt-1">{t('选择各功能的默认 API，将保存到你的本地用户设置中。', 'Select default API for each function to save to your local preferences.')}</p>
                         </div>
                         <div className="bg-black/20 p-4 sm:p-6 rounded-xl border border-blue-400/20 space-y-4 shadow-sm">
                             {functionApiConfigs.map(funcConfig => {
