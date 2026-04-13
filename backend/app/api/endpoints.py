@@ -1397,7 +1397,7 @@ def _persist_remote_image_result(
 
 
 _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
-    re.compile(r"^file\d+\.aitohumanize\.com$", re.IGNORECASE),
+    re.compile(r"^file\d*\.aitohumanize\.com$", re.IGNORECASE),
 ]
 
 
@@ -2344,8 +2344,8 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
         request_mode = str(req_context.get("mode") or "").strip().lower()
         if request_mode != "joint_diptych" and normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
             _register_asset_helper(db, current_user.id, normalized_url, req_context, normalized_meta)
-            _bind_generated_media_to_shot(db, current_user, req_context, normalized_url)
-            _bind_generated_media_to_entity(db, current_user, req_context, normalized_url)
+            _bind_generated_media_to_shot(db, current_user, req_context, normalized_url, oss_uploaded_success=False)
+            _bind_generated_media_to_entity(db, current_user, req_context, normalized_url, oss_uploaded_success=False)
         elif request_mode != "joint_diptych" and normalized_url:
             logger.warning(
                 "[ImageJob] skipped asset registration/bind for temporary provider url | job_id=%s user_id=%s url=%s entity_id=%s shot_id=%s",
@@ -21816,7 +21816,7 @@ def _log_api_switch_regenerate_if_needed(
     )
 
 
-def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, media_url: Optional[str]) -> None:
+def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
     if not media_url:
         return
 
@@ -21855,28 +21855,36 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
     req_prompt = str(get_attr(req, "prompt") or "").strip()
     changed = False
 
+    tech = {}
+    try:
+        tech = json.loads(shot.technical_notes or "{}")
+        if not isinstance(tech, dict):
+            tech = {}
+    except Exception:
+        tech = {}
+
     if asset_type in {"start_frame", "start"}:
-        if shot.image_url != media_url:
+        if shot.image_url != media_url or (oss_uploaded_success is not None and tech.get("start_frame_oss_uploaded") != oss_uploaded_success):
             shot.image_url = media_url
+            if oss_uploaded_success is not None:
+                tech["start_frame_oss_uploaded"] = oss_uploaded_success
+            shot.technical_notes = json.dumps(tech, ensure_ascii=False)
             changed = True
 
     elif asset_type in {"end_frame", "end"}:
-        tech = {}
-        try:
-            tech = json.loads(shot.technical_notes or "{}")
-            if not isinstance(tech, dict):
-                tech = {}
-        except Exception:
-            tech = {}
-
-        if tech.get("end_frame_url") != media_url:
+        if tech.get("end_frame_url") != media_url or (oss_uploaded_success is not None and tech.get("end_frame_oss_uploaded") != oss_uploaded_success):
             tech["end_frame_url"] = media_url
+            if oss_uploaded_success is not None:
+                tech["end_frame_oss_uploaded"] = oss_uploaded_success
             shot.technical_notes = json.dumps(tech, ensure_ascii=False)
             changed = True
 
     elif asset_type == "video":
-        if shot.video_url != media_url:
+        if shot.video_url != media_url or (oss_uploaded_success is not None and tech.get("video_oss_uploaded") != oss_uploaded_success):
             shot.video_url = media_url
+            if oss_uploaded_success is not None:
+                tech["video_oss_uploaded"] = oss_uploaded_success
+            shot.technical_notes = json.dumps(tech, ensure_ascii=False)
             changed = True
 
     if not changed:
@@ -21894,7 +21902,7 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
     )
 
 
-def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str]) -> None:
+def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
     if not media_url:
         return
 
@@ -21974,7 +21982,14 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
             )
             return
 
-    if str(entity.image_url or "").strip() == stable_media_url:
+    tech_attrs = {}
+    try:
+        tech_attrs = json.loads(entity.custom_attributes or "{}")
+        if not isinstance(tech_attrs, dict): tech_attrs = {}
+    except Exception:
+        pass
+
+    if str(entity.image_url or "").strip() == stable_media_url and (oss_uploaded_success is None or tech_attrs.get("oss_uploaded_success") == oss_uploaded_success):
         logger.info(
             "[SubjectMediaBind] unchanged | entity_id=%s name=%s project_id=%s media_url=%s user_id=%s",
             getattr(entity, "id", None),
@@ -21994,6 +22009,14 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
         stable_media_url,
         getattr(current_user, "id", None),
     )
+    if oss_uploaded_success is not None:
+        tech_attrs["oss_uploaded_success"] = oss_uploaded_success
+        entity.custom_attributes = json.dumps(tech_attrs, ensure_ascii=False)
+        
+    if oss_uploaded_success is not None:
+        tech_attrs["oss_uploaded_success"] = oss_uploaded_success
+        entity.custom_attributes = json.dumps(tech_attrs, ensure_ascii=False)
+        
     entity.image_url = stable_media_url
     db.add(entity)
     db.commit()
@@ -22924,13 +22947,13 @@ async def _run_generate_image(
             request_mode = str(getattr(req, "mode", "") or "").strip().lower()
 
             if request_mode != "joint_diptych":
-                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
-                await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url)
+                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url, False)
+                await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url, False)
                 if not _is_ephemeral_provider_media_url(temp_url):
                     await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
 
             # Trigger background task for OSS upload, if the URL is an external HTTP URL
-            if temp_url.startswith("http") and not _is_ephemeral_provider_media_url(temp_url):
+            if temp_url.startswith("http"):
                 async def _bg_upload_and_update(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
                     try:
@@ -22941,8 +22964,8 @@ async def _run_generate_image(
                         if norm_url and norm_url != raw_url:
                             if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(norm_url):
                                 await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, norm_url, req_obj, norm_meta)
-                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, norm_url)
-                                await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, norm_url)
+                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, norm_url, True)
+                                await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, norm_url, True)
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update] failed for user={user.id} url={raw_url}: {e}")
                     finally:
@@ -24499,7 +24522,7 @@ async def generate_voice_endpoint(
                 except Exception as asset_err:
                     logger.warning("[GenerateVoice] asset registration failed: %s", asset_err)
 
-            if voice_url.startswith("http") and not _is_ephemeral_provider_media_url(voice_url):
+            if voice_url.startswith("http"):
                 async def _bg_upload_and_update_voice(user: User, req_obj: Any, raw_url: str, prompt_text: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
                     try:
@@ -25396,7 +25419,7 @@ async def _run_generate_video(
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
-            skip_download=True,
+            skip_download=False,
         )
 
         if isinstance(result, dict):
@@ -25464,26 +25487,10 @@ async def _run_generate_video(
         if result.get("url"):
             temp_url = result.get("url")
 
-            # Same logic as images, avoiding blocking for external video URLs
+            # For videos, wait until provider URLs are fetched internally by media_service.
             if temp_url.startswith("http") and not _is_ephemeral_provider_media_url(temp_url):
                 await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
                 await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
-
-                async def _bg_upload_and_update_video(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
-                    bg_db = SessionLocal()
-                    try:
-                        bg_user = bg_db.query(User).filter(User.id == user.id).first()
-                        if not bg_user: return
-                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, bg_user, raw_url, meta)
-                        if norm_url and norm_url != raw_url:
-                            if not _is_ephemeral_provider_media_url(norm_url):
-                                await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, norm_url, req_obj, norm_meta)
-                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, norm_url)
-                    except Exception as e:
-                        logger.error(f"[_bg_upload_and_update_video] failed for user={user.id} url={raw_url}: {e}")
-                    finally:
-                        bg_db.close()
-                asyncio.create_task(_bg_upload_and_update_video(current_user, req, temp_url, result.get("metadata")))
             else:
                 await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
                 await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
