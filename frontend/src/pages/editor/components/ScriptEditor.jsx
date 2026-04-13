@@ -3234,16 +3234,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLlmAssetRawResultContent(analyzedText);
 
             if (analyzedText) {
-                // Automatically import the generated subjects
-                const sceneImportReport = await doImportText(analyzedText, 'json', {
-                    onLog,
-                    projectId,
-                    episodeId: activeEpisode?.id,
-                });
+                // Safeguard: make sure we are not importing plain text phase 1 by mistake
+                const hasValidSubjectJsonBlock = /"characters"\s*:\s*\[|"props"\s*:\s*\[|"environments"\s*:\s*\[|"posters"\s*:\s*\[/i.test(analyzedText);
+                const backendSubjectsJson = result?.subjects_json;
                 
-                const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
-                const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
-                onLog?.(`[Asset Gen Tracking] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+                if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
+                    onLog?.(`[Asset Gen Tracking] Warning: AI did not return a valid Entities JSON block. Skipping import to prevent overwriting index.`, "warning");
+                } else {
+                    // Automatically import the generated subjects
+                    const sceneImportReport = await doImportText(analyzedText, 'json', {
+                        onLog,
+                        projectId,
+                        episodeId: activeEpisode?.id,
+                        subjectsJson: backendSubjectsJson || null,
+                    });
+                    
+                    const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
+                    const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
+                    onLog?.(`[Asset Gen Tracking] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+                }
             }
 
         } catch (error) {

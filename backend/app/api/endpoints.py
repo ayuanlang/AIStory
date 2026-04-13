@@ -2588,7 +2588,7 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         return result
 
     from app.db.session import SessionLocal
-    from app.models.user import User
+    from app.models.all_models import User
 
     db = SessionLocal()
     try:

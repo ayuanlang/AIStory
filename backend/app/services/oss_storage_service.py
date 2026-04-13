@@ -88,15 +88,13 @@ class OSSStorageService:
         is_qiniu = self._is_qiniu_provider(pool)
 
         if "://" in public_base_url:
-            if is_qiniu and public_base_url.startswith("https://"):
-                return public_base_url.replace("https://", "http://", 1)
             return public_base_url
             
         endpoint = str(getattr(pool, "endpoint", "") or "").strip()
         endpoint_scheme = urllib.parse.urlparse(endpoint).scheme or ""
         
         if is_qiniu:
-            return f"http://{public_base_url}"
+            return f"https://{public_base_url}"
 
         if endpoint_scheme:
             return f"{endpoint_scheme}://{public_base_url}"
@@ -502,8 +500,6 @@ class OSSStorageService:
                 Params={"Bucket": pool.bucket, "Key": key},
                 ExpiresIn=int(getattr(pool, "presign_expires_seconds", 7 * 24 * 3600)),
             )
-            if self._is_qiniu_provider(pool) and url.startswith("https://"):
-                url = url.replace("https://", "http://", 1)
             return url
         except Exception as exc:
             logger.warning("OSS presign failed | key=%s err=%s", key, exc)
