@@ -22934,13 +22934,15 @@ async def _run_generate_image(
                 async def _bg_upload_and_update(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
                     try:
-                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, user, raw_url, meta)
-                        
+                        bg_user = bg_db.query(User).filter(User.id == user.id).first()
+                        if not bg_user: return
+                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, bg_user, raw_url, meta)
+
                         if norm_url and norm_url != raw_url:
                             if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(norm_url):
-                                await asyncio.to_thread(_register_asset_helper, bg_db, user.id, norm_url, req_obj, norm_meta)
-                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, user, req_obj, norm_url)
-                                await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, user, req_obj, norm_url)
+                                await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, norm_url, req_obj, norm_meta)
+                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, norm_url)
+                                await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, norm_url)
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update] failed for user={user.id} url={raw_url}: {e}")
                     finally:
@@ -24501,7 +24503,9 @@ async def generate_voice_endpoint(
                 async def _bg_upload_and_update_voice(user: User, req_obj: Any, raw_url: str, prompt_text: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
                     try:
-                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, user, raw_url, meta)
+                        bg_user = bg_db.query(User).filter(User.id == user.id).first()
+                        if not bg_user: return
+                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, bg_user, raw_url, meta)
                         if norm_url and norm_url != raw_url:
                             # Update shot
                             if req_obj.shot_id:
@@ -24519,7 +24523,7 @@ async def generate_voice_endpoint(
                                         bg_db.commit()
                             
                             # Register asset
-                            await asyncio.to_thread(_register_asset_helper, bg_db, user.id, norm_url, req_obj, norm_meta)
+                            await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, norm_url, req_obj, norm_meta)
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update_voice] failed for user={user.id} url={raw_url}: {e}")
                     finally:
@@ -25468,11 +25472,13 @@ async def _run_generate_video(
                 async def _bg_upload_and_update_video(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
                     try:
-                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, user, raw_url, meta)
+                        bg_user = bg_db.query(User).filter(User.id == user.id).first()
+                        if not bg_user: return
+                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, bg_user, raw_url, meta)
                         if norm_url and norm_url != raw_url:
                             if not _is_ephemeral_provider_media_url(norm_url):
-                                await asyncio.to_thread(_register_asset_helper, bg_db, user.id, norm_url, req_obj, norm_meta)
-                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, user, req_obj, norm_url)
+                                await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, norm_url, req_obj, norm_meta)
+                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, norm_url)
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update_video] failed for user={user.id} url={raw_url}: {e}")
                     finally:
