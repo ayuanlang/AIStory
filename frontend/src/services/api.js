@@ -2889,7 +2889,7 @@ export const refinePrompt = async (original_prompt, instruction, type = 'image')
     return await asyncLLMPost('/tools/refine_prompt', { original_prompt, instruction, type });
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null) => {
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null, sceneAnalysisMode = null) => {
     let defaultApiId = systemApiId;
     if (!defaultApiId && functionName) {
         defaultApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
@@ -2901,6 +2901,9 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
         function_name: functionName,
         system_api_id: defaultApiId,
     };
+    if (sceneAnalysisMode) {
+        payload.scene_analysis_mode = sceneAnalysisMode;
+    }
     if (projectId) {
         payload.project_id = projectId;
     }

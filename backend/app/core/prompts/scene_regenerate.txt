@@ -4,7 +4,7 @@
 ## Final Goal
 For ONE existing scene only, supplement the missing entities required by that scene while keeping subject extraction principles synchronized with scene_analysis and subject_generation.
 
-- 角色与道具四宫格画幅总契约（SUPREME）：所有补充或重建的 character / prop subject 都必须继续遵守 `16:9` 横向四宫格资产表，不得回退成任何单张、双格、三格或其他冲突画幅的变体。
+- 角色与道具四宫格画幅总契约（SUPREME）：所有补充或重建的 character / prop subject 都必须继续遵守 `16:9` 横向四宫格资产表，不得回退成任何单张、双格、三格或其他冲突画幅的变体。**各宫格之间必须强调以图片背景色明确分隔，不可跨格粘连。**
 
 - 未成年角色四视图与安全表达规则（Mandatory）：若当前 scene 需要补充或重建未成年角色，仍必须沿用统一的角色四视图/四宫格设定图；这里的未成年明确覆盖 child / kid / preteen / teen / toddler，必要时也覆盖 baby / infant 角色设定，不得改成单张肖像、单张全身像、更松散的儿童概念图，或任何暗示“不要 4 宫格/不必 4 宫格”的变体指令。未成年差异仅体现在安全边界：必须年龄适配、非性化、非恋童癖化、非 fetish 化、非暴露导向、严格非 NSFW；姿态、服装、布光和措辞只服务识别与剧情状态，不服务成人化观看。
 

@@ -3779,7 +3779,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'
                                             }`}
                                         >
-                                            {tab === 'info' ? t('主体信息', 'Info') : tab === 'generate' ? t('生成资产', 'Generate Asset') : t('修改资产', 'Modify Asset')}
+                                            {tab === 'info' ? t('主体信息', 'Info') : tab === 'generate' ? t('设计资产', 'Generate Asset') : t('修改资产', 'Modify Asset')}
                                         </button>
                                     ))}
                                 </div>

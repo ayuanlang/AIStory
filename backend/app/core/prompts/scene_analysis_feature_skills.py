@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 _PROMPTS_ROOT = Path(settings.BASE_DIR) / "app" / "core" / "prompts"
 _FEATURE_STACK_ROOT = _PROMPTS_ROOT / "skills" / "scene_analysis_feature_stack"
 _REGISTRY_PATH = _FEATURE_STACK_ROOT / "registry.json"
-_DEFAULT_ROUTED_BASE_PROMPT = "scene_analysis_routed_base.txt"
+_DEFAULT_ROUTED_BASE_PROMPT = "skills/scene_analysis_feature_stack/scene_planning.md"
 _COMBO_SLOT_TOKEN = "[[SCENE_ANALYSIS_COMBO_RULES]]"
 _PROMPT_FRAGMENT_KEYS = (
     "prompt",

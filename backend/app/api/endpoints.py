@@ -22926,6 +22926,8 @@ async def _run_generate_image(
             if request_mode != "joint_diptych":
                 await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
                 await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url)
+                if not _is_ephemeral_provider_media_url(temp_url):
+                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
 
             # Trigger background task for OSS upload, if the URL is an external HTTP URL
             if temp_url.startswith("http") and not _is_ephemeral_provider_media_url(temp_url):
@@ -24482,6 +24484,19 @@ async def generate_voice_endpoint(
 
         # Register voice asset so frontend can resolve metadata panels by URL.
         if voice_url:
+            if not _is_ephemeral_provider_media_url(voice_url):
+                try:
+                    await asyncio.to_thread(
+                        _register_asset_helper,
+                        db,
+                        current_user.id,
+                        voice_url,
+                        req,
+                        (result.get("metadata") if isinstance(result, dict) else None),
+                    )
+                except Exception as asset_err:
+                    logger.warning("[GenerateVoice] asset registration failed: %s", asset_err)
+
             if voice_url.startswith("http") and not _is_ephemeral_provider_media_url(voice_url):
                 async def _bg_upload_and_update_voice(user: User, req_obj: Any, raw_url: str, prompt_text: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
@@ -25448,7 +25463,8 @@ async def _run_generate_video(
             # Same logic as images, avoiding blocking for external video URLs
             if temp_url.startswith("http") and not _is_ephemeral_provider_media_url(temp_url):
                 await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
-                
+                await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
+
                 async def _bg_upload_and_update_video(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
                     try:

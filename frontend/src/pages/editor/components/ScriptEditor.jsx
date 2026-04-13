@@ -5924,11 +5924,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                               }
                                               setShowAnalysisModal(false);
                                           }}
-                                disabled={isAnalyzing}
+                                disabled={isAnalyzing && !phase2ResolverRef.current}
                                 className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                              >
-                                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                                          {t('运行分析', 'Run Analysis')}
+                                {(isAnalyzing && !phase2ResolverRef.current) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                                          {phase2ResolverRef.current ? t('确认并继续', 'Confirm & Continue') : t('运行分析', 'Run Analysis')}
                              </button>
                         </div>
                     </div>
