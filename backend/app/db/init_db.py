@@ -1230,6 +1230,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             existing_episode_columns = [c['name'] for c in inspector.get_columns('episodes')]
             episode_columns_to_check = [
                 ("ai_scene_analysis_result", "TEXT"),
+                ("ai_entity_design_result", "TEXT"),
                 ("character_profiles", "JSON")
             ]
 
