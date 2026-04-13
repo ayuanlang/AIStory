@@ -1574,6 +1574,12 @@ const Editor = ({
                         'info'
                     );
 
+                    const _isFallbackIndex = (n) => {
+                        const lc = String(n || '').toLowerCase().replace(/[\s_\-]/g, '');
+                        return ['subjectindex', 'subjectsindex', 'sceneanalysis', 'entities', 'character', 'characters', 'prop', 'props', 'environment', 'environments', 'role', 'roles', 'item', 'items', 'scene', 'scenes', '角色', '道具', '场景', '人物', '环境', '物件'].includes(lc);
+                    };
+                    const skipSubjectIndex = (n, en) => _isFallbackIndex(n) || _isFallbackIndex(en);
+
                     // Characters
                     if (data.characters && Array.isArray(data.characters)) {
                         for (const char of data.characters) {
@@ -1586,6 +1592,10 @@ const Editor = ({
                                 ''
                             ).trim();
                             const entityNameEn = String(char?.name_en || char?.english_name || char?.en_name || '').trim();
+                            if (skipSubjectIndex(entityName, entityNameEn)) {
+                                addLog(`Skipped entity payload named '${entityName}' (it matched subject index fallback rules).`, 'warning');
+                                continue;
+                            }
                             if (!entityName) {
                                 addLog('Skipped character entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
@@ -1662,6 +1672,7 @@ const Editor = ({
                                           ''
                                       ).trim();
                                       const entityNameEn = String(prop?.name_en || prop?.english_name || prop?.en_name || '').trim();
+                             if (skipSubjectIndex(entityName, entityNameEn)) continue;
                              if (!entityName) {
                                           addLog('Skipped prop entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
@@ -1729,6 +1740,7 @@ const Editor = ({
                                           ''
                                       ).trim();
                                       const entityNameEn = String(env?.name_en || env?.english_name || env?.en_name || '').trim();
+                             if (skipSubjectIndex(entityName, entityNameEn)) continue;
                              if (!entityName) {
                                           addLog('Skipped environment entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
@@ -1800,6 +1812,7 @@ const Editor = ({
                                           ''
                                       ).trim();
                                       const entityNameEn = String(poster?.name_en || poster?.english_name || poster?.en_name || '').trim();
+                             if (skipSubjectIndex(entityName, entityNameEn)) continue;
                              if (!entityName) {
                                           addLog('Skipped poster entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
@@ -2336,9 +2349,9 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                              }
                          }
 
-                    } else if (sceneLines.length > 2 && inSceneTable && !trimmed.startsWith('|') && trimmed !== '') {
+                    } else if (sceneLines.length > 2 && inSceneTable && !isTableRow && trimmed !== '') {
                          inSceneTable = false;
-                    } else if (shotLines.length > 2 && inShotTable && !trimmed.startsWith('|') && trimmed !== '') {
+                    } else if (shotLines.length > 2 && inShotTable && !isTableRow && trimmed !== '') {
                          inShotTable = false;
                     }
                 }

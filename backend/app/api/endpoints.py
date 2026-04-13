@@ -2571,6 +2571,65 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
         await _dispatch_generation_callback("image", callback_url, updated_job)
 
 
+
+def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return result
+
+    raw_url = _extract_job_result_url(result)
+    if not raw_url:
+        return result
+
+    try:
+        user_id = int(job.get("user_id") or 0)
+    except Exception:
+        user_id = 0
+    if user_id <= 0:
+        return result
+
+    from app.db.session import SessionLocal
+    from app.models.user import User
+
+    db = SessionLocal()
+    try:
+        current_user = db.query(User).filter(User.id == user_id).first()
+        if not current_user:
+            return result
+
+        req_context: Dict[str, Any] = {}
+        for key in (
+            "prompt", "negative_prompt", "provider", "model", "aspect_ratio",
+            "duration", "project_id", "episode_id", "scene_id", "shot_id",
+            "shot_number", "shot_name", "asset_type", "seed", "subject_id"
+        ):
+            value = job.get(key)
+            if value is not None and value != "":
+                req_context[key] = value
+
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+        
+        normalized_url, normalized_meta = _persist_remote_image_result(current_user, raw_url, metadata)
+        
+        finalized_result = dict(result)
+        if normalized_url:
+            finalized_result["url"] = normalized_url
+        if normalized_meta is not None:
+            finalized_result["metadata"] = normalized_meta
+
+        # Try to bind if relevant and not ephemeral
+        if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
+            try:
+                _bind_generated_media_to_shot(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
+            except Exception as bind_exc:
+                logger.warning(f"[_finalize_video_job_result_persistence] _bind_generated_media_to_shot failed: {bind_exc}")
+
+        return finalized_result
+    except Exception as exc:
+        logger.warning("[VideoJob] callback persistence finalize failed | job_id=%s error=%s", job_id, exc)
+        return result
+    finally:
+        db.close()
+
 def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
     provider_task_id = _extract_job_provider_task_id(job)
     callback_ticket = _extract_job_provider_callback_ticket(job)
@@ -2611,6 +2670,15 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
             updates["finished_at"] = now_bj_iso()
 
     if normalized_status == "succeeded":
+        candidate_result = result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
+        if candidate_result:
+            effective_job = dict(job)
+            effective_job.update(updates)
+            persisted_result = _finalize_video_job_result_persistence(job_id, effective_job, dict(candidate_result))
+            persisted_result_url = _extract_job_result_url(persisted_result)
+            if persisted_result_url:
+                updates["result"] = persisted_result
+
         if current_error:
             updates["error"] = None
     elif normalized_status in {"failed", "canceled"}:
@@ -22786,7 +22854,7 @@ async def _run_generate_image(
             filename_base=_build_generation_filename_base(req, db),
             asset_type=req.asset_type,
             provider_options=image_provider_options,
-            skip_download=True,
+            skip_download=False,
         )
 
         if isinstance(result, dict):
@@ -24383,7 +24451,7 @@ async def generate_voice_endpoint(
             provider_options=provider_options,
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
-            skip_download=True,
+            skip_download=False,
         )
 
         if isinstance(result, dict):

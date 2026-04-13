@@ -26,11 +26,14 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
     const [value, setValue] = useState(Number(localStorage.getItem(storageKey)) || '');
     
     useEffect(() => {
-        if (!value && apiList.length > 0) {
-            const primary = apiList.find(a => !a.is_fallback) || apiList[0];
-            if (primary && primary.system_api_id) {
-                setValue(primary.system_api_id);
-                localStorage.setItem(storageKey, primary.system_api_id);
+        if (apiList.length > 0) {
+            const isValid = apiList.some(a => Number(a.system_api_id) === Number(value));
+            if (!value || !isValid) {
+                const primary = apiList.find(a => !a.is_fallback) || apiList[0];
+                if (primary && primary.system_api_id) {
+                    setValue(primary.system_api_id);
+                    localStorage.setItem(storageKey, primary.system_api_id);
+                }
             }
         }
     }, [apiList, value, storageKey]);

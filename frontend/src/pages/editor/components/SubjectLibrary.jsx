@@ -351,7 +351,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (!rawUrl) return false;
         try {
             const parsed = new URL(rawUrl, window.location.origin);
-            return /^file\d+\.aitohumanize\.com$/i.test(String(parsed.hostname || '').trim());
+            return /^file\d*\.aitohumanize\.com$/i.test(String(parsed.hostname || '').trim());
         } catch {
             return false;
         }
@@ -1932,7 +1932,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
         const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-            function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
+            function_name: (deps && deps.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
             project_id: projectId,
             episode_id: currentEpisode?.id,
             entity_id: analyzed?.id,
@@ -2736,7 +2736,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             const submitResult = await submitImageGenerationJob(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
+                function_name: (depUrls && depUrls.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
                 entity_id: targetEntityId,
@@ -3066,7 +3066,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 let createdJobId = '';
                 try {
                     const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                        function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
+                        function_name: (depUrls && depUrls.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
                         project_id: projectId,
                         episode_id: currentEpisode?.id,
                         entity_id: entity?.id,
@@ -3541,6 +3541,27 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 </button>
                             )}
 
+                            {(() => {
+                                let isOssTemp = false;
+                                try {
+                                    const attrs = entity.custom_attributes ? (typeof entity.custom_attributes === 'string' ? JSON.parse(entity.custom_attributes) : entity.custom_attributes) : {};
+                                    if (attrs && attrs.oss_uploaded_success === false) {
+                                        isOssTemp = true;
+                                    }
+                                } catch(e) {}
+                                if (!isOssTemp && entity.image_url && isEphemeralProviderMediaUrl(entity.image_url)) {
+                                    isOssTemp = true;
+                                }
+                                return isOssTemp ? (
+                                    <div 
+                                        className="absolute bottom-2 left-2 z-30 inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow" 
+                                        title={t('图片未持久化到OSS，目前为临时地址。', 'Image not yet persisted to OSS, using temporary link.')}
+                                    >
+                                        <AlertTriangle size={12} />
+                                        <span>{t('临时图片', 'Temp')}</span>
+                                    </div>
+                                ) : null;
+                            })()}
                             {entity.image_url ? (
                                 <SafeImage
                                     src={entity.image_url}

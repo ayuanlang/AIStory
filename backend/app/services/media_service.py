@@ -3979,6 +3979,26 @@ class MediaGenerationService:
                             f"skipped_sample={pool_debug['skipped_sample']}",
                         ])
 
+                    details_payload = {
+                        "category": resolved_category,
+                        "function": function_name,
+                        "requested_provider": requested_provider,
+                        "requested_model": requested_model_value,
+                        "selected_id": selected_id,
+                        "selected_provider": selected_provider,
+                        "selected_model": selected_model,
+                        "source": selected_source,
+                        "stage": stage,
+                        "note": note,
+                        "user_system_api_id": user_system_api_id,
+                        "mismatch_default": mismatch,
+                    }
+                    try:
+                        from app.services.system_log_service import log_action
+                        log_action(session, int(user_id), f"user_{user_id}", "API_SELECTION_TRACE", details=", ".join(f"{k}={v}" for k, v in details_payload.items()), ip_address="127.0.0.1")
+                    except Exception as e_log:
+                        pass
+
                     _debug_log(
                         "API_FALLBACK_TRACE "
                         f"stage={stage} user_id={user_id} category={resolved_category} requested_provider={requested_provider or '<none>'} "

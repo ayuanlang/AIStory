@@ -154,6 +154,12 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
+const isDummySubject = (itemName) => {
+    if (!itemName) return false;
+    const lcName = String(itemName).trim().toLowerCase().replace(/[\s_\-]/g, '');
+    return ['subjectindex', 'subjectsindex', 'sceneanalysis', 'entities', 'character', 'characters', 'prop', 'props', 'environment', 'environments', 'role', 'roles', 'item', 'items', 'scene', 'scenes', '角色', '道具', '场景', '人物', '环境', '物件'].includes(lcName);
+};
+
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onLog, onImportText, onSwitchToScenes, uiLang = 'zh' }) => {
     const functionApiConfigs = useFunctionApis('script_analysis');
     const navigate = useNavigate();
@@ -181,6 +187,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [systemPrompt, setSystemPrompt] = useState('');
     const [userPrompt, setUserPrompt] = useState('');
     const [isSuperuser, setIsSuperuser] = useState(false);
+    const isSuperuserRef = useRef(false);
+
+    useEffect(() => {
+        isSuperuserRef.current = isSuperuser;
+    }, [isSuperuser]);
+
     const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
     const [subjectConsistencyResultText, setSubjectConsistencyResultText] = useState('');
     const [subjectRecoveryModal, setSubjectRecoveryModal] = useState({
@@ -633,6 +645,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const payload = { characters: [], props: [], environments: [] };
             for (const item of arr || []) {
                 if (!item || typeof item !== 'object') continue;
+                if (isDummySubject(item.name) || isDummySubject(item.subject_name_exact) || isDummySubject(item.name_en)) continue;
                 const type = normalizeKey(item.type || item.subject_type || item.entity_type || '');
                 if (['character', 'characters', 'char', 'role', 'roles', '人物', '角色'].includes(type)) {
                     payload.characters.push(item);
@@ -645,12 +658,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return payload;
         };
 
+        const cleanArray = (arr) => (arr || []).filter(item => !isDummySubject(item?.name) && !isDummySubject(item?.name_en) && !isDummySubject(item?.subject_name_exact));
+
         const normalizePayload = (obj) => {
             if (!obj || typeof obj !== 'object') return null;
 
-            const characters = pickArrayByAliases(obj, ['characters', 'character', 'chars', 'subjects', 'people', 'roles', '人物', '角色']);
-            const props = pickArrayByAliases(obj, ['props', 'prop', 'items', '道具', '物件']);
-            const environments = pickArrayByAliases(obj, ['environments', 'environment', 'envs', 'env', 'scenes', '场景', '环境']);
+            let characters = pickArrayByAliases(obj, ['characters', 'character', 'chars', 'subjects', 'people', 'roles', '人物', '角色']);
+            let props = pickArrayByAliases(obj, ['props', 'prop', 'items', '道具', '物件']);
+            let environments = pickArrayByAliases(obj, ['environments', 'environment', 'envs', 'env', 'scenes', '场景', '环境']);
+            
+            characters = cleanArray(characters);
+            props = cleanArray(props);
+            environments = cleanArray(environments);
 
             if (characters.length || props.length || environments.length) {
                 return { characters, props, environments };
@@ -793,7 +812,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const nameMatch = body.match(/subject_name_exact\s*=\s*([^|\n`]+)/i);
                 const typeToken = String(typeMatch?.[1] || '').trim().toLowerCase();
                 const subjectName = String(nameMatch?.[1] || '').trim();
-                if (!typeToken || !subjectName) continue;
+                if (!typeToken || !subjectName || isDummySubject(subjectName)) continue;
 
                 let type = '';
                 if (typeToken.includes('character') || typeToken.includes('角色') || typeToken.includes('人物') || typeToken.includes('char')) type = 'character';
@@ -3077,8 +3096,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         onLog?.(`[Phase 2 Debug] checking early return condition: projectId=${projectId}, importedSceneRows count=${importedSceneRows.length}`);
 
-        if (!projectId || importedSceneRows.length === 0) {
-            onLog?.(`[Phase 2 Debug] aborting! Because projectId or importedSceneRows is empty.`);
+        if (!projectId) {
+            onLog?.(`[Phase 2 Debug] aborting! Because projectId is empty.`);
             return emptyReport;
         }
 
@@ -3174,7 +3193,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 finalSubjectIndexText = `${metaParts.join('\n')}\n\n[Subject Index extracted from Phase 1]\n${finalSubjectIndexText}`;
             }
 
-            if (isSuperuser) {
+            const isUserSuper = isSuperuser || isSuperuserRef.current; // Capture current state or use ref if we had one
+            if (isUserSuper) {
                 setSystemPrompt(finalPromptContent);
                 setUserPrompt(finalSubjectIndexText);
                 setShowAnalysisModal(true);
@@ -3196,22 +3216,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             onLog?.(`[Asset Gen Tracking] Launching second LLM call for 'subject_generation'`);
 
-            const result = await awaitAnalyzeSceneWithRecovery(
-                () => analyzeScene(
-                    finalSubjectIndexText,
-                    finalPromptContent,
-                    null,
-                    activeEpisode?.id || null,
-                    analysisAttentionNotes,
-                    selectedReuseSubjectAssets,
-                    null,
-                    projectId,
-                    "subject_generation"
-                ),
-                { startedAt: Date.now(), baselineText: "" }
+            const result = await analyzeScene(
+                finalSubjectIndexText,
+                finalPromptContent,
+                null,
+                activeEpisode?.id || null,
+                analysisAttentionNotes,
+                selectedReuseSubjectAssets,
+                null, // No runtime hooks (we just want it to wait via the default `asyncLLMPost` behavior)
+                projectId,
+                "subject_generation", // explicitly setting functionName
+                null,                 // default systemApiId
+                "2_pass_generate_assets" // overriding sceneAnalysisMode internally just to bust the dedupe cache for the second call
             );
 
-            const analyzedText = extractAnalysisTextFromResult(result);        
+            const analyzedText = extractAnalysisTextFromResult(result);
             setLlmAssetRawResultContent(analyzedText);
 
             if (analyzedText) {
@@ -3221,14 +3240,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     projectId,
                     episodeId: activeEpisode?.id,
                 });
-                onLog?.(`[Asset Gen Tracking] Asset import completed. Created: ${sceneImportReport?.createdEntities?.length}, Matched: ${sceneImportReport?.matchedEntities?.length}`);
-            }
-
-        } catch (error) {
-            console.error("Asset generation step failed:", error);
-            onLog?.(`Asset generation failed: ${error.message}`);
-        }
-
+                
+                const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
+                const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
+                onLog?.(`[Asset Gen Tracking] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
         return emptyReport;
     }, [
         projectId, llmRawResultContent, llmResultContent, activeEpisode, t, onLog,
@@ -4933,7 +4948,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
-            const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
+            const baselineAnalysisText = String(llmRawResultContent || activeEpisode?.ai_scene_analysis_result || '').trim();
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => analyzeScene(
                     userInput,

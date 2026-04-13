@@ -8271,6 +8271,43 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
                                             )}
                                              {(editingShot.video_url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none group-hover:bg-black/10"><Maximize2 className="text-white opacity-0 group-hover:opacity-100 drop-shadow-md"/></div>}
+                                             
+                                             {/* Video Actions Overlay */}
+                                             {!currentGeneratingState.video && (
+                                                <div className="absolute top-2 right-2 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            openMediaPicker(async (url) => {
+                                                                const changes = { video_url: url };
+                                                                await onUpdateShot(editingShot.id, changes);
+                                                                setEditingShot(prev => ({...prev, ...changes}));
+                                                                onLog?.('Video changed', 'success');
+                                                            }, { type: 'video' });
+                                                        }}
+                                                        className="p-1.5 bg-black/60 hover:bg-sky-500/80 text-white rounded-md transition-all shadow"
+                                                        title={t('选择或上传视频以替换或回填', 'Select or Upload Video')}
+                                                    >
+                                                        <Upload className="w-3.5 h-3.5"/>
+                                                    </button>
+                                                    {editingShot.video_url && (
+                                                        <button
+                                                            onClick={async (e) => { 
+                                                                e.stopPropagation();
+                                                                if(!await confirmUiMessage(t('确定要删除当前视频并撤回默认状态吗？', 'Delete current Video?'))) return;
+                                                                const newData = { video_url: "" };
+                                                                await onUpdateShot(editingShot.id, newData);
+                                                                setEditingShot(prev => ({...prev, ...newData}));
+                                                                onLog?.('Video removed', 'info');
+                                                            }}
+                                                            className="p-1.5 bg-black/60 hover:bg-red-500/80 text-white rounded-md transition-all shadow"
+                                                            title={t('删除视频，重置为空白状态', 'Delete Video')}
+                                                        >
+                                                            <Trash2 className="w-3.5 h-3.5"/>
+                                                        </button>
+                                                    )}
+                                                </div>
+                                             )}
                                         </div>
                                         {(() => {
                                             let voiceoverUrl = '';
