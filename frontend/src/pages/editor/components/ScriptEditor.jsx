@@ -3062,7 +3062,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }));
     }, [availableSubjectAssets, selectedReuseSubjectIds]);
 
-    const runPostImportSceneSubjectPipeline = useCallback(async (importReport, options = {}) => {
+    const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
         const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
         const emptyReport = {
             checkedSceneCount: importedSceneRows.length,
@@ -3075,11 +3075,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             },
         };
 
+        onLog?.(`[Phase 2 Debug] checking early return condition: projectId=${projectId}, importedSceneRows count=${importedSceneRows.length}`);
+
         if (!projectId || importedSceneRows.length === 0) {
+            onLog?.(`[Phase 2 Debug] aborting! Because projectId or importedSceneRows is empty.`);
             return emptyReport;
         }
 
-        const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
+        const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
         let subjectIndexText = "";
 
         onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
@@ -3231,7 +3234,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         projectId, llmRawResultContent, llmResultContent, activeEpisode, t, onLog,
         fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery,
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
-        isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal
+        isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal,
+        project
     ]);
 
     
@@ -4688,7 +4692,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
-            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport);
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
             if (importReport && typeof importReport === 'object') {
                 importReport = {
                     ...importReport,
@@ -5041,7 +5045,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
-            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport);
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
             if (importReport && typeof importReport === 'object') {
                 importReport = {
                     ...importReport,
@@ -6032,5 +6036,4 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         </div>
     );
 };
-
 
