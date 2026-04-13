@@ -1249,9 +1249,9 @@ def _persist_remote_image_result(
         return media_url, updated_metadata
 
     content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
-    if content_type and not content_type.startswith("image/"):
+    if content_type and not (content_type.startswith("image/") or content_type.startswith("video/") or content_type.startswith("audio/")):
         logger.warning(
-            "[ImageResultNormalize] remote image skipped non-image content | user_id=%s url=%s content_type=%s",
+            "[ImageResultNormalize] remote media skipped non-media content | user_id=%s url=%s content_type=%s",
             getattr(current_user, "id", None),
             raw,
             content_type,
@@ -1265,14 +1265,33 @@ def _persist_remote_image_result(
         "image/webp": ".webp",
         "image/gif": ".gif",
         "image/bmp": ".bmp",
+        "video/mp4": ".mp4",
+        "video/quicktime": ".mov",
+        "video/webm": ".webm",
+        "video/x-msvideo": ".avi",
+        "video/x-matroska": ".mkv",
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/wav": ".wav",
+        "audio/x-wav": ".wav",
+        "audio/mp4": ".m4a",
+        "audio/aac": ".aac",
+        "audio/flac": ".flac",
+        "audio/ogg": ".ogg",
+        "audio/opus": ".opus",
     }
     file_ext = extension_map.get(content_type)
     if not file_ext:
         path_ext = os.path.splitext(parsed.path or "")[1].lower()
-        if path_ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+        if path_ext in extension_map.values():
             file_ext = ".jpg" if path_ext == ".jpeg" else path_ext
         else:
-            file_ext = ".png"
+            if content_type.startswith("video/"):
+                file_ext = ".mp4"
+            elif content_type.startswith("audio/"):
+                file_ext = ".mp3"
+            else:
+                file_ext = ".png"
 
     filename = f"provider_result_{uuid.uuid4().hex[:16]}{file_ext}"
     chunks: List[bytes] = []
@@ -4351,9 +4370,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "template_hash_sha256": hashlib.sha256(str(system_instruction or "").encode("utf-8")).hexdigest(),
             }
         else:
-            prompt_filename = request.prompt_file or "scene_analysis.txt"
+            prompt_filename = request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning.md"
             if feature_bundle.get("enabled") and not request.prompt_file:
-                prompt_filename = str(feature_bundle.get("base_prompt_file") or "scene_analysis_routed_base.txt")
+                prompt_filename = str(feature_bundle.get("base_prompt_file") or "skills/scene_analysis_feature_stack/scene_planning.md")
             try:
                 system_instruction = _resolve_prompt_text(prompt_filename)
             except FileNotFoundError:
@@ -4371,7 +4390,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "Rendered routed scene analysis prompt with explicit slots: requested_mode=%s effective_mode=%s base_prompt=%s slots=%s skills=%s features=%s combos=%s",
                 requested_scene_analysis_mode,
                 feature_bundle.get("mode"),
-                feature_bundle.get("base_prompt_file") or request.prompt_file or "scene_analysis.txt",
+                feature_bundle.get("base_prompt_file") or request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning.md",
                 sorted((feature_bundle.get("slot_blocks") or {}).keys()),
                 [item.get("skill_id") for item in (feature_bundle.get("selected_skills") or [])],
                 feature_bundle.get("normalized_features") or {},
@@ -22744,6 +22763,7 @@ async def _run_generate_image(
             filename_base=_build_generation_filename_base(req, db),
             asset_type=req.asset_type,
             provider_options=image_provider_options,
+            skip_download=True,
         )
 
         if isinstance(result, dict):
@@ -22890,36 +22910,45 @@ async def _run_generate_image(
         
         # Register Asset
         if result.get("url"):
-            normalized_url, normalized_meta = await asyncio.to_thread(
-                _persist_data_uri_image_result,
-                current_user,
-                result.get("url"),
-                result.get("metadata"),
-            )
-            normalized_url, normalized_meta = await asyncio.to_thread(
-                _persist_remote_image_result,
-                current_user,
-                normalized_url,
-                normalized_meta,
-            )
-            result["url"] = normalized_url
-            if normalized_meta is not None:
-                result["metadata"] = normalized_meta
+            temp_url = result.get("url")
+            
+            # If it's a base64 image, upload it synchronously first, to avoid sending giant base64 to frontend & db
+            if temp_url.startswith("data:image/"):
+                norm_url, norm_meta = await asyncio.to_thread(_persist_data_uri_image_result, current_user, temp_url, result.get("metadata"))
+                if norm_url and norm_url != temp_url:
+                    temp_url = norm_url
+                    result["url"] = temp_url
+                    if norm_meta is not None:
+                        result["metadata"] = norm_meta
 
             request_mode = str(getattr(req, "mode", "") or "").strip().lower()
-            if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(result.get("url")):
-                # Only register if not error? result.get("url") check handles it.
-                await asyncio.to_thread(_register_asset_helper, db, current_user.id, result["url"], req, result.get("metadata"))
-                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, result.get("url"))
-                await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, result.get("url"))
-            elif request_mode != "joint_diptych":
-                logger.warning(
-                    "[ImageResultNormalize] skipped asset registration/bind for temporary provider url | user_id=%s url=%s entity_id=%s shot_id=%s",
-                    getattr(current_user, "id", None),
-                    result.get("url"),
-                    getattr(req, "entity_id", None),
-                    getattr(req, "shot_id", None),
-                )
+
+            if request_mode != "joint_diptych":
+                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
+                await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url)
+
+            # Trigger background task for OSS upload, if the URL is an external HTTP URL
+            if temp_url.startswith("http") and not _is_ephemeral_provider_media_url(temp_url):
+                async def _bg_upload_and_update(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
+                    bg_db = SessionLocal()
+                    try:
+                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, user, raw_url, meta)
+                        
+                        if norm_url and norm_url != raw_url:
+                            if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(norm_url):
+                                await asyncio.to_thread(_register_asset_helper, bg_db, user.id, norm_url, req_obj, norm_meta)
+                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, user, req_obj, norm_url)
+                                await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, user, req_obj, norm_url)
+                    except Exception as e:
+                        logger.error(f"[_bg_upload_and_update] failed for user={user.id} url={raw_url}: {e}")
+                    finally:
+                        bg_db.close()
+
+                asyncio.create_task(_bg_upload_and_update(current_user, req, temp_url, result.get("metadata")))
+            else:
+                # If it's already OSS (e.g. data URI converted to OSS) or local path, register it directly
+                if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(temp_url):
+                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
 
         return result
     except asyncio.CancelledError:
@@ -24327,6 +24356,7 @@ async def generate_voice_endpoint(
             provider_options=provider_options,
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
+            skip_download=True,
         )
 
         if isinstance(result, dict):
@@ -24452,17 +24482,46 @@ async def generate_voice_endpoint(
 
         # Register voice asset so frontend can resolve metadata panels by URL.
         if voice_url:
-            try:
-                await asyncio.to_thread(
-                    _register_asset_helper,
-                    db,
-                    current_user.id,
-                    voice_url,
-                    req,
-                    (result.get("metadata") if isinstance(result, dict) else None),
-                )
-            except Exception as asset_err:
-                logger.warning("[GenerateVoice] asset registration failed: %s", asset_err)
+            if voice_url.startswith("http") and not _is_ephemeral_provider_media_url(voice_url):
+                async def _bg_upload_and_update_voice(user: User, req_obj: Any, raw_url: str, prompt_text: str, meta: Optional[dict] = None):
+                    bg_db = SessionLocal()
+                    try:
+                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, user, raw_url, meta)
+                        if norm_url and norm_url != raw_url:
+                            # Update shot
+                            if req_obj.shot_id:
+                                bg_shot = bg_db.query(Shot).filter(Shot.id == int(req_obj.shot_id)).first()
+                                if bg_shot:
+                                    bg_tech = {}
+                                    try:
+                                        bg_tech = json.loads(bg_shot.technical_notes or "{}")
+                                    except:
+                                        bg_tech = {}
+                                    if bg_tech.get("voiceover_url") == raw_url:
+                                        bg_tech["voiceover_url"] = norm_url
+                                        bg_shot.technical_notes = json.dumps(bg_tech, ensure_ascii=False)
+                                        bg_db.add(bg_shot)
+                                        bg_db.commit()
+                            
+                            # Register asset
+                            await asyncio.to_thread(_register_asset_helper, bg_db, user.id, norm_url, req_obj, norm_meta)
+                    except Exception as e:
+                        logger.error(f"[_bg_upload_and_update_voice] failed for user={user.id} url={raw_url}: {e}")
+                    finally:
+                        bg_db.close()
+                asyncio.create_task(_bg_upload_and_update_voice(current_user, req, voice_url, effective_prompt, result.get("metadata")))
+            else:
+                try:
+                    await asyncio.to_thread(
+                        _register_asset_helper,
+                        db,
+                        current_user.id,
+                        voice_url,
+                        req,
+                        (result.get("metadata") if isinstance(result, dict) else None),
+                    )
+                except Exception as asset_err:
+                    logger.warning("[GenerateVoice] asset registration failed: %s", asset_err)
 
         if isinstance(result, dict):
             result["effective_prompt"] = effective_prompt
@@ -25318,6 +25377,7 @@ async def _run_generate_video(
             user_id=current_user.id,
             user_credits=(current_user.credits or 0),
             filename_base=_build_generation_filename_base(req, db),
+            skip_download=True,
         )
 
         if isinstance(result, dict):
@@ -25383,8 +25443,28 @@ async def _run_generate_video(
 
         # Register Asset
         if result.get("url"):
-            await asyncio.to_thread(_register_asset_helper, db, current_user.id, result["url"], req, result.get("metadata"))
-            await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, result.get("url"))
+            temp_url = result.get("url")
+
+            # Same logic as images, avoiding blocking for external video URLs
+            if temp_url.startswith("http") and not _is_ephemeral_provider_media_url(temp_url):
+                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
+                
+                async def _bg_upload_and_update_video(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
+                    bg_db = SessionLocal()
+                    try:
+                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, user, raw_url, meta)
+                        if norm_url and norm_url != raw_url:
+                            if not _is_ephemeral_provider_media_url(norm_url):
+                                await asyncio.to_thread(_register_asset_helper, bg_db, user.id, norm_url, req_obj, norm_meta)
+                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, user, req_obj, norm_url)
+                    except Exception as e:
+                        logger.error(f"[_bg_upload_and_update_video] failed for user={user.id} url={raw_url}: {e}")
+                    finally:
+                        bg_db.close()
+                asyncio.create_task(_bg_upload_and_update_video(current_user, req, temp_url, result.get("metadata")))
+            else:
+                await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
+                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
 
         if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}

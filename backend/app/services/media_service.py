@@ -4304,7 +4304,7 @@ class MediaGenerationService:
             result["error"] = self._vendor_failed_message(error_provider or provider, result.get("error"))
         return result
 
-    async def generate_video(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, reference_video_urls: Optional[List[str]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, provider_options: Optional[Dict[str, Any]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None):
+    async def generate_video(self, prompt: str, negative_prompt: Optional[str] = None, llm_config: Optional[Dict[str, Any]] = None, reference_image_url: Optional[Union[str, List[str]]] = None, reference_video_urls: Optional[List[str]] = None, last_frame_url: Optional[str] = None, duration: int = 5, aspect_ratio: Optional[str] = None, keyframes: Optional[List[str]] = None, provider_options: Optional[Dict[str, Any]] = None, user_id: int = 1, user_credits: int = 0, filename_base: Optional[str] = None, skip_download: bool = False):
         explicit_provider_selected = bool((llm_config or {}).get("__user_explicit_provider"))
         provider = self._normalize_provider_name((llm_config or {}).get("provider"), "Video")
         pre_resolved_api_config = (llm_config or {}).get("__pre_resolved_api_config")
@@ -4445,7 +4445,7 @@ class MediaGenerationService:
         )
 
         # Download 
-        if result and "url" in result and result["url"]:
+        if not skip_download and result and "url" in result and result["url"]:
             result["url"] = await asyncio.to_thread(
                 self._download_and_save,
                 result["url"],
@@ -4467,6 +4467,7 @@ class MediaGenerationService:
         provider_options: Optional[Dict[str, Any]] = None,
         user_id: int = 1,
         user_credits: int = 0,
+        skip_download: bool = False,
     ):
         explicit_provider_selected = bool((llm_config or {}).get("__user_explicit_provider"))
         explicit_selection = bool((llm_config or {}).get("__user_explicit_selection"))
@@ -4546,7 +4547,7 @@ class MediaGenerationService:
             primary_retry_limit=3,
         )
 
-        if result and "url" in result and result["url"]:
+        if not skip_download and result and "url" in result and result["url"]:
             result["url"] = await asyncio.to_thread(
                 self._download_and_save,
                 result["url"],
