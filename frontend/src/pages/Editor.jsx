@@ -834,23 +834,36 @@ const Editor = ({
                 || findNestedObjectByKeywords(obj, ['globalinfo', 'projectinfo', '项目信息']);
 
             const base = candidate || obj;
-            const payload = {
+
+            const toneRaw = pickValue(base, ['tone', '色调', 'mood']);
+            const lightingRaw = pickValue(base, ['lighting', '灯光', 'light']);
+            const payloadRaw = {
                 script_title: toText(pickValue(base, ['script_title', 'title', '项目标题'])),
                 expected_duration: toText(pickValue(base, ['expected_duration', '预期时长(秒)', '预期时长'])) || "60",
                 type: toText(pickValue(base, ['type', 'project_type', '类型'])),
                 language: toText(pickValue(base, ['language', 'lang', '语言'])),
                 base_positioning: toText(pickValue(base, ['base_positioning', 'positioning', '定位'])),
-                notes: toText(pickValue(base, ['notes', 'note', '备注'])),
+                notes: toText(pickValue(base, ['notes', 'note', '备注'])),      
                 Global_Style: toText(pickValue(base, ['global_style', 'Global_Style', 'style', '风格'])),
                 borrowed_films: toStringArray(pickValue(base, ['borrowed_films', 'reference_films', '参考影片'])),
-                tone: toText(pickValue(base, ['tone', '色调'])),
-                lighting: toText(pickValue(base, ['lighting', '灯光'])),
+                borrowed_films_note: toText(pickValue(base, ['borrowed_films_note', 'reference_films_note', '参考影片备注'])),
+                tone: toneRaw ? toText(toneRaw) : '',
+                lighting: lightingRaw ? toText(lightingRaw) : '',        
             };
 
-            const hasData = Object.entries(payload).some(([k, v]) => {
-                if (k === 'borrowed_films') return Array.isArray(v) && v.length > 0;
-                return String(v || '').trim().length > 0;
-            });
+            const payload = {};
+            let hasData = false;
+            for (const [k, v] of Object.entries(payloadRaw)) {
+                if (k === 'borrowed_films') {
+                    if (Array.isArray(v) && v.length > 0) {
+                        payload[k] = v;
+                        hasData = true;
+                    }
+                } else if (String(v || '').trim().length > 0) {
+                    payload[k] = v;
+                    hasData = true;
+                }
+            }
 
             if (hasData) return { global_info: payload };
         }
@@ -897,17 +910,19 @@ const Editor = ({
         for (const obj of candidateObjects) {
             const globalStyleRaw = findValueByAliases(obj, ['Global_Style', 'global_style', 'style', 'project_style']);
             const borrowedFilmsRaw = findValueByAliases(obj, ['borrowed_films', 'borrowedFilms', 'reference_films', 'referenceFilms']);
-            const toneRaw = findValueByAliases(obj, ['tone']);
-            const lightingRaw = findValueByAliases(obj, ['lighting']);
+            const borrowedFilmsNoteRaw = findValueByAliases(obj, ['borrowed_films_note', 'borrowedFilmsNote', 'reference_films_note', 'referenceFilmsNote']);
+            const toneRaw = findValueByAliases(obj, ['tone', 'mood']);
+            const lightingRaw = findValueByAliases(obj, ['lighting', 'light']);
 
             const payload = {
                 Global_Style: toNonEmptyString(globalStyleRaw),
                 borrowed_films: toStringArray(borrowedFilmsRaw),
+                borrowed_films_note: toNonEmptyString(borrowedFilmsNoteRaw),
                 tone: toNonEmptyString(toneRaw),
                 lighting: toNonEmptyString(lightingRaw),
             };
 
-            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.tone || payload.lighting) {
+            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.borrowed_films_note || payload.tone || payload.lighting) {
                 return payload;
             }
         }
@@ -1058,22 +1073,28 @@ const Editor = ({
                 }
             }
         }
-        // Fallback: numbered Subject Index list lines, e.g.
-        // 1. `subject_no=S001 | subject_type=character | subject_name_exact=CHAR:[@Isabella] | ...`
-        const listLineRe = /`([^`]*subject_type\s*=\s*[^`]*subject_name_exact\s*=\s*[^`]*)`/gi;
-        const payload = { characters: [], props: [], environments: [] };
+// Fallback: generic key-value rows (with or without backticks, with or without numbered list)
+        const payload = { characters: [], props: [], environments: [] };        
         const seen = new Set();
-        let lineMatch;
-        while ((lineMatch = listLineRe.exec(section)) !== null) {
-            const body = String(lineMatch[1] || '');
-            const typeMatch = body.match(/subject_type\s*=\s*([^|\n`]+)/i);
-            const nameMatch = body.match(/subject_name_exact\s*=\s*([^|\n`]+)/i);
+        
+        const fallbackLines = section.split('\n')
+            .map(line => String(line || '').trim().replace(/`/g, ''))
+            .filter(line => /subject_type\s*=/i.test(line) && /subject_name_(exact|zh|en)\s*=/i.test(line));
+
+        for (const line of fallbackLines) {
+            const typeMatch = line.match(/subject_type\s*=\s*([^|\n]+)/i);     
+            const nameMatch = line.match(/subject_name_(?:exact|zh|en)\s*=\s*([^|\n]+)/i);
+            const anchorMatch = line.match(/entity_attributes\s*=\s*([^|\n]+)/i) || line.match(/attributes\s*=\s*([^|\n]+)/i) || line.match(/entity_traits\s*=\s*([^|\n]+)/i);
+            
             const typeToken = String(typeMatch?.[1] || '').trim().toLowerCase();
-            const subjectName = String(nameMatch?.[1] || '').trim();
+            let subjectName = String(nameMatch?.[1] || '').trim();
+            // remove CHAR: / PROP: prefixes
+            subjectName = subjectName.replace(/^(CHAR|PROP|ENV)\s*:\s*/i, '').trim();
+            
             if (!typeToken || !subjectName) continue;
 
             let type = '';
-            if (typeToken.includes('character') || typeToken.includes('角色') || typeToken.includes('人物') || typeToken.includes('char')) type = 'character';
+            if (typeToken.includes('character') || typeToken.includes('角色') || typeToken.includes('人物') || typeToken.includes('char')) type = 'character';  
             else if (typeToken.includes('prop') || typeToken.includes('道具') || typeToken.includes('item')) type = 'prop';
             else if (typeToken.includes('environment') || typeToken.includes('场景') || typeToken.includes('环境') || typeToken.includes('env')) type = 'environment';
             if (!type) continue;
@@ -1086,7 +1107,7 @@ const Editor = ({
                 name: subjectName,
                 name_en: '',
                 subject_name_exact: subjectName,
-                anchor_description: '',
+                anchor_description: String(anchorMatch?.[1] || '').trim(),
             };
             if (type === 'character') payload.characters.push(item);
             else if (type === 'prop') payload.props.push(item);
@@ -1117,9 +1138,11 @@ const Editor = ({
             if (count > 0) return count;
         }
 
-        // Fallback count for numbered list line style.
-        const listMatches = section.match(/`[^`]*subject_type\s*=\s*[^`]*subject_name_exact\s*=\s*[^`]*`/gi);
-        return Array.isArray(listMatches) ? listMatches.length : 0;
+        // Fallback count for generic key-value line style.
+        const fallbackLines = section.split('\n')
+            .map(line => String(line || '').trim().replace(/`/g, ''))
+            .filter(line => /subject_type\s*=/i.test(line) && /subject_name_(exact|zh|en)\s*=/i.test(line));
+        return fallbackLines.length;
     };
 
     const shouldForceAutoImportForAnalysisBundle = (text) => {
@@ -1429,7 +1452,7 @@ const Editor = ({
 
         addLog(`Import Flags: Script=${hasScriptTable}, Scene=${hasSceneTable}, Shot=${hasShotTable}`, "info");
 
-        if (jsonBlocks.length === 0 && !hasScriptTable && !hasSceneTable && !hasShotTable) {
+        if (jsonBlocks.length === 0 && !hasScriptTable && !hasSceneTable && !hasShotTable && !projectVisualBackfill) {
 
             addLog("No recognizable markers found.", "error");
             alert("No supported format detected. Please check your markers.");
@@ -1482,6 +1505,9 @@ const Editor = ({
             if (isBlank(originalGlobalInfo.lighting) && projectVisualBackfill.lighting) {
                 backfillPatch.lighting = projectVisualBackfill.lighting;
             }
+            if (isBlank(originalGlobalInfo.borrowed_films_note) && projectVisualBackfill.borrowed_films_note) {
+                backfillPatch.borrowed_films_note = projectVisualBackfill.borrowed_films_note;
+            }
 
             if (Object.keys(backfillPatch).length > 0) {
                 try {
@@ -1503,12 +1529,15 @@ const Editor = ({
             // 2. Process Global Info (JSON)
             if (data.global_info) {
                 try {
-                    await updateProject(id, { global_info: data.global_info });
+                    const latestProj = await fetchProject(id);
+                    const currentGInfo = (latestProj?.global_info && typeof latestProj.global_info === 'object') ? latestProj.global_info : {};
+                    const mergedGI = { ...currentGInfo, ...data.global_info };
+                    await updateProject(id, { global_info: mergedGI });
                     addLog("Project Global Info updated.", "success");
                     changesMade = true;
                     reloadRequired = true;
                 } catch (e) {
-                    addLog(`Global Info Update Failed: ${e.message}`, "error");
+                    addLog(`Global Info Update Failed: ${e.message}`, "error"); 
                 }
             }
 
