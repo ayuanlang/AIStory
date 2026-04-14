@@ -458,16 +458,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     // AI Prompt Preview Modal State
     const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [shotReviewModal, setShotReviewModal] = useState({ open: false, sceneId: null, data: null, loading: false });
-    const [voicePromptConfirmModal, setVoicePromptConfirmModal] = useState({
-        open: false,
-        shotId: null,
-        prompt: '',
-        systemPrompt: '',
-        loadingSystemPrompt: false,
-        languageCode: '',
-        projectLanguage: '',
-        submitting: false,
-    });
 
     // Media Handling
     const [viewMedia, setViewMedia] = useState(null);
@@ -478,7 +468,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
     const [stoppingVideoByShot, setStoppingVideoByShot] = useState({});
-    const [voiceGeneratingByShot, setVoiceGeneratingByShot] = useState({});
     const [translatingPromptField, setTranslatingPromptField] = useState('');
     const [batchProgress, setBatchProgress] = useState({
         current: 0,
@@ -1829,9 +1818,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         ? (generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 })
         : { start: false, end: false, video: false };
     const currentShotGenerating = Boolean(currentGeneratingState.start || currentGeneratingState.end || currentGeneratingState.video);
-    const currentVoiceGenerating = editingShot?.id
-        ? !!voiceGeneratingByShot[String(editingShot.id)]
-        : false;
     const isShotFrameActionLocked = useCallback(
         (frameType) => Boolean(currentGeneratingState?.[frameType === 'end' ? 'end' : 'start']),
         [currentGeneratingState]
@@ -5974,201 +5960,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [editingShot, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
 
-    const isVoiceoverSyncEnabled = useMemo(() => {
-        try {
-            const tech = JSON.parse(editingShot?.technical_notes || '{}');
-            return Boolean(tech?.video_generate_voiceover);
-        } catch (e) {
-            return false;
-        }
-    }, [editingShot?.technical_notes]);
-
-    const setVoiceoverSyncEnabled = useCallback((enabled) => {
-        setEditingShot((prev) => {
-            if (!prev) return prev;
-            let tech = {};
-            try {
-                tech = JSON.parse(prev.technical_notes || '{}');
-                if (!tech || typeof tech !== 'object') tech = {};
-            } catch (e) {
-                tech = {};
-            }
-            tech.video_generate_voiceover = Boolean(enabled);
-            return { ...prev, technical_notes: JSON.stringify(tech) };
-        });
-    }, []);
-
-    const setShotVoiceGenerating = useCallback((shotId, value) => {
-        const stableShotId = String(shotId || '').trim();
-        if (!stableShotId) return;
-        setVoiceGeneratingByShot((prev) => {
-            if (value) return { ...prev, [stableShotId]: true };
-            const next = { ...prev };
-            delete next[stableShotId];
-            return next;
-        });
-    }, []);
-
-    const buildVoiceGenerationContext = (shot, basePromptOverride = null) => {
-        if (!shot) return null;
-        const tech = (() => {
-            try {
-                const parsed = JSON.parse(shot.technical_notes || '{}');
-                return parsed && typeof parsed === 'object' ? parsed : {};
-            } catch (e) {
-                return {};
-            }
-        })();
-
-        const cnVideoPrompt = String(tech.video_prompt_cn || '').trim();
-        const rawPrompt = basePromptOverride
-            || (resolvedPromptSubmitLang === 'cn'
-                ? (cnVideoPrompt || getShotVideoPromptEn(shot) || 'Video motion')
-                : (getShotVideoPromptEn(shot) || cnVideoPrompt || 'Video motion'));
-        const isManual = tech.manual_video_prompt === true;
-        const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual);
-        const finalPrompt = isManual
-            ? submitPrompt
-            : (submitPrompt + getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) }));
-
-        const projectLanguage = String(
-            activeEpisode?.episode_info?.e_global_info?.language
-            || activeEpisode?.episode_info?.language
-            || project?.global_info?.language
-            || ''
-        ).trim();
-        const voiceBuild = buildVoicePromptWithEntityContext(finalPrompt, entities, projectLanguage, uiLang);
-        const voicePrompt = String(voiceBuild.voicePrompt || '').trim();
-
-        return {
-            shot,
-            voicePrompt,
-            languageCode: voiceBuild.languageCode,
-            projectLanguage: projectLanguage || voiceBuild.languageCode,
-        };
-    };
-
-    const submitVoiceoverOnly = async (context) => {
-        const shot = context?.shot;
-        if (!shot?.id) return;
-
-        const targetShotId = shot.id;
-        const voicePrompt = String(context?.voicePrompt || '').trim();
-        const plannerSystemPrompt = String(context?.plannerSystemPrompt || '').trim();
-        const languageCode = String(context?.languageCode || '').trim() || 'en';
-        const projectLanguage = String(context?.projectLanguage || '').trim() || languageCode;
-
-        if (!voicePrompt) {
-            onLog?.(t('未检测到对白，已取消仅配音生成', 'No dialogue detected, canceled voice-only generation'), 'warning');
-            showNotification(t('未检测到可用于配音的对白', 'No dialogue available for voiceover'), 'warning');
-            return;
-        }
-
-        setShotVoiceGenerating(targetShotId, true);
-        try {
-            onLog?.(`${t('配音语言约束', 'Voice language constraint')}: ${languageCode}`, 'info');
-            onLog?.(t('开始仅生成配音...', 'Generating voiceover only...'), 'info');
-
-            const voiceRes = await generateVoice(voicePrompt, null, null, {
-                project_id: projectId,
-                shot_id: targetShotId,
-                shot_number: shot.shot_id,
-                shot_name: shot.shot_name,
-                asset_type: 'voiceover',
-                use_llm_param_planning: true,
-                planner_system_prompt: plannerSystemPrompt || undefined,
-                language_code: languageCode,
-                project_language: projectLanguage,
-            });
-
-            try {
-                const planMeta = voiceRes?.voiceover_plan_prompts || {};
-                const sysLen = String(planMeta?.system_prompt || '').length;
-                const userLen = String(planMeta?.user_prompt || '').length;
-                const src = String(planMeta?.template_source || 'unknown');
-                const effectiveLen = String(voiceRes?.effective_prompt || '').length;
-                onLog?.(
-                    `${t('配音规划返回', 'Voice planning response')}: source=${src}, sys=${sysLen}, user=${userLen}, effective=${effectiveLen}`,
-                    'info'
-                );
-            } catch (logErr) {
-                console.warn('Voice planning response log failed', logErr);
-            }
-
-            const voiceUrl = String(voiceRes?.url || '').trim();
-            if (!voiceUrl) {
-                onLog?.(t('配音生成完成但未返回音频 URL', 'Voiceover completed but no audio URL returned'), 'warning');
-                showNotification(t('配音生成完成但未返回音频 URL', 'Voiceover completed but no audio URL returned'), 'warning');
-                return;
-            }
-
-            let tech = {};
-            try {
-                const parsed = JSON.parse(shot.technical_notes || '{}');
-                tech = parsed && typeof parsed === 'object' ? parsed : {};
-            } catch (e) {
-                tech = {};
-            }
-            const nextTech = { ...tech, voiceover_url: voiceUrl, voiceover_prompt: voicePrompt };
-            if (voiceRes?.metadata && typeof voiceRes.metadata === 'object') {
-                nextTech.voiceover_metadata = voiceRes.metadata;
-            }
-            const voiceUpdate = { technical_notes: JSON.stringify(nextTech) };
-            setEditingShot((prev) => {
-                if (!prev || prev.id !== targetShotId) return prev;
-                return { ...prev, ...voiceUpdate };
-            });
-
-            refreshShotAssetsMeta();
-            onLog?.(t('仅配音生成完成', 'Voice-only generation completed'), 'success');
-            showNotification(t('仅配音生成完成', 'Voice-only generation completed'), 'success');
-        } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
-            onLog?.(`${t('配音生成失败', 'Voiceover generation failed')}: ${detail}`, 'error');
-            showNotification(`${t('配音生成失败', 'Voiceover generation failed')}: ${detail}`, 'error');
-        } finally {
-            setShotVoiceGenerating(targetShotId, false);
-        }
-    };
-
-    const handleGenerateVoiceoverOnly = async () => {
-        if (!editingShot?.id) return;
-        const context = buildVoiceGenerationContext(editingShot);
-        if (!context) return;
-
-        if (isSuperuser) {
-            setVoicePromptConfirmModal({
-                open: true,
-                shotId: editingShot.id,
-                prompt: String(context.voicePrompt || ''),
-                systemPrompt: '',
-                loadingSystemPrompt: true,
-                languageCode: String(context.languageCode || ''),
-                projectLanguage: String(context.projectLanguage || ''),
-                submitting: false,
-            });
-            try {
-                const res = await fetchPrompt('voice_tts_planner_system.txt');
-                const systemPromptText = String(res?.content || '').trim();
-                setVoicePromptConfirmModal((prev) => ({
-                    ...prev,
-                    systemPrompt: systemPromptText,
-                    loadingSystemPrompt: false,
-                }));
-            } catch (e) {
-                onLog?.(t('读取配音系统提示词失败，已使用空白值', 'Failed to load voice planner system prompt; using blank value'), 'warning');
-                setVoicePromptConfirmModal((prev) => ({
-                    ...prev,
-                    loadingSystemPrompt: false,
-                }));
-            }
-            onLog?.(t('超级用户模式：请确认配音提示词后再提交。', 'Superuser mode: confirm voice prompt before submitting.'), 'info');
-            return;
-        }
-
-        await submitVoiceoverOnly(context);
-    };
-
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
         const shotSnapshot = editingShot;
@@ -6318,54 +6109,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 throw videoDispatchError;
             }
 
-            const shouldGenerateVoiceover = Boolean(tech.video_generate_voiceover);
-            let voiceTaskPromise = null;
-            let usedVoicePrompt = '';
-            if (shouldGenerateVoiceover) {
-                const projectLanguage = String(
-                    activeEpisode?.episode_info?.e_global_info?.language
-                    || activeEpisode?.episode_info?.language
-                    || project?.global_info?.language
-                    || ''
-                ).trim();
-                const voiceBuild = buildVoicePromptWithEntityContext(finalPrompt, resolvedEntities, projectLanguage, uiLang);
-                usedVoicePrompt = String(voiceBuild.voicePrompt || '').trim();
-                if (!usedVoicePrompt) {
-                    onLog?.(t('未检测到对白，已跳过配音生成', 'No dialogue detected, skipped voiceover generation'), 'warning');
-                } else {
-                    onLog?.(`${t('配音语言约束', 'Voice language constraint')}: ${voiceBuild.languageCode}`, 'info');
-                    if (Array.isArray(voiceBuild.matchedEntities) && voiceBuild.matchedEntities.length > 0) {
-                        const names = voiceBuild.matchedEntities
-                            .map((entity) => String(entity?.name_en || entity?.name || '').trim())
-                            .filter(Boolean)
-                            .join(', ');
-                        onLog?.(`${t('配音角色识别', 'Voice role context')}: ${names}`, 'info');
-                    }
-                    onLog?.(t('开始生成配音...', 'Generating voiceover...'), 'info');
-                    voiceTaskPromise = generateVoice(usedVoicePrompt, null, null, {
-                        project_id: projectId,
-                        shot_id: targetShotId,
-                        shot_number: editingShot.shot_id,
-                        shot_name: editingShot.shot_name,
-                        asset_type: 'voiceover',
-                        use_llm_param_planning: true,
-                        language_code: voiceBuild.languageCode,
-                        project_language: projectLanguage || voiceBuild.languageCode,
-                    });
-                }
-            }
+            const videoSettled = await Promise.allSettled([videoTaskPromise]);
 
-            if (shouldGenerateVoiceover) {
-                onLog?.(t('视频与配音已并发发起', 'Video and voiceover requests dispatched concurrently'), 'info');
-            }
-
-            const [videoSettled, voiceSettled] = await Promise.allSettled([
-                videoTaskPromise,
-                voiceTaskPromise || Promise.resolve(null),
-            ]);
-
-            if (videoSettled.status === 'fulfilled' && videoSettled.value && videoSettled.value.url) {
-                const res = videoSettled.value;
+            if (videoSettled[0].status === 'fulfilled' && videoSettled[0].value && videoSettled[0].value.url) {
+                const res = videoSettled[0].value;
                 clearPendingVideoJob(targetShotId);
                 const newData = { video_url: res.url, prompt: rawPrompt };
                 
@@ -6390,38 +6137,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 refreshShotAssetsMeta();
             }
 
-            if (voiceTaskPromise) {
-                if (voiceSettled.status === 'fulfilled') {
-                    const voiceRes = voiceSettled.value;
-                    const voiceUrl = String(voiceRes?.url || '').trim();
-                    if (voiceUrl) {
-                        const persistedVoicePrompt = usedVoicePrompt || extractDialogueOnlyFromPrompt(finalPrompt) || finalPrompt;
-                        const nextTech = { ...tech, voiceover_url: voiceUrl, voiceover_prompt: persistedVoicePrompt };
-                        if (voiceRes?.metadata && typeof voiceRes.metadata === 'object') {
-                            nextTech.voiceover_metadata = voiceRes.metadata;
-                        }
-                        const voiceUpdate = { technical_notes: JSON.stringify(nextTech) };
-                        setEditingShot(prev => {
-                            if (!prev || prev.id !== targetShotId) return prev;
-                            return { ...prev, ...voiceUpdate };
-                        });
-
-                        // Backend /generate/voice already persists shot technical notes,
-                        // including planning fields; avoid racing overwrite from stale local tech.
-                        refreshShotAssetsMeta();
-                        onLog?.(t('配音生成完成', 'Voiceover generated'), 'success');
-                    } else {
-                        onLog?.(t('配音生成完成但未返回音频 URL', 'Voiceover completed but no audio URL returned'), 'warning');
-                    }
-                } else {
-                    const voiceErr = voiceSettled.reason;
-                    const detail = voiceErr?.response?.data?.detail || voiceErr?.message || 'unknown error';
-                    onLog?.(`${t('配音生成失败', 'Voiceover generation failed')}: ${detail}`, 'error');
-                }
-            }
-
-            if (videoSettled.status === 'rejected') {
-                const e = videoSettled.reason;
+            if (videoSettled[0].status === 'rejected') {
+                const e = videoSettled[0].reason;
                 if (isClientInterruptionError(e)) {
                     const recovered = await tryRecoverShotMediaAfterInterruption({
                         shotId: targetShotId,
@@ -7762,16 +7479,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                             <div className="flex items-center gap-2">
                                 <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型', 'Image Model')} />
                                 <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型', 'Video Model')} />
-                                <button
-                                    onClick={() => {
-                                        const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-                                        window.location.assign(`/settings?tab=default-api-activation&return_to=${returnTo}`);
-                                    }}
-                                    className="p-2 hover:bg-white/10 text-white rounded-lg border border-white/10 transition-colors"
-                                    title={t('打开生成设置', 'Open Generation Settings')}
-                                >
-                                    <SettingsIcon className="w-5 h-5" />
-                                </button>
                                 <button onClick={() => setEditingShot(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                             </div>
                         </div>
@@ -7779,10 +7486,10 @@ const isCroppingThisShot = !!(shotState.cropping);
 
                             <div>
                                 <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
-                                <PromptMentionTextarea entities={entities} uiLang={uiLang} 
-                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-20 focus:outline-none focus:border-primary/50"
+                                <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-20 focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
                                     value={editingShot.shot_logic_cn || ''}
-                                    onChange={(e) => setEditingShot({...editingShot, shot_logic_cn: e.target.value})}
+                                    readOnly={true}
                                     placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
                                 />
                             </div>
@@ -7795,11 +7502,11 @@ const isCroppingThisShot = !!(shotState.cropping);
                                     {/* Start Frame */}
                                     <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
-                                            <div className="flex min-h-[52px] items-start justify-between gap-2">
-                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                            <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
+                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('起始帧', 'Start Frame')}
                                             </div>
-                                            <div className="flex flex-wrap items-center justify-end gap-1">
+                                            <div className="flex flex-wrap items-center justify-center gap-1">
                                                 <button
                                                     onClick={() => openAssetDetailModal('start')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
@@ -7914,7 +7621,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             )}
                                         </div>
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[72px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('起始帧提示词（中文）...', 'Start Frame Prompt (CN)...') : t('起始帧提示词...', 'Start Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             onChange={(e) => {
@@ -7969,11 +7676,11 @@ const isCroppingThisShot = !!(shotState.cropping);
                                     {/* End Frame */}
                                     <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
-                                            <div className="flex min-h-[52px] items-start justify-between gap-2">
-                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                            <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
+                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('结束帧', 'End Frame')}
                                             </div>
-                                            <div className="flex flex-wrap items-center justify-end gap-1">
+                                            <div className="flex flex-wrap items-center justify-center gap-1">
                                                 <button
                                                     onClick={() => openAssetDetailModal('end')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
@@ -8125,9 +7832,9 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 return <div className="absolute inset-0 flex items-center justify-center opacity-20"><ImageIcon className="w-8 h-8"/></div>;
                                             })()}
                                         </div>
-                                        
+
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[72px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('结束帧提示词（中文）...', 'End Frame Prompt (CN)...') : t('结束帧提示词...', 'End Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             onChange={(e) => {
@@ -8160,21 +7867,12 @@ const isCroppingThisShot = !!(shotState.cropping);
                                     {/* Final Video Output (Moved Here) */}
                                     <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
                                         <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
-                                            <div className="flex min-h-[52px] items-start justify-between gap-2">
-                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                            <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
+                                            <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('最终视频', 'Final Video')}
                                             </div>
-                                            
-                                            <div className="flex flex-wrap items-center justify-end gap-1">
-                                                <label className="inline-flex items-center gap-1.5 text-[10px] text-white/80 whitespace-nowrap">
-                                                    <input
-                                                        type="checkbox"
-                                                        className="accent-sky-400"
-                                                        checked={isVoiceoverSyncEnabled}
-                                                        onChange={(e) => setVoiceoverSyncEnabled(e.target.checked)}
-                                                    />
-                                                    {t('配音', 'Voiceover')}
-                                                </label>
+
+                                            <div className="flex flex-wrap items-center justify-center gap-1">
                                                 <button
                                                     onClick={() => openAssetDetailModal('video')}
                                                     className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
@@ -8231,14 +7929,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 >
                                                     {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                                     {Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
-                                                </button>
-                                                <button
-                                                    onClick={handleGenerateVoiceoverOnly}
-                                                    disabled={currentVoiceGenerating}
-                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentVoiceGenerating ? 'bg-emerald-500/10 text-emerald-200/50 cursor-wait' : 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'}`}
-                                                >
-                                                    {currentVoiceGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                    {currentVoiceGenerating ? t('配音生成中...', 'Generating voiceover...') : t('仅生成配音', 'Generate Voiceover Only')}
                                                 </button>
                                             </div>
                                         </div>
@@ -8324,7 +8014,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         })()}
 
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[72px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}
                                             onChange={(e) => {
@@ -9449,14 +9139,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     })}
                                                                     {renderPromptLangMenu('video')}
                                                                     {renderDetailActionButton({
-                                                                        label: t('生成配音', 'Generate Voiceover'),
-                                                                        busyLabel: t('配音生成中...', 'Generating Voiceover...'),
-                                                                        onClick: handleGenerateVoiceoverOnly,
-                                                                        disabled: currentVoiceGenerating,
-                                                                        busy: currentVoiceGenerating,
-                                                                        variant: 'success',
-                                                                    })}
-                                                                    {renderDetailActionButton({
                                                                         label: t('强制停止', 'Force Stop'),
                                                                         busyLabel: t('停止中...', 'Stopping...'),
                                                                         onClick: () => handleForceStopShotVideo(editingShot?.id),
@@ -9466,15 +9148,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                         title: t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job'),
                                                                     })}
                                                                 </div>
-                                                                <label className="inline-flex items-center gap-2 text-xs text-white/80">
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        className="accent-sky-400"
-                                                                        checked={isVoiceoverSyncEnabled}
-                                                                        onChange={(e) => setVoiceoverSyncEnabled(e.target.checked)}
-                                                                    />
-                                                                    {t('配音', 'Voiceover')}
-                                                                </label>
                                                                 <div className="flex items-center justify-between">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('生成模式', 'Generation Mode')}</div>
                                                                     <select
@@ -9843,97 +9516,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 rounded text-[11px] text-white border border-white/10"
                             >
                                 {t('清除镜头筛选', 'Clear Shot Filters')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {voicePromptConfirmModal.open && (
-                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl">
-                        <div className="p-4 border-b border-white/10 flex justify-between items-center">
-                            <h3 className="font-bold flex items-center gap-2"><Wand2 size={16} className="text-primary" />{t('仅生成配音（超级用户确认）', 'Voice-Only Generation (Superuser Confirmation)')}</h3>
-                            <button
-                                onClick={() => setVoicePromptConfirmModal({ open: false, shotId: null, prompt: '', systemPrompt: '', loadingSystemPrompt: false, languageCode: '', projectLanguage: '', submitting: false })}
-                                disabled={voicePromptConfirmModal.submitting}
-                            >
-                                <X size={18} />
-                            </button>
-                        </div>
-
-                        <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                            <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200 flex items-start gap-2">
-                                <Info size={14} className="shrink-0 mt-0.5" />
-                                {t('超级用户模式：请确认或编辑配音提示词，确认后再提交。', 'Superuser mode: review or edit the voice prompt before submitting.')}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                                {t('语言代码', 'Language Code')}: {voicePromptConfirmModal.languageCode || '-'}
-                            </div>
-                            <div className="flex flex-col gap-2">
-                                <label className="text-xs font-bold text-muted-foreground uppercase">{t('系统提示词（配音规划）', 'System Prompt (Voice Planner)')}</label>
-                                <textarea
-                                    className="w-full min-h-[180px] bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono focus:outline-none focus:border-primary/50 resize-y"
-                                    value={voicePromptConfirmModal.systemPrompt}
-                                    onChange={(e) => setVoicePromptConfirmModal((prev) => ({ ...prev, systemPrompt: e.target.value }))}
-                                    disabled={voicePromptConfirmModal.submitting || voicePromptConfirmModal.loadingSystemPrompt}
-                                />
-                            </div>
-                            {voicePromptConfirmModal.loadingSystemPrompt && (
-                                <div className="text-xs text-blue-300">{t('正在加载系统提示词模板...', 'Loading system prompt template...')}</div>
-                            )}
-                            <textarea
-                                className="w-full min-h-[260px] bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono focus:outline-none focus:border-primary/50 resize-y"
-                                value={voicePromptConfirmModal.prompt}
-                                onChange={(e) => setVoicePromptConfirmModal((prev) => ({ ...prev, prompt: e.target.value }))}
-                                disabled={voicePromptConfirmModal.submitting}
-                            />
-                        </div>
-
-                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
-                            <button
-                                onClick={() => setVoicePromptConfirmModal({ open: false, shotId: null, prompt: '', systemPrompt: '', loadingSystemPrompt: false, languageCode: '', projectLanguage: '', submitting: false })}
-                                disabled={voicePromptConfirmModal.submitting}
-                                className="px-4 py-2 rounded hover:bg-white/10 text-sm"
-                            >
-                                {t('取消', 'Cancel')}
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    const targetShotId = voicePromptConfirmModal.shotId;
-                                    const shot = (editingShot && editingShot.id === targetShotId)
-                                        ? editingShot
-                                        : (shots || []).find((item) => item?.id === targetShotId);
-                                    if (!shot) {
-                                        showNotification(t('未找到镜头，无法提交配音生成', 'Shot not found, cannot submit voice generation'), 'error');
-                                        return;
-                                    }
-
-                                    const promptText = String(voicePromptConfirmModal.prompt || '').trim();
-                                    if (!promptText) {
-                                        showNotification(t('提示词为空，请先填写', 'Prompt is empty, please fill it first'), 'warning');
-                                        return;
-                                    }
-
-                                    setVoicePromptConfirmModal((prev) => ({ ...prev, submitting: true }));
-                                    try {
-                                        await submitVoiceoverOnly({
-                                            shot,
-                                            voicePrompt: promptText,
-                                            plannerSystemPrompt: String(voicePromptConfirmModal.systemPrompt || '').trim(),
-                                            languageCode: voicePromptConfirmModal.languageCode,
-                                            projectLanguage: voicePromptConfirmModal.projectLanguage,
-                                        });
-                                        setVoicePromptConfirmModal({ open: false, shotId: null, prompt: '', systemPrompt: '', loadingSystemPrompt: false, languageCode: '', projectLanguage: '', submitting: false });
-                                    } finally {
-                                        setVoicePromptConfirmModal((prev) => (prev.open ? { ...prev, submitting: false } : prev));
-                                    }
-                                }}
-                                disabled={voicePromptConfirmModal.submitting}
-                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium flex items-center gap-2"
-                            >
-                                {voicePromptConfirmModal.submitting ? <Loader2 className="animate-spin" size={16} /> : <Wand2 size={16} />}
-                                {voicePromptConfirmModal.submitting ? t('提交中...', 'Submitting...') : t('确认并生成配音', 'Confirm and Generate Voiceover')}
                             </button>
                         </div>
                     </div>

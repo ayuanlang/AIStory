@@ -92,14 +92,15 @@ export const LightweightMentionPicker = ({ isOpen, onClose, entities, uiLang, on
     );
 };
 
-export const PromptMentionTextarea = React.forwardRef(({ 
-    value, 
-    onChange, 
-    entities, 
-    uiLang, 
-    className, 
-    placeholder, 
-    onBlur 
+export const PromptMentionTextarea = React.forwardRef(({
+    value,
+    onChange,
+    entities,
+    uiLang,
+    className,
+    placeholder,
+    onBlur,
+    ...props
 }, ref) => {
     const internalRef = useRef(null);
     const resolvedRef = ref || internalRef;
@@ -206,6 +207,7 @@ export const PromptMentionTextarea = React.forwardRef(({
                 onBlur={onBlur}
                 className={className}
                 placeholder={placeholder}
+                {...props}
             />
             {pickerOpen && (
                 <LightweightMentionPicker

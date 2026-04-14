@@ -478,15 +478,10 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                     </h4>
                     <div className="flex items-center gap-1.5">
                         <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-white/50">Used by AI: {activeRefs.length}</span>
-                        {isVideoRefManager && (
-                            <span className="text-[10px] bg-primary/15 border border-primary/30 px-1.5 py-0.5 rounded text-primary/90">
-                                {t(`当前提交引用数 = ${currentSubmitRefCount}`, `Current submit ref count = ${currentSubmitRefCount}`)}
-                            </span>
-                        )}
                     </div>
                 </div>
                 
-                <div className={`flex gap-2 pb-2 custom-scrollbar ${isPortrait ? 'flex-col overflow-y-auto max-h-[220px] h-full' : 'overflow-x-auto min-h-[90px]'}`}>
+                <div className={`flex gap-2 pb-2 custom-scrollbar ${isPortrait ? 'flex-col overflow-y-auto max-h-[420px] 2xl:max-h-[480px] h-full' : 'overflow-x-auto min-h-[90px]'}`}>
                     {/* 1. Active Refs (Selected) */}
                     {activeRefs.map((url, idx) => (
                         <div key={url + idx} className={`relative group shrink-0 ${isPortrait ? 'w-full aspect-[4/3]' : 'w-[140px] aspect-video'} bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in`} onClick={() => setSelectedImage(url)}>
