@@ -41,7 +41,7 @@ from app.services.video_service import create_montage
 from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel
 import bcrypt
 import re
 import json
@@ -15483,28 +15483,6 @@ class EntityOut(BaseModel):
     dependency_strategy: Optional[Dict[str, Any]] = {}
     custom_attributes: Optional[Dict[str, Any]] = {}
 
-    @model_validator(mode='before')
-    @classmethod
-    def decode_json_fields(cls, values: Any) -> Any:
-        if not hasattr(values, '__dict__') and not isinstance(values, dict):
-            return values
-        
-        is_dict = isinstance(values, dict)
-
-        for field in ['visual_dependencies', 'dependency_strategy', 'custom_attributes']:
-            val = values.get(field) if is_dict else getattr(values, field, None)
-            if isinstance(val, str):
-                try:
-                    import json
-                    parsed = json.loads(val)
-                    if is_dict:
-                        values[field] = parsed
-                    else:
-                        setattr(values, field, parsed)
-                except Exception:
-                    pass
-        return values
-
     class Config:
         from_attributes = True
 
@@ -16021,7 +15999,17 @@ def update_entity(
     
     # Separate standard columns from custom attributes
     standard_columns = {c.name for c in Entity.__table__.columns}
-    custom_attrs = dict(entity.custom_attributes or {})
+    
+    custom_attrs = {}
+    if isinstance(entity.custom_attributes, dict):
+        custom_attrs = entity.custom_attributes.copy()
+    elif isinstance(entity.custom_attributes, str):
+        try:
+            custom_attrs = json.loads(entity.custom_attributes)
+            if not isinstance(custom_attrs, dict):
+                custom_attrs = {}
+        except Exception:
+            pass
     
     for field, value in update_data.items():
         if field == "image_url" and value != entity.image_url:
@@ -17829,14 +17817,24 @@ def _resolve_accessible_project_ids_for_user(db: Session, current_user: User) ->
 
 @router.get("/assets/unreferenced-ids", response_model=dict)
 def get_unreferenced_asset_ids(
+    project_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    assets = db.query(Asset).filter(Asset.user_id == current_user.id).all()
+    # Base asset query for the user
+    query = db.query(Asset).filter(Asset.user_id == current_user.id)
+    
+    if project_id is not None:
+        _require_project_access(db, project_id, current_user)
+        accessible_project_ids = [project_id]
+        # Just fetch all user assets, the filtering will happen by matching referenced tokens
+        # which is fast enough, and avoids missing assets that don't have project_id in meta_info.
+    else:
+        accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
+        
+    assets = query.all()
     if not assets:
         return {"unreferenced_ids": [], "referenced_ids": [], "total_assets": 0}
-
-    accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
     referenced_tokens: set[str] = set()
 
     if accessible_project_ids:
@@ -21910,9 +21908,6 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
     if not media_url:
         return
 
-    if media_url.startswith("/") or any(domain in media_url.lower() for domain in ["clouddn.com", "backblazeb2.com", "qiniucs.com", "qiniu.com", ".bkt.", "aistory"]):
-        oss_uploaded_success = True
-
     def get_attr(obj, key):
         if isinstance(obj, dict):
             return obj.get(key)
@@ -21998,9 +21993,6 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
 def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
     if not media_url:
         return
-
-    if media_url.startswith("/") or any(domain in media_url.lower() for domain in ["clouddn.com", "backblazeb2.com", "qiniucs.com", "qiniu.com", ".bkt.", "aistory"]):
-        oss_uploaded_success = True
 
     def get_attr(obj, key):
         if isinstance(obj, dict):

@@ -104,6 +104,7 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
+    fetchUnreferencedAssetIds
 } from '../../../services/api';
 
 import RefineControl from '../../../components/RefineControl.jsx';
@@ -300,13 +301,14 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [tab, setTab] = useState('assets');
     const [assets, setAssets] = useState([]);
+    const [allCleanData, setAllCleanData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
     const [selectedMulti, setSelectedMulti] = useState(new Set()); // Multi-selection state
     
     // Filters
-    const [filterScope, setFilterScope] = useState('project_subjects'); // 'project_subjects', 'project', 'subject', 'shot', 'type'
+    const [filterScope, setFilterScope] = useState('characters'); // 'characters', 'props', 'environments', 'shots', 'all'
     const [filterType, setFilterType] = useState('all');
     const [filterValue, setFilterValue] = useState('');
     const [filterFrameType, setFilterFrameType] = useState('all');
@@ -356,16 +358,13 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     useEffect(() => {
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
-        }
-        if (isOpen && tab === 'assets') {
-             // Reset filters if context is provided?
-             // If context has entityId, maybe default to subject?
-             if (context.entityId && filterScope === 'project') {
-                 setFilterScope('subject');
-                 setFilterValue(context.entityId);
-             } else if (context.shotId && filterScope === 'project') {
-                 // setFilterScope('shot'); // Optional: heuristic
-                 // setFilterValue(context.shotId);
+             
+             // Setup initial filters based on context
+             if (context && context.entityId) {
+                 const t = entities.find(e => String(e.id) === String(context.entityId))?.type || 'character';
+                 setFilterScope(t === 'character' ? 'characters' : t === 'prop' ? 'props' : t === 'environment' ? 'environments' : 'characters');
+             } else {
+                 setFilterScope('characters');
              }
         }
     }, [isOpen]);
@@ -384,9 +383,39 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     useEffect(() => {
         if (isOpen && tab === 'assets') {
-            loadAssets();
+            if (!allCleanData) loadAssets();
+        } else if (!isOpen) {
+            setAllCleanData(null);
+            setAssets([]);
         }
-    }, [isOpen, tab, filterScope, filterType, filterValue, filterFrameType]);
+    }, [isOpen, tab]); // Removed filter scopes from here so it only fetches broadly
+
+    useEffect(() => {
+        if (!allCleanData) return;
+        
+        // Step 2: Apply Scope Filtering locally fast
+        let res = allCleanData;
+        
+        if (filterScope === 'characters') {
+            const targetIds = new Set(entities.filter(e => e.type === 'character').map(e => String(e.id)));
+            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+        } else if (filterScope === 'props') {
+            const targetIds = new Set(entities.filter(e => e.type === 'prop').map(e => String(e.id)));
+            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+        } else if (filterScope === 'environments') {
+            const targetIds = new Set(entities.filter(e => e.type === 'environment').map(e => String(e.id)));
+            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+        } else if (filterScope === 'shots') {
+            res = allCleanData.filter(a => !!a.meta_info?.shot_id);
+        } // 'all' scope keeps everything from cleanData
+
+        // Step 3: Global Media Type Filter
+        if (filterType !== 'all') {
+            res = res.filter(a => a.type === filterType);
+        }
+
+        setAssets(res);
+    }, [allCleanData, filterScope, filterType, filterValue, filterFrameType, entities]);
 
     useEffect(() => {
         if (isOpen) {
@@ -425,59 +454,35 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (viewport) viewport.scrollTop = 0;
     }, [filterScope, filterType, filterValue, filterFrameType, tab, isOpen]);
 
-    const loadAssets = () => {
+    const loadAssets = async () => {
         setLoading(true);
-        const params = {};
-        if (filterType !== 'all') params.type = filterType;
-        
-        // Base scope is Project
-        if (projectId) params.project_id = projectId;
+        try {
+            const params = {};
+            if (projectId) params.project_id = projectId;
+            
+            const [data, refsPayload] = await Promise.all([
+                fetchAssets(params),
+                fetchUnreferencedAssetIds({ project_id: projectId }) // scope optimization
+            ]);
 
-        // Refine scope
-        let clientSideFilterIds = null; // If set, filter by these entity IDs locally
-        let requireAnyEntity = false;
+            const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
+            
+            // Step 1: Clean list to EXCLUDE historical/unreferenced generated assets
+            const cleanData = ((data || []) ).filter(a => {
+                const meta = a.meta_info || {};
+                const isGenerated = meta.provider || meta.prompt || meta.source === 'ai_generation';
+                if (isGenerated) {
+                    return referencedSet.has(String(a.id)); // Must be active
+                }
+                return true; // Keep manual standalone uploads 
+            });
 
-        if (filterScope === 'subject' && filterValue) {
-            params.entity_id = filterValue;
-        } else if (filterScope === 'shot' && filterValue) {
-            params.shot_id = filterValue;
-        } else if (filterScope === 'type' && filterValue) {
-            // "By Type" strategy: Fetch project assets, then filter by entity_id belonging to that type
-            // Find all entities of this type
-            const targetEntities = entities.filter(e => (e.type || 'prop').toLowerCase() === filterValue.toLowerCase());
-            clientSideFilterIds = new Set(targetEntities.map(e => e.id));
-        } else if (filterScope === 'project_subjects') {
-            requireAnyEntity = true;
+            setAllCleanData(cleanData); // Save clean version to memory
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setLoading(false);
         }
-
-        fetchAssets(params).then(data => {
-            let res = data || [];
-
-            // Client-side filtering for Entity Type logic (if backend doesn't support recursive type filtering)
-            if (clientSideFilterIds) {
-                res = res.filter(a => {
-                    const eid = a.meta_info?.entity_id;
-                    return eid && clientSideFilterIds.has(Number(eid));
-                });
-            } else if (requireAnyEntity) {
-                res = res.filter(a => !!a.meta_info?.entity_id);
-            }
-
-            // Frame Type filtering
-            if (filterScope === 'shot' && filterFrameType !== 'all') {
-                res = res.filter(a => {
-                    const ft = String(a.meta_info?.frame_type || a.meta_info?.asset_type || '').toLowerCase();
-                    const isStartEnd = ft.includes('start') || ft.includes('end') || ft.includes('first') || ft.includes('last');
-                    const isKeyframe = ft.includes('key');
-                    
-                    if (filterFrameType === 'start_end') return isStartEnd;
-                    if (filterFrameType === 'keyframe') return isKeyframe;
-                    return true;
-                });
-            }
-
-            setAssets(res);
-        }).catch(console.error).finally(() => setLoading(false));
     };
 
     const handleUpload = async (e) => {
@@ -537,61 +542,14 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
-                            <option value="project_subjects">{t('项目主体库', 'Project Subjects')}</option>
-                            <option value="project">{t('项目全部素材', 'All Project Assets')}</option>
-                            <option value="type">{t('按主体类型', 'By Subject Type')}</option>
-                            <option value="subject">{t('按指定主体', 'By Exact Subject')}</option>
-                            <option value="shot">{t('按分镜（Shot）', 'By Storyboard (Shot)')}</option>
+                            <option value="characters">{t('项目角色', 'Project Characters')}</option>
+                            <option value="props">{t('项目道具', 'Project Props')}</option>
+                            <option value="environments">{t('项目环境', 'Project Environments')}</option>
+                            <option value="shots">{t('项目分镜', 'Project Shots')}</option>
+                            <option value="all">{t('所有素材', 'All Assets')}</option>
                         </select>
 
-                        {/* Refinement Selector */}
-                        {filterScope === 'type' && (
-                             <select 
-                                value={filterValue}
-                                onChange={(e) => setFilterValue(e.target.value)}
-                                className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
-                            >
-                                <option value="">{t('选择类型...', 'Select Type...')}</option>
-                                <option value="character">{t('角色', 'Characters')}</option>
-                                <option value="prop">{t('道具', 'Props')}</option>
-                                <option value="environment">{t('环境', 'Environments')}</option>
-                                <option value="poster">{t('海报', 'Poster')}</option>
-                                <option value="poster">{t('海报', 'Poster')}</option>
-                            </select>
-                        )}
 
-                        {filterScope === 'subject' && (
-                             <select 
-                                value={filterValue}
-                                onChange={(e) => setFilterValue(e.target.value)}
-                                className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
-                            >
-                                <option value="">{t('选择主体...', 'Select Subject...')}</option>
-                                {entities.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                            </select>
-                        )}
-
-                        {filterScope === 'shot' && (
-                            <>
-                                 <select 
-                                    value={filterValue}
-                                    onChange={(e) => setFilterValue(e.target.value)}
-                                    className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50 max-w-[150px]"
-                                >
-                                    <option value="">{t('选择镜头...', 'Select Shot...')}</option>
-                                    {availableShots.map(s => <option key={s.id} value={s.id}>{s.shot_id} - {s.shot_name || t('未命名', 'Untitled')}</option>)}
-                                </select>
-                                <select
-                                    value={filterFrameType}
-                                    onChange={(e) => setFilterFrameType(e.target.value)}
-                                    className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
-                                >
-                                    <option value="all">{t('全部帧', 'All Frames')}</option>
-                                    <option value="start_end">{t('首尾帧', 'Start/End Frames')}</option>
-                                    <option value="keyframe">{t('关键帧', 'Keyframes')}</option>
-                                </select>
-                            </>
-                        )}
 
                         <select 
                             value={filterType}

@@ -2783,8 +2783,8 @@ export const getMaintenanceStatus = async () => {
     return response.data;
 };
 
-export const fetchUnreferencedAssetIds = async () => {
-    const response = await api.get('/assets/unreferenced-ids');
+export const fetchUnreferencedAssetIds = async (params = {}) => {
+    const response = await api.get('/assets/unreferenced-ids', { params });
     return response.data;
 }
 
