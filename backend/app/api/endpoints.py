@@ -21910,6 +21910,9 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
     if not media_url:
         return
 
+    if media_url.startswith("/") or any(domain in media_url.lower() for domain in ["clouddn.com", "backblazeb2.com", "qiniucs.com", "qiniu.com", ".bkt.", "aistory"]):
+        oss_uploaded_success = True
+
     def get_attr(obj, key):
         if isinstance(obj, dict):
             return obj.get(key)
@@ -21995,6 +21998,9 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
 def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
     if not media_url:
         return
+
+    if media_url.startswith("/") or any(domain in media_url.lower() for domain in ["clouddn.com", "backblazeb2.com", "qiniucs.com", "qiniu.com", ".bkt.", "aistory"]):
+        oss_uploaded_success = True
 
     def get_attr(obj, key):
         if isinstance(obj, dict):
