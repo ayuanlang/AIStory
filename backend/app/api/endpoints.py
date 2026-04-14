@@ -15456,6 +15456,7 @@ class EntityCreate(BaseModel):
     dependency_strategy: Optional[Dict[str, Any]] = {}
     custom_attributes: Optional[Dict[str, Any]] = {}
 
+import pydantic
 class EntityOut(BaseModel):
     id: int
     name: Optional[str] = None
@@ -15482,6 +15483,25 @@ class EntityOut(BaseModel):
     visual_dependencies: Optional[List[str]] = []
     dependency_strategy: Optional[Dict[str, Any]] = {}
     custom_attributes: Optional[Dict[str, Any]] = {}
+
+    @pydantic.field_validator("visual_dependencies", mode="before")
+    @classmethod
+    def validate_visual_dependencies(cls, v: Any) -> List[str]:
+        return _coerce_visual_dependencies(v)
+
+    @pydantic.field_validator("dependency_strategy", "custom_attributes", mode="before")
+    @classmethod
+    def validate_dict_fields(cls, v: Any) -> Dict[str, Any]:
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str) and v.strip():
+            import json
+            try:
+                parsed = json.loads(v.strip())
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                pass
+        return {}
 
     class Config:
         from_attributes = True
@@ -15563,6 +15583,11 @@ def read_entities(
                     "local_path": diag.get("local_path"),
                 })
 
+    try:
+        dumped_missing = json.dumps(sample_missing, ensure_ascii=False)
+    except Exception:
+        dumped_missing = "[]"
+
     logger.info(
         "[EntityImageReadDiag] project_id=%s user_id=%s total=%s with_image=%s rel_upload=%s abs_upload=%s missing_local=%s sample_missing=%s",
         project_id,
@@ -15572,7 +15597,7 @@ def read_entities(
         relative_upload,
         absolute_upload,
         missing_local,
-        json.dumps(sample_missing, ensure_ascii=False),
+        dumped_missing,
     )
     return repaired_entities
 
