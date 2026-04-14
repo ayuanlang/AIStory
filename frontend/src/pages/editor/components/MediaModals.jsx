@@ -375,7 +375,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     useEffect(() => {
          // Load shots if needed
-         if (filterScope === 'shot' && episodeId && availableShots.length === 0) {
+         if (filterScope === 'shots' && episodeId && availableShots.length === 0) {
                fetchEpisodeShots(episodeId, { compact: true }).then(data => {
                  setAvailableShots(data.sort((a,b) => {
                       // simple sort by shot_id alphanumeric
@@ -398,20 +398,64 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (!allCleanData) return;
         
         // Step 2: Apply Scope Filtering locally fast
-        let res = allCleanData;
-        
+        // Synthesize missing legacy assets from explicit links since API might paginate them out
+        const synthData = [];
+        const existingUrls = new Set(allCleanData.map(a => String(a.url || '').trim()));
+
+        const addSynth = (url, metaInfo, fallbackType) => {
+            const u = String(url || '').trim();
+            if (!u || existingUrls.has(u)) return;
+            existingUrls.add(u);
+            synthData.push({
+                id: 'synth_' + Math.random().toString(36).slice(2, 10),     
+                url: u,
+                type: u.toLowerCase().endsWith('.mp4') ? 'video' : fallbackType,
+                meta_info: metaInfo,
+                is_synthetic: true
+            });
+        };
+
+        if (entities && Array.isArray(entities)) {
+            entities.forEach(e => {
+                if (e.image_url) addSynth(e.image_url, { entity_id: e.id, project_id: projectId }, 'image');
+            });
+        }
+
+        if (availableShots && Array.isArray(availableShots)) {
+            availableShots.forEach(s => {
+                addSynth(s.image_url, { shot_id: s.id, project_id: projectId }, 'image');
+                addSynth(s.video_url, { shot_id: s.id, project_id: projectId }, 'video');
+                
+                try {
+                    const notes = typeof s.technical_notes === 'string' ? JSON.parse(s.technical_notes || '{}') : (s.technical_notes || {});
+                    if (Array.isArray(notes.ref_image_urls)) {
+                        notes.ref_image_urls.forEach(u => addSynth(u, { shot_id: s.id, project_id: projectId }, 'image'));
+                    }
+                    if (Array.isArray(notes.end_ref_image_urls)) {
+                        notes.end_ref_image_urls.forEach(u => addSynth(u, { shot_id: s.id, project_id: projectId }, 'image'));
+                    }
+                    if (Array.isArray(notes.video_ref_image_urls)) {
+                        notes.video_ref_image_urls.forEach(u => addSynth(u, { shot_id: s.id, project_id: projectId }, 'image'));
+                    }
+                } catch(err) {}
+            });
+        }
+
+        const enrichedData = [...synthData, ...allCleanData];
+        let res = enrichedData;
+
         if (filterScope === 'characters') {
             const targetIds = new Set(entities.filter(e => e.type === 'character').map(e => String(e.id)));
-            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+            res = enrichedData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
         } else if (filterScope === 'props') {
             const targetIds = new Set(entities.filter(e => e.type === 'prop').map(e => String(e.id)));
-            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+            res = enrichedData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
         } else if (filterScope === 'environments') {
             const targetIds = new Set(entities.filter(e => e.type === 'environment').map(e => String(e.id)));
-            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+            res = enrichedData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
         } else if (filterScope === 'shots') {
-            res = allCleanData.filter(a => !!a.meta_info?.shot_id);
-        } // 'all' scope keeps everything from cleanData
+            res = enrichedData.filter(a => !!a.meta_info?.shot_id);
+        } // 'all' scope keeps everything from enrichedData
 
         // Step 3: Global Media Type Filter
         if (filterType !== 'all') {
@@ -419,7 +463,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         }
 
         setAssets(res);
-    }, [allCleanData, filterScope, filterType, filterValue, filterFrameType, entities]);
+    }, [allCleanData, filterScope, filterType, filterValue, filterFrameType, entities, availableShots, projectId]);
 
     useEffect(() => {
         if (isOpen) {
