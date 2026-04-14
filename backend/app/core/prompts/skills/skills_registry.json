@@ -11,6 +11,16 @@
       "legacy_refs": []
     },
     {
+      "id": "scene_analysis_feature_stack",
+      "title": "Scene Analysis Feature Stack",
+      "type": "analysis",
+      "prompts": [
+        "skills/scene_analysis_feature_stack/scene_planning.md",
+        "skills/scene_analysis_feature_stack/entity_design.md"
+      ],
+      "legacy_refs": []
+    },
+    {
       "id": "scene_analysis",
       "title": "Scene Analysis",
       "type": "analysis",
