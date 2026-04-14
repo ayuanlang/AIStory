@@ -15498,6 +15498,12 @@ class EntityOut(BaseModel):
                     import json
                     parsed = json.loads(val)
                     if is_dict:
+                        values[field] = parsed
+                    else:
+                        setattr(values, field, parsed)
+                except Exception:
+                    pass
+        return values
 
     class Config:
         from_attributes = True
