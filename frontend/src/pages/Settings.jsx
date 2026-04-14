@@ -788,6 +788,8 @@ const Settings = () => {
                             : 'high'
                     );
                 }
+
+                refreshActiveSettingSources();
              } catch (e) {
                  console.error("Failed to load backend settings", e);
              }
@@ -1206,6 +1208,7 @@ const Settings = () => {
 
         // 3. Sync to Backend
         await syncToBackend("LLM", provider, configToSave);
+        await refreshActiveSettingSources();
 
         let providerAlias = '';
         try {
@@ -1312,6 +1315,8 @@ const Settings = () => {
             console.error('Failed to save smart router setting', e);
             showNotification(t('智能 API 调用开关保存失败', 'Failed to save intelligent API toggle'), 'error');
         }
+
+        await refreshActiveSettingSources();
 
         showNotification("Generation settings & credentials saved", "success");
         addLog("Generation settings & credentials saved", "success");

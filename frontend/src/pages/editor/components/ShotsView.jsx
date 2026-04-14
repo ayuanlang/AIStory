@@ -7666,35 +7666,6 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             {isCroppingThisShot ? t('处理图片中', 'Processing Image') : t('生成中', 'Generating')}
                                         </div>
                                     )}
-                                    {(() => {
-                                        let isOssTemp = false;
-                                        const urlStr = String(shot.video_url || shot.image_url || '').toLowerCase();
-                                        if (!urlStr || urlStr.startsWith('data:') || urlStr.startsWith('blob:')) return null;
-                                        const isStableOss = urlStr.startsWith('/') || /qiniu|clouddn\.com|backblaze|\.bkt\.|aistory/.test(urlStr);
-
-                                        if (!isStableOss) {
-                                            try {
-                                                const tech = shot.technical_metadata ? (typeof shot.technical_metadata === 'string' ? JSON.parse(shot.technical_metadata) : shot.technical_metadata) : {};
-                                                if (shot.video_url && tech.video_oss_uploaded === false) {
-                                                    isOssTemp = true;
-                                                } else if (shot.image_url && tech.start_frame_oss_uploaded === false) {
-                                                    isOssTemp = true;
-                                                }
-                                                if (!isOssTemp && /(file\d*\.aitohumanize\.com|temporary|ephemeral)/i.test(urlStr)) {
-                                                    isOssTemp = true;
-                                                }
-                                            } catch(e) {}
-                                        }
-                                        return isOssTemp ? (
-                                            <div 
-                                                className={`absolute z-30 inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow ${(isGeneratingThisShot || isCroppingThisShot) ? 'bottom-8 left-2' : 'bottom-2 left-2'}`}
-                                                title={t('图片或视频尚未持久化到OSS，目前为临时地址。', 'Image/Video not yet persisted to OSS, using temporary link.')}
-                                            >
-                                                <AlertTriangle size={12} />
-                                                <span>{t('临时文件', 'Temp')}</span>
-                                            </div>
-                                        ) : null;
-                                    })()}
                                 </div>
                                 
                                 {/* Info - Simplified */}
