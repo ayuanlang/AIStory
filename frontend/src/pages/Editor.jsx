@@ -1293,11 +1293,10 @@ const Editor = ({
             sources.push('json_key_fragments');
         }
 
-        const subjectIndexPayload = getEntitiesPayloadFromSubjectIndexTable(text);
-        if (hasAny(subjectIndexPayload)) {
-            merged = mergePayload(merged, subjectIndexPayload, true);
-            sources.push('subject_index_fallback');
-        }
+        // Feature change: By removing the `getEntitiesPayloadFromSubjectIndexTable` fallback, 
+        // we explicitly block Phase 1 Markdown Subject Index tables from being imported 
+        // as empty assets (e.g. without proper descriptions or JSON structures).
+        // This ensures asset generation ONLY happens from valid JSON produced in Phase 2.
 
         if (!hasAny(merged)) return null;
         return {

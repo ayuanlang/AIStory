@@ -41,7 +41,7 @@ from app.services.video_service import create_montage
 from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 import bcrypt
 import re
 import json
@@ -15482,6 +15482,22 @@ class EntityOut(BaseModel):
     visual_dependencies: Optional[List[str]] = []
     dependency_strategy: Optional[Dict[str, Any]] = {}
     custom_attributes: Optional[Dict[str, Any]] = {}
+
+    @model_validator(mode='before')
+    @classmethod
+    def decode_json_fields(cls, values: Any) -> Any:
+        if not hasattr(values, '__dict__') and not isinstance(values, dict):
+            return values
+        
+        is_dict = isinstance(values, dict)
+
+        for field in ['visual_dependencies', 'dependency_strategy', 'custom_attributes']:
+            val = values.get(field) if is_dict else getattr(values, field, None)
+            if isinstance(val, str):
+                try:
+                    import json
+                    parsed = json.loads(val)
+                    if is_dict:
 
     class Config:
         from_attributes = True
