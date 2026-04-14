@@ -234,7 +234,7 @@ export const MediaDetailModal = ({ media, onClose }) => {
     );
 };
 
-export const AssetHoverMetaOverlay = ({ asset, t, entities = [] }) => {
+export const AssetHoverMetaOverlay = ({ asset, t, entities = [], position = 'top' }) => {
     if (!asset) return null;
 
     const meta = (asset.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
@@ -278,8 +278,12 @@ export const AssetHoverMetaOverlay = ({ asset, t, entities = [] }) => {
         ...(createdLabel ? [{ label: t('创建时间', 'Created'), value: createdLabel }] : []),
     ];
 
+    const popoverPositionClass = position === 'bottom' 
+        ? "top-full mt-2 origin-top -translate-y-2 group-hover:translate-y-0" 
+        : "bottom-full mb-2 origin-bottom translate-y-2 group-hover:translate-y-0";
+
     return (
-        <div className="pointer-events-none absolute left-0 bottom-full mb-2 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150 z-50 origin-bottom">
+        <div className={`pointer-events-none absolute left-0 opacity-0 group-hover:opacity-100 transition-all duration-150 z-[60] ${popoverPositionClass}`}>
             <div className="rounded-lg border border-white/10 bg-black/95 backdrop-blur-md shadow-2xl p-3 w-56 max-w-[280px]">
                 <div className="text-[11px] font-bold uppercase tracking-wide text-primary/90 mb-2.5">
                     {t('资产信息', 'Asset Info')}
@@ -577,7 +581,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         <>
                             {assetTopSpacerHeight > 0 && <div style={{ height: `${assetTopSpacerHeight}px` }} />}
                             <div className="grid grid-cols-4 gap-3">
-                            {visibleAssets.map(asset => (
+                            {visibleAssets.map((asset, index) => {
+                                const globalIndex = assetStartIndex + index;
+                                const isFirstRow = globalIndex < 4;
+                                return (
                                 <div
                                     key={asset.id}
                                     className="relative group"
@@ -617,9 +624,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                             </div>
                                         )}
                                     </div>
-                                    <AssetHoverMetaOverlay asset={asset} t={t} entities={entities} />
+                                    <AssetHoverMetaOverlay asset={asset} t={t} entities={entities} position={isFirstRow ? 'bottom' : 'top'} />
                                 </div>
-                            ))}
+                                );
+                            })}
                             </div>
                             {assetBottomSpacerHeight > 0 && <div style={{ height: `${assetBottomSpacerHeight}px` }} />}
                             {assets.length === 0 && <div className="text-center text-muted-foreground py-8">{t('未找到素材', 'No assets found')}</div>}
