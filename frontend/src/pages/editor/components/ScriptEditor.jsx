@@ -3252,6 +3252,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
                     const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
                     onLog?.(`[Asset Gen Tracking] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+                    
+                    return {
+                        checkedSceneCount: importedSceneRows.length,
+                        missingSceneCount: 0,
+                        missingItemCount: createdLen + matchedLen,
+                        supplementReport: {
+                            createdItems: sceneImportReport?.createdSubjectItems || [],
+                            skippedItems: sceneImportReport?.skippedSubjectItems || [],
+                            failedItems: [],
+                        }
+                    };
                 }
             }
 
