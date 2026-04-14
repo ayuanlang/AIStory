@@ -464,24 +464,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             const params = {};
             if (projectId) params.project_id = projectId;
             
-            const [data, refsPayload] = await Promise.all([
-                fetchAssets(params),
-                fetchUnreferencedAssetIds({ project_id: projectId }) // scope optimization
-            ]);
+            const data = await fetchAssets(params);
 
-            const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
-            
-            // Step 1: Clean list to EXCLUDE historical/unreferenced generated assets
-            const cleanData = ((data || []) ).filter(a => {
-                const meta = a.meta_info || {};
-                const isGenerated = meta.provider || meta.prompt || meta.source === 'ai_generation';
-                if (isGenerated) {
-                    return referencedSet.has(String(a.id)); // Must be active
-                }
-                return true; // Keep manual standalone uploads 
-            });
-
-            setAllCleanData(cleanData); // Save clean version to memory
+            // Allow all assets to be selectable, removing the previous overzealous unreferenced AI-asset exclusion
+            setAllCleanData(data || []); // Save clean version to memory
         } catch (error) {
             console.error(error);
         } finally {
