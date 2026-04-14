@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 _PROMPTS_ROOT = Path(settings.BASE_DIR) / "app" / "core" / "prompts"
 _FEATURE_STACK_ROOT = _PROMPTS_ROOT / "skills" / "shot_generation_feature_stack"
 _REGISTRY_PATH = _FEATURE_STACK_ROOT / "registry.json"
-_DEFAULT_ROUTED_BASE_PROMPT = "shot_generator_routed_base.txt"
+_DEFAULT_ROUTED_BASE_PROMPT = "skills/shot_generation.md"
 _COMBO_SLOT_TOKEN = "[[SHOT_GENERATION_COMBO_RULES]]"
 
 
@@ -198,7 +198,7 @@ def resolve_shot_generation_feature_bundle(
         return {
             "mode": "classic",
             "enabled": False,
-            "base_prompt_file": "shot_generator.txt",
+            "base_prompt_file": "skills/shot_generation.md",
             "known_slot_tokens": known_slot_tokens,
             "slot_blocks": {},
             "normalized_features": {},

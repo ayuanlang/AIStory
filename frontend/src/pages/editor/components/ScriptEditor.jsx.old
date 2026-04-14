@@ -1,0 +1,128 @@
+const runPostImportSceneSubjectPipeline = useCallback(async (importReport, options = {}) => {
+        const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
+        const emptyReport = {
+            checkedSceneCount: importedSceneRows.length,
+            missingSceneCount: 0,
+            missingItemCount: 0,
+            missingSceneReports: [],
+            supplementReport: {
+                createdItems: [],
+                skippedItems: [],
+                failedItems: [],
+                sceneReports: [],
+                countsByType: { character: 0, prop: 0, environment: 0 },
+            },
+        };
+
+        if (!projectId || importedSceneRows.length === 0) {
+            return emptyReport;
+        }
+
+        // 移除在剧本分析时自动进行实体补充的部分 (Disabled early return to re-enable asset generation)
+        // return emptyReport;
+
+        setAnalysisFlowStatus({
+            phase: 'generating_assets',
+            message: t('主体信息同步完毕！AI 正在查漏补缺，智能扫描并修复各分镜画面的上下文元素...', 'Scenes and subjects imported. Checking each scene for missing entities...'),
+        });
+
+        const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
+        let latestEntities = await fetchEntities(projectId).catch(() => []);
+        const missingSceneReports = [];
+        const supplementReport = {
+            createdItems: [],
+            skippedItems: [],
+            failedItems: [],
+            sceneReports: [],
+            countsByType: { character: 0, prop: 0, environment: 0 },
+        };
+
+        for (const scene of importedSceneRows) {
+            const latestEntityPool = mergeEntityPoolWithSubjectIndex(latestEntities, authoritativeSubjectText);
+            const currentMissing = findMissingSceneSubjectRefs(scene, latestEntityPool);
+            if (!Array.isArray(currentMissing) || currentMissing.length === 0) continue;
+
+            const sceneNo = String(scene?.scene_no || '').trim();
+            const sceneName = String(scene?.scene_name || '').trim();
+            const sceneLabel = sceneNo || sceneName || `#${scene?.id || 'unknown'}`;
+            const normalizedSceneReport = {
+                sceneId: Number(scene?.id || 0) || null,
+                sceneNo,
+                sceneName,
+                missing: currentMissing,
+            };
+            missingSceneReports.push({
+                scene,
+                missing: currentMissing,
+                normalized: normalizedSceneReport,
+            });
+
+            const details = currentMissing.map((ref) => {
+                const conflicts = findCrossTypeEntityMatches(latestEntityPool, ref?.name, ref?.type);
+                const conflictLabel = conflicts.length > 0
+                    ? ` | cross_type_matches=${conflicts.map((c) => `${c?.type || 'unknown'}:${c?.name || c?.name_en || c?.id || 'unknown'}`).join(';')}`
+                    : '';
+                return `${ref.type}:${ref.name} [field=${ref.sourceField || '-'}]${conflictLabel}`;
+            });
+            onLog?.(`[SceneSubjectGap] scene=${sceneLabel} -> ${details.join(' || ')}`, 'warning');
+
+            setAnalysisFlowStatus({
+                phase: 'importing_assets',
+                message: t(
+                    `场景 ${sceneLabel} 存在 ${currentMissing.length} 个缺失实体，正在复用场景补实体流程逐个补充...`,
+                    `Scene ${sceneLabel} has ${currentMissing.length} missing entities. Reusing the scene supplement flow now...`
+                ),
+            });
+
+            const sceneSupplementReport = await createMissingSceneSubjectPlaceholders({
+                projectId,
+                sceneRows: [scene],
+                existingEntities: latestEntityPool,
+                onLog,
+            });
+
+            if (sceneSupplementReport) {
+                supplementReport.createdItems.push(...(Array.isArray(sceneSupplementReport.createdItems) ? sceneSupplementReport.createdItems : []));
+                supplementReport.skippedItems.push(...(Array.isArray(sceneSupplementReport.skippedItems) ? sceneSupplementReport.skippedItems : []));
+                supplementReport.failedItems.push(...(Array.isArray(sceneSupplementReport.failedItems) ? sceneSupplementReport.failedItems : []));
+                supplementReport.sceneReports.push(...(Array.isArray(sceneSupplementReport.sceneReports) ? sceneSupplementReport.sceneReports : []));
+                supplementReport.countsByType.character += Number(sceneSupplementReport?.countsByType?.character || 0);
+                supplementReport.countsByType.prop += Number(sceneSupplementReport?.countsByType?.prop || 0);
+                supplementReport.countsByType.environment += Number(sceneSupplementReport?.countsByType?.environment || 0);
+            }
+
+            latestEntities = await fetchEntities(projectId).catch(() => latestEntities);
+        }
+
+        const missingItemCount = missingSceneReports.reduce((sum, item) => sum + Number(item?.missing?.length || 0), 0);
+        if (missingSceneReports.length === 0) {
+            onLog?.('Post-import scene entity check passed: no missing scene subjects detected. Supplement step skipped.', 'success');
+            return {
+                ...emptyReport,
+                checkedSceneCount: importedSceneRows.length,
+            };
+        }
+
+        onLog?.(
+            `Post-import scene entity check found missing subjects in ${missingSceneReports.length} scene(s), total missing items=${missingItemCount}.`,
+            'warning'
+        );
+
+        const createdCount = Number(supplementReport?.createdItems?.length || 0);
+        const skippedCount = Number(supplementReport?.skippedItems?.length || 0);
+        const failedCount = Number(supplementReport?.failedItems?.length || 0);
+
+        onLog?.(
+            `Post-import scene entity supplement summary: missing_scenes=${missingSceneReports.length}, missing_items=${missingItemCount}, created=${createdCount}, skipped=${skippedCount}, failed=${failedCount}.`,
+            failedCount > 0 ? 'warning' : 'success'
+        );
+
+        return {
+            checkedSceneCount: importedSceneRows.length,
+            missingSceneCount: missingSceneReports.length,
+            missingItemCount,
+            missingSceneReports: missingSceneReports.map((item) => item.normalized),
+            supplementReport: supplementReport || emptyReport.supplementReport,
+            pendingUserConfirmation: false,
+        };
+    }, [onLog, projectId, t]);

@@ -1,0 +1,1 @@
+const fs = require("fs"); let content = fs.readFileSync("frontend/src/pages/editor/components/ScriptEditor.jsx", "utf8"); content = content.split("(?=\\n###|\\Z)").join("(?=\\n###|$)"); fs.writeFileSync("frontend/src/pages/editor/components/ScriptEditor.jsx", content);

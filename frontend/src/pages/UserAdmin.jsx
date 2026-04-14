@@ -923,7 +923,7 @@ const UserAdmin = () => {
 
     const resolveDefaultPromptRefForSkill = (skill) => {
         const refs = getPromptRefsForSkill(skill);
-        const preferred = ['skills/scene_analysis_feature_stack/scene_planning.md', 'shot_generator.txt'];
+        const preferred = ['skills/scene_analysis_feature_stack/scene_planning.md', 'shot_generation.md'];
         for (const candidate of preferred) {
             if (refs.includes(candidate)) return candidate;
         }

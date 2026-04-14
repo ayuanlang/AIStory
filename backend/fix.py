@@ -1,35 +1,35 @@
-﻿import re
 
-with open('app/api/settings.py', 'r', encoding='utf-8') as f:
+import re
+
+fname = "C:/AS/AIStory/backend/app/api/endpoints.py"
+with open(fname, "r", encoding="utf-8") as f:
     text = f.read()
 
-part1_bad = '''# --- Function API Config Routes ---
-from app.schemas.settings import FunctionAPIConfigUpdate, FunctionAPIConfigOut  
+# Add try: db.commit() in analyze_scene before agent_service.get_active_llm_config
+text = text.replace(
+    "config = agent_service.get_active_llm_config(\n            user_id=current_user_id,\n            category=\"LLM\",",
+    "try:\n            db.commit()\n        except Exception:\n            pass\n        config = agent_service.get_active_llm_config(\n            user_id=current_user_id,\n            category=\"LLM\","
+)
 
-from app.models.all_models import APIRoutingConfig
+# And in ai_generate_shots:
+text = text.replace(
+    "llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)",
+    "try:\n            db.commit()\n        except Exception:\n            pass\n        llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)"
+)
 
-@router.get(\"/settings/system/function_api_configs\", response_model=List[FunctionAPIConfigOut])
+# And in media_service.py get_api_config:
+mname = "C:/AS/AIStory/backend/app/services/media_service.py"
+with open(mname, "r", encoding="utf-8") as f:
+    mtext = f.read()
+mtext = mtext.replace(
+    "try:\n                        from app.services.system_log_service import log_action",
+    "try:\n                        session.commit()\n                    except Exception:\n                        pass\n                    try:\n                        from app.services.system_log_service import log_action"
+)
 
-@router.get(\"/settings/system/api_routing_mode\")'''
-
-part1_good = '''# --- Function API Config Routes ---
-from app.schemas.settings import FunctionAPIConfigUpdate, FunctionAPIConfigOut  
-from app.models.all_models import APIRoutingConfig
-
-@router.get(\"/settings/system/api_routing_mode\")'''
-
-text = text.replace(part1_bad, part1_good)
-
-part2_bad = '''    return {\"use_function_based_routing\": conf.use_function_based_routing}      
-
-def get_all_function_api_configs('''
-part2_good = '''    return {\"use_function_based_routing\": conf.use_function_based_routing}
-
-@router.get(\"/settings/system/function_api_configs\", response_model=List[FunctionAPIConfigOut])
-def get_all_function_api_configs('''
-
-text = text.replace(part2_bad, part2_good)
-
-with open('app/api/settings.py', 'w', encoding='utf-8') as f:
+with open(fname, "w", encoding="utf-8") as f:
     f.write(text)
-print('Done!')
+
+with open(mname, "w", encoding="utf-8") as f:
+    f.write(mtext)
+print("patched")
+

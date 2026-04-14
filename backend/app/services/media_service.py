@@ -3872,9 +3872,12 @@ class MediaGenerationService:
                             target_setting = None
                             if system_api_id:
                                 for s in settings:
-                                    if s.get("system_api_id") == system_api_id:
+                                    if s.get("system_api_id") and int(s.get("system_api_id")) == int(system_api_id): 
                                         target_setting = s
                                         break
+                                if not target_setting:
+                                    # Fallback if not found in list but directly provided
+                                    target_setting = {"system_api_id": system_api_id}
                             else:
                                 # Pick highest priority
                                 sorted_settings = sorted(settings, key=lambda x: x.get('priority', 0), reverse=True)
@@ -3897,9 +3900,9 @@ class MediaGenerationService:
                                 user_setting = DummyUserSetting()
                     except Exception as e:
                         _debug_log(f"Error querying FunctionAPIConfig for function_name={function_name}: {e}", "warning")
-                
+
                 # Check for direct system_api_id parameter override (e.g. from frontend dropdowns)
-                elif system_api_id is not None:
+                if user_binding_status != "function_api_direct_route" and system_api_id is not None:
                     user_system_api_id = int(system_api_id)
                     selected_user_strategy = "unified_function_api"
                     user_setting_id = "func_based_" + getattr(category, "name", str(category))
@@ -3993,6 +3996,10 @@ class MediaGenerationService:
                         "user_system_api_id": user_system_api_id,
                         "mismatch_default": mismatch,
                     }
+                    try:
+                        session.commit()
+                    except Exception:
+                        pass
                     try:
                         from app.services.system_log_service import log_action
                         log_action(session, int(user_id), f"user_{user_id}", "API_SELECTION_TRACE", details=", ".join(f"{k}={v}" for k, v in details_payload.items()), ip_address="127.0.0.1")
@@ -4113,6 +4120,7 @@ class MediaGenerationService:
                 # Non-strict mode: use the per-user category binding first.
                 if user_setting:
                     selected_system_setting_id = int(getattr(user_setting, "system_api_id", 0) or 0)
+                    logger.info(f"[DEBUG] get_api_config | user_id={user_id} category={resolved_category} function_name={function_name} got user_setting with system_api_id={selected_system_setting_id} from {getattr(user_setting, 'id', None)}")
                     if selected_system_setting_id > 0:
                         selected_binding_deprecated = False
                         selected_by_id = self._system_setting_query(session, category=resolved_category).filter(
@@ -4134,6 +4142,7 @@ class MediaGenerationService:
                                 user_binding_status = "resolved"
                                 user_binding_detail = f"{getattr(selected_by_id, 'provider', None) or '<none>'}/{getattr(selected_by_id, 'model', None) or '<none>'}"
                                 _trace_default_vs_selected("direct_system_api_id", selected_by_id, resolved_source, "explicit_user_category_binding")
+                                logger.info(f"[DEBUG] _build_runtime_from_system_row hit! selected_by_id={selected_by_id}")
                                 return _build_runtime_from_system_row(
                                     selected_by_id,
                                     resolved_source,

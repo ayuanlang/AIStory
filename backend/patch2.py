@@ -1,212 +1,42 @@
-import os
-with open('app/api/endpoints.py', 'r', encoding='utf-8') as f:
+
+import sys
+
+with open("c:/AS/AIStory/backend/app/api/endpoints.py", "r", encoding="utf-8") as f:
     text = f.read()
 
-# 2. delete_project
-old_dp = '''    # Best-effort file cleanup after DB commit
-    try:
-        upload_root = settings.UPLOAD_DIR
-        if not os.path.isabs(upload_root):
-            upload_root = os.path.abspath(upload_root)
+old_1 = """        config = agent_service.get_active_llm_config(
+            user_id=current_user_id,
+            category="LLM","""
 
-        def _to_upload_path(url_or_path: str) -> Optional[str]:
-            if not url_or_path:
-                return None
-            raw = str(url_or_path).strip()
-            if not raw:
-                return None
+new_1 = """        try:
+            db.commit()
+        except Exception:
+            pass
+        config = agent_service.get_active_llm_config(
+            user_id=current_user_id,
+            category="LLM","""
 
-            # If it's a URL, strip scheme/host
-            try:
-                parsed = urllib.parse.urlparse(raw)
-                path_part = parsed.path if parsed.scheme else raw
-            except Exception:
-                path_part = raw
+old_2 = "        llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)"
+new_2 = """        try:
+            db.commit()
+        except Exception:
+            pass
+        llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)"""
 
-            path_part = urllib.parse.unquote(path_part)
-            path_part = path_part.lstrip("/")
+if old_1 in text:
+    text = text.replace(old_1, new_1)
+    print("Patched analyze_scene")
 
-            # Normalize common forms:
-            # - uploads/<user>/<file>
-            # - /uploads/<user>/<file>
-            # - <user>/<file> (relative already)
-            if path_part.startswith("uploads/"):
-                rel = path_part.replace("uploads/", "", 1)
-            elif "/uploads/" in path_part:
-                rel = path_part.split("/uploads/", 1)[1]
-            else:
-                rel = path_part
-
-            abs_path = os.path.abspath(os.path.join(upload_root, rel))
-            # Safety: only delete within upload_root
-            if not abs_path.startswith(upload_root):
-                return None
-            return abs_path
-
-        for u in set(candidate_urls):
-            p = _to_upload_path(u)
-            if p and os.path.exists(p) and os.path.isfile(p):
-                try:
-                    os.remove(p)
-                except Exception as fe:
-                    logger.warning(f"[delete_project] Failed to delete file {p}: {fe}")
-    except Exception as e:
-        logger.warning(f"[delete_project] File cleanup skipped/failed project_id={project_id}: {e}")
-
-    return None'''
-new_dp = '''    # Best-effort file cleanup after DB commit
-    _cleanup_media_files(candidate_urls)
-
-    return None'''
-text = text.replace(old_dp, new_dp)
-
-# 3. delete_scene
-old_ds = '''    _require_project_access(db, episode.project_id, current_user, owner_only=True)
-
-    db.delete(db_scene)
-    db.commit()
-    return None'''
-new_ds = '''    _require_project_access(db, episode.project_id, current_user, owner_only=True)
-
-    candidate_urls = []
-    shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
-    for s in shots:
-        if s.image_url: candidate_urls.append(s.image_url)
-        if s.video_url: candidate_urls.append(s.video_url)
-
-    db.delete(db_scene)
-    db.commit()
+if old_2 in text:
+    text = text.replace(old_2, new_2)
+    print("Patched ai_generate_shots")
     
-    _cleanup_media_files(candidate_urls)
-    
-    return None'''
-text = text.replace(old_ds, new_ds)
+# also patch ai_regenerate_shots just in case
+old_3 = "        llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)"
+if old_3 in text:
+    # already handled by old_2 if identical
+    pass
 
-# 4. delete_shot
-old_dsh = '''    _require_project_access(db, episode.project_id, current_user, owner_only=True)
-
-    db.delete(db_shot)
-    db.commit()
-    return {"ok": True}'''
-new_dsh = '''    _require_project_access(db, episode.project_id, current_user, owner_only=True)
-
-    candidate_urls = []
-    if db_shot.image_url: candidate_urls.append(db_shot.image_url)
-    if db_shot.video_url: candidate_urls.append(db_shot.video_url)
-
-    db.delete(db_shot)
-    db.commit()
-    
-    _cleanup_media_files(candidate_urls)
-    
-    return {"ok": True}'''
-text = text.replace(old_dsh, new_dsh)
-
-# 5. delete_entity
-old_de = '''    _require_project_access(db, entity.project_id, current_user, owner_only=True)
-
-    db.delete(entity)
-    db.commit()
-    return {"status": "success"}'''
-new_de = '''    _require_project_access(db, entity.project_id, current_user, owner_only=True)
-
-    candidate_urls = []
-    if entity.image_url: candidate_urls.append(entity.image_url)
-
-    db.delete(entity)
-    db.commit()
-    
-    _cleanup_media_files(candidate_urls)
-    
-    return {"status": "success"}'''
-text = text.replace(old_de, new_de)
-
-# 6. delete_project_entities
-old_dpe = '''    _require_project_access(db, project_id, current_user, owner_only=True)
-
-    db.query(Entity).filter(Entity.project_id == project_id).delete()    
-    db.commit()
-    return {"status": "success", "message": "All entities deleted"}'''
-new_dpe = '''    _require_project_access(db, project_id, current_user, owner_only=True)
-
-    entities = db.query(Entity).filter(Entity.project_id == project_id).all()
-    candidate_urls = [e.image_url for e in entities if e.image_url]
-
-    db.query(Entity).filter(Entity.project_id == project_id).delete()    
-    db.commit()
-    
-    _cleanup_media_files(candidate_urls)
-    
-    return {"status": "success", "message": "All entities deleted"}'''
-text = text.replace(old_dpe, new_dpe)
-
-# 7. delete_asset
-old_da = '''    # Delete file if local
-    try:
-        if asset.url and "/uploads/" in asset.url:
-            # parsing logic: /uploads/{user_id}/{filename}
-            parts = asset.url.split("/uploads/")
-            if len(parts) > 1:
-                rel_path = parts[1] # user_id/filename
-                file_path = os.path.join(settings.UPLOAD_DIR, rel_path)  
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-        elif asset.url:
-            oss_storage_service.delete_url(asset.url)
-    except Exception as e:
-        print(f"Error deleting file for asset {asset_id}: {e}")
-
-    db.delete(asset)
-    db.commit()
-    return {"status": "success"}'''
-new_da = '''    candidate_urls = []
-    if asset.url:
-        candidate_urls.append(asset.url)
-
-    db.delete(asset)
-    db.commit()
-    
-    _cleanup_media_files(candidate_urls)
-    
-    return {"status": "success"}'''
-text = text.replace(old_da, new_da)
-
-# 8. batch_delete_assets
-old_bda = '''    deleted_count = 0
-    for asset in assets:
-        # Delete file if local
-        try:
-            if asset.url and "/uploads/" in asset.url:
-                parts = asset.url.split("/uploads/")
-                if len(parts) > 1:
-                    rel_path = parts[1]
-                    file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-            elif asset.url:
-                oss_storage_service.delete_url(asset.url)
-        except Exception as e:
-            print(f"Error deleting file for asset {asset.id}: {e}")      
-
-        db.delete(asset)
-        deleted_count += 1
-
-    db.commit()
-    return {"status": "success", "deleted_count": deleted_count}'''
-new_bda = '''    candidate_urls = []
-    deleted_count = 0
-    for asset in assets:
-        if asset.url:
-            candidate_urls.append(asset.url)
-        db.delete(asset)
-        deleted_count += 1
-
-    db.commit()
-    
-    _cleanup_media_files(candidate_urls)
-    
-    return {"status": "success", "deleted_count": deleted_count}'''
-text = text.replace(old_bda, new_bda)
-
-with open('app/api/endpoints.py', 'w', encoding='utf-8') as f:
+with open("c:/AS/AIStory/backend/app/api/endpoints.py", "w", encoding="utf-8") as f:
     f.write(text)
+

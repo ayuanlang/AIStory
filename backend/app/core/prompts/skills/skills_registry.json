@@ -92,13 +92,11 @@
       "title": "Shot Generation",
       "type": "storyboard",
       "prompts": [
-        "shot_generator.txt",
-        "shot_generator_routed_base.txt",
+        "skills/shot_generation.md",
         "shot_regenerate.txt"
       ],
       "legacy_refs": [
-        "shot_generator.txt",
-        "shot_generator_routed_base.txt",
+        "skills/shot_generation.md",
         "shot_regenerate.txt"
       ]
     }

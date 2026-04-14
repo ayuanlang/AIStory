@@ -683,8 +683,9 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                 )}
 
                 <label
-                    className="absolute top-2 left-2 z-30 flex items-center justify-center w-6 h-6 rounded bg-black/60 border border-white/20 cursor-pointer shadow"
+                    className={`absolute top-2 left-2 z-30 flex items-center justify-center w-6 h-6 rounded bg-black/60 border border-white/20 cursor-pointer shadow transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                     title={t('选择场景', 'Select scene')}
+                    onClick={(e) => e.stopPropagation()}
                 >
                     <input
                         type="checkbox"
@@ -4904,7 +4905,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                             <div className="bg-amber-500/10 border border-amber-500/20 rounded p-3 text-xs text-amber-100 flex items-start gap-2">
                                 <Info size={14} className="shrink-0 mt-0.5" />
                                 <div className="space-y-1">
-                                    <div>{t('本次会复用 shot_generator.txt，并临时注入“只输出变更/新增分镜”的规则。', 'This reuses shot_generator.txt and injects temporary rules to return only changed/new shots.')}</div>
+                                    <div>{t('本次会复用 shot_generation.md，并临时注入“只输出变更/新增分镜”的规则。', 'This reuses shot_generation.md and injects temporary rules to return only changed/new shots.')}</div>
                                     <div>{t('请在下方输入你希望补充或改写的要求，例如新增镜头节奏、补拍反应镜头、增强角色动作连续性。生成完成后会自动导入到场景，并输出变化报告。', 'Enter the additional requirements below, such as adding beats, inserting reaction shots, or strengthening action continuity. After generation, the result will be auto-imported into the scene with a change report.')}</div>
                                 </div>
                             </div>

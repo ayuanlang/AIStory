@@ -2145,7 +2145,29 @@ class LLMService:
             raw_reason = f"API Error {response.status_code} [provider={provider}, model={model}, endpoint={url}, setting_id={resolved_setting_id}, source={resolved_source}]: {response.text}"
             raise Exception(self._vendor_failed_message(provider, raw_reason))
 
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception as e:
+            provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
+            resolved_setting_id = (extra_config or {}).get("__resolved_setting_id")
+            resolved_source = (extra_config or {}).get("__resolved_source")
+            human_summary = f"LLM provider '{provider}' returned an invalid JSON response (Status {response.status_code})."
+            logger.warning("%s | Exception: %s | Raw body snippet: %s", human_summary, e, response.text[:200])
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": provider,
+                "category": resolved_category,
+                "url": url,
+                "model": model,
+                "status_code": response.status_code,
+                "response_text": response.text[:2000],
+                "human_summary": human_summary,
+                "resolved_source": resolved_source,
+                "resolved_setting_id": resolved_setting_id,
+                "exception": str(e),
+            })
+            raw_reason = f"Invalid JSON response [provider={provider}, model={model}, status={response.status_code}]: {response.text[:200]}"
+            raise Exception(self._vendor_failed_message(provider, raw_reason))
+
         try:
             data["_token_limit_hints"] = self._extract_provider_limit_hints(data, response.headers)
         except Exception:

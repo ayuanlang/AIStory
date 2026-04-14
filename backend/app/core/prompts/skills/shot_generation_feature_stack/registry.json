@@ -5,12 +5,12 @@
     {
       "id": "classic",
       "title": "Classic",
-      "description": "Use legacy shot_generator.txt unchanged."
+      "description": "Use legacy shot_generation.md unchanged."
     },
     {
       "id": "routed",
       "title": "Routed",
-      "description": "Use shot_generator_routed_base.txt plus routed feature skills."
+      "description": "Use shot_generation.md plus routed feature skills."
     }
   ],
   "dimensions": [

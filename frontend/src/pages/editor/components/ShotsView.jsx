@@ -1734,17 +1734,30 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 next.video = false;
                 next.videoAt = 0;
             }
-            if (next.start || next.end || next.video) cleaned[shotId] = next;
+            if (next.start || next.end || next.video) {
+                cleaned[shotId] = next;
+                if (!generationMediaBaselineRef.current[String(shotId)]) {
+                    generationMediaBaselineRef.current[String(shotId)] = {};
+                }
+            }
         });
         setGeneratingStateByShot(cleaned);
         writeGenerationStateStorage(cleaned);
         hasHydratedGenerationStateRef.current = true;
     }, [generationStateStorageKey, readGenerationStateStorage, writeGenerationStateStorage]);
 
+    const isFirstGenerationSyncRef = useRef(true);
     useEffect(() => {
         if (!hasHydratedGenerationStateRef.current) return;
+        if (isFirstGenerationSyncRef.current) {
+            isFirstGenerationSyncRef.current = false;
+            const existing = readGenerationStateStorage();
+            if (Object.keys(generatingStateByShot || {}).length === 0 && Object.keys(existing || {}).length > 0) {
+                return;
+            }
+        }
         writeGenerationStateStorage(generatingStateByShot);
-    }, [generatingStateByShot, writeGenerationStateStorage]);
+    }, [generatingStateByShot, writeGenerationStateStorage, readGenerationStateStorage]);
 
     useEffect(() => {
         if (!activeEpisode?.id) {

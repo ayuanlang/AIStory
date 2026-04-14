@@ -3554,7 +3554,7 @@ _PROMPT_SKILL_ALIAS = {
     "script_generator_scenes.txt": "skill:script_generation/script_generator_scenes.txt",
     "script_generator_episode_script.txt": "skill:script_generation/script_generator_episode_script.txt",
     "scene_regenerate.txt": "skill:script_generation/scene_regenerate.txt",
-    "shot_generator.txt": "skill:script_generation/shot_generator.txt",
+    "shot_generator.txt": "skills/shot_generation.md",
     "shot_regenerate.txt": "shot_regenerate.txt",
     "promo_generator_global.txt": "skill:promo_generation/promo_generator_global.txt",
     "promo_generator_episode_script.txt": "skill:promo_generation/promo_generator_episode_script.txt",
@@ -3976,6 +3976,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
     Submits raw script text to LLM for Scene/Beat analysis using a specific prompt template.
     Returns the raw analysis result (Markdown/JSON).
     """
+    logger.info(f"[DEBUG] /analyze_scene received system_api_id={getattr(request, 'system_api_id', None)} async_mode={async_mode}")
     if async_mode == "1":
         dedup_key = _build_analyze_scene_dedup_key(current_user.id, request)
         now_ts = time.time()
@@ -4867,6 +4868,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         ]
 
         # Resolve LLM config from user's active setting (api_key/base_url always from system_api_settings).
+        try:
+            db.commit()
+        except Exception:
+            pass
         config = agent_service.get_active_llm_config(
             user_id=current_user_id, 
             category="LLM",
@@ -7443,7 +7448,13 @@ def _is_markdown_table_separator(line: str) -> bool:
 def _normalize_markdown_table_cells(cells: List[str], header_count: int) -> List[str]:
     if header_count <= 0:
         return []
-    vals = list(cells or [])
+    vals = []
+    import re
+    for c in (cells or []):
+        if c:
+            c = re.sub(r"(?i)<br\s*/?>", "\n", str(c)).replace("\\n", "\n").strip()
+        vals.append(c)
+
     if len(vals) < header_count:
         vals.extend([""] * (header_count - len(vals)))
         return vals
@@ -7607,17 +7618,12 @@ _SHOT_MARKDOWN_DEFAULT_HEADERS: List[str] = [
 _SHOT_REQUIRED_ROW_FIELDS: List[Tuple[str, List[str]]] = [
     ("Shot ID", ["Shot ID", "shot_id", "镜头ID"]),
     ("Shot Name", ["Shot Name", "shot_name", "镜头名称"]),
-    ("Scene ID", ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号"]),
-    ("Shot Logic (CN)", ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"]),
-    ("Start Frame", ["Start Frame", "start_frame", "起始帧"]),
+    ("Scene ID", ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场景编号"]),
+    ("Shot Logic (CN)", ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头画面逻辑说明"]),
+    ("Start Frame", ["Start Frame", "start_frame", "起始画面"]),
     ("Video Content", ["Video Content", "video_content", "视频内容"]),
     ("Duration (s)", ["Duration (s)", "Duration", "duration", "时长", "时长(s)"]),
-    ("Keyframes", ["Keyframes", "keyframes", "关键帧"]),
-    ("End Frame", ["End Frame", "end_frame", "结束帧"]),
-    ("Start Frame (CN)", ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"]),
-    ("Video Content (CN)", ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"]),
-    ("Keyframes (CN)", ["Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文"]),
-    ("End Frame (CN)", ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"]),
+    ("End Frame", ["End Frame", "end_frame", "结束画面"]),
 ]
 
 
@@ -13054,7 +13060,7 @@ class AIShotGenRequest(BaseModel):
 class AIShotRegenerateRequest(BaseModel):
     content: Optional[List[Dict[str, Any]]] = None
     additional_instructions: Optional[str] = None
-    prompt_file: Optional[str] = "shot_generator.txt"
+    prompt_file: Optional[str] = "skills/shot_generation.md"
     shot_generation_mode: Optional[str] = None
     shot_generation_features: Optional[Dict[str, Any]] = None
     function_name: Optional[str] = None
@@ -13566,13 +13572,15 @@ def _build_shot_prompts(
             script_text=core_goal_text,
             mode=effective_mode,
         )
-        base_prompt_file = str(feature_bundle.get("base_prompt_file") or "shot_generator.txt")
+        base_prompt_file = str(feature_bundle.get("base_prompt_file") or "skills/shot_generation.md")
         system_prompt = _resolve_prompt_text(base_prompt_file)
         if feature_bundle.get("enabled"):
             system_prompt = render_shot_generation_routed_prompt(system_prompt, feature_bundle)
     except Exception as e:
         logger.error(f"Failed to load shot generation prompt stack: {e}")
-        raise HTTPException(status_code=500, detail="Shot generation prompt stack could not be loaded.")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Shot generation prompt stack could not be loaded: {str(e)}")
 
     # Environment Context is now a separate field in the table
 
@@ -14432,6 +14440,10 @@ async def ai_generate_shots(
         function_name = getattr(req, "function_name", None) if req else None
         system_api_id = getattr(req, "system_api_id", None) if req else None
 
+        try:
+            db.commit()
+        except Exception:
+            pass
         llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)
         if not llm_config:
             logger.error(f"[ai_generate_shots] missing_llm_config scene_id={scene_id} user_id={current_user_id}")
@@ -14709,9 +14721,9 @@ async def ai_regenerate_shots(
                 status_code=400,
             )
 
-        prompt_filename = str((req.prompt_file if req else "") or "shot_generator.txt").strip() or "shot_generator.txt"
+        prompt_filename = str((req.prompt_file if req else "") or "skills/shot_generation.md").strip() or "skills/shot_generation.md"
         try:
-            if prompt_filename != "shot_generator.txt":
+            if prompt_filename != "skills/shot_generation.md":
                 system_prompt = _resolve_prompt_text(prompt_filename)
                 _, base_user_prompt = _build_shot_prompts(db, scene, project)
                 user_input = (
@@ -14735,6 +14747,10 @@ async def ai_regenerate_shots(
         function_name = getattr(req, "function_name", None) if req else None
         system_api_id = getattr(req, "system_api_id", None) if req else None
 
+        try:
+            db.commit()
+        except Exception:
+            pass
         llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)
         if not llm_config:
             raise HTTPException(status_code=400, detail="No active LLM config")

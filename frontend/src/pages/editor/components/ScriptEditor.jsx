@@ -184,6 +184,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+    const [subjectIndexText, setSubjectIndexText] = useState('');
+    const [isEditingSubjectIndex, setIsEditingSubjectIndex] = useState(false);
+    const [isRetryingPhase2, setIsRetryingPhase2] = useState(false);
     const [systemPrompt, setSystemPrompt] = useState('');
     const [userPrompt, setUserPrompt] = useState('');
     const [isSuperuser, setIsSuperuser] = useState(false);
@@ -192,6 +195,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         isSuperuserRef.current = isSuperuser;
     }, [isSuperuser]);
+
+    useEffect(() => {
+        if (!activeEpisode) return;
+        const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode.ai_scene_analysis_result || '';
+        if (authoritativeSubjectText) {
+            let extractedText = "";
+            const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
+            if (dashMatch && dashMatch[1].trim()) {
+                extractedText = dashMatch[1].trim();
+            } else {
+                const match = authoritativeSubjectText.match(/(?:###?|##)\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
+                if (match) {
+                    extractedText = match[0];
+                } else {
+                    extractedText = authoritativeSubjectText;
+                }
+            }
+
+            if (extractedText !== activeEpisode.ai_scene_analysis_subject_index) {
+                setSubjectIndexText(extractedText);
+                updateEpisode(activeEpisode.id, { 
+                    ai_scene_analysis_subject_index: extractedText 
+                }).catch(err => console.log('Auto-update Subject Index failed.', err));
+            } else if (extractedText && !subjectIndexText) {
+                setSubjectIndexText(extractedText);
+            }
+        }
+    }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.id]);
 
     const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
     const [subjectConsistencyResultText, setSubjectConsistencyResultText] = useState('');
@@ -2640,6 +2671,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setRawContent('');
         }
 
+        setSubjectIndexText(activeEpisode?.ai_scene_analysis_subject_index || '');
         setAnalysisAttentionNotes(String(activeEpisode?.episode_info?.analysis_attention_notes || ''));
         setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
         setCoreCoverageResultText(String(activeEpisode?.episode_info?.core_coverage_check_result || ''));
@@ -3120,6 +3152,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else {
                 subjectIndexText = authoritativeSubjectText;
                 onLog?.(`[Asset Gen Tracking] Failed to find Subject Index header or dashes! Using fallback full text for asset generation.`, 'warning');
+            }
+        }
+
+        // Phase 2 Preparation: Save extracted subjectIndexText to episode and set UI state
+        if (subjectIndexText.trim()) {
+            setSubjectIndexText(subjectIndexText);
+            try {
+                await updateEpisode(activeEpisode.id, { 
+                    ai_scene_analysis_subject_index: subjectIndexText 
+                });
+                onLog?.(`[Phase 2] Saved ai_scene_analysis_subject_index (length: ${subjectIndexText.length})`);
+            } catch (error) {
+                onLog?.(`[Phase 2] Warning: Failed to save subject index to episode: ${error.message}`);
             }
         }
 
@@ -5195,6 +5240,58 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
+
+    const handleRetryPhase2 = async () => {
+        if (!activeEpisode?.id) return;
+        setIsRetryingPhase2(true);
+        try {
+            onLog?.('Retrying Phase 2 (Asset Generation)...', 'process');
+            // Re-run the second pass with the (potentially edited) subjectIndexText
+            // It will also bust deduplication cache by using sceneAnalysisMode = "2_pass_generate_assets" internally
+            const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(
+                analysisUiReport?.importReport || {},
+                subjectIndexText
+            );
+            
+            // Update the UI report with the new asset counts
+            if (analysisUiReport && typeof analysisUiReport === 'object') {
+                const newImportReport = {
+                    ...analysisUiReport.importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                };
+                
+                setAnalysisUiReport(prev => ({
+                    ...prev,
+                    importReport: newImportReport,
+                }));
+                
+                const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+                const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+                const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+                const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+                
+                setAnalysisFlowStatus({
+                    phase: 'completed',
+                    message: postImportMissingItems > 0
+                        ? (
+                            postImportSupplementFailed > 0
+                                ? t(`重试分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充成功 ${postImportSupplementCreated} 项、失败 ${postImportSupplementFailed} 项、跳过 ${postImportSupplementSkipped} 项。`, `Retry completed: ${postImportMissingItems} missing entities detected. Supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                                : t(`重试分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充 ${postImportSupplementCreated} 项（跳过 ${postImportSupplementSkipped} 项）。`, `Retry completed: ${postImportMissingItems} missing entities detected. Supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                        )
+                        : t('重试分析完成：未检测到实体缺失，流程已结束。', 'Retry completed: no missing entities detected, workflow finished.'),
+                });
+                
+                onLog?.('Phase 2 Asset Generation Retry Completed.', 'success');
+            }
+        } catch (error) {
+            console.error("Retry Phase 2 failed:", error);
+            onLog?.(`Retry Phase 2 failed: ${error.message || String(error)}`, 'error');
+            alert(`Retry Phase 2 failed: ${error.message}`);
+        } finally {
+            setIsRetryingPhase2(false);
+        }
+    };
+
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
     return (
@@ -5414,6 +5511,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     * {t('如果不满意，也可以在刚才的“补充说明”写清要求，点击下方的“修改并重跑分析”。', 'Not satisfied? Add notes below and click "Refine" to try again.')}
                                 </div>
                             </div>
+                            
+                            
                         </div>
                     )}
                 </div>
@@ -5765,6 +5864,68 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 onChange={(e) => handleLlmRawContentChange(e.target.value)}
                                 onBlur={handleSaveLlmRawContent}
                             />
+
+                            <div className="rounded-lg border border-white/10 bg-black/20 p-4 mt-4">
+                                <div className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">
+                                    📋 {t('Phase 2 Subject Index', 'Phase 2 Subject Index')}
+                                </div>
+                                <div className="space-y-3">
+                                    <textarea 
+                                        className="w-full h-32 p-3 bg-black/30 border border-white/10 rounded-md text-white/80 font-mono text-xs resize-none focus:outline-none focus:border-white/20"
+                                        value={subjectIndexText}
+                                        onChange={(e) => {
+                                            if (isEditingSubjectIndex) {
+                                                setSubjectIndexText(e.target.value);
+                                            }
+                                        }}
+                                        readOnly={!isEditingSubjectIndex}
+                                        placeholder={t('在这里粘贴或编辑 Subject Index 用于第二阶段...', 'Paste or edit Subject Index here for Phase 2...')}
+                                    />
+                                    <div className="flex gap-2">
+                                        <button
+                                                onClick={() => setIsEditingSubjectIndex(!isEditingSubjectIndex)}
+                                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/50 text-blue-300"
+                                            >
+                                                {isEditingSubjectIndex ? t('完成编辑', 'Done') : t('修改', 'Edit')}
+                                            </button>
+                                            {isEditingSubjectIndex && (
+                                                <button
+                                                    onClick={async () => {
+                                                        try {
+                                                            await updateEpisode(activeEpisode.id, { 
+                                                                ai_scene_analysis_subject_index: subjectIndexText 
+                                                            });
+                                                            onLog?.('Subject Index saved successfully');
+                                                            setIsEditingSubjectIndex(false);
+                                                        } catch (error) {
+                                                            onLog?.(`Failed to save Subject Index: ${error.message}`);
+                                                        }
+                                                    }}
+                                                    className="px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-300"
+                                                >
+                                                    {t('保存', 'Save')}
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={handleRetryPhase2}
+                                                disabled={isRetryingPhase2}
+                                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                            >
+                                                {isRetryingPhase2 ? (
+                                                    <>
+                                                        <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                                                        {t('正在重试...', 'Retrying...')}
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <RefreshCw className="w-3 h-3 flex-shrink-0" />
+                                                        {t('重试第二阶段(资产生成)', 'Retry Phase 2')}
+                                                    </>
+                                                )}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
                         </div>
                     </div>
                 </div>

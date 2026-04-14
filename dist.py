@@ -1,6 +1,6 @@
 import os
 
-file_path = "backend/app/core/prompts/shot_generator.txt"
+file_path = "backend/app/core/prompts/skills/shot_generation.md"
 with open(file_path, "r", encoding="utf-8") as f:
     lines = f.readlines()
 
