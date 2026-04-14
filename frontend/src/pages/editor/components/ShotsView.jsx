@@ -464,9 +464,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+    const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
     const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
-    const [isManualRebindingMedia, setIsManualRebindingMedia] = useState(false);
     const [stoppingVideoByShot, setStoppingVideoByShot] = useState({});
     const [translatingPromptField, setTranslatingPromptField] = useState('');
     const [batchProgress, setBatchProgress] = useState({
@@ -4057,36 +4057,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         syncShotMediaRuntimeState,
     ]);
 
-    const handleManualRebindMediaSlots = useCallback(async () => {
-        if (!projectId || !activeEpisode?.id || isManualRebindingMedia) return;
-
-        setIsManualRebindingMedia(true);
-        try {
-            const payload = {
-                project_id: Number(projectId),
-                episode_id: Number(activeEpisode.id),
-                limit: 10000,
-            };
-
-            if (selectedSceneId && selectedSceneId !== 'all') {
-                payload.scene_id = Number(selectedSceneId);
-            }
-
-            const res = await rebindShotMediaAssets(payload);
-            const rebound = Number(res?.bound || 0);
-            const updatedShots = Number(res?.updated_shots || 0);
-            onLog?.(
-                `Media rebind finished: bound ${rebound}, updated shots ${updatedShots}, scanned ${Number(res?.scanned || 0)}.`,
-                rebound > 0 ? 'success' : 'info'
-            );
-            await refreshShots();
-        } catch (e) {
-            onLog?.(`Media rebind failed: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-        } finally {
-            setIsManualRebindingMedia(false);
-        }
-    }, [projectId, activeEpisode?.id, selectedSceneId, isManualRebindingMedia, onLog, refreshShots]);
-
     const setEditingShotTechField = useCallback((key, value) => {
         setEditingShot((prev) => {
             if (!prev) return prev;
@@ -4293,6 +4263,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [editingShot, getEditingShotTech, localKeyframes, onLog, setLocalKeyframes, t]);
 
     useEffect(() => {
+        // Runs rebindShotMediaAssets automatically when an episode is activated
         if (!projectId || !activeEpisode?.id) return;
         const key = `${projectId}:${activeEpisode.id}`;
         if (mediaRebindAttemptedRef.current === key) return;
@@ -4304,12 +4275,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const res = await rebindShotMediaAssets({
                     project_id: Number(projectId),
                     episode_id: Number(activeEpisode.id),
-                    limit: 5000,
+                    limit: 10000,
                 });
 
                 const rebound = Number(res?.bound || 0);
-                if (rebound > 0 && !cancelled) {
-                    onLog?.(`Recovered ${rebound} historical media-slot links.`, 'success');
+                const updatedShots = Number(res?.updated_shots || 0);
+                if (!cancelled && (rebound > 0 || updatedShots > 0)) {
+                    onLog?.(`Recovered ${rebound} historical media-slot links. Updated ${updatedShots} shots.`, 'success');
                     await refreshShots();
                 }
             } catch (e) {
@@ -7075,8 +7047,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [activeEpisode?.episode_number, activeEpisode?.title, activeEpisode?.id, sceneCodeById]);
 
     const sortedShots = useMemo(() => {
-        return [...(shots || [])];
-    }, [shots]);
+        return [...(shots || [])].sort((a, b) => {
+            const keyA = getShotHierarchyKey(a);
+            const keyB = getShotHierarchyKey(b);
+            return keyA.localeCompare(keyB, undefined, { numeric: true, sensitivity: 'base' });
+        });
+    }, [shots, getShotHierarchyKey]);
 
     const selectedShotIdSet = useMemo(
         () => new Set((selectedShotIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
@@ -7207,43 +7183,59 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         >
                             {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
                         </button>
-                        <div className="relative inline-flex items-center ml-2 border border-white/20 rounded overflow-hidden">
-                             <button
-                                onClick={handleManualRebindMediaSlots}
-                                disabled={isManualRebindingMedia || isBatchGenerating || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${isManualRebindingMedia ? 'bg-white/20 text-white/80 cursor-wait' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('手动回填历史媒体关联（只补空槽位）', 'Manual historical media rebind (fills empty slots only)')}
-                            >
-                                {isManualRebindingMedia ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3"/>}
-                                <span>{t('回填', 'Rebind')}</span>
-                            </button>
-                             <button 
-                                onClick={handleBatchGenerate}
-                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                title={t('批量生成缺失的起始/结束帧', 'Batch Generate Missing Start/End Frames')}
-                            >
-                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('补帧', 'Frames')}</span>
-                            </button>
-                            <button 
-                                onClick={handleBatchGenerateJointDiptych}
-                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                title={t('按镜头批量执行首尾联生', 'Batch Generate Joint Start/End Diptychs')}
-                            >
-                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <PanelsTopLeft className="w-3 h-3"/>}
-                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('首尾联生', 'Joint')}</span>
-                            </button>
-                            <button 
-                                onClick={handleBatchGenerateVideo}
-                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
-                                className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                title={t('批量生成视频（仅处理已有首尾帧且当前无视频的镜头）', 'Batch Generate Videos (only shots with existing start/end frames and no current video)')}
-                            >
-                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Film className="w-3 h-3"/>}
-                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('视频', 'Video')}</span>
-                            </button>
+                        <div className="relative inline-flex items-center ml-2 border border-white/20 rounded bg-transparent">
+                            <div className="relative flex items-center">
+                                <button 
+                                    onClick={handleBatchGenerate}
+                                    disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                    className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                    title={t('批量生成缺失的起始/结束帧', 'Batch Generate Missing Start/End Frames')}
+                                >
+                                    {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                    <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('批量生成镜头', 'Batch Gen Shots')}</span>
+                                </button>
+                                <button 
+                                    onClick={() => setIsBatchMenuOpen(!isBatchMenuOpen)}
+                                    disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                    className={`px-1.5 py-1.5 text-xs flex items-center transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                >
+                                    <ChevronDown className="w-3 h-3" />
+                                </button>
+                                
+                                {isBatchMenuOpen && (
+                                    <>
+                                        <div 
+                                            className="fixed inset-0 z-40"
+                                            onClick={() => setIsBatchMenuOpen(false)}
+                                        />
+                                        <div className="absolute top-full left-0 mt-1 w-48 bg-[#1e1e1e] border border-white/20 rounded shadow-xl z-50 overflow-hidden text-white dropdown-menu-container">
+                                            <button
+                                                onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerate(); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
+                                            >
+                                                <Wand2 className="w-3 h-3 text-muted-foreground"/>
+                                                {t('首尾帧依次 (默认)', 'Sequential Start/End')}
+                                            </button>
+                                            <button
+                                                onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateJointDiptych(); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
+                                            >
+                                                <PanelsTopLeft className="w-3 h-3 text-muted-foreground"/>
+                                                {t('首尾联生', 'Joint Start/End Diptych')}
+                                            </button>
+                                            <button
+                                                onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateVideo(); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
+                                                title={t('仅处理已有首尾帧且当前无视频的镜头', 'Only shots with existing start/end frames and no current video')}
+                                            >
+                                                <Film className="w-3 h-3 text-muted-foreground"/>
+                                                {t('视频', 'Video')}
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
                             {isBatchGenerating && (
                                 <button
                                     onClick={handleStopShotBatch}
@@ -7358,7 +7350,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                         {shot.shot_id}
                                     </div>
                                     <label
-                                        className="absolute top-2 right-2 z-20 flex items-center justify-center w-5 h-5 rounded bg-black/60 border border-white/30 shadow"
+                                        className={`absolute top-2 right-2 z-20 flex items-center justify-center w-5 h-5 rounded bg-black/60 border border-white/30 shadow transition-opacity ${selectedShotIdSet.has(Number(shot.id)) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                                         onClick={(e) => e.stopPropagation()}
                                         title={t('选择镜头', 'Select shot')}
                                     >
@@ -7472,9 +7464,18 @@ const isCroppingThisShot = !!(shotState.cropping);
                         )}
 
                         <div className="p-3 sm:p-4 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 sticky top-0 bg-[#09090b] z-10">
-                            <h3 className="font-bold text-lg flex items-center gap-2">
+                            <h3 className="font-bold text-lg flex flex-wrap items-center gap-2">
                                 {t('编辑镜头', 'Edit Shot')} {editingShot.shot_id}
                                 {editingShot.shot_name && <span className="text-base font-normal text-muted-foreground">- {editingShot.shot_name}</span>}
+                                <div className="flex items-center gap-1 ml-2 md:gap-2">
+                                    <label className="text-xs font-normal text-muted-foreground">Duration(s):</label>
+                                    <input 
+                                        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-sm font-normal text-white focus:border-primary/50 focus:outline-none w-16" 
+                                        value={editingShot.duration || ''} 
+                                        onChange={e => setEditingShot({...editingShot, duration: e.target.value})}
+                                        placeholder="e.g. 5"
+                                    />
+                                </div>
                             </h3>
                             <div className="flex items-center gap-2">
                                 <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型', 'Image Model')} />
@@ -8318,83 +8319,8 @@ const isCroppingThisShot = !!(shotState.cropping);
                                 {/* Association Tags Input Removed as requested */}
                             </div>
 
-                            {/* Metadata */}
-                            <div className="space-y-3 pt-4 border-t border-white/10">
-                                <div className="flex items-center justify-between gap-2">
-                                    <h4 className="text-sm font-bold text-primary flex items-center gap-2">
-                                        <Info className="w-4 h-4" />
-                                        {t('扩展列（导入入库）', 'Extra Columns (Imported)')}
-                                    </h4>
-                                    <button
-                                        onClick={() => {
-                                            const next = { ...(editingShotExtraColumns || {}) };
-                                            let seed = 1;
-                                            while (Object.prototype.hasOwnProperty.call(next, `extra_col_${seed}`)) seed += 1;
-                                            next[`extra_col_${seed}`] = '';
-                                            setEditingShotExtraColumns(next);
-                                        }}
-                                        className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded flex items-center gap-1"
-                                    >
-                                        <Plus className="w-3 h-3" /> {t('新增列', 'Add Column')}
-                                    </button>
-                                </div>
 
-                                {Object.keys(editingShotExtraColumns || {}).length === 0 ? (
-                                    <div className="text-xs text-muted-foreground bg-black/20 border border-white/10 rounded p-3">
-                                        {t('暂无扩展列。若 markdown 中有新增列，导入后会出现在这里并可编辑。', 'No extra columns yet. If markdown contains new columns, they will appear here and be editable.')}
-                                    </div>
-                                ) : (
-                                    <div className="space-y-2">
-                                        {Object.entries(editingShotExtraColumns || {}).map(([k, v]) => (
-                                            <div key={`extra-col-${k}`} className="grid grid-cols-[minmax(180px,1fr)_minmax(320px,2fr)_auto] gap-2 items-start">
-                                                <input
-                                                    className="bg-black/20 border border-white/10 rounded p-2 text-xs"
-                                                    value={k}
-                                                    onChange={(e) => {
-                                                        const nextKey = String(e.target.value || '').trim();
-                                                        const current = { ...(editingShotExtraColumns || {}) };
-                                                        const curVal = current[k];
-                                                        delete current[k];
-                                                        if (nextKey) {
-                                                            current[nextKey] = curVal;
-                                                        }
-                                                        setEditingShotExtraColumns(current);
-                                                    }}
-                                                    placeholder={t('列名', 'Column Name')}
-                                                />
-                                                <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                    className="bg-black/20 border border-white/10 rounded p-2 text-xs min-h-[60px]"
-                                                    value={String(v ?? '')}
-                                                    onChange={(e) => {
-                                                        const current = { ...(editingShotExtraColumns || {}) };
-                                                        current[k] = e.target.value;
-                                                        setEditingShotExtraColumns(current);
-                                                    }}
-                                                    placeholder={t('列值', 'Column Value')}
-                                                />
-                                                <button
-                                                    onClick={() => {
-                                                        const current = { ...(editingShotExtraColumns || {}) };
-                                                        delete current[k];
-                                                        setEditingShotExtraColumns(current);
-                                                    }}
-                                                    className="p-2 hover:bg-red-500/20 text-muted-foreground hover:text-red-400 rounded"
-                                                    title={t('删除列', 'Delete Column')}
-                                                >
-                                                    <Trash2 className="w-4 h-4" />
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10 text-xs text-muted-foreground">
-                                <InputGroup label="Shot Number" value={editingShot.shot_id} onChange={(v) => { setEditingShot({...editingShot, shot_id: v}) }} />
-                                <InputGroup label="Duration (s)" value={editingShot.duration} onChange={v => setEditingShot({...editingShot, duration: v})} />
-                            </div>
-
-                            <button 
+                            <button
                                 onClick={async () => {
                                     try {
                                         await updateShot(editingShot.id, editingShot);

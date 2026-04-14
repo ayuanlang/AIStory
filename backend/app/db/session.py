@@ -13,7 +13,7 @@ _logger = logging.getLogger(__name__)
 is_sqlite = "sqlite" in settings.DATABASE_URL
 
 engine_kwargs = {
-    "connect_args": {"check_same_thread": False} if is_sqlite else {},
+    "connect_args": {"check_same_thread": False, "timeout": 30} if is_sqlite else {},
 }
 
 if not is_sqlite:
