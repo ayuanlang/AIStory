@@ -425,19 +425,6 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             availableShots.forEach(s => {
                 addSynth(s.image_url, { shot_id: s.id, project_id: projectId }, 'image');
                 addSynth(s.video_url, { shot_id: s.id, project_id: projectId }, 'video');
-                
-                try {
-                    const notes = typeof s.technical_notes === 'string' ? JSON.parse(s.technical_notes || '{}') : (s.technical_notes || {});
-                    if (Array.isArray(notes.ref_image_urls)) {
-                        notes.ref_image_urls.forEach(u => addSynth(u, { shot_id: s.id, project_id: projectId }, 'image'));
-                    }
-                    if (Array.isArray(notes.end_ref_image_urls)) {
-                        notes.end_ref_image_urls.forEach(u => addSynth(u, { shot_id: s.id, project_id: projectId }, 'image'));
-                    }
-                    if (Array.isArray(notes.video_ref_image_urls)) {
-                        notes.video_ref_image_urls.forEach(u => addSynth(u, { shot_id: s.id, project_id: projectId }, 'image'));
-                    }
-                } catch(err) {}
             });
         }
 
@@ -508,10 +495,24 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             const params = {};
             if (projectId) params.project_id = projectId;
             
-            const data = await fetchAssets(params);
+            const [data, refsPayload] = await Promise.all([
+                fetchAssets(params),
+                fetchUnreferencedAssetIds({ project_id: projectId }) // scope optimization
+            ]);
 
-            // Allow all assets to be selectable, removing the previous overzealous unreferenced AI-asset exclusion
-            setAllCleanData(data || []); // Save clean version to memory
+            const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
+
+            // Step 1: Clean list to EXCLUDE historical/unreferenced generated assets
+            const cleanData = ((data || []) ).filter(a => {
+                const meta = a.meta_info || {};
+                const isGenerated = meta.provider || meta.prompt || meta.source === 'ai_generation';
+                if (isGenerated) {
+                    return referencedSet.has(String(a.id)); // Must be active  
+                }
+                return true; // Keep manual standalone uploads
+            });
+
+            setAllCleanData(cleanData); // Save clean version to memory
         } catch (error) {
             console.error(error);
         } finally {
