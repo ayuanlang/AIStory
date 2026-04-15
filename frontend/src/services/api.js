@@ -394,11 +394,11 @@ export const deleteMontageResult = async (projectId, url) => {
 };
 
 const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
-    const parsed = Number(import.meta?.env?.VITE_VIDEO_JOB_TIMEOUT_MS || 10 * 60 * 1000);
+    const parsed = Number(import.meta?.env?.VITE_VIDEO_JOB_TIMEOUT_MS || 15 * 60 * 1000);
     if (!Number.isFinite(parsed) || parsed <= 0) {
-        return 10 * 60 * 1000;
+        return 15 * 60 * 1000;
     }
-    return Math.min(10 * 60 * 1000, Math.max(60 * 1000, parsed));
+    return Math.min(15 * 60 * 1000, Math.max(60 * 1000, parsed));
 })();
 
 const IMAGE_STATUS_MAX_CONCURRENT = (() => {
@@ -530,7 +530,7 @@ const normalizeVideoJobTimeoutMs = (value) => {
     if (!Number.isFinite(parsed) || parsed <= 0) {
         return VIDEO_JOB_TIMEOUT_MS_DEFAULT;
     }
-    return Math.min(10 * 60 * 1000, Math.max(60 * 1000, parsed));
+    return Math.min(15 * 60 * 1000, Math.max(60 * 1000, parsed));
 };
 
 const buildApiErrorMessage = (error) => {
@@ -1901,6 +1901,9 @@ export const getGenerationJobPool = async (params = {}) => {
 };
 
 export const stopGenerationJob = async (kind, jobId, { force = false } = {}) => {
+    if (kind === 'image' || kind === 'all') {
+        imageSubmitIdempotencyCache.clear();
+    }
     const response = await api.post(`/generate/jobs/${kind}/${jobId}/stop`, null, {
         params: force ? { force: true } : undefined,
     });
@@ -1908,11 +1911,17 @@ export const stopGenerationJob = async (kind, jobId, { force = false } = {}) => 
 };
 
 export const deleteGenerationJob = async (kind, jobId) => {
-    const response = await api.delete(`/generate/jobs/${kind}/${jobId}`);
+    if (kind === 'image' || kind === 'all') {
+        imageSubmitIdempotencyCache.clear();
+    }
+    const response = await api.delete(`/generate/jobs/${kind}/${jobId}`);       
     return response?.data || {};
 };
 
 export const stopAllGenerationJobs = async (kind = 'all', { force = false } = {}) => {
+    if (kind === 'image' || kind === 'all') {
+        imageSubmitIdempotencyCache.clear();
+    }
     const response = await api.post('/generate/jobs/stop-all', null, {
         params: force ? { kind, force: true } : { kind },
     });

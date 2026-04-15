@@ -482,7 +482,7 @@ VIDEO_JOB_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_video_jobs")
 VIDEO_JOB_TASKS: Dict[str, Any] = {}
 
 IMAGE_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("IMAGE_JOB_MAX_RUNNING_SECONDS", "900")))
-VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SECONDS", "1200")))
+VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SECONDS", "900")))
 
 GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
 GENERATION_CALLBACK_LOCK = threading.Lock()
