@@ -362,7 +362,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (prevPhase === 'completed' || prevPhase === 'warning' || prevPhase === 'failed') return prev;
                 return {
                     phase: 'completed',
-                    message: prevMessage || t('深度拆解与自动构建已完美收官！请移步工作台检阅分镜详情。', 'Analysis and import completed.'),
+                    message: prevMessage || t('🎉 剧本分析与场景构建已完成，快来看看吧！', 'Analysis and import completed.'),
                 };
             }
 
@@ -405,7 +405,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return '';
         }
         if (normalized === 'ANALYSIS_LLM_CALL_FAILED_RETRIED') {
-            return t('剧本分析过程中出现过 LLM 调用失败，系统已自动重试/回退模型继续执行。请关注分析结果与告警详情。', 'LLM call failures occurred during scene analysis; the system retried/fallback to continue. Please review result details and warnings.');
+            return t('生成期间 AI 走神了一小下，不过我们已经帮您自动重连啦。请稍微留意一下最终的报告详情哦。', 'LLM call failures occurred during scene analysis; the system retried/fallback to continue. Please review result details and warnings.');
         }
         return '';
     }, [t]);
@@ -1643,7 +1643,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             running: true,
             action: 'subject_consistency',
             progress: 35,
-            message: t('即将完成！正在为您进行最终的实体逻辑校验与角色一致性排查...', 'Checking subject consistency...'),
+            message: t('✅ 即将完成！最后为您核对一下角色和道具...', 'Checking subject consistency...'),
         });
         try {
             const report = runSubjectConsistencyCheck();
@@ -1655,8 +1655,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 action: 'subject_consistency',
                 progress: 100,
                 message: report?.ok
-                    ? t('Subject 一致性检查通过。', 'Subject consistency check passed.')
-                    : t('Subject 一致性检查完成，发现告警。', 'Subject consistency check completed with warnings.'),
+                    ? t('出场名单核对无误！', 'Subject consistency check passed.')
+                    : t('出场名单核对完啦，不过发现了几个小问题。', 'Subject consistency check completed with warnings.'),
             });
             setTimeout(() => {
                 setWorkspaceOpStatus(prev => (prev.action === 'subject_consistency' ? { running: false, action: '', progress: 0, message: '' } : prev));
@@ -1787,7 +1787,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             running: true,
             action: 'import_entities',
             progress: 20,
-            message: t('素材同步：正在为您分选核心角色与场景，自动并入当前项目素材引擎...', 'Importing entities...'),
+            message: t('🎨 正在提炼剧本里的核心角色与场景...', 'Importing entities...'),
         });
         try {
             const ok = await doImportText(JSON.stringify(payload, null, 2), 'json');
@@ -2053,7 +2053,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             running: true,
             action: 'core_coverage',
             progress: 30,
-            message: t('正在校验 Core 覆盖...', 'Checking core coverage...'),
+            message: t('🔍 正在检查重要剧情是否都已涵盖...', 'Checking core coverage...'),
         });
         if (!suppressLog && onLog) {
             onLog(`Core coverage source selected: ${sourceLabel || 'unknown'}`, 'info');
@@ -2080,8 +2080,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 action: 'core_coverage',
                 progress: 100,
                 message: report.isCovered
-                    ? t('Core 覆盖检查通过。', 'Core coverage check passed.')
-                    : t('Core 覆盖检查完成，发现缺失。', 'Core coverage check completed with uncovered points.'),
+                    ? t('剧情要点已全部包含，完美！', 'Core coverage check passed.')
+                    : t('剧情核对完成，好像漏掉了一些细节。', 'Core coverage check completed with uncovered points.'),
             });
             setTimeout(() => {
                 setWorkspaceOpStatus(prev => (prev.action === 'core_coverage' ? { running: false, action: '', progress: 0, message: '' } : prev));
@@ -2125,7 +2125,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onSwitchToScenes();
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: t('检查结果已确认，已切换到 Scenes。', 'Check results confirmed, switched to Scenes.'),
+                message: t('已自动帮您切换到场景表，请根据刚才的检查结果进行微调。', 'Check results confirmed, switched to Scenes.'),
             });
         }
         setPendingSwitchAfterPostChecks(false);
@@ -2145,7 +2145,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onSwitchToScenes();
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: t('已切换到 Scenes，请按检查结果修改内容。', 'Switched to Scenes. Update content based on check results.'),
+                message: t('已自动帮您切换到场景表，请根据刚才的检查结果进行微调。', 'Switched to Scenes. Update content based on check results.'),
             });
         }
         if (onLog) onLog('Post-check action: switched to Scenes for manual fixes.', 'info');
@@ -2155,7 +2155,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setPostAnalysisCheckModal({
             open: true,
             status: 'running',
-            message: t('正在自动执行检查：Subject 一致性...', 'Running check: Subject Consistency...'),
+            message: t('🧹 正在检查角色和场景名称是否前后一致...', 'Running check: Subject Consistency...'),
             guidance: [],
         });
 
@@ -2163,8 +2163,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const passedSubject = Boolean(subjectReport?.ok);
         const summary = passedSubject
-            ? t('Subject 一致性检查已完成且通过。请先观察结果，再关闭窗口继续。', 'Subject consistency check completed and passed. Review the result, then close this dialog to continue.')
-            : t('Subject 一致性检查已完成。请先观察结果（含告警），再关闭窗口继续。', 'Subject consistency check completed. Review the result (including warnings), then close this dialog to continue.');
+            ? t('登场角色和道具核对完全一致！您可以放心关掉此窗口继续啦。', 'Subject consistency check completed and passed. Review the result, then close this dialog to continue.')
+            : t('登场角色和道具核对完毕。有几个地方需要您瞧瞧，确认后关掉窗口就行。', 'Subject consistency check completed. Review the result (including warnings), then close this dialog to continue.');
 
         const guidance = [];
         if (!passedSubject) {
@@ -2361,7 +2361,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'saving_scenes',
-                message: t('推演完成：已成功获取 AI 的导演级解析框架，正在为您结构化导入至工作台...', 'LLM response received, auto-importing...'),
+                message: t('🎬 AI导演已交稿，正在为您排版整理...', 'LLM response received, auto-importing...'),
             });
 
             if (onLog) onLog('Auto-importing analysis result...', 'process');       
@@ -2982,7 +2982,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!taskId) {
             setAnalysisFlowStatus({
                 phase: 'warning',
-                message: t('当前没有正在运行的分镜推演任务需要被终止。', 'No running analysis task found to stop.'),
+                message: t('当前没有正在运行的场景推演任务需要被终止。', 'No running analysis task found to stop.'),
             });
             return;
         }
@@ -3180,7 +3180,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatus({
             phase: "generating_assets",
-            message: t("正在根据 Subject Index 生成设计资产...", "Generating design assets from Subject Index..."),
+            message: t("✨ 正在为您生成对应的人物和场景资产...", "Generating design assets from Subject Index..."),
         });
 
         try {
@@ -3370,7 +3370,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisStopRequestedRef.current = false;
         setAnalysisFlowStatus({
             phase: 'analyzing',
-            message: t('业务恢复：识别到您正在进行中的AI分镜进度，正在为您恢复现场...', 'Detected an in-progress analysis task, reconnecting...'),
+            message: t('🔄 发现有个没完成的场景任务，接着帮您做完...', 'Detected an in-progress analysis task, reconnecting...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -4622,7 +4622,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
             phase: 'autosaving',
-            message: t('护航：正在为您实时安全上链剧本进度...', 'Auto-saving script...'),
+            message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -4660,7 +4660,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('AI 收到您的要求，正为您深度推演分镜结构。此过程涉及海量结构重塑与多维推理，可能需要 3~4 分钟，您可以喝口咖啡稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
@@ -4688,11 +4688,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.llmReturnedAt = Date.now();
             setAnalysisFlowStatus({
                 phase: 'processing_output_workspace',
-                message: t('LLM 已返回：正在保存原始返回并填写分析输出工作区（Output Workspace）...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
+                message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
             });
             setAnalysisFlowStatus({
                 phase: 'processing_output_workspace',
-                message: t('LLM 已返回：正在保存原始返回并填写分析输出工作区（Output Workspace）...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
+                message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
             });
 
             if (result && result.meta) {
@@ -4756,7 +4756,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
                 phase: 'saving_scenes',
-                message: t('重构完成：正在帮您解包为结构化工作流并推送到画板...', 'Importing Markdown and JSON into workspace...'),
+                message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
                 importReport = await runAutoImportAndSwitchToScenes(analyzedText, {
@@ -4847,10 +4847,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充成功 ${postImportSupplementCreated} 项、失败 ${postImportSupplementFailed} 项、跳过 ${postImportSupplementSkipped} 项。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
-                            : t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充 ${postImportSupplementCreated} 项（跳过 ${postImportSupplementSkipped} 项）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                            ? t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们成功搞定了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                            : t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们自动补充了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
                     )
-                    : t('分析完成：未检测到实体缺失，流程已结束。', 'Analysis completed: no missing entities detected, workflow finished.'),
+                    : t('✅ 工作圆满完成！未发现缺失的资产。', 'Analysis completed: no missing entities detected, workflow finished.'),
             });
 
             if (onLog) onLog("AI Analysis applied and saved.");
@@ -4986,7 +4986,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
             phase: 'autosaving',
-            message: t('护航：正在为您实时安全上链剧本进度...', 'Auto-saving script...'),
+            message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -5021,7 +5021,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('AI 收到您的要求，正为您深度推演分镜结构。此过程涉及海量结构重塑与多维推理，可能需要 3~4 分钟，您可以喝口咖啡稍作等待...', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
@@ -5109,7 +5109,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
                 phase: 'saving_scenes',
-                message: t('重构完成：正在帮您解包为结构化工作流并推送到画板...', 'Importing Markdown and JSON into workspace...'),
+                message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
                 importReport = await runAutoImportAndSwitchToScenes(analyzedText || "", {
@@ -5200,10 +5200,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充成功 ${postImportSupplementCreated} 项、失败 ${postImportSupplementFailed} 项、跳过 ${postImportSupplementSkipped} 项。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
-                            : t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充 ${postImportSupplementCreated} 项（跳过 ${postImportSupplementSkipped} 项）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                            ? t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们成功搞定了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                            : t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们自动补充了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
                     )
-                    : t('分析完成：未检测到实体缺失，流程已结束。', 'Analysis completed: no missing entities detected, workflow finished.'),
+                    : t('✅ 工作圆满完成！未发现缺失的资产。', 'Analysis completed: no missing entities detected, workflow finished.'),
             });
 
             setShowAnalysisModal(false);
@@ -5280,10 +5280,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     message: postImportMissingItems > 0
                         ? (
                             postImportSupplementFailed > 0
-                                ? t(`重试分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充成功 ${postImportSupplementCreated} 项、失败 ${postImportSupplementFailed} 项、跳过 ${postImportSupplementSkipped} 项。`, `Retry completed: ${postImportMissingItems} missing entities detected. Supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
-                                : t(`重试分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充 ${postImportSupplementCreated} 项（跳过 ${postImportSupplementSkipped} 项）。`, `Retry completed: ${postImportMissingItems} missing entities detected. Supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                                ? t(`🔄 补全完毕！发现 ${postImportMissingItems} 个需补充资产，成功处理了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Retry completed: ${postImportMissingItems} missing entities detected. Supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                                : t(`🔄 补全完毕！发现 ${postImportMissingItems} 个需补充资产，已成功处理 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Retry completed: ${postImportMissingItems} missing entities detected. Supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
                         )
-                        : t('重试分析完成：未检测到实体缺失，流程已结束。', 'Retry completed: no missing entities detected, workflow finished.'),
+                        : t('重试✅ 工作圆满完成！未发现缺失的资产。', 'Retry completed: no missing entities detected, workflow finished.'),
                 });
                 
                 onLog?.('Phase 2 Asset Generation Retry Completed.', 'success');
@@ -5371,7 +5371,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2 font-semibold">
                             {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4" /> : <Loader2 className="w-4 h-4 animate-spin" />}
-                            <span>{t('AI 剧本分析状态', 'AI Script Analysis Status')}</span>
+                            <span>{t('场景拆解进度', 'AI Script Analysis Status')}</span>
                         </div>
                         {!isAnalyzing && (
                             <button
@@ -5393,7 +5393,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             { key: 'analyzing', label: t('场景解析', 'Scene Planning') },
                             { key: 'saving_scenes', label: t('保存结构', 'Import Structure') },
                             { key: 'generating_assets', label: t('推演资产', 'Asset Generation') },
-                            { key: 'completed', label: t('分析报告', 'Report') },
+                            { key: 'completed', label: t('AI 总结报告', 'Report') },
                         ].map((step, idx) => {
                             const stepOrder = ['autosaving', 'analyzing', 'saving_scenes', 'generating_assets', 'completed'];
                             const phase = analysisFlowStatus.phase || 'idle';
@@ -5468,7 +5468,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     {analysisUiReport && analysisUiReport.status !== 'running' && (
                         <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm space-y-3 mb-2">
                             <div className="font-bold text-white/90 text-base flex items-center gap-2">
-                                <CheckCircle className="w-5 h-5 text-emerald-400" /> {t('剧本分析与导入完成！', 'Analysis & Import Completed!')}
+                                <CheckCircle className="w-5 h-5 text-emerald-400" /> {t('阅读与场景梳理完毕！', 'Analysis & Import Completed!')}
                             </div>
                             <div className="text-white/80 space-y-2 bg-black/20 p-3 rounded-md border border-white/5">
                                 <div>
@@ -5501,7 +5501,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     )}
                                                 </span>
                                             ) : <span className="text-amber-400">{t('发现部分实体可能存在指代不清，建议稍作人工核对。', 'Found some ambiguous entities, quick manual review recommended.')}</span>)
-                                            : <span className="text-emerald-400">{t('基础逻辑检查通过。', 'Basic logic check passed.')}</span>
+                                            : <span className="text-emerald-400">{t('没问题，所有的道具和角色都对得上号~', 'Basic logic check passed.')}</span>
                                     }
                                 </div>
                                 <div>
@@ -5513,7 +5513,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     * {t('如果提示有极少数过渡性道具生成失败，您可以直接忽略，不影响视频生成的大局。', 'If a few minor transitional props failed to generate, you can safely ignore them.')}
                                 </div>
                                 <div>
-                                    * {t('如果不满意，也可以在刚才的“补充说明”写清要求，点击下方的“修改并重跑分析”。', 'Not satisfied? Add notes below and click "Refine" to try again.')}
+                                    * {t('如果不满意，也可以在刚才的“补充说明”写清要求，点击下方的“修改并调整后重新生成”。', 'Not satisfied? Add notes below and click "Refine" to try again.')}
                                 </div>
                             </div>
                             
@@ -5580,7 +5580,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[220px] sm:min-w-[300px]">{t('内容（修订）', 'Content (Revised)')}</th>
                                         <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[220px] sm:min-w-[300px]">{t('内容（原始）', 'Content (Original)')}</th>
                                         <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">{t('叙事功能', 'Narrative Function')}</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-64">{t('分析与改编备注', 'Analysis & Adaptation Notes')}</th>
+                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-64">{t('从剧本提炼的导演备注', 'Analysis & Adaptation Notes')}</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-white/5">
@@ -5628,7 +5628,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 {isSuperuser && (
                 <div className="border-t border-white/10 bg-black/10 shrink-0">
                     <div className="px-6 py-3 border-b border-white/10">
-                        <div className="text-sm text-primary uppercase font-extrabold tracking-wide">{t('分析输出工作区（Output Workspace）', 'Analysis Output Workspace')}</div>
+                        <div className="text-sm text-primary uppercase font-extrabold tracking-wide">{t('AI 提炼与草稿区', 'Analysis Output Workspace')}</div>
                     </div>
                     <div className="space-y-0">
                         <div className="border-b border-white/10">
@@ -5734,7 +5734,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold border border-white/10 ${(isImportingEntities || isCheckingSubjectConsistency || isCheckingCoreCoverage) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/5 hover:bg-white/10 text-white/80'}`}
                                         title={t('检查 Markdown 表格中的 subject 与 JSON entities 是否一致', 'Check consistency between markdown subjects and JSON entities')}
                                     >
-                                        {isCheckingSubjectConsistency ? t('检查中...', 'Checking...') : t('检查 Subject 一致性', 'Check Subject Consistency')}
+                                        {isCheckingSubjectConsistency ? t('检查中...', 'Checking...') : t('核对出场名单', 'Check Subject Consistency')}
                                     </button>
                                     <button
                                         onClick={runCoreCoverageCheck}
@@ -5986,7 +5986,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ) : (
                                     <Info className="w-5 h-5 text-sky-300" />
                                 )}
-                                {t('AI Script Analysis Subject 检查结果', 'AI Script Analysis Subject Check Result')}
+                                {t('剧本角色与场景盘点单', 'AI Script Analysis Subject Check Result')}
                             </h3>
                             <button
                                 onClick={closePostAnalysisCheckModal}
@@ -6021,7 +6021,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
 
                             <div className="text-xs text-muted-foreground">
-                                {t('请先观察以上 Subject 检查结果，确认后关闭窗口继续。', 'Please review the subject check result above, then close this dialog to continue.')}
+                                {t('请先核对上方的盘点单，确认无误后就可以关掉窗口继续啦。', 'Please review the subject check result above, then close this dialog to continue.')}
                             </div>
                         </div>
 
@@ -6032,7 +6032,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     className="px-4 py-2 rounded-lg text-sm font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-500/30"
                                     title={t('建议重跑 AI Script Analysis', 'Recommended: rerun AI Script Analysis')}
                                 >
-                                    {t('重跑分析', 'Rerun Analysis')}
+                                    {t('调整后重新生成', 'Rerun Analysis')}
                                 </button>
                             )}
                             <button
@@ -6136,7 +6136,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                              >
                                 {(isAnalyzing && !phase2ResolverRef.current) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                                          {phase2ResolverRef.current ? t('确认并继续', 'Confirm & Continue') : t('运行分析', 'Run Analysis')}
+                                          {phase2ResolverRef.current ? t('确认并继续', 'Confirm & Continue') : t('开始提取场景', 'Run Analysis')}
                              </button>
                         </div>
                     </div>
