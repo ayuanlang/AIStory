@@ -1609,8 +1609,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     ? await getVideoGenerationJobStatus(stableJobId)
                     : await getImageGenerationJobStatus(stableJobId);
                 const phase = String(status?.status || '').trim().toLowerCase();
+                const isTerminal = ['succeeded', 'completed', 'failed', 'error', 'canceled', 'cancelled'].includes(phase) || Boolean(status?.result?.url || status?.result?.video_url || status?.url || status?.video_url);
 
-                if (phase === 'queued' || phase === 'running') {
+                if (!isTerminal) {
                     setShotGeneratingState(stableShotId, stableMediaKey, true);
                     return { state: 'running', jobId: stableJobId, source: 'local', phase };
                 }
