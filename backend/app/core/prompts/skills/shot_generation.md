@@ -88,23 +88,26 @@
      - 并在关键转变点使用 `-> resulting in {明确可见的结果态}` 结束。
   4. **`[Dynamic Atmosphere]` (动态光影/焦点)**：标定本动作推进时的光影顺应和亮度对比度演变。
 
-### 八、静态提示词要求（首尾帧 / Start & End Frames）
+### 八、静态提示词要求（首尾帧及关键帧 / Start, Keyframes & End Frames）
 - `Start Frame` 用于定格动作发生前（T=0）的稳定态；`End Frame` 用于落定动作执行后的终局状态。
+- `Keyframes` 用于描述在长镜头或复杂动作中，动作发生状态改变的关键节点截帧（如 T=4s 时角色倒地）。若无关键节点变化，则填 `NO`。
 - **独立完整法则**：不可使用 `same as above`，必须自给自足。每帧分为以下六大维度排布：
   1. **`[Global Style]`**：全局风格、胶片质感。
   2. **`[Context & Lighting]`**：环境与光线布置。
   3. **`[Camera & Composition]`**：详细的机位尺寸、角度构图法则、**具体的物理光学参数（如 `35mm lens`, `shallow depth of field` 等焦段与景深设定）**。
   4. **`[Staging & Spatial]`**：角色的精确落位和 Z 轴排布。**（必须充分分析 Beat 中描述的人物朝向与状态，指明确切的相对相机面部朝向，如 `Facing lens` 或 `Profile Left`）。**
   5. **`[Subject Action (Static)]`**：角色静态瞬间展示（严禁用 run/jump，只能是停滞瞬间的外观姿态及表情）。
-  6. **`[Layers & Details]`**：前中后景层级和残留物理痕迹（限 End Frame）。
+  6. **`[Layers & Details]`**：前中后景层级和残留物理痕迹（限 End Frame 及 Keyframes）。
 
 ### 九、最终标准输出 (Final Output Format)
 - 你只需输出最终的一张 Markdown 表格即可。
 - **严禁输出任何开场白、反思过程或表外寒暄**。
 
 #### Markdown 表头格式与双语编写约束
-- **双语并行原则**：提示词列采取双语独立编写机制，**非翻译模式**。`Start Frame` / `Video Content` / `End Frame` 用英文编写，对应带 `(CN)` 的中文列则直接使用符合中文语境的自然语言进行独立编写，不要生硬互翻，中文列中严禁保留英文提示词结构标签。
-- **逻辑推演**：`Shot Logic (CN)` 作为分镜逻辑推演蓝图，必须全程用**纯中文**填写。
+- **双语并行原则**：提示词列采取双语独立编写机制，**非翻译模式**。`Start Frame` / `Video Content` / `Keyframes` / `End Frame` 用英文编写。对应带 `(CN)` 的中文列则直接使用符合中文语境的自然语言进行独立编写，中文列中严禁保留英文提示词结构标签（如 `[Global Style]` 等）。
+- **逻辑推演 (Shot Logic)**：作为分镜逻辑推演蓝图，必须全程用**纯中文**填写，必须包含阶段预估耗时加法公式（如 P1() + P2() = ），并说明高阶运镜与重点音效的选用理由。
+- **关联实体 (Associated Entities)**：罗列该分镜中出现的所有带标签实体（如 `CHAR:[@Name], PROP:[Name], ENV:[Name]`）。
+- **镜头命名 (Shot Name)**：简要概括本镜头的核心视觉动作或剧情（纯中文，如“建置与对峙”）。
 - **锚点格式**：双语列中的实体锚点标签（如 `CHAR:[@Name]`）均保留英文格式并在上下文独立存在即可，绝对不要翻译。
 
 | Shot ID | Shot Name | Scene ID | Shot Logic (CN) | Start Frame | Video Content | Duration (s) | Keyframes | End Frame | Start Frame (CN) | Video Content (CN) | Keyframes (CN) | End Frame (CN) | Associated Entities |

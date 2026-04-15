@@ -669,7 +669,7 @@ const Editor = ({
             return [];
         };
         const splitByTypeFromArray = (arr) => {
-            const payload = { characters: [], props: [], environments: [] };
+            const payload = { characters: [], props: [], environments: [], posters: [] };
             const toType = (value) => normalizeKey(value);
             for (const item of (arr || [])) {
                 if (!item || typeof item !== 'object') continue;
@@ -741,7 +741,7 @@ const Editor = ({
             const entityArray = pick(obj, ['entities', 'entity', 'subjectlist']);
             if (entityArray.length) {
                 const split = splitByTypeFromArray(entityArray);
-                if (split.characters.length || split.props.length || split.environments.length) {
+                if (split.characters.length || split.props.length || split.environments.length || split.posters.length) {
                     return split;
                 }
             }
@@ -750,8 +750,9 @@ const Editor = ({
             const partA = pick(obj, ['part2a', 'part2acharacters', 'charactersjson', 'characterjson']);
             const partB = pick(obj, ['part2b', 'part2bprops', 'propsjson', 'propjson']);
             const partC = pick(obj, ['part2c', 'part2cenvironments', 'environmentsjson', 'environmentjson']);
-            if (partA.length || partB.length || partC.length) {
-                return { characters: partA, props: partB, environments: partC };
+            const partD = pick(obj, ['part2d', 'part2dposters', 'postersjson', 'posterjson']);
+            if (partA.length || partB.length || partC.length || partD.length) {
+                return { characters: partA, props: partB, environments: partC, posters: partD };
             }
 
             const nested = obj.entities || obj.entity || obj.subjects || obj.subject || obj.data || obj.payload || obj.result;
@@ -761,7 +762,7 @@ const Editor = ({
             return null;
         };
 
-        let mergedPayload = { characters: [], props: [], environments: [] };
+        let mergedPayload = { characters: [], props: [], environments: [], posters: [] };
         for (const obj of blocks) {
             if (Array.isArray(obj)) {
                 mergedPayload = mergePayload(mergedPayload, splitByTypeFromArray(obj));
@@ -772,7 +773,7 @@ const Editor = ({
                 mergedPayload = mergePayload(mergedPayload, payload);
             }
         }
-        if (mergedPayload.characters.length || mergedPayload.props.length || mergedPayload.environments.length) {
+        if (mergedPayload.characters.length || mergedPayload.props.length || mergedPayload.environments.length || mergedPayload.posters.length) {
             return mergedPayload;
         }
         return null;
@@ -1287,6 +1288,7 @@ const Editor = ({
             characters: extractNamedJsonArrayFromRawText(text, 'characters'),
             props: extractNamedJsonArrayFromRawText(text, 'props'),
             environments: extractNamedJsonArrayFromRawText(text, 'environments'),
+            posters: extractNamedJsonArrayFromRawText(text, 'posters'),
         };
         if (hasAny(fragmentPayload)) {
             merged = mergePayload(merged, fragmentPayload);

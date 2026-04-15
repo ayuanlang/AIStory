@@ -673,7 +673,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
 
         const splitByTypeFromArray = (arr) => {
-            const payload = { characters: [], props: [], environments: [] };
+            const payload = { characters: [], props: [], environments: [], posters: [] };
             for (const item of arr || []) {
                 if (!item || typeof item !== 'object') continue;
                 if (isDummySubject(item.name) || isDummySubject(item.subject_name_exact) || isDummySubject(item.name_en)) continue;
@@ -684,6 +684,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     payload.props.push(item);
                 } else if (['environment', 'environments', 'env', 'scene', '场景', '环境'].includes(type)) {
                     payload.environments.push(item);
+                } else if (['poster', 'posters', 'cover', 'covers', '海报', '封面'].includes(type)) {
+                    payload.posters.push(item);
                 }
             }
             return payload;
@@ -697,20 +699,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let characters = pickArrayByAliases(obj, ['characters', 'character', 'chars', 'subjects', 'people', 'roles', '人物', '角色']);
             let props = pickArrayByAliases(obj, ['props', 'prop', 'items', '道具', '物件']);
             let environments = pickArrayByAliases(obj, ['environments', 'environment', 'envs', 'env', 'scenes', '场景', '环境']);
+            let posters = pickArrayByAliases(obj, ['poster', 'posters', 'cover', 'covers', '海报', '封面']);
             
             characters = cleanArray(characters);
             props = cleanArray(props);
             environments = cleanArray(environments);
+            posters = cleanArray(posters);
 
-            if (characters.length || props.length || environments.length) {
-                return { characters, props, environments };
+            if (characters.length || props.length || environments.length || posters.length) {
+                return { characters, props, environments, posters };
             }
 
             // Support wrappers like { entities: [...] } / { subjects: [...] }
             const entityArray = pickArrayByAliases(obj, ['entities', 'entity', 'subjectlist', 'subjects']);
             if (entityArray.length) {
                 const split = splitByTypeFromArray(entityArray);
-                if (split.characters.length || split.props.length || split.environments.length) {
+                if (split.characters.length || split.props.length || split.environments.length || split.posters.length) {
                     return split;
                 }
             }
@@ -728,13 +732,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 characters: [],
                 props: [],
                 environments: [],
+                posters: [],
             };
         };
 
         // First try direct objects.
         for (const obj of objects) {
             const direct = normalizePayload(obj);
-            if (direct && (direct.characters.length || direct.props.length || direct.environments.length)) return direct;
+            if (direct && (direct.characters.length || direct.props.length || direct.environments.length || direct.posters.length)) return direct;
         }
 
         // Then search nested wrappers (e.g. { part3: { characters: [...] } }).
@@ -747,7 +752,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             seen.add(cur);
 
             const nested = normalizePayload(cur);
-            if (nested && (nested.characters.length || nested.props.length || nested.environments.length)) return nested;
+            if (nested && (nested.characters.length || nested.props.length || nested.environments.length || nested.posters.length)) return nested;
 
             if (Array.isArray(cur)) {
                 for (const item of cur) {

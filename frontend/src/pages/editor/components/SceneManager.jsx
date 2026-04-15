@@ -532,7 +532,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     )
 };
 
-export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, onClick, onGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false, subjectGap = null, onSupplementSubjects = null, supplementingSubjects = false }) => {
+export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, onClick, onGenerateShots, onStopGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false, subjectGap = null, onSupplementSubjects = null, supplementingSubjects = false }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -606,6 +606,13 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
             }
         } finally {
             setIsGenerating(false);
+        }
+    };
+
+    const handleStop = async (e) => {
+        e.stopPropagation();
+        if (onStopGenerateShots) {
+            await onStopGenerateShots(scene.id, e);
         }
     };
 
@@ -714,12 +721,12 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                         {isShotMenuOpen && (
                             <div className="absolute top-full right-0 mt-1 min-w-[148px] rounded-lg border border-white/10 bg-[#111111] shadow-2xl overflow-hidden">
                                 <button
-                                    onClick={handleGenerate}
-                                    disabled={shotsBusy}
-                                    className="w-full px-3 py-2 text-left text-[11px] text-white/90 hover:bg-white/10 flex items-center gap-2 disabled:opacity-50"
+                                    onClick={shotsBusy ? handleStop : handleGenerate}
+                                    disabled={shotsBusy && !onStopGenerateShots}
+                                    className={`w-full px-3 py-2 text-left text-[11px] hover:bg-white/10 flex items-center gap-2 ${shotsBusy ? (onStopGenerateShots ? 'text-red-400' : 'text-white/50 opacity-50') : 'text-white/90'}`}
                                 >
-                                    {shotsBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-                                    {shotsBusy ? t('生成中...', 'Generating...') : t('AI 镜头', 'AI Shots')}
+                                    {shotsBusy ? (onStopGenerateShots ? <X className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />) : <Wand2 className="w-3 h-3" />}
+                                    {shotsBusy ? (onStopGenerateShots ? t('停止生成', 'Stop Generating') : t('生成中...', 'Generating...')) : t('AI 镜头', 'AI Shots')}
                                 </button>
                                 <button
                                     onClick={handleSupplement}
@@ -739,13 +746,13 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                             {t('删除', 'Delete')}
                         </button>
                         <button 
-                            onClick={handleGenerate}
-                            disabled={shotsBusy}
-                            className="bg-primary/90 hover:bg-primary text-black px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 shadow-lg"
-                            title={t('AI 生成镜头列表', 'AI Generate Shot List')}
+                            onClick={shotsBusy ? handleStop : handleGenerate}
+                            disabled={shotsBusy && !onStopGenerateShots}
+                            className={`${shotsBusy && onStopGenerateShots ? 'bg-red-500/90 hover:bg-red-500 text-white' : 'bg-primary/90 hover:bg-primary text-black'} px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 shadow-lg ${shotsBusy && !onStopGenerateShots ? 'opacity-60' : ''}`}
+                            title={shotsBusy ? t('停止生成', 'Stop Generating') : t('AI 生成镜头列表', 'AI Generate Shot List')}
                         >
-                            {shotsBusy ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                            {shotsBusy ? t('生成中...', 'Generating...') : t('AI 镜头', 'AI Shots')}
+                            {shotsBusy ? (onStopGenerateShots ? <X className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin"/>) : <Wand2 className="w-3 h-3"/>}
+                            {shotsBusy ? (onStopGenerateShots ? t('停止...', 'Stop') : t('生成中...', 'Generating...')) : t('AI 镜头', 'AI Shots')}
                         </button>
                     </div>
                 </div>
@@ -854,13 +861,13 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                 <div className="pt-2 border-t border-white/5 mt-auto">
                     <div className="grid grid-cols-3 gap-2">
                         <button
-                            onClick={handleGenerate}
-                            disabled={shotsBusy}
-                            className="bg-primary/85 hover:bg-primary text-black px-2 py-1.5 rounded text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-60"
-                            title={t('AI 生成镜头列表', 'AI Generate Shot List')}
+                            onClick={shotsBusy ? handleStop : handleGenerate}
+                            disabled={shotsBusy && !onStopGenerateShots}
+                            className={`${shotsBusy && onStopGenerateShots ? 'bg-red-500/90 hover:bg-red-500 text-white' : 'bg-primary/85 hover:bg-primary text-black'} px-2 py-1.5 rounded text-[11px] font-semibold flex items-center justify-center gap-1 ${shotsBusy && !onStopGenerateShots ? 'opacity-60' : ''}`}
+                            title={shotsBusy ? t('停止生成', 'Stop Generating') : t('AI 生成镜头列表', 'AI Generate Shot List')}
                         >
-                            {shotsBusy ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                            {shotsBusy ? t('生成中...', 'Generating...') : t('AI 镜头', 'AI Shots')}
+                            {shotsBusy ? (onStopGenerateShots ? <X className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin"/>) : <Wand2 className="w-3 h-3"/>}
+                            {shotsBusy ? (onStopGenerateShots ? t('停止...', 'Stop') : t('生成中...', 'Generating...')) : t('AI 镜头', 'AI Shots')}
                         </button>
                         <button
                             onClick={handleSupplement}
@@ -4198,6 +4205,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                                     onToggleSelect={toggleSceneSelected}
                                     onClick={() => setEditingScene(scene)} 
                                     onGenerateShots={handleGenerateShots}
+                                    onStopGenerateShots={handleStopGenerateShots}
                                     onSupplementShots={handleOpenShotSupplementMenu}
                                     onSupplementSubjects={(sceneCandidate) => {
                                         setEditingScene(sceneCandidate);
@@ -4242,12 +4250,19 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                                         {sceneRegenerating ? t('补充中...', 'Supplementing...') : t('补充实体', 'Supplement Entities')}
                                     </button>
                                     <button
-                                        onClick={() => editingScene?.id && handleGenerateShots(editingScene.id)}
-                                        disabled={!editingScene?.id || isSceneAiShotsBusy(editingScene?.id)}
-                                        className="px-3 py-1.5 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/20 rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                                        title={editingScene?.id ? t('为该场景生成 AI 镜头', 'Generate AI shots for this scene') : t('请先保存场景再生成 AI 镜头', 'Save scene first to generate AI shots')}
+                                        onClick={() => {
+                                            if (!editingScene?.id) return;
+                                            if (isSceneAiShotsBusy(editingScene.id)) {
+                                                handleStopGenerateShots(editingScene.id);
+                                            } else {
+                                                handleGenerateShots(editingScene.id);
+                                            }
+                                        }}
+                                        disabled={!editingScene?.id}
+                                        className={`px-3 py-1.5 ${isSceneAiShotsBusy(editingScene?.id) ? 'bg-red-500/20 hover:bg-red-500/30 text-red-500 border-red-500/20' : 'bg-primary/20 hover:bg-primary/30 text-primary border-primary/20'} border rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed`}
+                                        title={editingScene?.id ? (isSceneAiShotsBusy(editingScene?.id) ? t('停止生成', 'Stop generating') : t('为该场景生成 AI 镜头', 'Generate AI shots for this scene')) : t('请先保存场景再生成 AI 镜头', 'Save scene first to generate AI shots')}
                                     >
-                                        {isSceneAiShotsBusy(editingScene?.id) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>} {isSceneAiShotsBusy(editingScene?.id) ? t('生成中...', 'Generating...') : 'AI Shots'}
+                                        {isSceneAiShotsBusy(editingScene?.id) ? <X className="w-3 h-3" /> : <Wand2 className="w-3 h-3"/>} {isSceneAiShotsBusy(editingScene?.id) ? t('停止...', 'Stop') : 'AI Shots'}
                                     </button>
                                     <button
                                         onClick={() => {
