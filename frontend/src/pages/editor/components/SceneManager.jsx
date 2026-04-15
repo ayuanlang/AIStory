@@ -3194,6 +3194,36 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         }
     };
 
+    const handleStopGenerateShots = async (sceneId) => {
+        const stableSceneId = Number(sceneId || 0);
+        if (!isSceneAiShotsBusy(stableSceneId)) {
+            onLog?.(t('该场景的 AI 镜头任务并未运行，或已结束。', 'AI Shots task for this scene is not running or has already finished.'), 'warning');
+            return;
+        }
+
+        const marker = loadAiShotsTaskMarker(activeEpisode?.id, stableSceneId);
+        
+        try {
+            if (!window.confirm(t('确定要停止生成该场景的 AI 镜头吗？', 'Are you sure you want to stop generating AI Shots for this scene?'))) return;
+            
+            setAiShotsFlowStatus({ phase: 'failed', sceneId: stableSceneId, message: t('正在停止...', 'Stopping...') });
+            
+            if (marker?.taskId) {
+                await stopAsyncTask(marker.taskId);
+            }
+        } catch (e) {
+            console.error('Failed to stop AI shots task', e);
+            onLog?.(`SceneManager: Failed to stop AI Shots task - ${e.message}`, 'error');
+        } finally {
+            clearAiShotsTaskMarker(activeEpisode?.id, stableSceneId);
+            aiShotsBusySceneIdsRef.current.delete(stableSceneId);
+            aiShotsPromptPreviewSceneIdsRef.current.delete(stableSceneId);
+            closeSceneShotPromptModal(stableSceneId);
+            setAiShotsFlowStatus({ phase: '', sceneId: null, message: '' });
+            onLog?.(t(`已停止场景 ${stableSceneId} 的 AI 镜头任务。`, `Stopped AI Shots task for scene ${stableSceneId}.`), 'warning');
+        }
+    };
+
     const handleDeleteScene = async (scene) => {
         if (!scene?.id) {
             const remaining = scenes.filter(s => s !== scene);
