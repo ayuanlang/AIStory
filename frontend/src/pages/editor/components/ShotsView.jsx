@@ -2572,10 +2572,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const isLockedManual = isManualMode && isUserEdited;
             const autoMatches = getSuggestedRefImages(shotSnapshot, rawPrompt, true, resolvedEntities);
 
+            const deletedRefs = tech.deleted_ref_urls || [];
             if (isLockedManual) {
                 refs = [...tech.ref_image_urls];
+                for (const img of autoMatches) {
+                    if (!refs.includes(img) && !deletedRefs.includes(img)) {
+                        refs.push(img);
+                    }
+                }
             } else if (isManualMode) {
-                const deletedRefs = tech.deleted_ref_urls || [];
                 refs = autoMatches.filter(url => !deletedRefs.includes(url));
             } else {
                 refs = [...new Set(autoMatches)];
@@ -2618,6 +2623,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             if (isLockedManual) {
                 refs = [...tech.end_ref_image_urls];
+                for (const img of autoMatches) {
+                    if (!refs.includes(img) && !deletedRefs.includes(img)) {
+                        refs.push(img);
+                    }
+                }
             } else if (isManualMode) {
                 refs = autoMatches.filter((url) => !deletedRefs.includes(url));
             } else {
@@ -5058,6 +5068,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         let refs = [];
         if (isLockedManual) {
             refs = [...tech.end_ref_image_urls];
+            for (const img of autoMatches) {
+                if (!refs.includes(img) && !deletedRefs.includes(img)) {
+                    refs.push(img);
+                }
+            }
         } else if (isManualMode) {
             // Manual but not locked: refresh by current entity images.
             refs = autoMatches.filter((url) => !deletedRefs.includes(url));

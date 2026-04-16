@@ -22,7 +22,7 @@ _QUEUE_STARTED = False
 _QUEUE_STOP_EVENT = threading.Event()
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "3600") or 3600.0))
-_QUEUE_WORKER_THREADS = max(1, min(4, int(os.getenv("GENERATION_QUEUE_WORKER_THREADS", "1") or 1)))
+_QUEUE_WORKER_THREADS = max(1, int(os.getenv("GENERATION_QUEUE_WORKER_THREADS", "30") or 30))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None
 
@@ -272,6 +272,26 @@ def _ensure_queue_table_ready() -> None:
             conn.execute(text(ddl))
             conn.execute(text(index_ddl))
         _QUEUE_TABLE_READY = True
+
+
+def list_generation_tasks(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    _ensure_queue_table_ready()
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT job_id, kind, user_id, status, attempt_count, worker_id, created_at, started_at, finished_at, last_heartbeat, error
+                FROM generation_task_queue
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            {"limit": limit, "offset": offset},
+        ).mappings().all()
+        return [{k: row.get(k) for k in row.keys()} for row in rows]
+    finally:
+        db.close()
 
 
 def enqueue_generation_task(*, job_id: str, kind: str, user_id: int, payload: Dict[str, Any]) -> str:

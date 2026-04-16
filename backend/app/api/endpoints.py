@@ -203,6 +203,30 @@ def get_password_hash(password):
     return hashed.decode('utf-8')
 
 router = APIRouter()
+
+@router.get("/admin/queue/tasks")
+def admin_list_queue_tasks(limit: int = 100, offset: int = 0, current_user: "User" = Depends(get_current_user)):
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(status_code=403, detail="Superuser required")
+    from app.services.generation_task_queue import list_generation_tasks
+    return {"tasks": list_generation_tasks(limit=limit, offset=offset)}
+
+@router.post("/admin/queue/tasks/{job_id}/cancel")
+def admin_cancel_queue_task(job_id: str, current_user: "User" = Depends(get_current_user)):
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(status_code=403, detail="Superuser required")
+    from app.services.generation_task_queue import cancel_generation_task
+    task = cancel_generation_task(job_id, reason="Canceled by Admin")
+    return {"status": "ok", "task": task}
+
+@router.post("/admin/queue/tasks/cancel-queued")
+def admin_cancel_all_queued(current_user: "User" = Depends(get_current_user)):
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(status_code=403, detail="Superuser required")
+    from app.services.generation_task_queue import cancel_generation_tasks
+    count = cancel_generation_tasks(reason="Cleared queued by Admin")
+    return {"status": "ok", "canceled_count": count}
+
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
 

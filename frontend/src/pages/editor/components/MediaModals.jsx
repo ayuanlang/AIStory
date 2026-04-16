@@ -399,16 +399,33 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         
         // Step 2: Apply Scope Filtering locally fast
         let res = allCleanData;
-        
+
+        const buildEntityAssets = (typeMatch) => {
+            return entities
+                .filter(e => e.type === typeMatch && e.image_url)
+                .map(e => ({
+                    id: 'entity_' + e.id,
+                    url: e.image_url,
+                    type: 'image',
+                    meta_info: { entity_id: e.id, source: 'entity' }
+                }));
+        };
+
+        const mergeAssets = (baseAssets, entityAssets) => {
+            const urlSet = new Set(baseAssets.map(a => String(a.url).trim()));
+            const uniqueEntities = entityAssets.filter(ea => !urlSet.has(String(ea.url).trim()));
+            return [...uniqueEntities, ...baseAssets];
+        };
+
         if (filterScope === 'characters') {
             const targetIds = new Set(entities.filter(e => e.type === 'character').map(e => String(e.id)));
-            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('character'));
         } else if (filterScope === 'props') {
             const targetIds = new Set(entities.filter(e => e.type === 'prop').map(e => String(e.id)));
-            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('prop'));
         } else if (filterScope === 'environments') {
             const targetIds = new Set(entities.filter(e => e.type === 'environment').map(e => String(e.id)));
-            res = allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id)));
+            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('environment'));
         } else if (filterScope === 'shots') {
             res = allCleanData.filter(a => !!a.meta_info?.shot_id);
         } // 'all' scope keeps everything from cleanData
