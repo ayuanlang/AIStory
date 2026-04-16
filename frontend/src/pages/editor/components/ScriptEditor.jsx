@@ -5486,18 +5486,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     {analysisUiReport && analysisUiReport.status !== 'running' && (
                         <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm space-y-3 mb-2">
                             <div className="font-bold text-white/90 text-base flex items-center gap-2">
-                                <CheckCircle className="w-5 h-5 text-emerald-400" /> {t('阅读与场景梳理完毕！', 'Analysis & Import Completed!')}
+                                <CheckCircle className="w-5 h-5 text-emerald-400" /> {t('阅读与段落梳理完毕！', 'Analysis & Import Completed!')}
                             </div>
                             <div className="text-white/80 space-y-2 bg-black/20 p-3 rounded-md border border-white/5">
                                 <div>
                                     <span className="font-medium">✨ {t('新登场资产', 'New Assets')}:</span> {t('为您提炼了', 'Generated')}
                                     <span className="text-purple-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.character || 0} </span>{t('位角色', 'characters')}、
-                                    <span className="text-emerald-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.environment || 0} </span>{t('个场景', 'environments')}、
+                                    <span className="text-emerald-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.environment || 0} </span>{t('个空镜', 'environments')}、
                                     <span className="text-amber-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.prop || 0} </span>{t('个道具', 'props')}。
                                 </div>
                                 <div>
-                                    <span className="font-medium">🔍 {t('镜头画面搭建', 'Scene Construction')}:</span> {t('核对了', 'Checked')}
-                                    <span className="text-white font-semibold"> {analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount || 0} </span>{t('个镜头', 'shots')}。
+                                    <span className="font-medium">🔍 {t('场景画面搭建', 'Scene Construction')}:</span> {t('核对了', 'Checked')}
+                                    <span className="text-white font-semibold"> {analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount || 0} </span>{t('个场景', 'shots')}。
                                     {analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount > 0 ? (
                                         <span className="ml-1 break-all">
                                             {t('其中', 'Among them,')} <span className="text-red-300">{analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount}</span> {t('个画面细节原本是缺失的，系统已自动帮您生成填补了', 'missing visual details were automatically generated and filled:')} <span className="text-emerald-300">{analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.createdItems?.length || 0}</span> {t('个实体', 'entities')}。
