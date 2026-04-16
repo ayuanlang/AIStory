@@ -418,17 +418,17 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         };
 
         if (filterScope === 'characters') {
-            const targetIds = new Set(entities.filter(e => e.type === 'character').map(e => String(e.id)));
-            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('character'));
-        } else if (filterScope === 'props') {
-            const targetIds = new Set(entities.filter(e => e.type === 'prop').map(e => String(e.id)));
-            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('prop'));
-        } else if (filterScope === 'environments') {
-            const targetIds = new Set(entities.filter(e => e.type === 'environment').map(e => String(e.id)));
-            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('environment'));
-        } else if (filterScope === 'shots') {
-            res = allCleanData.filter(a => !!a.meta_info?.shot_id);
-        } // 'all' scope keeps everything from cleanData
+              res = buildEntityAssets('character');
+          } else if (filterScope === 'props') {
+              res = buildEntityAssets('prop');
+          } else if (filterScope === 'environments') {
+              res = buildEntityAssets('environment');
+          } else if (filterScope === 'shots') {
+              res = availableShots.flatMap(s => [
+                  s.start_frame_image_url && { id: 'shot_start_' + s.id, url: s.start_frame_image_url, type: 'image', meta_info: { source: 'shot', shot_id: s.id } },
+                  s.end_frame_image_url && { id: 'shot_end_' + s.id, url: s.end_frame_image_url, type: 'image', meta_info: { source: 'shot', shot_id: s.id } }
+              ]).filter(Boolean);
+          }
 
         // Step 3: Global Media Type Filter
         if (filterType !== 'all') {
@@ -436,7 +436,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         }
 
         setAssets(res);
-    }, [allCleanData, filterScope, filterType, filterValue, filterFrameType, entities]);
+    }, [allCleanData, filterScope, filterType, filterValue, filterFrameType, entities, availableShots]);
 
     useEffect(() => {
         if (isOpen) {
