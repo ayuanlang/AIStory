@@ -141,7 +141,7 @@
 
 #### 3.1.5 纯净去剧情角色化与门禁自检 (Clean Plate Gatekeeping)
 - **落实全局 Clean Plate 规则**：环境仅指代抽象空间结构、材质以及可辅助渲染氛围的无剧情背景群众。由于高频误差来自对 OTS 的分镜头过写，严禁包含任何剧情推进语句或明确身份的主线/配角指代。
-- **背景人群规模强制声明**：如果上游提取的环境中包含“人群/路人/观众等”（如繁华街道），允许在提示词中描述这些无脸化、无具体身份、纯作氛围背景的人群实体。**并且在生成中英文提示词时，必须根据上游设定明确描述其具体的大致数量、规模或分布密度（例如“座无虚席”、“人头攒动 (crowded/packed)”、“寥寥数人 (sparse/empty)”等），严禁仅泛泛而谈“有人”。**
+- **背景人群规模强制声明与负面提示防冲突**：如果上游提取的环境中包含“人群/路人/观众等”（如繁华街道），允许在提示词中描述这些无脸化、无具体身份、纯作氛围背景的人群实体。**并且在生成中英文提示词时，必须根据上游设定明确描述其具体的大致数量、规模或分布密度（例如“座无虚席”、“人头攒动 (crowded/packed)”、“寥寥数人 (sparse/empty)”等），严禁仅泛泛而谈“有人”。同时特别注意：对于这种明确包含背景人群的环境，绝不允许在 `negative_prompt_en` 中写入 `people, crowd, humans` 等排斥性词汇（否则会导致生成指令自相矛盾）；而应改为在负面提示中重点排除 `specific characters, main character outfits, detailed faces` 等会破坏路人模糊氛围的词。**
 - **环境门禁扫描**：提交前必须额外扫描并确保不存在以下可能引发剧情人物残留的词或模式：`CHAR:[@`、`over shoulder`、`over-the-shoulder`、`A over B`、`B over A`、`shoulder silhouette`、`behind head`、`blurred shoulder`、`back-of-head`、`arm entering frame`、`hand in foreground`、`hair edge`、`mirror reflection of a main character`、`specific character shadow`。命中任一即整条报废重写。
 
 ### 3.2 对话正反打与 OTS (Clean Plate Logic)

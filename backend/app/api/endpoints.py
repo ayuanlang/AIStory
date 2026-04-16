@@ -9092,7 +9092,7 @@ async def analyze_project_novel_to_story_generator_fields(
 
     user_prompt = f"Project Title: {project.title}\n\nNovel/Script Text:\n{novel_text}"
 
-    function_name = getattr(req, "function_name", None) if req else None
+    function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
 
     llm_config = agent_service.get_active_llm_config(current_user.id, system_api_id=system_api_id, function_name=function_name)
@@ -14467,7 +14467,7 @@ async def ai_generate_shots(
         logger.info(f"[ai_generate_shots] user_input_len={len(user_input)}")
 
         # 4. Call LLM
-        function_name = getattr(req, "function_name", None) if req else None
+        function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
         system_api_id = getattr(req, "system_api_id", None) if req else None
 
         try:
@@ -14774,7 +14774,7 @@ async def ai_regenerate_shots(
         except FileNotFoundError:
             raise HTTPException(status_code=500, detail=f"Prompt file '{prompt_filename}' could not be loaded.")
 
-        function_name = getattr(req, "function_name", None) if req else None
+        function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
         system_api_id = getattr(req, "system_api_id", None) if req else None
 
         try:

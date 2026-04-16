@@ -1268,6 +1268,11 @@ export const stopProjectEpisodeScripts = async (projectId) => {
 }
 
 export const startSceneAiShotsBatch = async (episodeId, payload = {}) => {
+    payload = payload || {};
+    payload.function_name = payload.function_name || 'script_analysis';
+    if (payload.system_api_id === undefined) {
+        payload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
+    }
     const response = await api.post(`/episodes/${episodeId}/scenes/ai_shots/batch/start`, payload);
     return response.data;
 }
