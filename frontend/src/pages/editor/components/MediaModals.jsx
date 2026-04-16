@@ -375,7 +375,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     useEffect(() => {
          // Load shots if needed
-         if (filterScope === 'shot' && episodeId && availableShots.length === 0) {
+         if (filterScope === 'shots' && episodeId && availableShots.length === 0) {
                fetchEpisodeShots(episodeId, { compact: true }).then(data => {
                  setAvailableShots(data.sort((a,b) => {
                       // simple sort by shot_id alphanumeric
