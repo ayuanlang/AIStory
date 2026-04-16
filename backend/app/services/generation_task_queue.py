@@ -21,7 +21,7 @@ _QUEUE_START_LOCK = threading.Lock()
 _QUEUE_STARTED = False
 _QUEUE_STOP_EVENT = threading.Event()
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
-_QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "3600") or 3600.0))
+_QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "900") or 900.0))
 _QUEUE_WORKER_THREADS = max(1, int(os.getenv("GENERATION_QUEUE_WORKER_THREADS", "30") or 30))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None
@@ -505,12 +505,38 @@ def _finish_task(job_id: str, *, status: str, error: Optional[str] = None, only_
     finally:
         db.close()
 
+_QUEUE_LAST_CLEANUP_TIME = 0.0
+
+def _cleanup_old_tasks() -> None:
+    global _QUEUE_LAST_CLEANUP_TIME
+    now = time.time()
+    if now - _QUEUE_LAST_CLEANUP_TIME < 3600.0:
+        return
+    _QUEUE_LAST_CLEANUP_TIME = now
+    cutoff = now - 86400.0  # 1 day cutoff
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            text(
+                "DELETE FROM generation_task_queue WHERE status IN ('completed', 'failed', 'canceled') AND created_at < :cutoff"
+            ),
+            {"cutoff": cutoff},
+        )
+        db.commit()
+        if (result.rowcount or 0) > 0:
+            logger.info("generation queue cleanup deleted %s old tasks", result.rowcount)
+    except Exception as exc:
+        logger.warning("generation queue cleanup failed: %s", exc)
+    finally:
+        db.close()
 
 def _worker_loop(worker_name: str, processor: Callable[[str, str, int, Dict[str, Any]], None]) -> None:
     logger.info("generation queue worker started | worker=%s poll=%ss reclaim=%ss", worker_name, _QUEUE_POLL_SECONDS, _QUEUE_RECLAIM_SECONDS)
     while not _QUEUE_STOP_EVENT.is_set():
         task = None
         try:
+            if worker_name.endswith("-1"):  # Only the first worker tries to clean up
+                _cleanup_old_tasks()
             task = _claim_next_task(worker_name)
             if not task:
                 _QUEUE_STOP_EVENT.wait(_QUEUE_POLL_SECONDS)
