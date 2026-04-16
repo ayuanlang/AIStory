@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
 import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
 import Footer from '../components/Footer';
+import QueueAdmin from '../components/QueueAdmin';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
@@ -4838,6 +4839,7 @@ const UserAdmin = () => {
         { id: 'pricing', label: t('定价', 'Pricing'), icon: DollarSign },
         { id: 'transactions', label: t('记录', 'History'), icon: Activity },
         { id: 'system_api', label: t('系统 API', 'System API'), icon: Key },
+        { id: 'queue', label: t('队列', 'Queue'), icon: Activity },
         { id: 'config_sync', label: t('配置同步', 'Config Sync'), icon: Database },
         { id: 'pricing_rules', label: t('计费规则', 'Pricing Rules'), icon: DollarSign },
         { id: 'oss_pools', label: t('OSS 存储配置', 'OSS Storage'), icon: Database },
@@ -5456,6 +5458,9 @@ const UserAdmin = () => {
                             </div>
                         </div>
                     )}
+
+                    {/* QUEUE TAB */}
+                    {activeTab === 'queue' && <QueueAdmin />}
 
                     {/* USERS TAB */}
                     {activeTab === 'users' && (

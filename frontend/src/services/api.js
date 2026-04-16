@@ -3153,3 +3153,7 @@ export const updateFunctionApiConfig = async (functionName, payload) => {
     const response = await api.post(`/settings/system/function_api_configs/${functionName}`, payload);
     return response.data;
 };
+
+export const getAdminQueueTasks = async () => (await api.get('/admin/queue/tasks')).data;
+export const cancelAdminQueueTask = async (jobId) => (await api.post(`/admin/queue/tasks/${jobId}/cancel`)).data;
+export const cancelAllQueuedAdminTasks = async () => (await api.post('/admin/queue/tasks/cancel-queued')).data;

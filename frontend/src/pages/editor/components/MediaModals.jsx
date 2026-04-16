@@ -418,14 +418,11 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         };
 
         if (filterScope === 'characters') {
-            const targetIds = new Set(entities.filter(e => e.type === 'character').map(e => String(e.id)));
-            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('character'));
+            res = buildEntityAssets('character');
         } else if (filterScope === 'props') {
-            const targetIds = new Set(entities.filter(e => e.type === 'prop').map(e => String(e.id)));
-            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('prop'));
+            res = buildEntityAssets('prop');
         } else if (filterScope === 'environments') {
-            const targetIds = new Set(entities.filter(e => e.type === 'environment').map(e => String(e.id)));
-            res = mergeAssets(allCleanData.filter(a => targetIds.has(String(a.meta_info?.entity_id))), buildEntityAssets('environment'));
+            res = buildEntityAssets('environment');
         } else if (filterScope === 'shots') {
             res = allCleanData.filter(a => !!a.meta_info?.shot_id);
         } // 'all' scope keeps everything from cleanData
