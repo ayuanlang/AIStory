@@ -3425,7 +3425,7 @@ class MediaGenerationService:
             baseline_config["model"] = requested_model
 
         target_generation_mode = self._normalize_generation_mode(modality)
-        if target_generation_mode and candidates:
+        if target_generation_mode and candidates and not explicit_selection:
             baseline_matches_candidate = any(
                 c.get("provider") == effective_provider
                 and str(c.get("model") or "") == str(baseline_config.get("model") or "")

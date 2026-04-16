@@ -1,4 +1,4 @@
-﻿
+
 import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { MediaPickerModal, AssetHoverMetaOverlay } from './MediaModals';
@@ -409,7 +409,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     projectId: String(extractSubjectHistoryField(item, 'project_id') || extractSubjectHistoryField(item, 'ownerScopeId') || '').trim(),
                     subjectName: String(extractSubjectHistoryField(item, 'subject_name') || extractSubjectHistoryField(item, 'entity_name') || '').trim(),
                     resultUrl,
-                    displayLabel: jobKind === 'reconstruct' ? t('主体重构', 'Subject Reconstruction') : t('主体生图', 'Subject Image Generation'),
+                    displayLabel: jobKind === 'reconstruct' ? t('�����ع�', 'Subject Reconstruction') : t('������ͼ', 'Subject Image Generation'),
                     createdAtMs: Date.parse(String(item?.created_at || item?.started_at || item?.finished_at || '')) || 0,
                 };
             })
@@ -441,7 +441,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     job_id: item.id,
                     status: 'completed',
                     resultUrl: item.url,
-                    displayLabel: item.remark || t('主体生图', 'Subject Image Generation'),
+                    displayLabel: item.remark || t('������ͼ', 'Subject Image Generation'),
                     createdAtMs: Date.parse(item.created_at || '') || 0,
                     kind: 'asset'
                 };
@@ -471,9 +471,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         try {
             await deleteAsset(assetId);
             await fetchSubjectGenerationHistory(selectedEntity);
-            onLog?.(t('主体历史图片已删除。', 'Subject history image deleted.'), 'warning');
+            onLog?.(t('������ʷͼƬ��ɾ����', 'Subject history image deleted.'), 'warning');
         } catch (e) {
-            onLog?.(t('删除历史图片失败：', 'Failed to delete subject history image: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
+            onLog?.(t('ɾ����ʷͼƬʧ�ܣ�', 'Failed to delete subject history image: ') + (e?.response?.data?.detail || e?.message || 'unknown error'), 'error');
         } finally {
             setSubjectGenerationHistoryDeletingId('');
         }
@@ -512,7 +512,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (onLog) {
             onLog(
                 t(
-                    `已强制清理主体任务：${ownerLabel}，原因：${reasonText}`,
+                    `��ǿ��������������${ownerLabel}��ԭ��${reasonText}`,
                     `Subject job force-cleared: ${ownerLabel}. Reason: ${reasonText}`
                 ),
                 'warning'
@@ -781,13 +781,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [tempPromptSubmitLang, resolvedPromptSubmitLang]);
 
     const promptLangText = useCallback((lang) => {
-        return lang === 'cn' ? t('中文', 'Chinese') : t('英文', 'English');
+        return lang === 'cn' ? t('����', 'Chinese') : t('Ӣ��', 'English');
     }, [t]);
 
     const promptLangPrefText = useCallback((pref) => {
-        if (pref === 'cn') return t('中文', 'Chinese');
-        if (pref === 'auto') return t('跟随界面语言', 'Follow UI');
-        return t('英文', 'English');
+        if (pref === 'cn') return t('����', 'Chinese');
+        if (pref === 'auto') return t('�����������', 'Follow UI');
+        return t('Ӣ��', 'English');
     }, [t]);
 
     const getSubjectImageJobEntry = useCallback((entityOrId) => {
@@ -806,7 +806,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const stableEntityId = String(entityOrId?.id || entityOrId || '').trim();
         const entityName = String(entityOrId?.name || entityOrId?.name_en || stableEntityId).trim() || stableEntityId;
         const message = t(
-            `主体图片任务运行中，暂时不能更换或移除图片：${entityName}`,
+            `����ͼƬ���������У���ʱ���ܸ������Ƴ�ͼƬ��${entityName}`,
             `Subject image job is running. Image changes are temporarily disabled: ${entityName}`
         );
         showSubjectNotification(message, 'warning');
@@ -833,7 +833,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const globalStyle = getResolvedEntityGlobalStyleText();
         if (!globalStyle) return rawText;
 
-        const tokenPattern = /[\[【]\s*(global style|global_style)\s*[\]】]/ig;
+        const tokenPattern = /[\[��]\s*(global style|global_style)\s*[\]��]/ig;
         const replaced = rawText.replace(tokenPattern, `[Global Style](${globalStyle})`);
         if (replaced !== rawText) return replaced;
         if (!injectIfMissing) return rawText;
@@ -967,7 +967,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (onLog) {
             onLog(
                 t(
-                    `等待主体稳定图片地址超时：${entityLabel}`,
+                    `�ȴ������ȶ�ͼƬ��ַ��ʱ��${entityLabel}`,
                     `Timed out waiting for durable subject image URL: ${entityLabel}`
                 ),
                 'warning'
@@ -1086,7 +1086,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
 
         // Guard: if the global runtime object still shows this task as recently
-        // running, do NOT heal — the batch loop is still alive in a background
+        // running, do NOT heal �� the batch loop is still alive in a background
         // closure even though the component remounted with fresh refs.
         const globalTaskState = subjectBatchRuntime?.[stableTask];
         if (globalTaskState?.running) {
@@ -1301,7 +1301,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             if (isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
                                 onLog(
                                     t(
-                                        `主体任务状态查询失败（${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}）：${job?.entityName || entityId} - ${detail}`,
+                                        `��������״̬��ѯʧ�ܣ�${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}����${job?.entityName || entityId} - ${detail}`,
                                         `Subject job status polling failed (${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}): ${job?.entityName || entityId} - ${detail}`
                                     ),
                                     'warning'
@@ -1330,7 +1330,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             clearLocalSubjectImageJobState(entityId);
                             applySubjectEntityImageLocally(entityId, generatedUrl);
                             if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
-                                onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                                onLog(t(`����������ɣ�${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                             }
                             continue;
                         }
@@ -1347,7 +1347,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 clearLocalSubjectImageJobState(entityId);
                             }
                             if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
-                                onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                                onLog(t(`����������ɣ�${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                             }
                             continue;
                         }
@@ -1360,7 +1360,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         if ((now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
                             onLog(
                                 t(
-                                    `主体任务返回了临时图片地址，正在等待稳定图片入库：${job?.entityName || entityId}`,
+                                    `�������񷵻�����ʱͼƬ��ַ�����ڵȴ��ȶ�ͼƬ��⣺${job?.entityName || entityId}`,
                                     `Subject job returned a temporary image URL; waiting for durable image persistence: ${job?.entityName || entityId}`
                                 ),
                                 'process'
@@ -1374,7 +1374,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             if (isActivePoll() && onLog) {
                                 onLog(
                                     t(
-                                        `主体任务已完成，但在等待稳定图片超时后仍未拿到可持久化地址：${job?.entityName || entityId}`,
+                                        `������������ɣ����ڵȴ��ȶ�ͼƬ��ʱ����δ�õ��ɳ־û���ַ��${job?.entityName || entityId}`,
                                         `Subject job finished, but no durable image URL was available before the persistence wait timed out: ${job?.entityName || entityId}`
                                     ),
                                     'warning'
@@ -1429,7 +1429,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             clearLocalSubjectImageJobState(entityId);
                         }
                         if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
-                            onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                            onLog(t(`����������ɣ�${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                         }
                         continue;
                     }
@@ -1439,7 +1439,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             clearLocalSubjectImageJobState(entityId);
                         }
                         if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'failed') && onLog) {
-                            onLog(t(`主体生成失败：${job?.entityName || entityId} - ${statusResp?.error || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${statusResp?.error || status}`), 'error');
+                            onLog(t(`��������ʧ�ܣ�${job?.entityName || entityId} - ${statusResp?.error || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${statusResp?.error || status}`), 'error');
                         }
                         continue;
                     }
@@ -1506,7 +1506,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         try {
             const data = await fetchEntities(projectId); // Fetch ALL types
             const processedData = Array.isArray(data) ? data.map(item => {
-                if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
+                if (item.type === 'environment' && (item.name === '���溣��' || item.name_en === 'Cover Poster')) {
                     return { ...item, type: 'poster' };
                 }
                 return item;
@@ -1730,17 +1730,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const handleBatchAnalyzeExistingSubjects = async () => {
         const runtimeSnapshot = getSubjectBatchSnapshot();
         if (runtimeSnapshot?.analyze?.running && runtimeSnapshot?.analyze?.scopeKey === subjectBatchScopeKey) {
-            alert(t('批量提示词反推任务正在运行中，请稍候。', 'Batch prompt reverse task is already running.'));
+            alert(t('������ʾ�ʷ����������������У����Ժ�', 'Batch prompt reverse task is already running.'));
             return;
         }
 
         if (runtimeSnapshot?.reconstruct?.running && runtimeSnapshot?.reconstruct?.scopeKey === subjectBatchScopeKey) {
-            alert(t('批量参考生图任务正在运行中，请稍候。', 'Batch reference image generation task is already running.'));
+            alert(t('�����ο���ͼ�������������У����Ժ�', 'Batch reference image generation task is already running.'));
             return;
         }
 
         if (isBatchReconstructingEntities) {
-            alert(t('批量参考生图任务正在运行中，请稍候。', 'Batch reference image generation task is already running.'));
+            alert(t('�����ο���ͼ�������������У����Ժ�', 'Batch reference image generation task is already running.'));
             return;
         }
 
@@ -1749,7 +1749,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             uploadedImageTokens = await buildUploadedImageTokenSet();
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
-            alert(t(`读取上传资产失败：${detail}`, `Failed to load uploaded assets: ${detail}`));
+            alert(t(`��ȡ�ϴ��ʲ�ʧ�ܣ�${detail}`, `Failed to load uploaded assets: ${detail}`));
             return;
         }
 
@@ -1757,12 +1757,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const targets = hasImageEntities.filter((item) => isUserUploadedEntityImage(item, uploadedImageTokens));
         const skippedSystemCount = Math.max(0, hasImageEntities.length - targets.length);
         if (targets.length === 0) {
-            alert(t('当前没有可分析的“用户上传图片”主体。系统生成图片将被自动跳过。', 'No user-uploaded subject images available for analysis. System-generated images are skipped.'));
+            alert(t('��ǰû�пɷ����ġ��û��ϴ�ͼƬ�����塣ϵͳ����ͼƬ�����Զ�������', 'No user-uploaded subject images available for analysis. System-generated images are skipped.'));
             return;
         }
 
         const confirmed = await confirmUiMessage(t(
-            `将批量提示词反推并反写 ${targets.length} 个“用户上传图片”主体信息${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `��������ʾ�ʷ��Ʋ���д ${targets.length} �����û��ϴ�ͼƬ��������Ϣ${skippedSystemCount > 0 ? `���Զ�����ϵͳ���� ${skippedSystemCount} ����` : ''}���Ƿ������`,
             `Run batch prompt reverse and write back metadata for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
         ));
         if (!confirmed) return;
@@ -1771,7 +1771,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const batchSessionId = `subject-analyze-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         subjectBatchAnalyzeSessionRef.current = batchSessionId;
 
-        updateAnalyzeBatchRuntimeState(true, { current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
+        updateAnalyzeBatchRuntimeState(true, { current: 0, total: targets.length, status: t('׼����ʼ...', 'Preparing...') });
 
         let successCount = 0;
         let failedCount = 0;
@@ -1796,7 +1796,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     updateAnalyzeBatchRuntimeState(true, {
                         current: Math.min(processedCount + 1, targets.length),
                         total: targets.length,
-                        status: t(`AI品控查阅中：`, `Analyzing: ${entityLabel}`),
+                        status: t(`AIƷ�ز����У�`, `Analyzing: ${entityLabel}`),
                     });
 
                     try {
@@ -1816,7 +1816,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         if (onLog) {
                             onLog(
                                 t(
-                                    `批量提示词反推失败：${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`,
+                                    `������ʾ�ʷ���ʧ�ܣ�${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`,
                                     `Batch prompt reverse failed: ${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`
                                 ),
                                 'error'
@@ -1827,7 +1827,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         updateAnalyzeBatchRuntimeState(true, {
                             current: processedCount,
                             total: targets.length,
-                            status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
+                            status: t(`�Ѵ��� ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
                         });
                     }
                 }
@@ -1837,7 +1837,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
             if (subjectBatchAnalyzeSessionRef.current !== batchSessionId || subjectBatchAnalyzeStopRequestedRef.current) {
                 const stoppedSummary = t(
-                    `批量提示词反推已停止：成功 ${successCount}，失败 ${failedCount}`,
+                    `������ʾ�ʷ�����ֹͣ���ɹ� ${successCount}��ʧ�� ${failedCount}`,
                     `Batch prompt reverse stopped: ${successCount} succeeded, ${failedCount} failed`
                 );
                 if (onLog) onLog(stoppedSummary, 'warning');
@@ -1846,7 +1846,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             const summary = t(
-                `批量提示词反推完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
+                `������ʾ�ʷ�����ɣ����û��ϴ�ͼƬ�����ɹ� ${successCount}��ʧ�� ${failedCount}${skippedSystemCount > 0 ? `������ϵͳ���� ${skippedSystemCount}` : ''}`,
                 `Batch prompt reverse complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
             );
             if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
@@ -1873,7 +1873,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             progress({ step, label: t(zh, en), percent: Number(percent || 0) });
         };
 
-        setStep('analyzing', '正在分析当前图片...', 'Analyzing current image...', 20);
+        setStep('analyzing', '���ڷ�����ǰͼƬ...', 'Analyzing current image...', 20);
         const analyzed = await analyzeEntityImage(entity.id, 'subject_image_analysis');
         if (shouldStop()) {
             throw new Error('__subject_batch_stop__');
@@ -1882,7 +1882,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
         setAllEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
 
-        setStep('prompt', '正在整理新的提示词...', 'Refining prompt...', 55);
+        setStep('prompt', '���������µ���ʾ��...', 'Refining prompt...', 55);
 
         const epInfo = currentEpisode?.episode_info || {};
         const preferredImageSize = getEpisodePreferredImageSize(epInfo);
@@ -1930,7 +1930,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             throw new Error('__subject_batch_stop__');
         }
 
-        setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
+        setStep('generating', '���ڸ�������ʾ������ͼƬ...', 'Generating image with new prompt...', 80);
         const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
             function_name: (deps && deps.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
             project_id: projectId,
@@ -1952,7 +1952,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
 
         if (!asset?.url) {
-            throw new Error(t('生成结果缺少图片地址', 'Generated result missing image URL'));
+            throw new Error(t('���ɽ��ȱ��ͼƬ��ַ', 'Generated result missing image URL'));
         }
 
         let resolvedAssetUrl = String(asset.url || '').trim();
@@ -1960,7 +1960,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             if (onLog) {
                 onLog(
                     t(
-                        `主体重构返回了临时图片地址，正在等待稳定图片入库：${analyzed?.name || analyzed?.name_en || analyzed?.id}`,
+                        `�����ع���������ʱͼƬ��ַ�����ڵȴ��ȶ�ͼƬ��⣺${analyzed?.name || analyzed?.name_en || analyzed?.id}`,
                         `Subject reconstruction returned a temporary image URL; waiting for durable image persistence: ${analyzed?.name || analyzed?.name_en || analyzed?.id}`
                     ),
                     'process'
@@ -1971,7 +1971,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 entityName: analyzed?.name || analyzed?.name_en || analyzed?.id,
             });
             if (!resolvedAssetUrl) {
-                throw new Error(t('等待主体稳定图片地址超时', 'Timed out waiting for durable subject image URL'));
+                throw new Error(t('�ȴ������ȶ�ͼƬ��ַ��ʱ', 'Timed out waiting for durable subject image URL'));
             }
         }
 
@@ -1979,7 +1979,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const updatedEntity = { ...analyzed, image_url: resolvedAssetUrl };
         applySubjectEntityImageLocally(analyzed.id, resolvedAssetUrl);
 
-        setStep('done', '重构完成', 'Refactor completed', 100);
+        setStep('done', '�ع����', 'Refactor completed', 100);
         return updatedEntity;
     }, [allEntities, awaitPersistedSubjectEntityImage, currentEpisode?.episode_info, currentEpisode?.id, getEntityPromptByLang, isEphemeralProviderMediaUrl, onLog, prependEntityGlobalStyleToPromptHead, projectId, resolvedPromptSubmitLang, t]);
 
@@ -1993,7 +1993,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             isBatchAnalyzingEntities ||
             isReconstructingEntity
         ) {
-            alert(t('有其他批量任务正在运行，请稍后。', 'Another batch task is running. Please wait.'));
+            alert(t('���������������������У����Ժ�', 'Another batch task is running. Please wait.'));
             return;
         }
 
@@ -2002,7 +2002,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             uploadedImageTokens = await buildUploadedImageTokenSet();
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
-            alert(t(`读取上传资产失败：${detail}`, `Failed to load uploaded assets: ${detail}`));
+            alert(t(`��ȡ�ϴ��ʲ�ʧ�ܣ�${detail}`, `Failed to load uploaded assets: ${detail}`));
             return;
         }
 
@@ -2010,12 +2010,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const targets = hasImageEntities.filter((item) => isUserUploadedEntityImage(item, uploadedImageTokens));
         const skippedSystemCount = Math.max(0, hasImageEntities.length - targets.length);
         if (targets.length === 0) {
-            alert(t('当前没有可执行“批量参考生图”的用户上传图片主体。', 'No user-uploaded subject images available for batch reference image generation.'));
+            alert(t('��ǰû�п�ִ�С������ο���ͼ�����û��ϴ�ͼƬ���塣', 'No user-uploaded subject images available for batch reference image generation.'));
             return;
         }
 
         const confirmed = await confirmUiMessage(t(
-            `将对 ${targets.length} 个“用户上传图片”主体执行“批量参考生图”${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `���� ${targets.length} �����û��ϴ�ͼƬ������ִ�С������ο���ͼ��${skippedSystemCount > 0 ? `���Զ�����ϵͳ���� ${skippedSystemCount} ����` : ''}���Ƿ������`,
             `Run batch reference image generation for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
         ));
         if (!confirmed) return;
@@ -2024,7 +2024,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const batchSessionId = `subject-reference-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         subjectBatchReconstructSessionRef.current = batchSessionId;
 
-        updateReconstructBatchRuntimeState(true, { current: 0, total: targets.length, status: t('准备开始...', 'Preparing...') });
+        updateReconstructBatchRuntimeState(true, { current: 0, total: targets.length, status: t('׼����ʼ...', 'Preparing...') });
 
         let successCount = 0;
         let failedCount = 0;
@@ -2050,7 +2050,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         current: Math.min(processedCount + 1, targets.length),
                         total: targets.length,
                         status: t(
-                            `处理中：${entityLabel}`,
+                            `�����У�${entityLabel}`,
                             `Processing: ${entityLabel}`
                         ),
                     });
@@ -2087,7 +2087,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         if (onLog) {
                             onLog(
                                 t(
-                                    `批量参考生图失败：${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`,
+                                    `�����ο���ͼʧ�ܣ�${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`,
                                     `Batch reference image generation failed: ${entityLabel} - ${error?.response?.data?.detail || error?.message || 'Unknown error'}`
                                 ),
                                 'error'
@@ -2101,7 +2101,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         updateReconstructBatchRuntimeState(true, {
                             current: processedCount,
                             total: targets.length,
-                            status: t(`已处理 ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
+                            status: t(`�Ѵ��� ${processedCount}/${targets.length}`, `Processed ${processedCount}/${targets.length}`),
                         });
                     }
                 }
@@ -2111,7 +2111,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
             if (subjectBatchReconstructSessionRef.current !== batchSessionId || subjectBatchReconstructStopRequestedRef.current) {
                 const stoppedSummary = t(
-                    `批量参考生图已停止：成功 ${successCount}，失败 ${failedCount}`,
+                    `�����ο���ͼ��ֹͣ���ɹ� ${successCount}��ʧ�� ${failedCount}`,
                     `Batch reference image generation stopped: ${successCount} succeeded, ${failedCount} failed`
                 );
                 if (onLog) onLog(stoppedSummary, 'warning');
@@ -2120,7 +2120,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             const summary = t(
-                `批量参考生图完成（仅用户上传图片）：成功 ${successCount}，失败 ${failedCount}${skippedSystemCount > 0 ? `，跳过系统生成 ${skippedSystemCount}` : ''}`,
+                `�����ο���ͼ��ɣ����û��ϴ�ͼƬ�����ɹ� ${successCount}��ʧ�� ${failedCount}${skippedSystemCount > 0 ? `������ϵͳ���� ${skippedSystemCount}` : ''}`,
                 `Batch reference image generation complete (uploaded images only): ${successCount} succeeded, ${failedCount} failed${skippedSystemCount > 0 ? `, skipped ${skippedSystemCount} system-generated` : ''}`
             );
             if (onLog) onLog(summary, failedCount > 0 ? 'warning' : 'success');
@@ -2159,17 +2159,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     const handleReconstructEntityAsset = async (entity) => {
         if (!entity || !entity.id || !entity.image_url) {
-            alert(t('请先为主体选择一张现有图片再重构。', 'Please select an existing subject image before refactoring.'));
+            alert(t('����Ϊ����ѡ��һ������ͼƬ���ع���', 'Please select an existing subject image before refactoring.'));
             return;
         }
 
         if (!await confirmUiMessage(t(
-            `将基于当前图片分析并重写提示词，然后重新生成 ${entity.name || '该主体'} 的图片。是否继续？`,
+            `�����ڵ�ǰͼƬ��������д��ʾ�ʣ�Ȼ���������� ${entity.name || '������'} ��ͼƬ���Ƿ������`,
             `This will analyze the current image, rewrite prompt, and regenerate image for ${entity.name || 'this subject'}. Continue?`
         ))) return;
 
         setIsReconstructingEntity(true);
-        setReconstructProgress({ step: 'analyzing', label: t('正在分析当前图片...', 'Analyzing current image...'), percent: 20 });
+        setReconstructProgress({ step: 'analyzing', label: t('���ڷ�����ǰͼƬ...', 'Analyzing current image...'), percent: 20 });
         if (onLog) onLog(`Refactoring subject asset: ${entity.name || entity.name_en || entity.id}`, 'process');
 
         try {
@@ -2179,7 +2179,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             if (onLog) onLog(`Subject asset refactor completed: ${entity.name || entity.name_en || entity.id}`, 'success');
         } catch (e) {
             console.error(e);
-            alert(t('资产重构失败：', 'Asset refactor failed: ') + (e.response?.data?.detail || e.message));
+            alert(t('�ʲ��ع�ʧ�ܣ�', 'Asset refactor failed: ') + (e.response?.data?.detail || e.message));
             if (onLog) onLog(`Subject asset refactor failed: ${entity.name || entity.name_en || entity.id}`, 'error');
         } finally {
             setIsReconstructingEntity(false);
@@ -2374,7 +2374,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (projectTitle && projectId) return `${projectTitle} (#${projectId})`;
         if (projectTitle) return projectTitle;
         if (projectId) return `Project #${projectId}`;
-        return t('未标注项目', 'Unassigned Project');
+        return t('δ��ע��Ŀ', 'Unassigned Project');
     }, [getAssetMeta, t]);
 
     const getAssetImageType = useCallback((asset) => {
@@ -2394,7 +2394,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const getAssetImageTypeLabel = useCallback((typeName) => {
         const normalized = String(typeName || '').trim().toLowerCase();
         if (normalized === 'uploaded_asset') {
-            return t('上传资产', 'Uploaded Asset');
+            return t('�ϴ��ʲ�', 'Uploaded Asset');
         }
         return typeName;
     }, [t]);
@@ -2736,7 +2736,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             const submitResult = await submitImageGenerationJob(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                function_name: (depUrls && depUrls.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
+                function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
                 entity_id: targetEntityId,
@@ -2801,8 +2801,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 delete next[String(targetEntityId)];
                 return next;
             });
-            if (onLog) onLog(t(`已清除主体运行状态：${entityName}`, `Cleared subject running state: ${entityName}`), 'warning');
-            showSubjectNotification(t('已清除本地主体运行状态', 'Cleared local subject running state'), 'warning');
+            if (onLog) onLog(t(`�������������״̬��${entityName}`, `Cleared subject running state: ${entityName}`), 'warning');
+            showSubjectNotification(t('�����������������״̬', 'Cleared local subject running state'), 'warning');
             setStoppingSubjectImageJobs(prev => {
                 const next = { ...(prev || {}) };
                 delete next[String(targetEntityId)];
@@ -2813,19 +2813,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         try {
             const res = await stopGenerationJob('image', jobId, { force: true });
-            if (onLog) onLog(res?.message || t(`已请求停止主体任务：${entityName}`, `Stop requested for subject task: ${entityName}`), 'warning');
-            showSubjectNotification(t('已请求停止主体任务', 'Subject stop requested'), 'warning');
+            if (onLog) onLog(res?.message || t(`������ֹͣ��������${entityName}`, `Stop requested for subject task: ${entityName}`), 'warning');
+            showSubjectNotification(t('������ֹͣ��������', 'Subject stop requested'), 'warning');
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'unknown error';
             const normalizedDetail = String(detail).trim().toLowerCase();
             const missingJob = normalizedDetail.includes('job not found') || normalizedDetail.includes('not found');
             if (!missingJob) {
-                if (onLog) onLog(`${t('停止主体任务失败', 'Failed to stop subject task')}: ${detail}`, 'error');
-                showSubjectNotification(`${t('停止失败', 'Stop failed')}: ${detail}`, 'error');
+                if (onLog) onLog(`${t('ֹͣ��������ʧ��', 'Failed to stop subject task')}: ${detail}`, 'error');
+                showSubjectNotification(`${t('ֹͣʧ��', 'Stop failed')}: ${detail}`, 'error');
                 return;
             }
-            if (onLog) onLog(t(`后端主体任务不存在，已清除本地状态：${entityName}`, `Backend subject task no longer exists. Cleared local state: ${entityName}`), 'warning');
-            showSubjectNotification(t('后端任务不存在，已解除主体锁定', 'Backend job missing, subject lock cleared'), 'warning');
+            if (onLog) onLog(t(`����������񲻴��ڣ����������״̬��${entityName}`, `Backend subject task no longer exists. Cleared local state: ${entityName}`), 'warning');
+            showSubjectNotification(t('������񲻴��ڣ��ѽ����������', 'Backend job missing, subject lock cleared'), 'warning');
         } finally {
             setStoppingSubjectImageJobs(prev => {
                 const next = { ...(prev || {}) };
@@ -2896,7 +2896,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const skipConfirm = Boolean(options?.skipConfirm);
         if (!skipConfirm) {
             const confirmed = await confirmUiMessage(
-                t('确认移除该主体当前图片关联？这不会删除素材文件，只会清空主体绑定。', 'Remove the current image association from this subject? The asset file will be kept; only the subject binding will be cleared.')
+                t('ȷ���Ƴ������嵱ǰͼƬ�������ⲻ��ɾ���ز��ļ���ֻ���������󶨡�', 'Remove the current image association from this subject? The asset file will be kept; only the subject binding will be cleared.')
             );
             if (!confirmed) return null;
         }
@@ -2904,13 +2904,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         try {
             await updateEntity(Number(stableEntityId), { image_url: null });
             clearSubjectEntityImageLocally(stableEntityId);
-            showSubjectNotification(t('已移除主体图片关联', 'Subject image association removed'), 'warning');
-            onLog?.(t(`已移除主体图片关联：${targetEntity?.name || targetEntity?.name_en || stableEntityId}`, `Removed subject image association: ${targetEntity?.name || targetEntity?.name_en || stableEntityId}`), 'warning');
+            showSubjectNotification(t('���Ƴ�����ͼƬ����', 'Subject image association removed'), 'warning');
+            onLog?.(t(`���Ƴ�����ͼƬ������${targetEntity?.name || targetEntity?.name_en || stableEntityId}`, `Removed subject image association: ${targetEntity?.name || targetEntity?.name_en || stableEntityId}`), 'warning');
             return { ...(targetEntity || {}), image_url: null };
         } catch (e) {
             console.error(e);
-            const detail = e?.response?.data?.detail || e?.message || t('未知错误', 'Unknown error');
-            showSubjectNotification(`${t('移除图片失败', 'Failed to remove image')}: ${detail}`, 'error');
+            const detail = e?.response?.data?.detail || e?.message || t('δ֪����', 'Unknown error');
+            showSubjectNotification(`${t('�Ƴ�ͼƬʧ��', 'Failed to remove image')}: ${detail}`, 'error');
             return null;
         }
     }, [clearSubjectEntityImageLocally, confirmUiMessage, isSubjectImageActionLocked, onLog, selectedEntity, showSubjectNotification, t]);
@@ -2919,7 +2919,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const MIN_BATCH_IMAGE_PROMPT_CHARS = 5;
         const runtimeSnapshot = getSubjectBatchSnapshot();
         if (runtimeSnapshot?.generate?.running && runtimeSnapshot?.generate?.scopeKey === subjectBatchScopeKey) {
-            alert(t('批量生图任务正在运行中，请稍候。', 'Batch image generation task is already running.'));
+            alert(t('������ͼ�������������У����Ժ�', 'Batch image generation task is already running.'));
             return;
         }
 
@@ -3010,7 +3010,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 updateGenerateBatchRuntimeState(true, {
                     current: Math.min(processedCount + 1, toGenerate.length),
                     total: toGenerate.length,
-                    status: t(`生成中：${activeLabels}`, `Generating: ${activeLabels}`),
+                    status: t(`�����У�${activeLabels}`, `Generating: ${activeLabels}`),
                 });
             };
 
@@ -3066,7 +3066,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 let createdJobId = '';
                 try {
                     const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
-                        function_name: (depUrls && depUrls.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
+                        function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
                         project_id: projectId,
                         episode_id: currentEpisode?.id,
                         entity_id: entity?.id,
@@ -3102,7 +3102,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     if (isEphemeralProviderMediaUrl(resolvedImageUrl)) {
                         onLog?.(
                             t(
-                                `批量主体生图返回了临时图片地址，正在等待稳定图片入库：${entity?.name || entity?.name_en || entity?.id}`,
+                                `����������ͼ��������ʱͼƬ��ַ�����ڵȴ��ȶ�ͼƬ��⣺${entity?.name || entity?.name_en || entity?.id}`,
                                 `Batch subject generation returned a temporary image URL; waiting for durable image persistence: ${entity?.name || entity?.name_en || entity?.id}`
                             ),
                             'process'
@@ -3179,7 +3179,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         clearLocalSubjectImageJobState(entity.id);
                         onLog?.(
                             t(
-                                `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
+                                `������ͼ������${entity?.name || entity?.name_en || entity?.id} ����ʾ������ ${MIN_BATCH_IMAGE_PROMPT_CHARS} �ַ���`,
                                 `Batch image generation skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
                             ),
                             'warning'
@@ -3193,7 +3193,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     console.error(`Batch Gen Error for ${entity.name}`, settledTask.reason);
                     onLog?.(
                         t(
-                            `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                            `������ͼʧ�ܣ�${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
                             `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
                         ),
                         'error'
@@ -3213,12 +3213,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 updateGenerateBatchRuntimeState(true, {
                     current: processedCount,
                     total: toGenerate.length,
-                    status: t(`已处理 ${processedCount}/${toGenerate.length}`, `Processed ${processedCount}/${toGenerate.length}`),
+                    status: t(`�Ѵ��� ${processedCount}/${toGenerate.length}`, `Processed ${processedCount}/${toGenerate.length}`),
                 });
                 updateGenerateActiveStatus();
             }
             if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
-                alert(t('批量生图已停止。', 'Batch image generation stopped.'));
+                alert(t('������ͼ��ֹͣ��', 'Batch image generation stopped.'));
             } else if (skippedPromptCount > 0) {
                 alert(`Batch Generation Complete! Skipped ${skippedPromptCount} item(s) due to short prompt (<${MIN_BATCH_IMAGE_PROMPT_CHARS} chars).`);
             } else {
@@ -3291,11 +3291,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         clearPendingSubjectBatchImagePlaceholders();
 
         setIsStoppingBatchGenerateEntities(false);
-        if (onLog) onLog(t('已请求停止当前批量任务。', 'Stop requested for current batch task.'), 'warning');
+        if (onLog) onLog(t('������ֹͣ��ǰ��������', 'Stop requested for current batch task.'), 'warning');
         showSubjectNotification(
             forcedStoppedJobCount > 0
-                ? t(`已请求停止当前批量任务，并强制停止 ${forcedStoppedJobCount} 个已提交图片任务。`, `Stop requested for current batch task. Force-stopped ${forcedStoppedJobCount} submitted image jobs.`)
-                : t('已请求停止当前批量任务。未提交的后续任务将不再继续。', 'Stop requested for current batch task. Pending unsubmitted tasks will not continue.'),
+                ? t(`������ֹͣ��ǰ�������񣬲�ǿ��ֹͣ ${forcedStoppedJobCount} �����ύͼƬ����`, `Stop requested for current batch task. Force-stopped ${forcedStoppedJobCount} submitted image jobs.`)
+                : t('������ֹͣ��ǰ��������δ�ύ�ĺ������񽫲��ټ�����', 'Stop requested for current batch task. Pending unsubmitted tasks will not continue.'),
             'warning'
         );
     };
@@ -3343,13 +3343,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 <div className="flex flex-col gap-3">
                     <div className="flex gap-1.5 bg-gradient-to-r from-white/10 via-white/5 to-white/10 border border-white/15 p-1.5 rounded-xl self-start shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
                         <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary font-mono mr-1">
-                            {t('合计', 'Total')}: {allEntities.filter(e => e.image_url).length}/{allEntities.length}
+                            {t('�ϼ�', 'Total')}: {allEntities.filter(e => e.image_url).length}/{allEntities.length}
                         </span>
                         {[
-                            { key: 'character', label: t('角色', 'Char'), title: t('角色', 'Characters') },
-                            { key: 'environment', label: t('环境', 'Env'), title: t('环境', 'Environments') },
-                            { key: 'prop', label: t('道具', 'Prop'), title: t('道具', 'Props') },
-                            { key: 'poster', label: t('海报', 'Poster'), title: t('封面海报', 'Cover Poster') },
+                            { key: 'character', label: t('��ɫ', 'Char'), title: t('��ɫ', 'Characters') },
+                            { key: 'environment', label: t('����', 'Env'), title: t('����', 'Environments') },
+                            { key: 'prop', label: t('����', 'Prop'), title: t('����', 'Props') },
+                            { key: 'poster', label: t('����', 'Poster'), title: t('���溣��', 'Cover Poster') },
                         ].map(({ key, label, title }) => {
                             const stat = subjectCategoryStats[key] || { total: 0, generated: 0 };
                             return (
@@ -3363,7 +3363,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             </button>
                         )})}
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2">
-                            <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("文生图模型: ", "T2I Model: ")} /><FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("图生图模型: ", "I2I Model: ")} />
+                            <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("����ͼģ��: ", "T2I Model: ")} /><FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("ͼ��ͼģ��: ", "I2I Model: ")} />
                         </div>
                     </div>
                 </div>
@@ -3371,7 +3371,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                      <button 
                         onClick={handleDeleteAllEntities}
                         className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-md transition-colors"
-                    title={t('删除全部主体资产', 'Delete All Subjects')}
+                    title={t('ɾ��ȫ�������ʲ�', 'Delete All Subjects')}
                     >
                         <Trash2 size={16} />
                     </button>
@@ -3379,16 +3379,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         onClick={handleBatchGenerateEntities}
                         disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 disabled:opacity-50 transition-all border border-white/10"
-                        title={t('批量生成全部实体（遵循依赖）', 'Batch Generate All Entities (Respects Dependencies)')}
+                        title={t('��������ȫ��ʵ�壨��ѭ������', 'Batch Generate All Entities (Respects Dependencies)')}
                     >
                          {isBatchGeneratingEntities ? (
                              <>
                                  <RefreshCw className="animate-spin" size={12} /> 
-                                 {t('批处理中', 'Batching')} {batchEntityProgress ? `${batchEntityProgress.current}/${batchEntityProgress.total}` : '...'}
+                                 {t('��������', 'Batching')} {batchEntityProgress ? `${batchEntityProgress.current}/${batchEntityProgress.total}` : '...'}
                              </>
                          ) : (
                              <>
-                                <Wand2 size={12} /> {t('批量生图', 'Batch Generate Images')}
+                                <Wand2 size={12} /> {t('������ͼ', 'Batch Generate Images')}
                              </>
                          )}
                     </button>
@@ -3396,16 +3396,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         onClick={handleStopSubjectBatchTasks}
                         disabled={!hasRunningSubjectBatchTask || isStoppingBatchGenerateEntities}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-red-400/20"
-                        title={t('停止当前批量任务（支持批量生图/批量提示词反推/批量参考生图）', 'Stop current batch task (supports batch generation / prompt reverse / reference generation)')}
+                        title={t('ֹͣ��ǰ��������֧��������ͼ/������ʾ�ʷ���/�����ο���ͼ��', 'Stop current batch task (supports batch generation / prompt reverse / reference generation)')}
                     >
                         {isStoppingBatchGenerateEntities ? (
                             <>
                                 <Loader2 className="animate-spin" size={12} />
-                                {t('停止中', 'Stopping')}
+                                {t('ֹͣ��', 'Stopping')}
                             </>
                         ) : (
                             <>
-                                <X size={12} /> {t('停止', 'Stop')}
+                                <X size={12} /> {t('ֹͣ', 'Stop')}
                             </>
                         )}
                     </button>
@@ -3413,7 +3413,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         onClick={handleBatchAnalyzeExistingSubjects}
                         disabled={isBatchAnalyzingEntities || isBatchGeneratingEntities || isBatchReconstructingEntities || isReconstructingEntity || isAnalyzingEntity}
                         className="p-2 text-xs font-bold uppercase rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 flex items-center justify-center disabled:opacity-50 transition-all border border-indigo-400/20"
-                        title={t('仅批量对“用户上传图片”执行提示词反推并反写信息', 'Batch prompt reverse user-uploaded subject images only and write back metadata')}
+                        title={t('�������ԡ��û��ϴ�ͼƬ��ִ����ʾ�ʷ��Ʋ���д��Ϣ', 'Batch prompt reverse user-uploaded subject images only and write back metadata')}
                     >
                         {isBatchAnalyzingEntities ? (
                             <>
@@ -3429,7 +3429,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         onClick={handleBatchAnalyzeAndReconstructSubjects}
                         disabled={isBatchReconstructingEntities || isBatchAnalyzingEntities || isBatchGeneratingEntities || isReconstructingEntity || isAnalyzingEntity}
                         className="p-2 text-xs font-bold uppercase rounded-md bg-violet-500/20 hover:bg-violet-500/30 text-violet-100 flex items-center justify-center disabled:opacity-50 transition-all border border-violet-400/20"
-                        title={t('仅对用户上传图片执行：批量参考生图', 'Batch reference image generation for user-uploaded images only')}
+                        title={t('�����û��ϴ�ͼƬִ�У������ο���ͼ', 'Batch reference image generation for user-uploaded images only')}
                     >
                         {isBatchReconstructingEntities ? (
                             <>
@@ -3514,16 +3514,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 <div className="absolute top-2 left-2 z-30 px-2 py-1 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[10px] font-bold flex items-center gap-1">
                                     {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <RefreshCw className="animate-spin" size={10} />}
                                     {stoppingSubjectImageJobs[String(entity.id)]
-                                        ? t('停止中', 'Stopping')
+                                        ? t('ֹͣ��', 'Stopping')
                                         : isBatchPending
-                                            ? t('排队中', 'Queued')
+                                            ? t('�Ŷ���', 'Queued')
                                         : String(trackedJob?.status || '').toLowerCase() === 'persisting'
-                                            ? t('同步中', 'Syncing')
+                                            ? t('ͬ����', 'Syncing')
                                         : String(trackedJob?.status || '').toLowerCase() === 'running'
-                                            ? t('运行中', 'Running')
+                                            ? t('������', 'Running')
                                             : String(trackedJob?.status || '').toLowerCase() === 'queued'
-                                                ? t('排队中', 'Queued')
-                                                : t('生成中', 'Generating')}
+                                                ? t('�Ŷ���', 'Queued')
+                                                : t('������', 'Generating')}
                                 </div>
                             )}
                             {trackedJob && hasRunningSubjectImageJob && (
@@ -3534,10 +3534,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     }}
                                     disabled={Boolean(stoppingSubjectImageJobs[String(entity.id)])}
                                     className="absolute top-2 right-2 z-30 inline-flex items-center gap-1 rounded-md bg-red-500/80 hover:bg-red-500 text-white px-2 py-1 text-[10px] font-bold backdrop-blur-md disabled:opacity-60 disabled:cursor-not-allowed"
-                                    title={t('停止该主体的后台图片任务', 'Stop this subject background image task')}
+                                    title={t('ֹͣ������ĺ�̨ͼƬ����', 'Stop this subject background image task')}
                                 >
                                     {stoppingSubjectImageJobs[String(entity.id)] ? <Loader2 className="animate-spin" size={10} /> : <X size={10} />}
-                                    <span>{stoppingSubjectImageJobs[String(entity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}</span>
+                                    <span>{stoppingSubjectImageJobs[String(entity.id)] ? t('ֹͣ��', 'Stopping') : t('ֹͣ', 'Stop')}</span>
                                 </button>
                             )}
 
@@ -3562,10 +3562,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 return isOssTemp ? (
                                     <div 
                                         className="absolute bottom-2 left-2 z-30 inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow" 
-                                        title={t('图片未持久化到OSS，目前为临时地址。', 'Image not yet persisted to OSS, using temporary link.')}
+                                        title={t('ͼƬδ�־û���OSS��ĿǰΪ��ʱ��ַ��', 'Image not yet persisted to OSS, using temporary link.')}
                                     >
                                         <AlertTriangle size={12} />
-                                        <span>{t('临时图片', 'Temp')}</span>
+                                        <span>{t('��ʱͼƬ', 'Temp')}</span>
                                     </div>
                                 ) : null;
                             })()}
@@ -3581,8 +3581,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             ) : (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/5 px-4 text-center">
                                     <Users className="text-white/20" size={48} />
-                                    <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/55">{t('未绑定图片', 'No Linked Image')}</div>
-                                    <div className="text-[10px] text-white/35">{t('可重新选择或生成主体图', 'Select or generate a subject image')}</div>
+                                    <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/55">{t('δ��ͼƬ', 'No Linked Image')}</div>
+                                    <div className="text-[10px] text-white/35">{t('������ѡ�����������ͼ', 'Select or generate a subject image')}</div>
                                 </div>
                             )}
                             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
@@ -3592,7 +3592,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'library'); }}
                                     disabled={imageActionLocked}
                                     className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={imageActionLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片（素材库/上传）', 'Change Image (Library/Upload)')}
+                                    title={imageActionLocked ? t('ͼƬ���������У����ܸ���ͼƬ', 'Image job is running; image changes are disabled') : t('����ͼƬ���زĿ�/�ϴ���', 'Change Image (Library/Upload)')}
                                 >
                                     <ImageIcon size={16} />
                                 </button>
@@ -3600,7 +3600,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'generate'); }}
                                     disabled={imageActionLocked}
                                     className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={t('生成 AI 图片', 'Generate AI Image')}
+                                    title={t('���� AI ͼƬ', 'Generate AI Image')}
                                 >
                                     <Wand2 size={16} />
                                 </button>
@@ -3611,7 +3611,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     }}
                                     disabled={imageActionLocked || !entity.image_url}
                                     className="p-2 bg-amber-500/80 hover:bg-amber-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={imageActionLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                    title={imageActionLocked ? t('ͼƬ���������У������Ƴ�ͼƬ', 'Image job is running; image removal is disabled') : t('�Ƴ�ͼƬ����', 'Remove image association')}
                                 >
                                     <Unlink size={16} />
                                 </button>
@@ -3619,21 +3619,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(entity); }}
                                     disabled={isReconstructingEntity || imageActionLocked || !entity.image_url}
                                     className="p-2 bg-indigo-500/80 hover:bg-indigo-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={t('现有资产重构（分析图片并重生成）', 'Refactor Existing Asset (analyze + regenerate)')}
+                                    title={t('�����ʲ��ع�������ͼƬ�������ɣ�', 'Refactor Existing Asset (analyze + regenerate)')}
                                 >
                                     {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
                                 </button>
                                 <button 
                                     onClick={(e) => handleDeleteEntity(e, entity)}
                                     className="p-2 bg-red-500/80 hover:bg-red-600 rounded-full text-white backdrop-blur-md"
-                                    title={t('删除实体', 'Delete Entity')}
+                                    title={t('ɾ��ʵ��', 'Delete Entity')}
                                 >
                                     <Trash2 size={16} />
                                 </button>
                             </div>
                             {isEntityAnalyzed(entity) && (
                                 <div className="absolute bottom-2 right-2 z-30 px-2 py-1 rounded-md bg-emerald-500/20 border border-emerald-400/40 text-emerald-100 text-[10px] font-bold pointer-events-none">
-                                    {t('已分析', 'Analyzed')}
+                                    {t('�ѷ���', 'Analyzed')}
                                 </div>
                             )}
                         </div>
@@ -3652,13 +3652,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             {hasDependencies && (
                                                 <span className={`shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${isCharacter ? 'border-amber-300/40 text-amber-200 bg-amber-500/20' : 'border-sky-300/40 text-sky-200 bg-sky-500/20'}`} title={dependencies.join(', ')}>
                                                     <LinkIcon size={10} />
-                                                    {isCharacter ? t('角色依赖', 'Role Dependency') : t('有依赖', 'Has Dependency')}
+                                                    {isCharacter ? t('��ɫ����', 'Role Dependency') : t('������', 'Has Dependency')}
                                                 </span>
                                             )}
                                             {isDependedOn && (
-                                                <span className="shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-emerald-300/40 text-emerald-200 bg-emerald-500/20" title={t('作为其它资产的源', 'Source for other assets')}>
+                                                <span className="shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-emerald-300/40 text-emerald-200 bg-emerald-500/20" title={t('��Ϊ�����ʲ���Դ', 'Source for other assets')}>
                                                     <LinkIcon size={10} />
-                                                    {t('被依赖', 'Depended')}
+                                                    {t('������', 'Depended')}
                                                 </span>
                                             )}
                                         </div>
@@ -3666,9 +3666,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 })()}
                             </div>
                             <div className="text-[10px] text-white/55 uppercase tracking-[0.16em] mt-1">{subTab}</div>
-                            <div className="mt-3 text-[10px] text-white/45 uppercase tracking-[0.16em]">{t('Subject介绍', 'Subject Intro')}</div>
+                            <div className="mt-3 text-[10px] text-white/45 uppercase tracking-[0.16em]">{t('Subject����', 'Subject Intro')}</div>
                             <div className="text-xs text-white/70 mt-1 line-clamp-3 leading-relaxed min-h-[3.5rem]">
-                                {String(entity.description || '').trim() || t('暂无介绍，点击卡片可编辑主体描述。', 'No intro yet. Click the card to edit subject description.')}
+                                {String(entity.description || '').trim() || t('���޽��ܣ������Ƭ�ɱ༭����������', 'No intro yet. Click the card to edit subject description.')}
                             </div>
                         </div>
                     </div>
@@ -3694,7 +3694,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             {entityListLoading && entities.length === 0 && (
                 <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    {t('主体加载中...', 'Loading subjects...')}
+                    {t('���������...', 'Loading subjects...')}
                 </div>
             )}
 
@@ -3715,12 +3715,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             {/* Left: Image */}
                             <div className="w-1/2 bg-black relative flex items-center justify-center">
                                 {viewingEntity.image_url ? (
-                                    <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
+                                    <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('��ͼƬ', 'No Image')}</span></div>} />
                                 ) : (
                                     <div className="flex flex-col items-center justify-center px-8 text-center text-white/20">
                                         <Users size={64} />
-                                        <span className="mt-4 text-sm font-bold uppercase tracking-[0.18em]">{t('图片已移除', 'Image Unlinked')}</span>
-                                        <span className="mt-2 text-xs text-white/45">{t('当前主体未绑定图片，可重新选择素材或直接生成新图。', 'This subject has no linked image. Select media again or generate a new one.')}</span>
+                                        <span className="mt-4 text-sm font-bold uppercase tracking-[0.18em]">{t('ͼƬ���Ƴ�', 'Image Unlinked')}</span>
+                                        <span className="mt-2 text-xs text-white/45">{t('��ǰ����δ��ͼƬ��������ѡ���زĻ�ֱ��������ͼ��', 'This subject has no linked image. Select media again or generate a new one.')}</span>
                                     </div>
                                 )}
                                 
@@ -3731,7 +3731,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'library'); }}
                                             disabled={viewingEntityImageLocked}
                                             className="p-3 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                                          title={viewingEntityImageLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片', 'Change Image')}
+                                                          title={viewingEntityImageLocked ? t('ͼƬ���������У����ܸ���ͼƬ', 'Image job is running; image changes are disabled') : t('����ͼƬ', 'Change Image')}
                                          >
                                              <ImageIcon size={20} />
                                          </button>
@@ -3742,7 +3742,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             }}
                                             disabled={viewingEntityImageLocked || !viewingEntity.image_url}
                                             className="p-3 bg-amber-500/80 hover:bg-amber-500 text-white rounded-full backdrop-blur-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg border border-white/10"
-                                                          title={viewingEntityImageLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                                          title={viewingEntityImageLocked ? t('ͼƬ���������У������Ƴ�ͼƬ', 'Image job is running; image removal is disabled') : t('�Ƴ�ͼƬ����', 'Remove image association')}
                                          >
                                              <Unlink size={20} />
                                          </button>
@@ -3750,7 +3750,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             onClick={(e) => { e.stopPropagation(); handleAnalyzeEntity(viewingEntity); }}
                                             disabled={isAnalyzingEntity || isReconstructingEntity}
                                             className="p-3 bg-indigo-500/80 hover:bg-indigo-500 text-white rounded-full backdrop-blur-md transition-colors disabled:opacity-50 shadow-lg border border-white/10"
-                                                          title={t('分析图片并优化主体信息（生成新的提示词文件）', 'Analyze Image & Refine Subject Info (Generates new prompt file)')}
+                                                          title={t('����ͼƬ���Ż�������Ϣ�������µ���ʾ���ļ���', 'Analyze Image & Refine Subject Info (Generates new prompt file)')}
                                          >
                                              {isAnalyzingEntity ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
                                          </button>
@@ -3758,7 +3758,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(viewingEntity); }}
                                                           disabled={isReconstructingEntity || isAnalyzingEntity || viewingEntityImageLocked || !viewingEntity.image_url}
                                             className="p-3 bg-primary/90 hover:bg-primary text-black rounded-full backdrop-blur-md transition-colors disabled:opacity-50 shadow-lg border border-white/10"
-                                                          title={t('现有资产重构（分析图片并按新提示词重新生成）', 'Refactor Existing Asset (analyze + regenerate with new prompt)')}
+                                                          title={t('�����ʲ��ع�������ͼƬ��������ʾ���������ɣ�', 'Refactor Existing Asset (analyze + regenerate with new prompt)')}
                                          >
                                              {isReconstructingEntity ? <RefreshCw size={20} className="animate-spin" /> : <Wand2 size={20} />}
                                          </button>
@@ -3807,7 +3807,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'
                                             }`}
                                         >
-                                            {tab === 'info' ? t('主体信息', 'Info') : tab === 'generate' ? t('设计资产', 'Generate Asset') : t('修改资产', 'Modify Asset')}
+                                            {tab === 'info' ? t('������Ϣ', 'Info') : tab === 'generate' ? t('����ʲ�', 'Generate Asset') : t('�޸��ʲ�', 'Modify Asset')}
                                         </button>
                                     ))}
                                 </div>
@@ -3833,24 +3833,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             <div className="flex items-center gap-2">
                                                 {stoppingSubjectImageJobs[String(viewingEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <RefreshCw className="animate-spin" size={12} />}
                                                 {stoppingSubjectImageJobs[String(viewingEntity.id)]
-                                                    ? t('该主体停止请求发送中，请稍候。', 'Stop request is being sent for this subject. Please wait.')
+                                                    ? t('������ֹͣ�������У����Ժ�', 'Stop request is being sent for this subject. Please wait.')
                                                     : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'persisting'
-                                                        ? t('该主体已完成生成，正在等待稳定图片同步到素材库。', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
+                                                        ? t('��������������ɣ����ڵȴ��ȶ�ͼƬͬ�����زĿ⡣', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
                                                     : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'running'
-                                                        ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
+                                                        ? t('���������������У���ʹ�رմ���Ҳ�������', 'This subject is running in background and will continue even if you close this window.')
                                                         : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'queued'
-                                                            ? t('该主体正在排队中，开始后将自动运行。', 'This subject is queued and will run automatically once started.')
-                                                            : t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
+                                                            ? t('�����������Ŷ��У���ʼ���Զ����С�', 'This subject is queued and will run automatically once started.')
+                                                            : t('���������������У���ʹ�رմ���Ҳ�������', 'This subject is generating in background and will continue even if you close this window.')}
                                             </div>
                                             <button
                                                 type="button"
                                                 onClick={() => handleForceStopSubjectImage(viewingEntity)}
                                                 disabled={Boolean(stoppingSubjectImageJobs[String(viewingEntity.id)])}
                                                 className="shrink-0 inline-flex items-center gap-1 rounded border border-red-400/30 bg-red-500/15 px-2 py-1 text-[11px] font-bold text-red-100 hover:bg-red-500/25 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                                                title={t('强制停止该主体的后台图片任务，并解除当前运行状态', 'Force-stop this subject background image task and clear the current running state')}
+                                                title={t('ǿ��ֹͣ������ĺ�̨ͼƬ���񣬲������ǰ����״̬', 'Force-stop this subject background image task and clear the current running state')}
                                             >
                                                 {stoppingSubjectImageJobs[String(viewingEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <X size={12} />}
-                                                {stoppingSubjectImageJobs[String(viewingEntity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}
+                                                {stoppingSubjectImageJobs[String(viewingEntity.id)] ? t('ֹͣ��', 'Stopping') : t('ֹͣ', 'Stop')}
                                             </button>
                                         </div>
                                     )}
@@ -3888,7 +3888,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     {viewingEntity.type === 'environment' && (
                                         <div className="space-y-4 p-4 bg-white/5 rounded-lg border border-white/5">
                                              <div className="space-y-1">
-                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('氛围', 'Atmosphere')}</h4>
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('��Χ', 'Atmosphere')}</h4>
                                                  <input 
                                                     value={viewingEntity.atmosphere || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, atmosphere: e.target.value }))}
@@ -3898,7 +3898,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 />
                                             </div>
                                              <div className="space-y-1">
-                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('视觉参数', 'Visual Params')}</h4>
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('�Ӿ�����', 'Visual Params')}</h4>
                                                 <textarea 
                                                     value={viewingEntity.visual_params || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, visual_params: e.target.value }))}
@@ -3908,7 +3908,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 />
                                             </div>
                                              <div className="space-y-1">
-                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('叙事描述', 'Narrative Description')}</h4>
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('��������', 'Narrative Description')}</h4>
                                                 <textarea 
                                                     value={viewingEntity.narrative_description || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, narrative_description: e.target.value }))}
@@ -3923,7 +3923,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     {/* Appearance Details */}
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-1">
-                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('外观', 'Appearance')}</h4>
+                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('���', 'Appearance')}</h4>
                                             <textarea 
                                                 value={viewingEntity.appearance_cn || ''}
                                                 onChange={(e) => setViewingEntity(prev => ({ ...prev, appearance_cn: e.target.value }))}
@@ -3933,7 +3933,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             />
                                         </div>
                                         <div className="space-y-1">
-                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('服装', 'Clothing')}</h4>
+                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('��װ', 'Clothing')}</h4>
                                             <textarea 
                                                 value={viewingEntity.clothing || ''}
                                                 onChange={(e) => setViewingEntity(prev => ({ ...prev, clothing: e.target.value }))}
@@ -3951,17 +3951,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         </h4>
                                         <div className="grid grid-cols-1 gap-3">
                                             <div>
-                                                <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('中文提示词', 'Chinese Prompt')}</div>
+                                                <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('������ʾ��', 'Chinese Prompt')}</div>
                                                 <textarea
                                                     value={viewingEntity.generation_prompt_cn || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_cn: e.target.value }))}
                                                     onBlur={(e) => handleFieldUpdate('generation_prompt_cn', e.target.value)}
                                                     className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
-                                                    placeholder={t('输入中文生图提示词...', 'Enter Chinese generation prompt...')}
+                                                    placeholder={t('����������ͼ��ʾ��...', 'Enter Chinese generation prompt...')}
                                                 />
                                             </div>
                                             <div>
-                                                <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('英文提示词', 'English Prompt')}</div>
+                                                <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('Ӣ����ʾ��', 'English Prompt')}</div>
                                                 <textarea
                                                     value={viewingEntity.generation_prompt_en || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_en: e.target.value }))}
@@ -4010,13 +4010,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             <div className="bg-white/5 rounded-lg border border-white/5 p-3 text-xs space-y-1">
                                                 {viewingEntity.dependency_strategy.type && (
                                                     <div className="flex gap-2">
-                                                        <span className="text-muted-foreground">{t('类型：', 'Type:')}</span>
+                                                        <span className="text-muted-foreground">{t('���ͣ�', 'Type:')}</span>
                                                         <span className="font-bold text-primary">{viewingEntity.dependency_strategy.type}</span>
                                                     </div>
                                                 )}
                                                 {viewingEntity.dependency_strategy.logic && (
                                                     <div className="flex gap-2 flex-col sm:flex-row sm:items-baseline">
-                                                        <span className="text-muted-foreground whitespace-nowrap">{t('逻辑：', 'Logic:')}</span>
+                                                        <span className="text-muted-foreground whitespace-nowrap">{t('�߼���', 'Logic:')}</span>
                                                         <span className="text-white/80 italic">{viewingEntity.dependency_strategy.logic}</span>
                                                     </div>
                                                 )}
@@ -4026,8 +4026,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                                     {/* Visual Dependencies (Editable) */}
                                     <div className="space-y-2 pt-2 border-t border-white/5">
-                                         <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('视觉依赖', 'Visual Dependencies')}</h4>
-                                         <p className="text-[10px] text-white/40 mb-1">{t('添加主体名称后，生成该主体时会自动引用其图片。', 'Add entity names to use their images as reference when generating this entity.')}</p>
+                                         <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('�Ӿ�����', 'Visual Dependencies')}</h4>
+                                         <p className="text-[10px] text-white/40 mb-1">{t('�����������ƺ����ɸ�����ʱ���Զ�������ͼƬ��', 'Add entity names to use their images as reference when generating this entity.')}</p>
                                          <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                                              <div className="flex flex-wrap gap-2 mb-2">
                                                  {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, i) => (
@@ -4088,13 +4088,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 onClick={() => setViewingEntity(null)}
                                                 className="px-4 py-2 rounded-lg font-bold text-xs text-muted-foreground hover:bg-white/10 transition-colors uppercase"
                                             >
-                                                {t('取消', 'Cancel')}
+                                                {t('ȡ��', 'Cancel')}
                                             </button>
                                             <button 
                                                 onClick={handleCommitCreate}
                                                 className="px-6 py-2 rounded-lg font-bold text-xs bg-primary text-black hover:brightness-110 flex items-center gap-2 uppercase tracking-wide shadow-lg shadow-primary/20 transition-all active:scale-95"
                                             >
-                                                <Plus size={14} strokeWidth={3} /> {t('创建主体', 'Create Subject')}
+                                                <Plus size={14} strokeWidth={3} /> {t('��������', 'Create Subject')}
                                             </button>
                                         </div>
                                     )}
@@ -4120,7 +4120,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         return (
                                             <div className="space-y-2 pt-4 border-t border-white/5">
                                                 <div className="flex justify-between items-center">
-                                                    <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('其他属性', 'Other Attributes')}</h4>
+                                                    <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('��������', 'Other Attributes')}</h4>
                                                     <button 
                                                         onClick={async () => {
                                                             const key = await promptUiMessage("Enter new attribute name:", {
@@ -4195,17 +4195,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             <div className="space-y-2">
                                                 <div className="grid grid-cols-1 gap-3">
                                                     <div>
-                                                        <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('中文提示词', 'Chinese Prompt')}</div>
+                                                        <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('������ʾ��', 'Chinese Prompt')}</div>
                                                         <textarea
                                                             value={viewingEntity.generation_prompt_cn || ''}
                                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_cn: e.target.value }))}
                                                             onBlur={(e) => handleFieldUpdate('generation_prompt_cn', e.target.value)}
                                                             className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
-                                                            placeholder={t('输入中文生图提示词...', 'Enter Chinese generation prompt...')}
+                                                            placeholder={t('����������ͼ��ʾ��...', 'Enter Chinese generation prompt...')}
                                                         />
                                                     </div>
                                                     <div>
-                                                        <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('英文提示词', 'English Prompt')}</div>
+                                                        <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('Ӣ����ʾ��', 'English Prompt')}</div>
                                                         <textarea
                                                             value={viewingEntity.generation_prompt_en || ''}
                                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_en: e.target.value }))}
@@ -4223,7 +4223,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             {/* Auto-detected Visual Dependencies */}
                                             {parseVisualDependencies(viewingEntity?.visual_dependencies).length > 0 && (
                                                 <div className="relative">
-                                                    <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('视觉依赖（自动作为参考）', 'Visual Dependencies (Auto-Used)')}</label>
+                                                    <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('�Ӿ��������Զ���Ϊ�ο���', 'Visual Dependencies (Auto-Used)')}</label>
                                                     <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                         {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, idx) => {
                                                             const startDep = String(dep).trim();
@@ -4256,7 +4256,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                     </div>
                                                                     {!depEntity && (
                                                                         <div className="text-[8px] text-red-400 px-0.5">
-                                                                            {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
+                                                                            {entityListLoading ? t('������', 'Loading') : t('δ�ҵ�', 'Not Found')}
                                                                         </div>
                                                                     )}
                                                                 </div>
@@ -4268,7 +4268,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                                             {/* Reference Image Select */}
                                             <div className="relative">
-                                                     <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('参考图（可选）', 'Ref Image (Optional)')}</label>
+                                                     <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('�ο�ͼ����ѡ��', 'Ref Image (Optional)')}</label>
 
                                                      {!refImage ? (
                                                          <div className="flex gap-2 items-center">
@@ -4330,7 +4330,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                      {refSelectionMode === 'assets' && !refImage && (
                                                          <div className="absolute bottom-full left-0 right-0 mb-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl h-64 overflow-hidden flex flex-col">
                                                              <div className="p-2 border-b border-white/10 flex justify-between items-center bg-black/20">
-                                                                 <span className="text-xs font-bold text-muted-foreground ml-2">{t('从素材库选择', 'Select from Assets')}</span>
+                                                                 <span className="text-xs font-bold text-muted-foreground ml-2">{t('���زĿ�ѡ��', 'Select from Assets')}</span>
                                                                  <button onClick={() => setRefSelectionMode(null)}><X size={14} className="text-white/50 hover:text-white"/></button>
                                                              </div>
                                                              <div className="px-2 py-2 border-b border-white/10 bg-black/20 grid grid-cols-1 sm:grid-cols-[1fr_130px_130px] gap-2">
@@ -4338,7 +4338,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                      type="text"
                                                                      value={assetKeyword}
                                                                      onChange={(e) => setAssetKeyword(e.target.value)}
-                                                                     placeholder={t('搜索素材', 'Search assets')}
+                                                                     placeholder={t('�����ز�', 'Search assets')}
                                                                      className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                                  />
                                                                  <select
@@ -4346,7 +4346,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                      onChange={(e) => setAssetProjectFilter(e.target.value)}
                                                                      className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                                  >
-                                                                     <option value="all">{t('所有项目', 'All Projects')}</option>
+                                                                     <option value="all">{t('������Ŀ', 'All Projects')}</option>
                                                                      {assetProjectOptions.map((item) => (
                                                                          <option key={item.value} value={item.value}>{item.label}</option>
                                                                      ))}
@@ -4356,7 +4356,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                      onChange={(e) => setAssetImageTypeFilter(e.target.value)}
                                                                      className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                                  >
-                                                                     <option value="all">{t('所有类型', 'All Types')}</option>
+                                                                     <option value="all">{t('��������', 'All Types')}</option>
                                                                      {assetImageTypeOptions.map((item) => (
                                                                          <option key={item.value} value={item.value}>{item.label}</option>
                                                                      ))}
@@ -4388,10 +4388,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                  {assetsLoading ? (
                                                                      <div className="py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                                                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                                                         {t('素材加载中...', 'Loading assets...')}
+                                                                         {t('�زļ�����...', 'Loading assets...')}
                                                                      </div>
                                                                  ) : filteredAssets.length === 0 && (
-                                                                     <div className="py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
+                                                                     <div className="py-8 text-center text-xs text-muted-foreground">{t('δ�ҵ��ز�', 'No assets found')}</div>
                                                                  )}
                                                              </div>
                                                          </div>
@@ -4400,12 +4400,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                                             <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
                                                 <div className="text-[11px] text-muted-foreground">
-                                                    {t('提交语种：', 'Submit lang: ')}
+                                                    {t('�ύ���֣�', 'Submit lang: ')}
                                                     {tempPromptSubmitLang
-                                                        ? `${promptLangText(tempPromptSubmitLang)} (${t('临时', 'Temp')})`
+                                                        ? `${promptLangText(tempPromptSubmitLang)} (${t('��ʱ', 'Temp')})`
                                                         : `${promptLangPrefText(promptSubmitLangPref)}`
                                                     }
-                                                    {` ${t(' -> 生效: ', '-> Effective: ')}${promptLangText(effectivePromptSubmitLang)}`}
+                                                    {` ${t(' -> ��Ч: ', '-> Effective: ')}${promptLangText(effectivePromptSubmitLang)}`}
                                                 </div>
                                                 <div className="relative">
                                                     <button
@@ -4413,7 +4413,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                         disabled={generating}
                                                         className="px-3 py-1.5 rounded-md border border-white/15 bg-black/40 text-xs font-bold text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50 flex items-center gap-1"
                                                     >
-                                                        {t('切换语种', 'Switch Lang')} <ChevronDown size={14} />
+                                                        {t('�л�����', 'Switch Lang')} <ChevronDown size={14} />
                                                     </button>
                                                     {showPromptLangMenu && (
                                                         <div className="absolute right-0 bottom-full mb-2 w-48 rounded-lg border border-white/10 bg-[#121212] shadow-2xl z-20 overflow-hidden">
@@ -4421,19 +4421,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 onClick={() => { setTempPromptSubmitLang(''); setShowPromptLangMenu(false); }}
                                                                 className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === '' ? 'text-primary' : 'text-white/80'}`}
                                                             >
-                                                                {t('跟随全局', 'Follow config')}
+                                                                {t('����ȫ��', 'Follow config')}
                                                             </button>
                                                             <button
                                                                 onClick={() => { setTempPromptSubmitLang('en'); setShowPromptLangMenu(false); }}
                                                                 className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'en' ? 'text-primary' : 'text-white/80'}`}
                                                             >
-                                                                {t('临时英文', 'Temp English')}
+                                                                {t('��ʱӢ��', 'Temp English')}
                                                             </button>
                                                             <button
                                                                 onClick={() => { setTempPromptSubmitLang('cn'); setShowPromptLangMenu(false); }}
                                                                 className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'cn' ? 'text-primary' : 'text-white/80'}`}
                                                             >
-                                                                {t('临时中文', 'Temp Chinese')}
+                                                                {t('��ʱ����', 'Temp Chinese')}
                                                             </button>
                                                         </div>
                                                     )}
@@ -4443,7 +4443,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div>
-                                                        <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
+                                                        <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('������ʷ', 'Generation History')}</div>
                                                     </div>
                                                     <button
                                                         type="button"
@@ -4452,7 +4452,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                         className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
                                                     >
                                                         <RefreshCw className={subjectGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
-                                                        {t('刷新', 'Refresh')}
+                                                        {t('ˢ��', 'Refresh')}
                                                     </button>
                                                 </div>
                                                 {subjectGenerationHistoryLoading ? (
@@ -4461,7 +4461,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     </div>
                                                 ) : subjectGenerationHistory.length === 0 ? (
                                                     <div className="rounded border border-dashed border-white/10 px-3 py-4 text-center text-xs text-muted-foreground">
-                                                        {t('无历史。', 'No history yet.')}
+                                                        {t('����ʷ��', 'No history yet.')}
                                                     </div>
                                                 ) : (
                                                     <div className="space-y-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
@@ -4484,10 +4484,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         </div>
                                                                         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                                                                             <button onClick={() => canPreview && updateEntityImage(item.resultUrl, false, viewingEntity)} disabled={!canPreview} className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/80 hover:bg-white/10">
-                                                                                <ImageIcon size={10} /> {t('设为当前', 'Use Result')}
+                                                                                <ImageIcon size={10} /> {t('��Ϊ��ǰ', 'Use Result')}
                                                                             </button>
                                                                             <button onClick={() => handleDeleteSubjectGenerationHistoryItem(item)} disabled={isDeleting} className="inline-flex items-center gap-1 rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-500/20">
-                                                                                <Trash2 size={10} /> {t('删除', 'Delete')}
+                                                                                <Trash2 size={10} /> {t('ɾ��', 'Delete')}
                                                                             </button>
                                                                         </div>
                                                                     </div>
@@ -4506,15 +4506,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     {viewingEntityTab === 'advanced' && (
                                         <div className="flex flex-col h-full space-y-4">
                                             <div className="mb-4">
-                                                <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">{t('修改资产', 'Modify Asset')}</h4>
+                                                <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">{t('�޸��ʲ�', 'Modify Asset')}</h4>
                                                 <p className="text-[10px] text-white/50 mb-4">
-                                                    {t('输入具体指令以修改该资产的提示词。提交后将自动应用修改并重新生成图片。', 'Enter specific instructions to modify the prompt. Generation will be triggered automatically.')}
+                                                    {t('�������ָ�����޸ĸ��ʲ�����ʾ�ʡ��ύ���Զ�Ӧ���޸Ĳ���������ͼƬ��', 'Enter specific instructions to modify the prompt. Generation will be triggered automatically.')}
                                                 </p>
                                             </div>
                                             <div className="flex-1 min-h-[250px]">
                                                 <textarea
                                                     className="w-full h-full text-sm bg-white/5 border border-white/10 rounded-md p-4 text-white placeholder-white/30 resize-y outline-none focus:border-primary/50"
-                                                    placeholder={t("输入局部修改指令（例如：把狗的颜色换成黑色）...", "Enter local modification instructions (e.g., change the dog's color to black)...")}
+                                                    placeholder={t("����ֲ��޸�ָ����磺�ѹ�����ɫ���ɺ�ɫ��...", "Enter local modification instructions (e.g., change the dog's color to black)...")}
                                                     value={advancedInstruction}
                                                     onChange={e => setAdvancedInstruction(e.target.value)}
                                                 />
@@ -4562,7 +4562,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     }}
                                                 >
                                                     {isAdvancedLocalModifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paintbrush className="w-4 h-4" />}
-                                                    <span className="font-semibold text-sm">{t('局部修改', 'Local Modify')}</span>
+                                                    <span className="font-semibold text-sm">{t('�ֲ��޸�', 'Local Modify')}</span>
                                                 </button>
 
                                                 <button
@@ -4571,7 +4571,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     disabled={isAdvancedOptimizing || !advancedInstruction.trim() || isAdvancedLocalModifying || generating}
                                                     onClick={async () => {
                                                         setIsAdvancedOptimizing(true);
-                                                        if (onLog) onLog(t('正在通过大模型优化提示词...', 'Optimizing prompt using LLM...'), 'process');
+                                                        if (onLog) onLog(t('����ͨ����ģ���Ż���ʾ��...', 'Optimizing prompt using LLM...'), 'process');
                                                         try {
                                                             const base = viewingEntity?.generation_prompt_en || "";
                                                             const res = await refinePrompt(base, advancedInstruction, 'image');
@@ -4595,19 +4595,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                     });
                                                                 }
 
-                                                                if (onLog) onLog(t('已生成新提示词，准备拉起生成...', 'Generated new prompt, ready to regenerate...'), 'info');
+                                                                if (onLog) onLog(t('����������ʾ�ʣ�׼����������...', 'Generated new prompt, ready to regenerate...'), 'info');
                                                                 try {
                                                                     await handleGenerate(viewingEntity, autoRefs, optimized);
-                                                                    if (onLog) onLog(t('提交成功', 'Submitted successfully'), 'success');
+                                                                    if (onLog) onLog(t('�ύ�ɹ�', 'Submitted successfully'), 'success');
                                                                 } catch (err) {
-                                                                    if (onLog) onLog(t('生成失败', 'Generation failed'), 'error');
+                                                                    if (onLog) onLog(t('����ʧ��', 'Generation failed'), 'error');
                                                                 }
                                                             } else {
-                                                                if (onLog) onLog(t('优化失败，请稍后再试', 'Optimization failed, please try again'), 'error');
+                                                                if (onLog) onLog(t('�Ż�ʧ�ܣ����Ժ�����', 'Optimization failed, please try again'), 'error');
                                                             }
                                                         } catch (e) {
                                                             console.error("Refine prompt failed", e);
-                                                            if (onLog) onLog(t('指令分析失败', 'Instruction analysis failed') + ': ' + e.message, 'error');
+                                                            if (onLog) onLog(t('ָ�����ʧ��', 'Instruction analysis failed') + ': ' + e.message, 'error');
                                                         } finally {
                                                             setIsAdvancedOptimizing(false);
                                                         }
@@ -4615,7 +4615,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 >
                                                     <div className="flex items-center gap-2">
                                                         {isAdvancedOptimizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                                                        <span className="font-semibold text-sm">{t('重新生成', 'Regenerate')}</span>
+                                                        <span className="font-semibold text-sm">{t('��������', 'Regenerate')}</span>
                                                     </div>
                                                 </button>
                                             </div>
@@ -4648,7 +4648,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         ) : (
                                             <Wand2 size={16} />
                                         )}
-                                        {((viewingEntityTab === 'generate' && generating) || viewingEntityImageLocked) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}
+                                        {((viewingEntityTab === 'generate' && generating) || viewingEntityImageLocked) ? t('������...', 'Generating...') : t('����ͼƬ', 'Generate Image')}
                                     </button>
                                 </div>
                             </div>
@@ -4674,17 +4674,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             className="bg-[#1e1e1e] border border-white/10 rounded-xl w-full max-w-2xl h-[650px] flex flex-col shadow-2xl overflow-hidden"
                         >
                             <div className="flex justify-between items-center p-4 border-b border-white/10 bg-black/20">
-                                <h3 className="font-bold text-lg">{t('为主体选择图片', 'Select Image for')} {selectedEntity?.name}</h3>
+                                <h3 className="font-bold text-lg">{t('Ϊ����ѡ��ͼƬ', 'Select Image for')} {selectedEntity?.name}</h3>
                                 <div className="flex items-center gap-2">
                                     <button
                                         type="button"
                                         onClick={() => void handleRemoveEntityImage(selectedEntity)}
                                         disabled={selectedEntityImageLocked || !selectedEntity?.image_url}
                                         className="inline-flex items-center gap-1 rounded border border-amber-400/25 bg-amber-500/10 px-2.5 py-1.5 text-xs font-bold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                                        title={selectedEntityImageLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
+                                        title={selectedEntityImageLocked ? t('ͼƬ���������У������Ƴ�ͼƬ', 'Image job is running; image removal is disabled') : t('�Ƴ�ͼƬ����', 'Remove image association')}
                                     >
                                         <Unlink size={14} />
-                                        {t('移除图片', 'Remove Image')}
+                                        {t('�Ƴ�ͼƬ', 'Remove Image')}
                                     </button>
                                     <button onClick={() => setShowImageModal(false)} className="text-white/50 hover:text-white">
                                         <X size={20} />
@@ -4694,7 +4694,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                             {selectedEntityImageLocked && (
                                 <div className="px-4 py-2 border-b border-amber-400/20 bg-amber-500/10 text-xs text-amber-100">
-                                    {t('当前主体图片任务运行中。更换、上传、移除和高级改图操作已暂时锁定；如需处理，请先停止任务。', 'A subject image job is currently running. Replace, upload, remove, and advanced image editing actions are temporarily locked; stop the job first if you need to modify the image.')}
+                                    {t('��ǰ����ͼƬ���������С��������ϴ����Ƴ��͸߼���ͼ��������ʱ���������账��������ֹͣ����', 'A subject image job is currently running. Replace, upload, remove, and advanced image editing actions are temporarily locked; stop the job first if you need to modify the image.')}
                                 </div>
                             )}
 
@@ -4707,12 +4707,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${imageModalTab === tab ? 'border-primary text-primary bg-primary/5' : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'}`}
                                     >
                                         {tab === 'library'
-                                            ? t('素材库', 'Library')
+                                            ? t('�زĿ�', 'Library')
                                             : tab === 'upload'
-                                                ? t('上传', 'Upload')
+                                                ? t('�ϴ�', 'Upload')
                                                 : tab === 'generate'
-                                                    ? t('生成', 'Generate')
-                                                    : t('高级', 'Advanced')}
+                                                    ? t('����', 'Generate')
+                                                    : t('�߼�', 'Advanced')}
                                     </button>
                                 ))}
                             </div>
@@ -4729,7 +4729,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 type="text"
                                                 value={assetKeyword}
                                                 onChange={(e) => setAssetKeyword(e.target.value)}
-                                                placeholder={t('搜索素材名称/项目/类型/备注', 'Search name/project/type/remark')}
+                                                placeholder={t('�����ز�����/��Ŀ/����/��ע', 'Search name/project/type/remark')}
                                                 className="bg-black/40 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:border-primary/50 outline-none"
                                             />
                                             <select
@@ -4737,7 +4737,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 onChange={(e) => setAssetProjectFilter(e.target.value)}
                                                 className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
                                             >
-                                                <option value="all">{t('全部项目', 'All Projects')}</option>
+                                                <option value="all">{t('ȫ����Ŀ', 'All Projects')}</option>
                                                 {assetProjectOptions.map((item) => (
                                                     <option key={item.value} value={item.value}>{item.label}</option>
                                                 ))}
@@ -4747,7 +4747,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 onChange={(e) => setAssetImageTypeFilter(e.target.value)}
                                                 className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
                                             >
-                                                <option value="all">{t('全部图片类型', 'All Image Types')}</option>
+                                                <option value="all">{t('ȫ��ͼƬ����', 'All Image Types')}</option>
                                                 {assetImageTypeOptions.map((item) => (
                                                     <option key={item.value} value={item.value}>{item.label}</option>
                                                 ))}
@@ -4760,7 +4760,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 }}
                                                 className="px-3 py-2 rounded-md text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
                                             >
-                                                {t('重置', 'Reset')}
+                                                {t('����', 'Reset')}
                                             </button>
                                         </div>
                                         {imageLibraryWindow.topSpacerHeight > 0 && <div style={{ height: `${imageLibraryWindow.topSpacerHeight}px` }} />}
@@ -4787,11 +4787,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         {assetsLoading ? (
                                             <div className="py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
                                                 <Loader2 className="w-4 h-4 animate-spin" />
-                                                {t('素材加载中...', 'Loading assets...')}
+                                                {t('�زļ�����...', 'Loading assets...')}
                                             </div>
                                         ) : filteredAssets.length === 0 && (
                                             <div className="py-12 text-center text-muted-foreground">
-                                                {t('没有匹配筛选条件的素材', 'No assets matched current filters')}
+                                                {t('û��ƥ��ɸѡ�������ز�', 'No assets matched current filters')}
                                             </div>
                                         )}
                                     </div>
@@ -4813,16 +4813,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 <Upload className="text-muted-foreground mb-2" size={32} />
                                             )}
                                             <span className="text-sm font-medium text-muted-foreground">
-                                                {uploading ? t('上传中...', 'Uploading...') : t('点击或拖拽图片到此处', 'Click or drop image here')}
+                                                {uploading ? t('�ϴ���...', 'Uploading...') : t('�������קͼƬ���˴�', 'Click or drop image here')}
                                             </span>
                                         </div>
                                         
                                         <div className="w-full max-w-sm mt-8">
-                                             <div className="text-xs text-muted-foreground mb-2 uppercase font-bold tracking-wider">{t('或通过 URL 导入', 'Or import from URL')}</div>
+                                             <div className="text-xs text-muted-foreground mb-2 uppercase font-bold tracking-wider">{t('��ͨ�� URL ����', 'Or import from URL')}</div>
                                              <div className="flex gap-2">
                                                 <input 
                                                     type="text" 
-                                                    placeholder={t('请输入图片链接（https://...）', 'Enter image URL (https://...)')} 
+                                                    placeholder={t('������ͼƬ���ӣ�https://...��', 'Enter image URL (https://...)')} 
                                                     className="flex-1 bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:border-primary/50 outline-none"
                                                     disabled={selectedEntityImageLocked}
                                                     onKeyDown={(e) => {
@@ -4840,7 +4840,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 {imageModalTab === 'advanced' && (
                                     <div className="flex flex-col h-full">
                                         <div className="mb-4">
-                                            <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">{t('高级优化', 'Advanced Refinement')}</h4>
+                                            <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">{t('�߼��Ż�', 'Advanced Refinement')}</h4>
                                             <p className="text-[10px] text-white/50 mb-4">
                                                 Use AI to refine or modify the image with step-by-step instructions.
                                             </p>
@@ -4875,24 +4875,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 <div className="flex items-center gap-2">
                                                     {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <RefreshCw className="animate-spin" size={12} />}
                                                     {stoppingSubjectImageJobs[String(selectedEntity.id)]
-                                                        ? t('该主体停止请求发送中，请稍候。', 'Stop request is being sent for this subject. Please wait.')
+                                                        ? t('������ֹͣ�������У����Ժ�', 'Stop request is being sent for this subject. Please wait.')
                                                         : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'persisting'
-                                                            ? t('该主体已完成生成，正在等待稳定图片同步到素材库。', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
+                                                            ? t('��������������ɣ����ڵȴ��ȶ�ͼƬͬ�����زĿ⡣', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
                                                         : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'running'
-                                                            ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
+                                                            ? t('���������������У���ʹ�رմ���Ҳ�������', 'This subject is running in background and will continue even if you close this window.')
                                                             : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'queued'
-                                                                ? t('该主体正在排队中，开始后将自动运行。', 'This subject is queued and will run automatically once started.')
-                                                                : t('该主体正在生成中，即使关闭窗口也会继续。', 'This subject is generating in background and will continue even if you close this window.')}
+                                                                ? t('�����������Ŷ��У���ʼ���Զ����С�', 'This subject is queued and will run automatically once started.')
+                                                                : t('���������������У���ʹ�رմ���Ҳ�������', 'This subject is generating in background and will continue even if you close this window.')}
                                                 </div>
                                                 <button
                                                     type="button"
                                                     onClick={handleForceStopSubjectImage}
                                                     disabled={Boolean(stoppingSubjectImageJobs[String(selectedEntity.id)])}
                                                     className="shrink-0 inline-flex items-center gap-1 rounded border border-red-400/30 bg-red-500/15 px-2 py-1 text-[11px] font-bold text-red-100 hover:bg-red-500/25 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                                                    title={t('强制停止该主体的后台图片任务，并解除当前运行状态', 'Force-stop this subject background image task and clear the current running state')}
+                                                    title={t('ǿ��ֹͣ������ĺ�̨ͼƬ���񣬲������ǰ����״̬', 'Force-stop this subject background image task and clear the current running state')}
                                                 >
                                                     {stoppingSubjectImageJobs[String(selectedEntity.id)] ? <Loader2 className="animate-spin" size={12} /> : <X size={12} />}
-                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? t('停止中', 'Stopping') : t('停止', 'Stop')}
+                                                    {stoppingSubjectImageJobs[String(selectedEntity.id)] ? t('ֹͣ��', 'Stopping') : t('ֹͣ', 'Stop')}
                                                 </button>
                                             </div>
                                         )}
@@ -4911,7 +4911,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         {/* Auto-detected Visual Dependencies */}
                                         {parseVisualDependencies(selectedEntity?.visual_dependencies).length > 0 && (
                                             <div className="mb-4">
-                                                <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('视觉依赖（自动使用）', 'Visual Dependencies (Auto-Used)')}</label>
+                                                <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('�Ӿ��������Զ�ʹ�ã�', 'Visual Dependencies (Auto-Used)')}</label>
                                                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                     {parseVisualDependencies(selectedEntity.visual_dependencies).map((dep, idx) => {
                                                         const startDep = String(dep).trim();
@@ -4944,7 +4944,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 </div>
                                                                 {!depEntity && (
                                                                     <div className="text-[8px] text-red-400 px-0.5">
-                                                                        {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
+                                                                        {entityListLoading ? t('������', 'Loading') : t('δ�ҵ�', 'Not Found')}
                                                                     </div>
                                                                 )}
                                                             </div>
@@ -4956,7 +4956,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         
                                         {/* Reference Image Select */}
                                         <div className="mb-4 relative">
-                                                 <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('参考图（可选）', 'Ref Image (Optional)')}</label>
+                                                 <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('�ο�ͼ����ѡ��', 'Ref Image (Optional)')}</label>
                                                  
                                                  {!refImage ? (
                                                      <div className="flex gap-2 items-center">
@@ -5022,7 +5022,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                  {refSelectionMode === 'assets' && !refImage && (
                                                      <div className="absolute top-full left-0 right-0 mt-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl h-64 overflow-hidden flex flex-col">
                                                          <div className="p-2 border-b border-white/10 flex justify-between items-center bg-black/20">
-                                                             <span className="text-xs font-bold text-muted-foreground ml-2">{t('从素材中选择', 'Select from Assets')}</span>
+                                                             <span className="text-xs font-bold text-muted-foreground ml-2">{t('���ز���ѡ��', 'Select from Assets')}</span>
                                                              <button onClick={() => setRefSelectionMode(null)}><X size={14} className="text-white/50 hover:text-white"/></button>
                                                          </div>
                                                          <div className="px-2 py-2 border-b border-white/10 bg-black/20 grid grid-cols-1 sm:grid-cols-[1fr_130px_130px] gap-2">
@@ -5030,7 +5030,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                  type="text"
                                                                  value={assetKeyword}
                                                                  onChange={(e) => setAssetKeyword(e.target.value)}
-                                                                 placeholder={t('搜索素材', 'Search assets')}
+                                                                 placeholder={t('�����ز�', 'Search assets')}
                                                                  className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                              />
                                                              <select
@@ -5038,7 +5038,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                  onChange={(e) => setAssetProjectFilter(e.target.value)}
                                                                  className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                              >
-                                                                 <option value="all">{t('全部项目', 'All Projects')}</option>
+                                                                 <option value="all">{t('ȫ����Ŀ', 'All Projects')}</option>
                                                                  {assetProjectOptions.map((item) => (
                                                                      <option key={item.value} value={item.value}>{item.label}</option>
                                                                  ))}
@@ -5048,7 +5048,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                  onChange={(e) => setAssetImageTypeFilter(e.target.value)}
                                                                  className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                              >
-                                                                 <option value="all">{t('全部类型', 'All Types')}</option>
+                                                                 <option value="all">{t('ȫ������', 'All Types')}</option>
                                                                  {assetImageTypeOptions.map((item) => (
                                                                      <option key={item.value} value={item.value}>{item.label}</option>
                                                                  ))}
@@ -5080,10 +5080,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                              {assetsLoading ? (
                                                                  <div className="py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                                                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                                                     {t('素材加载中...', 'Loading assets...')}
+                                                                     {t('�زļ�����...', 'Loading assets...')}
                                                                  </div>
                                                              ) : filteredAssets.length === 0 && (
-                                                                 <div className="py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
+                                                                 <div className="py-8 text-center text-xs text-muted-foreground">{t('δ�ҵ��ز�', 'No assets found')}</div>
                                                              )}
                                                          </div>
                                                      </div>
@@ -5091,12 +5091,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         </div>
 
                                         <div className="mb-3 text-[11px] text-muted-foreground">
-                                            {t('当前提交语言：', 'Current submit language: ')}
+                                            {t('��ǰ�ύ���ԣ�', 'Current submit language: ')}
                                             {tempPromptSubmitLang
-                                                ? `${promptLangText(tempPromptSubmitLang)} (${t('手动临时', 'Temporary')})`
+                                                ? `${promptLangText(tempPromptSubmitLang)} (${t('�ֶ���ʱ', 'Temporary')})`
                                                 : `${promptLangPrefText(promptSubmitLangPref)}${promptSubmitLangPref === 'auto' ? ` -> ${promptLangText(resolvedPromptSubmitLang)}` : ''}`
                                             }
-                                            {` ${t('→ 生效：', '-> Effective: ')}${promptLangText(effectivePromptSubmitLang)}`}
+                                            {` ${t('�� ��Ч��', '-> Effective: ')}${promptLangText(effectivePromptSubmitLang)}`}
                                         </div>
 
                                         <div className="flex justify-end items-center gap-2">
@@ -5110,14 +5110,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 ) : (
                                                     <Wand2 size={18} />
                                                 )}
-                                                <span>{(generating || selectedEntityHasRunningImageJob) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}</span>
+                                                <span>{(generating || selectedEntityHasRunningImageJob) ? t('������...', 'Generating...') : t('����ͼƬ', 'Generate Image')}</span>
                                             </button>
                                             <div className="relative">
                                                 <button
                                                     onClick={() => setShowPromptLangMenu(prev => !prev)}
                                                     disabled={generating || selectedEntityHasRunningImageJob}
                                                     className="h-full px-2 py-2 rounded-lg border border-white/15 bg-black/30 text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50"
-                                                    title={t('临时切换本次提交语种', 'Temporarily switch submit language for this generation')}
+                                                    title={t('��ʱ�л������ύ����', 'Temporarily switch submit language for this generation')}
                                                 >
                                                     <ChevronDown size={16} />
                                                 </button>
@@ -5130,7 +5130,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                             }}
                                                             className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === '' ? 'text-primary' : 'text-white/80'}`}
                                                         >
-                                                            {t('跟随设置默认', 'Follow settings default')} ({promptLangPrefText(promptSubmitLangPref)}{promptSubmitLangPref === 'auto' ? ` -> ${promptLangText(resolvedPromptSubmitLang)}` : ''})
+                                                            {t('��������Ĭ��', 'Follow settings default')} ({promptLangPrefText(promptSubmitLangPref)}{promptSubmitLangPref === 'auto' ? ` -> ${promptLangText(resolvedPromptSubmitLang)}` : ''})
                                                         </button>
                                                         <button
                                                             onClick={() => {
@@ -5139,7 +5139,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                             }}
                                                             className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'en' ? 'text-primary' : 'text-white/80'}`}
                                                         >
-                                                            {t('临时改为英文提交', 'Temporarily submit in English')}
+                                                            {t('��ʱ��ΪӢ���ύ', 'Temporarily submit in English')}
                                                         </button>
                                                         <button
                                                             onClick={() => {
@@ -5148,7 +5148,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                             }}
                                                             className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'cn' ? 'text-primary' : 'text-white/80'}`}
                                                         >
-                                                            {t('临时改为中文提交', 'Temporarily submit in Chinese')}
+                                                            {t('��ʱ��Ϊ�����ύ', 'Temporarily submit in Chinese')}
                                                         </button>
                                                     </div>
                                                 )}
@@ -5158,8 +5158,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
                                             <div className="flex items-center justify-between gap-2">
                                                 <div>
-                                                    <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('生成历史', 'Generation History')}</div>
-                                                    <div className="text-[11px] text-muted-foreground">{t('显示该主体最近的生图与重构结果。', 'Recent subject image and reconstruction results for this subject.')}</div>
+                                                    <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/70">{t('������ʷ', 'Generation History')}</div>
+                                                    <div className="text-[11px] text-muted-foreground">{t('��ʾ�������������ͼ���ع������', 'Recent subject image and reconstruction results for this subject.')}</div>
                                                 </div>
                                                 <button
                                                     type="button"
@@ -5168,17 +5168,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
                                                 >
                                                     <RefreshCw className={subjectGenerationHistoryLoading ? 'animate-spin' : ''} size={12} />
-                                                    {t('刷新', 'Refresh')}
+                                                    {t('ˢ��', 'Refresh')}
                                                 </button>
                                             </div>
                                             {subjectGenerationHistoryLoading ? (
                                                 <div className="flex items-center justify-center gap-2 rounded border border-dashed border-white/10 px-3 py-6 text-xs text-muted-foreground">
                                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                                    {t('正在加载主体生成历史...', 'Loading subject generation history...')}
+                                                    {t('���ڼ�������������ʷ...', 'Loading subject generation history...')}
                                                 </div>
                                             ) : subjectGenerationHistory.length === 0 ? (
                                                 <div className="rounded border border-dashed border-white/10 px-3 py-6 text-center text-xs text-muted-foreground">
-                                                    {t('该主体还没有生成历史。', 'No generation history for this subject yet.')}
+                                                    {t('�����廹û��������ʷ��', 'No generation history for this subject yet.')}
                                                 </div>
                                             ) : (
                                                 <div className="space-y-2 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
@@ -5217,7 +5217,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                                 className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
                                                                             >
                                                                                 <ImageIcon size={12} />
-                                                                                {t('设为当前', 'Use Result')}
+                                                                                {t('��Ϊ��ǰ', 'Use Result')}
                                                                             </button>
                                                                             <button
                                                                                 type="button"
@@ -5226,7 +5226,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                                 className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
                                                                             >
                                                                                 <ExternalLink size={12} />
-                                                                                {t('查看', 'Open')}
+                                                                                {t('�鿴', 'Open')}
                                                                             </button>
                                                                             <button
                                                                                 type="button"
@@ -5235,7 +5235,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                                 className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20 disabled:opacity-50"
                                                                             >
                                                                                 {isDeleting ? <Loader2 className="animate-spin" size={12} /> : <Trash2 size={12} />}
-                                                                                {isDeleting ? t('删除中', 'Deleting') : t('删除记录', 'Delete Record')}
+                                                                                {isDeleting ? t('ɾ����', 'Deleting') : t('ɾ����¼', 'Delete Record')}
                                                                             </button>
                                                                         </div>
                                                                     </div>
