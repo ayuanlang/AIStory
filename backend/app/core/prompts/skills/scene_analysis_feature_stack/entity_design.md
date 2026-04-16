@@ -61,7 +61,7 @@
 
 ### 1.3 生图提示词与 Imagen 兼容规范
 - 仅作为写作约束指南。
-- **全局 Clean Plate 规则 (纯净空间隔离)**：生图提示词（包含 `cn/en`）仅限“纯视觉物理实体”描述。确保去除角色名、代号（封面海报除外）及人称代词，呈现纯粹的物理空间/静物。若生成前有剧情思维链，输出前务必转化为可见物理状态。
+- **全局 Clean Plate 规则 (纯净剧情角色隔离)**：生图提示词（包含 `cn/en`）仅限“视觉物理实体”与“非剧情背景路人氛围”描述。确保去除具体剧情角色名、代号（封面海报除外）及特定角色的人称代词，呈现纯粹的空间或静物（如果包含路人则允许描述 crowd/pedestrians 等背景人群体）。若生成前有剧情思维链，输出前务必转化为可见物理状态。
 - **全局字段显式回写契约 (Global Write-back)**：所有实体最终的 `generation_prompt_cn/en` 必须显式、自然地吸收并串联其所属结构字段中的有效属性（如名字/类型描述/依赖/动作/功能特征等），确保有效设定均转化为视觉词汇。
 - **自然语言流动的全维度覆盖 (Natural-Prose & Dimension Gate)**：`generation_prompt_en` / `negative_prompt_en` 必须是短句/短段的连贯自然英文 (prose)（推荐：主体 -> 构图机位 -> 光照色彩 -> 细节 -> 风格约束）。每条段落必须逐条核对并覆盖本实体的“最低必要维度”：
   - **Environment**：机位落点、观察朝向、FG/MG/BG、主次主体、光照层次、材质/空间结构、可达性、去人物化。
@@ -139,9 +139,10 @@
 - 正反环境补充约束：除“边界共同瞄定物/固定锚点集合”必须保持一致外，Front 与 Reverse 应尽量避免重复出现同类大件主体物（如床、整组沙发、大型柜体）作为两侧主构图锚点；应通过主次锚点重排体现视角差异。
 - 正反环境唯一大件例外：若剧本语义明确该大件为场景唯一且不可替代（例如单床病房、集体宿舍统一床位编排、剧情指定唯一舞台装置），可在正反两侧重复出现，但必须在 Delta 的 `Background Set Change/Framing Change` 中写明“唯一大件复用原因 + 其余差异锚点”。
 
-#### 3.1.5 纯净去叙事化与门禁自检 (Clean Plate Gatekeeping)
-- **落实全局 Clean Plate 规则**：环境仅指代抽象空间结构与材质。由于高频误差来自对 OTS 的分镜头过写，严禁包含任何剧情推进语句或人物指代。
-- **环境门禁扫描**：提交前必须额外扫描并确保不存在以下可能引发人物残留的词或模式：`CHAR:[@`、`over shoulder`、`over-the-shoulder`、`A over B`、`B over A`、`shoulder silhouette`、`behind head`、`blurred shoulder`、`back-of-head`、`arm entering frame`、`hand in foreground`、`hair edge`、`mirror reflection of a person`、`human shadow`、`he/she/they`（中英代词均禁）。命中任一即整条报废重写。
+#### 3.1.5 纯净去剧情角色化与门禁自检 (Clean Plate Gatekeeping)
+- **落实全局 Clean Plate 规则**：环境仅指代抽象空间结构、材质以及可辅助渲染氛围的无剧情背景群众。由于高频误差来自对 OTS 的分镜头过写，严禁包含任何剧情推进语句或明确身份的主线/配角指代。
+- **背景人群支持声明**：如果上游提取的环境中包含“人群/路人”（如繁华街道），允许在提示词中描述这些无脸化、无具体身份、纯作氛围背景的人群实体。
+- **环境门禁扫描**：提交前必须额外扫描并确保不存在以下可能引发剧情人物残留的词或模式：`CHAR:[@`、`over shoulder`、`over-the-shoulder`、`A over B`、`B over A`、`shoulder silhouette`、`behind head`、`blurred shoulder`、`back-of-head`、`arm entering frame`、`hand in foreground`、`hair edge`、`mirror reflection of a main character`、`specific character shadow`。命中任一即整条报废重写。
 
 ### 3.2 对话正反打与 OTS (Clean Plate Logic)
 - **OTS 同场双环境规则**：当 OTS/正反打在同一 Scene 内执行时，变体 `ENV:[..._OTS_A]` 与 `ENV:[..._OTS_B]` 仅负责交替呈现正反方位的物理对立结构。

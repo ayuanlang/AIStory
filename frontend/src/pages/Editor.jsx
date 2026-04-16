@@ -1374,6 +1374,7 @@ const Editor = ({
                     (Array.isArray(backendSubjectsJson.characters) && backendSubjectsJson.characters.length > 0)
                     || (Array.isArray(backendSubjectsJson.props) && backendSubjectsJson.props.length > 0)
                     || (Array.isArray(backendSubjectsJson.environments) && backendSubjectsJson.environments.length > 0)
+                    || (Array.isArray(backendSubjectsJson.covers) && backendSubjectsJson.covers.length > 0)
                 );
 
             if (hasBackendSubjects) {
@@ -1544,7 +1545,7 @@ const Editor = ({
 
             // 2c. Process Entities (JSON)
             // Can be { characters: [] } or { props: [] } etc
-            if (data.characters || data.props || data.environments) {
+            if (data.characters || data.props || data.environments || data.covers || data.posters) {
                 try {
                     addLog("Processing Entities block...", "process");
                     let count = 0;
@@ -1569,7 +1570,7 @@ const Editor = ({
                     const plannedCharacterCount = Array.isArray(data.characters) ? data.characters.length : 0;
                     const plannedPropCount = Array.isArray(data.props) ? data.props.length : 0;
                     const plannedEnvironmentCount = Array.isArray(data.environments) ? data.environments.length : 0;
-                    const plannedPosterCount = Array.isArray(data.posters) ? data.posters.length : 0;
+                    const plannedPosterCount = (Array.isArray(data.posters) ? data.posters.length : 0) + (Array.isArray(data.covers) ? data.covers.length : 0);
                     addLog(
                         `Entities block detected: character=${plannedCharacterCount}, prop=${plannedPropCount}, environment=${plannedEnvironmentCount}, poster=${plannedPosterCount}`,
                         'info'
@@ -1802,8 +1803,9 @@ const Editor = ({
                     }
 
                     // Posters
-                    if (data.posters && Array.isArray(data.posters)) {
-                        for (const poster of data.posters) {
+                    const resolvedPosters = (data.posters && Array.isArray(data.posters)) ? data.posters : ((data.covers && Array.isArray(data.covers)) ? data.covers : null);
+                    if (resolvedPosters) {
+                        for (const poster of resolvedPosters) {
                                       const entityName = String(
                                           poster?.name ||
                                           poster?.subject_name_exact ||

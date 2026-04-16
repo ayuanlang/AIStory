@@ -4300,6 +4300,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     continue
                 for section in ("characters", "props", "environments", "covers"):
                     items = obj.get(section)
+                    if section == "covers" and not items and "posters" in obj:
+                        items = obj.get("posters")
                     if isinstance(items, list):
                         payload[section].extend([x for x in items if isinstance(x, dict)])
 
@@ -4796,7 +4798,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     return "prop"
                 if t in {"environment", "environments", "env", "场景", "环境"}:
                     return "environment"
-                if t in {"cover", "covers", "封面", "封面海报"}:
+                if t in {"cover", "covers", "poster", "posters", "封面", "封面海报"}:
                     return "cover"
                 return ""
 
@@ -12104,6 +12106,8 @@ def _normalize_subject_entity_type(raw_type: Any) -> str:
         return "prop"
     if text in {"environment", "environments", "env", "场景", "环境"}:
         return "environment"
+    if text in {"cover", "covers", "poster", "posters", "cover_poster", "封面", "封面海报"}:
+        return "cover"
     return "character"
 
 
@@ -12248,7 +12252,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                     ] if value
                 )
             normalized["description_cn"] = description_cn
-        elif section in ("props", "environments"):
+        elif section in ("props", "environments", "covers"):
             normalized["description_cn"] = _pick_text(
                 item.get("description_cn"),
                 item.get("description"),
@@ -12274,6 +12278,8 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
 
         for section in ("characters", "props", "environments", "covers"):
             items = parsed.get(section)
+            if section == "covers" and not items and "posters" in parsed:
+                items = parsed.get("posters")
             if not isinstance(items, list):
                 continue
             normalized_items = []

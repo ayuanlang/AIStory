@@ -71,7 +71,7 @@
 - **一致性**：实体上出现的具体文字内容（招牌、海报等）必须与目标语言设定一致。
 
 #### 2. 角色提取规范
-- **角色不提取舍弃策略**：禁止将无明确身份、无剧情推动作用的群体性次要路人作为独立实体提取，也**绝对禁止**将他们融入场景环境描述中。
+- **角色不提取与合并策略**：禁止将无明确身份、无剧情推动作用的群体性次要路人（如群众、路人等）作为独立角色实体提取。**你应该将这些非剧情角色的人群作为背景元素融入到场景环境（Environment）的描述中**。
 - **角色深度提取**：必须提炼出角色的身份、性别、年龄、种族、个性特征、职业，以及服装基调和随身携带物。
 - **角色状态变化前置规则**：只要人物出现**可识别的重大外观或着装变化**（如流血挂彩、换便装、戴面具），就必须新建为带有后缀的独立角色实体。
 - **服装暗示识别规则**：动作暗示（如“扯正领带”）同理属于状态变化，提取为独立角色。
@@ -86,10 +86,10 @@
     - **连贯性声明**：拆分的正反面实体互相声明材质、轮廓一致，仅一面不同。
 
 #### 4. 环境（即空镜）提取规范 (Environment/Clean Plate Extraction Rules)
-  - **环境去人物与剧情隔离总规则（Clean Plate & Plot Isolation）**：环境作为**纯物理容器**，必须保持为绝对干净的资产，严格执行“角色清零”与“剧情隔离”。
-    - **视觉与语义绝对禁人物（含OTS防污染）**：无论是普通的空间环境还是 OTS 视角的专属环境变体，均**禁止出现任何人物语义或角色身影**。其描述负责结构、构图、光照与材质，不得混入任何角色外观、服装以及人体局部（如肩膀前景遮挡）。Environment 的 `Primary/Secondary Subject` 及 `Viewpoint Anchor & Observer View` 必须使用固定显露的物体（如门框、桌边），绝对禁止使用人物作为视线锚点。
+  - **环境去主/配角与剧情隔离总规则（Clean Plate & Plot Isolation）**：环境作为**物理与氛围容器**，必须保持不包含任何核心剧情角色，严格执行“主要角色清零”与“剧情隔离”。
+    - **视觉与语义绝对禁剧情角色（含OTS防污染）**：无论是普通的空间环境还是 OTS 视角的专属环境变体，均**禁止出现任何带有明确身份的剧情人物语义或角色身影**。不得混入任何剧情角色的外观、服装以及人体局部（如肩膀前景遮挡）。但**允许且鼓励将无明确身份、无剧情推动作用的群众、路人等背景人群作为环境氛围的一部分进行描述**。**特别补充：如果在同一场景或剧情连续体中，该环境既需要呈现“有群众/路人的人群状态”，又需要呈现“无群众/空无一人的清场状态”（例如人群突然散去或切换至清冷视角），必须将二者强制提取为两个互相独立的环境变体（例如 `ENV:[Street with Crowd]` 与 `ENV:[Street Empty]`）。**Environment 的 `Primary/Secondary Subject` 及 `Viewpoint Anchor & Observer View` 必须使用固定显露的物体（如门框、桌边），绝对禁止使用剧情核心人物作为视线锚点。
     - **剧情与动作隔离**：Environment 不得承载任何剧情或动作结果信息。所有的情节发展、冲突升级均须归位到 `Core Scene Info / {Beats}` 中承载。环境只描述静态空间条件。
-  - **多视角与正反环境构建衍生规则**：必须在环境提取阶段提前衍生出所有的环境变体。**极高优先级：提取“正反向环境”**。同地不同观察方向（如面朝门/面朝窗）、正打/反打背景差异大，必须拆分成互相独立的环境。A看B与B看A必须拆分为不同环境。
+  - **多视角与正反环境构建衍生规则**：必须在环境提取阶段提前衍生出所有的环境变体。**极高优先级：提取“正反向环境”与“多区域互视环境”**。同地不同观察方向（如面朝门/面朝窗）、从台上看台下与从台下看台上、从门内看门外与从门外看门内等，由于背景视觉差异极大，**必须强制拆分成互相独立的多个核心环境变体（例如 `ENV:[Stage looking at Audience]` 与 `ENV:[Audience looking at Stage]`）**，绝不能将互看的两端合并为一个环境。A看B与B看A必须拆分为不同环境。**特别强调：一旦环境视角发生变化，或环境自身状态出现重大物理改变（例如：门被打破、墙壁坍塌、房间从整洁变杂乱等），都必须强制将其提取为全新的环境实体（作为衍生变体或全新基础环境），绝不能与改变前的环境资产混用。补充要求：如果一个环境既需要转换视角，又发生了重大物理改变，必须按时间顺序优先生成“转换视角前的环境或该视角的常规状态”，然后再生成“发生重大物理改变后的新环境变体”。**
   - **空间结构与基准氛围**：包含概括性的空间特征、时间与光影基调。
 - **环境实例化**：每个 Environment 必须包含具象可识别的实例物体（桌子、灯、门窗等），禁止仅输出抽象标签。
 - **环境组成物详细描述**：剧本提及但不作为独立Prop提取的场景物体，必须在环境描述中涵盖并说明状态。
@@ -221,7 +221,7 @@
   - **`dependency_reference`（依赖继承声明）**：若该实体是某已有实体的衍生变体（如正反打的对立环境），填入其依赖的 Base 实体核心英文名（无需前缀）；若是独立新建实体则填 `None`。**特别注意：封面海报（cover_poster）必须存在依赖，其 `dependency_reference` 绝对不能为 `None`，必须明确列出构成该封面的核心角色、道具或环境的英文名（如 `Lin Suit, Silver Lighter`）。**
   - **`entity_attributes`（实体特征与定位）**：
     - **角色**：重点提取是否为主角、阵营（正派/反派/中立），以及身份、性别、年龄、种族、个性特征、职业，还有在剧中的核心总体剧情定位。**不需要进行具体的外貌、衣服、饰品的描述（除非剧本中有明确提及）**；若剧本有提，可加入标志性随身物品及习惯动作。**禁止写入角色在该场戏里的具体动作、姿态、转瞬即逝的表情或台词句子。**
-    - **环境**：作为无人无物的物理容器（空镜），描述其空间结构主干、核心陈列以及承担的主要剧情功能。**强制要求如下**：(1) 默认高审美表达（材质清晰、光影视角分层）；(2) 必须包含可识别的具体实例物体（如门窗、桌椅），禁止抽象空间标签；(3) 显式按前景(FG)/中景(MG)/后景(BG)构图描述可见元素与空间关系；(4) 明确当前画面主体（Primary Subject）与结合了观察者视角/方向的视线锚点（Viewpoint Anchor & Observer View，禁止使用人物，必须写明从何处看往何处的机位关系）；(5) 变体环境（Variants）禁止空泛描述（如“另一侧”），必须落到具体的可见实体变动；(6) 状态变化必须写清具体可见差异（如“窗框掉漆”而非“变旧了”）；(7) **必须明确说明 Stage（舞台）即角色可执行表演的具体边界与主要活动空间**。**禁止描述环境中正在发生的具体情节或临时的人物行为。**
+    - **环境**：作为无人无物的物理容器（空镜），描述其空间结构主干、核心陈列以及承担的主要剧情功能。**强制要求如下**：(1) 默认高审美表达（材质清晰、光影视角分层）；(2) 必须包含可识别的具体实例物体（如门窗、桌椅），禁止抽象空间标签；(3) 显式按前景(FG)/中景(MG)/后景(BG)构图描述可见元素与空间关系；(4) 明确当前画面主体（Primary Subject）与结合了观察者视角/方向的视线锚点（Viewpoint Anchor & Observer View，禁止使用人物，必须写明从何处看往何处的机位关系）；(5) 变体环境（Variants）禁止空泛描述（如“另一侧”），必须落到具体的可见实体变动；(6) 状态变化必须写清具体可见差异（如“门被打破”、“墙壁损毁”而非“变旧了”）；(7) **必须明确说明 Stage（舞台）即角色可执行表演的具体边界与主要活动空间**。**禁止描述环境中正在发生的具体情节或临时的人物行为。**
     - **道具**：物理轮廓、功能属性或在剧中的线索定位与作用。**禁止描述道具正在被谁如何使用的具体连贯动作过程。**
     - **封面海报 (cover_poster)**：作为全局固定的特殊视觉实体进行设计。**封面大片海报规则**：封面海报资产必须以**国际大片海报 / premium theatrical one-sheet** 的完成度生成，构图要求大气、明确、强情绪、强冲突、强识别度；同时要把剧本分格/分场的层次关系压缩进单张主视觉，可通过前中后景群像关系、道具引导线、环境纵深、光区切分、块面分区或多层叙事焦点来体现“剧情分格感”，但最终仍必须是**一张完整海报**，不得退化成漫画分镜表、拼贴九宫格或多张小图拼版。需提炼出最具代表性的视觉构图，描述画面主体（核心人物神态与动作站位、核心道具）、背景氛围光影，明确片名文字（Title）的留白排版位置。此实体完全为静帧海报构图服务，**不受“去人物动作”的规则限制**。
     - *注：若存在 dependency_reference，此处仅需描述相对基础实体的变化项或增量覆盖项。*
@@ -229,11 +229,12 @@
 
 - **输出示例（禁止照抄具体值，仅做语法参考）**：
   1. `subject_no=S001 | subject_type=character | subject_name_zh=林总 | subject_name_en=Lin Suit | dependency_reference=None | entity_attributes=阵营：反派主角。身份/职业：掌握生杀大权的集团总裁。性别/年龄/种族：30岁亚裔男性。个性特征：性格冷峻，习惯施压。服装基调（剧本明确提及）：深灰细条纹高定制西装。标志性随身物品：银色打火机。 | script_entity_coverage=剧本实体：林总（主语“他”）`
-  2. `subject_no=S002 | subject_type=environment | subject_name_zh=办公室正向视角 | subject_name_en=Office Front | dependency_reference=None | entity_attributes=现代极简高管办公室正向视角。材质清晰考究，光影具有纵深分层。剧中定位为核心权力空间。Viewpoint Anchor & Observer View: 观察者从办公室大门框向内朝核心区看入的视角。Primary Subject: 黑胡桃木办公桌。FG(前景): 门框边缘与金属灯；MG(中景): 办公桌与皮质老板椅；BG(后景): 深色实木书柜与百叶窗。Stage(舞台): 办公桌前方的宽敞地毯站立区。 | script_entity_coverage=剧本实体：<场所名=办公室>；<办公桌>; <椅子>; <书柜>`
-  3. `subject_no=S003 | subject_type=environment | subject_name_zh=办公室反向视角 | subject_name_en=Office Reverse | dependency_reference=Office Front | entity_attributes=现代极简高管办公室反向视角。阴影笼罩，压抑感强。Viewpoint Anchor & Observer View: 观察者从办公桌后侧向前看往客椅区的视角。Primary Subject: 访客靠背椅。FG(前景): 办公桌边缘与文件堆；MG(中景): 访客座椅；BG(后景): 紧闭的办公室门。Stage(舞台): 办公桌前方的客椅区。 | script_entity_coverage=剧本实体：无`
-  4. `subject_no=S004 | subject_type=character | subject_name_zh=医生 | subject_name_en=Dr. Chen | dependency_reference=None | entity_attributes=阵营：中立。身份/职业：心理医生。性别/年龄：40岁亚裔男性。个性特征：沉稳专业，眼神锐利。服装基调：无框眼镜，浅色羊绒衫搭配休闲西装。 | script_entity_coverage=剧本实体：医生`
-  5. `subject_no=S005 | subject_type=prop | subject_name_zh=银色打火机 | subject_name_en=Silver Lighter | dependency_reference=None | entity_attributes=复古样式的银色金属打火机。体现角色情绪波动和施压的关键线索道具。 | script_entity_coverage=剧本实体：银色打火机`
-  6. `subject_no=S006 | subject_type=cover_poster | subject_name_zh=项目封面海报 | subject_name_en=Project Cover Poster | dependency_reference=Lin Suit, Silver Lighter | entity_attributes=画面主体：反派主角Lin Suit背对镜头惊悚回眸，单手把玩Silver Lighter置于前景。背景氛围：冷色调城市夜景，压抑悬疑。排版留白：上方深色无杂物留白用于放Title。 | script_entity_coverage=无（全局提炼元素）`
+  2. `subject_no=S002 | subject_type=environment | subject_name_zh=街道人群状态 | subject_name_en=Street with Crowd | dependency_reference=None | entity_attributes=繁华商业街环境。材质清晰考究，光影具有纵深分层。剧中定位为公共开阔空间。Viewpoint Anchor & Observer View: 观察者从街道转角处路标向宽阔街道看去的视角。Primary Subject: 街道中心巨大的全息广告牌。FG(前景): 路标与正在穿行的无面目路人（作为背景氛围）；MG(中景): 拥挤的街道、广告牌与两侧商铺；BG(后景): 远处高楼轮廓。Stage(舞台): 广告牌下方的水泥路面。 | script_entity_coverage=剧本实体：<街道>; <路人>; <招牌>`
+  3. `subject_no=S003 | subject_type=environment | subject_name_zh=街道清场状态 | subject_name_en=Street Empty | dependency_reference=Street with Crowd | entity_attributes=繁华商业街环境的清场空无一人状态。阴影笼罩，压抑感强。Viewpoint Anchor & Observer View: 同上，从街道转角处路标向宽阔街道看去。Primary Subject: 街道中心巨大的全息广告牌。FG(前景): 孤零零的路标；MG(中景): 绝对空旷无人的街道、广告牌；BG(后景): 远处高楼轮廓。Stage(舞台): 广告牌下方的水泥路面。 | script_entity_coverage=剧本实体：<空无一人的街道>`
+  4. `subject_no=S004 | subject_type=environment | subject_name_zh=办公室废墟状态 | subject_name_en=Office Ruined | dependency_reference=Office Front | entity_attributes=现代极简高管办公室被严重破坏后的废墟状态（重大物理改变）。Viewpoint Anchor & Observer View: 观察者从被砸碎的办公室大门框向内朝核心区看入的视角。Primary Subject: 碎裂的黑胡桃木办公桌。FG(前景): 挂满玻璃渣的门边；MG(中景): 被斩断桌角的办公桌与倒地的皮椅；BG(后景): 破掉的大洞百叶窗。Stage(舞台): 杂乱的碎玻璃地毯区。 | script_entity_coverage=剧本实体：<被砸烂的办公室>`
+  5. `subject_no=S005 | subject_type=character | subject_name_zh=医生 | subject_name_en=Dr. Chen | dependency_reference=None | entity_attributes=阵营：中立。身份/职业：心理医生。性别/年龄：40岁亚裔男性。个性特征：沉稳专业，眼神锐利。服装基调：无框眼镜，浅色羊绒衫搭配休闲西装。 | script_entity_coverage=剧本实体：医生`
+  6. `subject_no=S006 | subject_type=prop | subject_name_zh=银色打火机 | subject_name_en=Silver Lighter | dependency_reference=None | entity_attributes=复古样式的银色金属打火机。体现角色情绪波动和施压的关键线索道具。 | script_entity_coverage=剧本实体：银色打火机`
+  7. `subject_no=S007 | subject_type=cover_poster | subject_name_zh=项目封面海报 | subject_name_en=Project Cover Poster | dependency_reference=Lin Suit, Silver Lighter | entity_attributes=画面主体：反派主角Lin Suit背对镜头惊悚回眸，单手把玩Silver Lighter置于前景。背景氛围：冷色调城市夜景，压抑悬疑。排版留白：上方深色无杂物留白用于放Title。 | script_entity_coverage=无（全局提炼元素）`
 
 ### Project Visual Backfill（紧跟 Subject Index，使用 JSON 格式）
 - **分隔符强制要求**：在上方 Subject Index 彻底输出完毕后，**必须强制输出一条明显的分隔线 `---------`**，然后再开始输出本 JSON 模块。

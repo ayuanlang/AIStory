@@ -2421,7 +2421,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         };
 
         const splitTypedItems = (items) => {
-            const next = { characters: [], props: [], environments: [] };
+            const next = { characters: [], props: [], environments: [], posters: [] };
             for (const item of (items || [])) {
                 if (!item || typeof item !== 'object') continue;
                 const itemType = normalizeKey(item.type || item.subject_type || item.entity_type || '');
@@ -2431,6 +2431,8 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                     next.props.push(item);
                 } else if (['environment', 'environments', 'env', 'scene', '场景', '环境'].includes(itemType)) {
                     next.environments.push(item);
+                } else if (['cover', 'covers', 'poster', 'posters', '封面', '封面海报'].includes(itemType)) {
+                    next.posters.push(item);
                 }
             }
             return next;
@@ -2441,8 +2443,9 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 characters: readArray(payload, ['characters', 'character', 'chars', 'roles', 'people', '人物', '角色']),
                 props: readArray(payload, ['props', 'prop', 'items', '道具', '物件']),
                 environments: readArray(payload, ['environments', 'environment', 'env', 'scenes', '场景', '环境']),
+                posters: readArray(payload, ['covers', 'cover', 'posters', 'poster', '封面', '封面海报']),
             };
-            if (direct.characters.length || direct.props.length || direct.environments.length) {
+            if (direct.characters.length || direct.props.length || direct.environments.length || direct.posters.length) {
                 return direct;
             }
 
@@ -2452,6 +2455,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                     characters: readArray(wrapped, ['characters', 'character', 'chars', 'roles', 'people', '人物', '角色']),
                     props: readArray(wrapped, ['props', 'prop', 'items', '道具', '物件']),
                     environments: readArray(wrapped, ['environments', 'environment', 'env', 'scenes', '场景', '环境']),
+                    posters: readArray(wrapped, ['covers', 'cover', 'posters', 'poster', '封面', '封面海报']),
                 };
             }
 
@@ -2464,6 +2468,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 characters: Array.isArray(payload?.characters) ? payload.characters : [],
                 props: Array.isArray(payload?.props) ? payload.props : [],
                 environments: Array.isArray(payload?.environments) ? payload.environments : [],
+                posters: (Array.isArray(payload?.posters) ? payload.posters : (Array.isArray(payload?.covers) ? payload.covers : [])),
             };
         })();
 
@@ -2471,19 +2476,21 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             character: Array.isArray(normalizedPayload.characters) ? normalizedPayload.characters.length : 0,
             prop: Array.isArray(normalizedPayload.props) ? normalizedPayload.props.length : 0,
             environment: Array.isArray(normalizedPayload.environments) ? normalizedPayload.environments.length : 0,
+            poster: Array.isArray(normalizedPayload.posters) ? normalizedPayload.posters.length : 0,
         };
 
         let importReport = null;
         if (typeof onImportText !== 'function') {
             return {
                 created: 0,
-                skipped: plannedByType.character + plannedByType.prop + plannedByType.environment,
+                skipped: plannedByType.character + plannedByType.prop + plannedByType.environment + plannedByType.poster,
                 createdItems: [],
                 skippedItems: [],
                 byType: {
                     character: { created: 0, skipped: plannedByType.character },
                     prop: { created: 0, skipped: plannedByType.prop },
                     environment: { created: 0, skipped: plannedByType.environment },
+                    poster: { created: 0, skipped: plannedByType.poster },
                 },
             };
         }

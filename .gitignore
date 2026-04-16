@@ -47,3 +47,5 @@ _clean_*.ps1
 temp_*.py
 update_*.py
 validation.py
+
+backup_temp/
