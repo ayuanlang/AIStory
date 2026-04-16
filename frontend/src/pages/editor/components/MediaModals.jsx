@@ -424,12 +424,23 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
           } else if (filterScope === 'environments') {
               res = buildEntityAssets('environment');
           } else if (filterScope === 'shots') {
-              res = availableShots.flatMap(s => [
-                  s.start_frame_image_url && { id: 'shot_start_' + s.id, url: s.start_frame_image_url, type: 'image', meta_info: { source: 'shot', shot_id: s.id } },
-                  s.end_frame_image_url && { id: 'shot_end_' + s.id, url: s.end_frame_image_url, type: 'image', meta_info: { source: 'shot', shot_id: s.id } }
-              ]).filter(Boolean);
-          }
-
+                res = availableShots.flatMap(s => {
+                    let startUrl = s.image_url ? String(s.image_url).trim() : '';
+                    let endUrl = s.end_frame_url;
+                    if (!endUrl && s.technical_notes) {
+                        try {
+                            const tech = typeof s.technical_notes === 'string' ? JSON.parse(s.technical_notes) : s.technical_notes;
+                            endUrl = tech?.end_frame_url;
+                        } catch (e) {}
+                    }
+                    endUrl = endUrl ? String(endUrl).trim() : '';
+                    
+                    return [
+                        startUrl && { id: 'shot_start_' + s.id, url: startUrl, type: 'image', meta_info: { source: 'shot', shot_id: s.id } },
+                        endUrl && { id: 'shot_end_' + s.id, url: endUrl, type: 'image', meta_info: { source: 'shot', shot_id: s.id } },
+                        s.video_url && { id: 'shot_video_' + s.id, url: String(s.video_url).trim(), type: 'video', meta_info: { source: 'shot', shot_id: s.id } }
+                    ];
+                }).filter(Boolean);            }
         // Step 3: Global Media Type Filter
         if (filterType !== 'all') {
             res = res.filter(a => a.type === filterType);
