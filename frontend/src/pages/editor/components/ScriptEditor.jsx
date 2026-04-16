@@ -1696,7 +1696,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         lastSubjectsImportIncompleteAlertRef.current = alertMessage;
         if (onLog) onLog(`Subjects import warning:\n${alertMessage}`, 'warning');
-        alert(alertMessage);
+        // alert(alertMessage);
     }, [localizeAnalysisWarningCode, onLog, t]);
 
     const ensureSubjectsImportedBeforePostChecks = useCallback(async (analysisResult, importReport = null) => {
@@ -1741,18 +1741,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         );
 
         const mergedImportedCounts = {
-            character: Math.max(
-                Number(importedCounts.character || 0),
-                Number(subjectsImportReport?.importedSubjectCounts?.character || 0)
-            ),
-            prop: Math.max(
-                Number(importedCounts.prop || 0),
-                Number(subjectsImportReport?.importedSubjectCounts?.prop || 0)
-            ),
-            environment: Math.max(
-                Number(importedCounts.environment || 0),
-                Number(subjectsImportReport?.importedSubjectCounts?.environment || 0)
-            ),
+            character: (Number(importedCounts.character || 0) + Number(subjectsImportReport?.importedSubjectCounts?.character || 0)),
+            prop: (Number(importedCounts.prop || 0) + Number(subjectsImportReport?.importedSubjectCounts?.prop || 0)),
+            environment: (Number(importedCounts.environment || 0) + Number(subjectsImportReport?.importedSubjectCounts?.environment || 0)),
         };
 
         return {
@@ -3129,6 +3120,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
                 countsByType: { character: 0, prop: 0, environment: 0 },
             },
+            importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
         };
 
         onLog?.(`[Phase 2 Debug] checking early return condition: projectId=${projectId}, importedSceneRows count=${importedSceneRows.length}`);
@@ -3297,12 +3289,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         projectId,
                         episodeId: activeEpisode?.id,
                         subjectsJson: backendSubjectsJson || null,
+                        suppressAlerts: true,
                     });
-                    
+
                     const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
                     const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
                     onLog?.(`[Asset Gen Tracking] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
-                    
+
                     return {
                         checkedSceneCount: importedSceneRows.length,
                         missingSceneCount: 0,
@@ -3311,7 +3304,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             createdItems: sceneImportReport?.createdSubjectItems || [],
                             skippedItems: sceneImportReport?.skippedSubjectItems || [],
                             failedItems: [],
-                        }
+                        },
+                        importedSubjectCounts: sceneImportReport?.importedSubjectCounts,
                     };
                 }
             }
@@ -3412,7 +3406,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             phaseMarks.importStartedAt = Date.now();
             try {
-                importReport = await runAutoImportAndSwitchToScenes(analyzedText || '', { switchToScenes: false });
+                importReport = await runAutoImportAndSwitchToScenes(analyzedText || '', { 
+                    switchToScenes: false,
+                    importOptions: { suppressAlerts: true }
+                });
                 if (!importReport) {
                     importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
                     setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
@@ -4790,6 +4787,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
+                if (postImportSceneSubjectReport?.importedSubjectCounts) {
+                    importReport.importedSubjectCounts = {
+                        character: (importReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
+                        prop: (importReport.importedSubjectCounts?.prop || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.prop) || 0),
+                        environment: (importReport.importedSubjectCounts?.environment || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.environment) || 0),
+                    };
+                }
             }
 
             let firstPassReport = null;
@@ -5143,6 +5147,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
+                if (postImportSceneSubjectReport?.importedSubjectCounts) {
+                    importReport.importedSubjectCounts = {
+                        character: (importReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
+                        prop: (importReport.importedSubjectCounts?.prop || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.prop) || 0),
+                        environment: (importReport.importedSubjectCounts?.environment || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.environment) || 0),
+                    };
+                }
             }
 
             let firstPassReport = null;
@@ -5264,6 +5275,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...analysisUiReport.importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
+                if (postImportSceneSubjectReport?.importedSubjectCounts) {
+                    newImportReport.importedSubjectCounts = {
+                        character: (newImportReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
+                        prop: (newImportReport.importedSubjectCounts?.prop || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.prop) || 0),
+                        environment: (newImportReport.importedSubjectCounts?.environment || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.environment) || 0),
+                    };
+                }
                 
                 setAnalysisUiReport(prev => ({
                     ...prev,
