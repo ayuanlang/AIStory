@@ -1232,6 +1232,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
                 ("ai_scene_analysis_result", "TEXT"),
                 ("ai_entity_design_result", "TEXT"),
                 ("ai_scene_analysis_subject_index", "TEXT"),
+                ("ai_scene_analysis_adaptation", "TEXT"),
                 ("character_profiles", "JSON")
             ]
 
