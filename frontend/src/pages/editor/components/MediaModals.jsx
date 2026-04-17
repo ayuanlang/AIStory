@@ -379,7 +379,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                fetchEpisodeShots(episodeId, { compact: true }).then(data => {
                  setAvailableShots(data.sort((a,b) => {
                       // simple sort by shot_id alphanumeric
-                      return a.shot_id.localeCompare(b.shot_id, undefined, { numeric: true });
+                        return String(a.shot_id || '').localeCompare(String(b.shot_id || ''), undefined, { numeric: true });
                  }));
              }).catch(console.error);
          }
@@ -446,6 +446,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             res = res.filter(a => a.type === filterType);
         }
 
+        console.log("[MediaModal Debug] filterScope:", filterScope, "availableShots:", availableShots.length, "res:", res.length);
         setAssets(res);
     }, [allCleanData, filterScope, filterType, filterValue, filterFrameType, entities, availableShots]);
 
