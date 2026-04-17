@@ -202,6 +202,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode.ai_scene_analysis_result || '';
         if (authoritativeSubjectText) {
             let extractedText = "";
+            let extractedAdaptationText = "";
+
+            const adaptMatch = authoritativeSubjectText.match(/\*\*\s*剧本改编(?:补充说明)?\s*\*\*[:：]?\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i) || 
+                                authoritativeSubjectText.match(/###?\s*剧本改编(?:补充说明)?\s*\n([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i) ||
+                                authoritativeSubjectText.match(/剧本改编(?:补充说明)?[:：\n]\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i);
+            if (adaptMatch) {
+                extractedAdaptationText = (adaptMatch[1] || adaptMatch[2] || adaptMatch[3] || "").trim();
+            }
+
             const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
             if (dashMatch && dashMatch[1].trim()) {
                 extractedText = dashMatch[1].trim();
@@ -214,16 +223,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            if (extractedText !== activeEpisode.ai_scene_analysis_subject_index) {
+            const needsUpdate = extractedText !== activeEpisode.ai_scene_analysis_subject_index || extractedAdaptationText !== activeEpisode.ai_scene_analysis_adaptation;
+            if (needsUpdate) {
                 setSubjectIndexText(extractedText);
-                updateEpisode(activeEpisode.id, { 
-                    ai_scene_analysis_subject_index: extractedText 
-                }).catch(err => console.log('Auto-update Subject Index failed.', err));
+                const updatePayload = {};
+                if (extractedText !== activeEpisode.ai_scene_analysis_subject_index) {
+                    updatePayload.ai_scene_analysis_subject_index = extractedText;
+                }
+                if (extractedAdaptationText !== activeEpisode.ai_scene_analysis_adaptation) {
+                    updatePayload.ai_scene_analysis_adaptation = extractedAdaptationText;
+                }
+                if (Object.keys(updatePayload).length > 0) {
+                    updateEpisode(activeEpisode.id, updatePayload)
+                        .catch(err => console.log('Auto-update Subject Index/Adaptation failed.', err));
+                }
             } else if (extractedText && !subjectIndexText) {
                 setSubjectIndexText(extractedText);
             }
         }
-    }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.id]);
+    }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.id]);
 
     const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
     const [subjectConsistencyResultText, setSubjectConsistencyResultText] = useState('');
@@ -3134,7 +3152,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
         let subjectIndexText = "";
 
-        onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
+        let adaptationText = "";
+
+          const adaptMatch = authoritativeSubjectText.match(/\*\*\s*剧本改编(?:补充说明)?\s*\*\*[:：]?\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i) || 
+                             authoritativeSubjectText.match(/###?\s*剧本改编(?:补充说明)?\s*\n([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i) ||
+                             authoritativeSubjectText.match(/剧本改编(?:补充说明)?[:：\n]\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i);
+          if (adaptMatch) {
+              adaptationText = adaptMatch[1] || adaptMatch[2] || adaptMatch[3] || "";
+              onLog?.(`[Asset Gen Tracking] Extracted Script Adaptation (length: ${adaptationText.length})`);
+          }
+
+          onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
 
         // Try to match the block wrapped by at least 5 dashes: ---------
         const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
@@ -3154,17 +3182,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         // Phase 2 Preparation: Save extracted subjectIndexText to episode and set UI state
-        if (subjectIndexText.trim()) {
-            setSubjectIndexText(subjectIndexText);
-            try {
-                await updateEpisode(activeEpisode.id, { 
-                    ai_scene_analysis_subject_index: subjectIndexText 
-                });
-                onLog?.(`[Phase 2] Saved ai_scene_analysis_subject_index (length: ${subjectIndexText.length})`);
-            } catch (error) {
-                onLog?.(`[Phase 2] Warning: Failed to save subject index to episode: ${error.message}`);
-            }
-        }
+        if (subjectIndexText.trim() || adaptationText.trim()) {
+              if (subjectIndexText.trim()) setSubjectIndexText(subjectIndexText);
+              const updatePayload = {};
+              if (subjectIndexText.trim()) updatePayload.ai_scene_analysis_subject_index = subjectIndexText.trim();
+              if (adaptationText.trim()) updatePayload.ai_scene_analysis_adaptation = adaptationText.trim();
+              
+              try {
+                  await updateEpisode(activeEpisode.id, updatePayload);
+                  onLog?.(`[Phase 2] Saved analysis meta (index len: ${subjectIndexText.length}, adaptation len: ${adaptationText.length})`);
+              } catch (error) {
+                  onLog?.(`[Phase 2] Warning: Failed to save analysis meta to episode: ${error.message}`);
+              }
+          }
 
         if (!subjectIndexText.trim()) {
             console.log("No Subject Index found in the analysis result. Skipping asset generation.");
@@ -4991,6 +5021,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!activeEpisode?.id) {
             alert("No active episode selected.");
             return;
+        }
+
+        // Bypass Phase 1 if subject index is already present!
+        if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
+            const bypassConfirmed = window.confirm("检测到当前分集已存在“实体资产(Subjects Index)”，是否跳过场景解构（Phase 1），直接生成实体设计资产（Phase 2）？\n\n点击“确定”跳过 Phase 1，点击“取消”从头重新进行完整分析。");
+            if (bypassConfirmed) {
+                setAnalysisFlowStatus({
+                    phase: 'processing_output_workspace',
+                    message: "🚀 跳过 Phase 1，直接进入资产设计...",
+                });
+                
+                try {
+                    // We just jump straight to Phase 2 logic (runPostImportSceneSubjectPipeline).
+                    // We mock an empty import report to keep the pipeline happy.
+                    const mockImportReport = { importedSceneRows: [] };
+                    const dummyAnalyzedText = activeEpisode.ai_scene_analysis_result || activeEpisode.ai_scene_analysis_subject_index; // Pass something fallback
+                    
+                    await runPostImportSceneSubjectPipeline(mockImportReport, activeEpisode.ai_scene_analysis_subject_index);
+                    
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: "🎉 补充实体资产生成完毕！",
+                    });
+                } catch (err) {
+                    console.error(err);
+                    setAnalysisFlowStatus({ phase: 'failed', message: "❌ 资产生成失败: " + err.message });
+                }
+                return; // Early return to completely bypass standard analysis flow
+            }
         }
         if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');

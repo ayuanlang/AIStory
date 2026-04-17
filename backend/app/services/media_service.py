@@ -6794,17 +6794,49 @@ class MediaGenerationService:
                 }
                 payload["size"] = size_map.get(str(aspect_ratio).strip(), payload["size"])
 
-            # APIYI /v1/videos: non-fl models are text-to-video only — silently
-            # ignore any reference image the caller passes through.  For -fl models
-            # the async API requires multipart upload which is not implemented yet.
+            # APIYI /v1/videos: Handle reference images specifically for kling models
             model_lower = model.lower()
-            is_frame_model = model_lower.endswith("-fl") or "-fl-" in model_lower
-            if is_frame_model and (ref_image or last_frame_url):
-                return {"error": f"{provider_name} /v1/videos frame-to-video (multipart upload) is not enabled yet in media service", "submit_failed": True}
-            # For non-fl models, just drop the ref images
-            if not is_frame_model:
-                ref_image = None
-                last_frame_url = None
+
+            if "kling" in model_lower and (ref_image or last_frame_url):
+                resolved_refs = self._resolve_ref_list_for_api(
+                    ref_image,
+                    force_data_uri_for_local=True,
+                    prefer_public_upload_url=True,
+                ) if ref_image else []
+                
+                payload["input"] = {
+                    "prompt": payload.get("prompt"),
+                    "duration": int(payload.get("seconds") or 5)
+                }
+                if resolved_refs:
+                    payload["input"]["image_urls"] = resolved_refs
+                
+                if last_frame_url:
+                    last_frame_resolved = self._resolve_ref_list_for_api(
+                        last_frame_url, 
+                        force_data_uri_for_local=True, 
+                        prefer_public_upload_url=True
+                    )
+                    if last_frame_resolved:
+                        current_urls = payload["input"].get("image_urls", [])
+                        if last_frame_resolved[0] not in current_urls:
+                            current_urls.append(last_frame_resolved[0])
+                        payload["input"]["image_urls"] = current_urls
+                
+                payload.pop("prompt", None)
+                payload.pop("seconds", None)
+                payload.pop("size", None)
+            else:
+                # non-fl models are text-to-video only by default — silently
+                # ignore any reference image the caller passes through.  For -fl models
+                # the async API requires multipart upload which is not implemented yet.
+                is_frame_model = model_lower.endswith("-fl") or "-fl-" in model_lower
+                if is_frame_model and (ref_image or last_frame_url):
+                    return {"error": f"{provider_name} /v1/videos frame-to-video (multipart upload) is not enabled yet in media service", "submit_failed": True}
+                # For non-fl models, just drop the ref images
+                if not is_frame_model:
+                    ref_image = None
+                    last_frame_url = None
 
             base_metadata = {
                 "provider": provider_name,
@@ -10620,6 +10652,11 @@ class MediaGenerationService:
                     if isinstance(image_inputs, list):
                         urls = [str(item).strip() for item in image_inputs if str(item).strip()]
                         if urls:
+                            # KIE API requires between 2 and 4 images
+                            if len(urls) == 1:
+                                urls.append(urls[0])
+                            elif len(urls) > 4:
+                                urls = urls[:4]
                             normalized_element["element_input_urls"] = urls
 
                     video_inputs = element.get("element_input_video_urls")

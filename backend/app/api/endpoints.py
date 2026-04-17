@@ -27729,7 +27729,7 @@ def _build_auto_kling_elements(
 
         image_url = str(row.get("image_url") or "").strip()
         if image_url:
-            element["element_input_urls"] = [image_url]
+            element["element_input_urls"] = [image_url, image_url]
 
         elements.append(element)
 
@@ -27794,6 +27794,10 @@ def _merge_kling_elements(explicit_elements: Any, auto_elements: List[Dict[str, 
         if isinstance(image_inputs, list):
             urls = [str(url).strip() for url in image_inputs if str(url).strip()]
             if urls:
+                if len(urls) == 1:
+                    urls.append(urls[0])
+                elif len(urls) > 4:
+                    urls = urls[:4]
                 item["element_input_urls"] = urls
 
         video_inputs = candidate.get("element_input_video_urls")
