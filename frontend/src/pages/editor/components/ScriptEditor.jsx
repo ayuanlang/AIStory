@@ -223,22 +223,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const needsUpdate = extractedText !== activeEpisode.ai_scene_analysis_subject_index || extractedAdaptationText !== activeEpisode.ai_scene_analysis_adaptation;
-            if (needsUpdate) {
+            // 剧本分析界面的修改是持久化的，不再从llm直接回填与持久化：
+            // 我们只进行UI展现刷新（用户自行通过编辑决定保存）
+            if (extractedText !== subjectIndexText) {
                 setSubjectIndexText(extractedText);
-                const updatePayload = {};
-                if (extractedText !== activeEpisode.ai_scene_analysis_subject_index) {
-                    updatePayload.ai_scene_analysis_subject_index = extractedText;
-                }
-                if (extractedAdaptationText !== activeEpisode.ai_scene_analysis_adaptation) {
-                    updatePayload.ai_scene_analysis_adaptation = extractedAdaptationText;
-                }
-                if (Object.keys(updatePayload).length > 0) {
-                    updateEpisode(activeEpisode.id, updatePayload)
-                        .catch(err => console.log('Auto-update Subject Index/Adaptation failed.', err));
-                }
-            } else if (extractedText && !subjectIndexText) {
-                setSubjectIndexText(extractedText);
+            }
+            if (extractedAdaptationText !== adaptationText) {
+                setAdaptationText(extractedAdaptationText);
             }
         }
     }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.id]);

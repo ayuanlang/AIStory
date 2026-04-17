@@ -1938,8 +1938,8 @@ const Editor = ({
 
                 if (scriptLines.length > 0) {
                     const content = scriptLines.join('\n');
-                    await updateEpisode(activeEpisodeId, { script_content: content });
-                    addLog(`Imported ${scriptLines.length} lines of Script content.`, "success");
+                    // await updateEpisode(activeEpisodeId, { script_content: content });
+                    addLog(`Parsed ${scriptLines.length} lines of Script content from LLM result. Skipped auto-backfilling to script_content to preserve original text.`, "success");
                     importStats.scriptLines = scriptLines.length;
                     changesMade = true;
                 } else {
