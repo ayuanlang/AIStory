@@ -2980,6 +2980,16 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
     return data;
 };
 
+export const fetchProjectSubjectInventoryPrompt = async (projectId) => {
+    try {
+        const response = await api.get(`/projects/${projectId}/subject_inventory_prompt`);
+        return response.data;
+    } catch (error) {
+        console.error("Failed to load subject inventory prompt:", error);
+        return null;
+    }
+};
+
 export const fetchPrompt = async (filename) => {
     try {
         const response = await api.get(`/prompts/${filename}`);

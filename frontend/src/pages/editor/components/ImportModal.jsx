@@ -193,7 +193,7 @@ export const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', p
             const token = localStorage.getItem('token');
             const body = {
                   text: text,
-                  project_id: projectId,
+                  project_id: project?.id,
                   prompt_file: "skills/scene_analysis_feature_stack/scene_planning.md",
                   include_negative_prompt: true,
                   function_name: "script_analysis",

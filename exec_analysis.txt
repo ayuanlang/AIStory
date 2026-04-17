@@ -1,16 +1,21 @@
-const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
-        if (analysisRunInFlightRef.current) {
-            if (onLog) onLog('Skipped duplicate AI Scene Analysis submit while another analysis run is already active.', 'warning');
+const executeAdvancedAnalysis = async (userInput, customSystemPrompt) => {
+        if (!activeEpisode?.id) {
+            alert("No active episode selected.");
+            return;
+        }
+        if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
+            if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
         analysisRunInFlightRef.current = true;
+
         const startedAt = Date.now();
         analysisStopRequestedRef.current = false;
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
             phase: 'autosaving',
-            message: t('正在自动保存剧本...', 'Auto-saving script...'),
+            message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -22,7 +27,7 @@ const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata 
             warning: '',
             error: '',
         });
-        if (onLog) onLog("Starting AI Scene Analysis...", "start");
+        if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
 
         let llmReturned = false;
         let runtimeMeta = null;
@@ -43,21 +48,18 @@ const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata 
         try {
             await autoSaveScriptBeforeAnalysis();
 
-            // Include project metadata if available, unless skipped (baked in)
-            const metadata = skipMetadata ? null : (project?.global_info || null);
-
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('已提交 LLM，正在等待返回。提交阶段超时约 300s，整体等待最长约 600s。', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
-            
-            const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
+
+            const baselineAnalysisText = String(llmRawResultContent || activeEpisode?.ai_scene_analysis_result || '').trim();
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => analyzeScene(
-                    content,
+                    userInput,
                     customSystemPrompt,
-                    metadata,
+                    null,
                     activeEpisode?.id || null,
                     analysisAttentionNotes,
                     selectedReuseSubjectAssets,
@@ -74,14 +76,6 @@ const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata 
             const analyzedText = extractAnalysisTextFromResult(result);
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
-            setAnalysisFlowStatus({
-                phase: 'processing_output_workspace',
-                message: t('LLM 已返回：正在保存原始返回并填写分析输出工作区（Output Workspace）...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
-            });
-            setAnalysisFlowStatus({
-                phase: 'processing_output_workspace',
-                message: t('LLM 已返回：正在保存原始返回并填写分析输出工作区（Output Workspace）...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
-            });
 
             if (result && result.meta) {
                 try {
@@ -114,40 +108,40 @@ const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata 
                 const uniqueWarnings = [...new Set(integrityWarnings.map(w => String(w || '').trim()).filter(Boolean))];
                 if (uniqueWarnings.length > 0) {
                     const warningText = uniqueWarnings.join('\n- ');
-                    if (onLog) onLog(`AI Scene Analysis warning:\n- ${warningText}`, 'warning');
+                    if (onLog) onLog(`AI Script Analysis warning:\n- ${warningText}`, 'warning');
                     if (displayWarnings.length > 0) {
                         showAnalysisWarningStatus(displayWarnings);
                     }
                 }
             }
 
-            setLlmRawResultContent(analyzedText);
-            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText));
-            lastLoadedAnalysisRef.current = analyzedText;
+            setLlmRawResultContent(analyzedText || "");
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
+            lastLoadedAnalysisRef.current = analyzedText || "";
 
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             phaseMarks.persistStartedAt = Date.now();
             try {
                 if (!savedByBackend) {
-                    if (onLog) onLog('Saving raw LLM output to episode analysis field...', 'process');
-                    await persistLlmResultContent(analyzedText);
+                    if (onLog) onLog('Saving advanced raw LLM output to episode analysis field...', 'process');
+                    await persistLlmResultContent(analyzedText || '');
                 } else {
-                    if (onLog) onLog('LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
+                    if (onLog) onLog('Advanced LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
                     await refreshAnalysisFromDB();
                 }
             } catch (persistErr) {
-                if (onLog) onLog(`Raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+                if (onLog) onLog(`Advanced raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
             } finally {
                 phaseMarks.persistFinishedAt = Date.now();
             }
-            
+
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
-                phase: 'importing',
-                message: t('正在导入 Markdown 与 JSON 到工作区...', 'Importing Markdown and JSON into workspace...'),
+                phase: 'saving_scenes',
+                message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
-                importReport = await runAutoImportAndSwitchToScenes(analyzedText, {
+                importReport = await runAutoImportAndSwitchToScenes(analyzedText || "", {
                     switchToScenes: false,
                     importOptions: {
                         autoSupplementSceneSubjects: false,
@@ -172,12 +166,19 @@ const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata 
             importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
-            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport);
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
             if (importReport && typeof importReport === 'object') {
                 importReport = {
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
+                if (postImportSceneSubjectReport?.importedSubjectCounts) {
+                    importReport.importedSubjectCounts = {
+                        character: (importReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
+                        prop: (importReport.importedSubjectCounts?.prop || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.prop) || 0),
+                        environment: (importReport.importedSubjectCounts?.environment || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.environment) || 0),
+                    };
+                }
             }
 
             let firstPassReport = null;
@@ -235,13 +236,12 @@ const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata 
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充成功 ${postImportSupplementCreated} 项、失败 ${postImportSupplementFailed} 项、跳过 ${postImportSupplementSkipped} 项。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
-                            : t(`分析完成：检测到 ${postImportMissingItems} 个缺失实体，已自动补充 ${postImportSupplementCreated} 项（跳过 ${postImportSupplementSkipped} 项）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                            ? t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们成功搞定了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                            : t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们自动补充了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
                     )
-                    : t('分析完成：未检测到实体缺失，流程已结束。', 'Analysis completed: no missing entities detected, workflow finished.'),
+                    : t('✅ 工作圆满完成！未发现缺失的资产。', 'Analysis completed: no missing entities detected, workflow finished.'),
             });
 
-            if (onLog) onLog("AI Analysis applied and saved.", "success");
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
@@ -250,9 +250,9 @@ const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata 
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
             if (canceled) {
-                if (onLog) onLog('Analysis task canceled by user.', 'warning');
+                if (onLog) onLog('Advanced analysis task canceled by user.', 'warning');
             } else {
-                if (onLog) onLog(`Analysis Failed: ${friendlyAnalysisError}`, "error");
+                if (onLog) onLog(`Advanced analysis failed: ${friendlyAnalysisError}`);
             }
             setAnalysisFlowStatus(
                 canceled
@@ -281,80 +281,84 @@ const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata 
         }
     };
 
-    const handleSaveAnalysisAttentionNotes = async () => {
-        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
-        setIsSavingAnalysisAttentionNotes(true);
+
+    const handleRetryPhase2 = async () => {
+        if (!activeEpisode?.id) return;
+        setIsRetryingPhase2(true);
         try {
-            const mergedEpisodeInfo = {
-                ...(activeEpisode?.episode_info || {}),
-                analysis_attention_notes: analysisAttentionNotes || '',
-            };
-            await onUpdateEpisodeInfo(activeEpisode.id, { episode_info: mergedEpisodeInfo });
-            if (onLog) onLog('Episode 1 analysis attention notes saved.', 'success');
-        } catch (e) {
-            console.error(e);
-            if (onLog) onLog(`Failed to save analysis attention notes: ${e.message}`, 'error');
+            onLog?.('Retrying Phase 2 (Asset Generation)...', 'process');
+            // Re-run the second pass with the (potentially edited) subjectIndexText
+            // It will also bust deduplication cache by using sceneAnalysisMode = "2_pass_generate_assets" internally
+            const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(
+                analysisUiReport?.importReport || {},
+                subjectIndexText
+            );
+            
+            // Update the UI report with the new asset counts
+            if (analysisUiReport && typeof analysisUiReport === 'object') {
+                const newImportReport = {
+                    ...analysisUiReport.importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                };
+                if (postImportSceneSubjectReport?.importedSubjectCounts) {
+                    newImportReport.importedSubjectCounts = {
+                        character: (newImportReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
+                        prop: (newImportReport.importedSubjectCounts?.prop || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.prop) || 0),
+                        environment: (newImportReport.importedSubjectCounts?.environment || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.environment) || 0),
+                    };
+                }
+                
+                setAnalysisUiReport(prev => ({
+                    ...prev,
+                    importReport: newImportReport,
+                }));
+                
+                const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+                const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+                const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+                const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+                
+                setAnalysisFlowStatus({
+                    phase: 'completed',
+                    message: postImportMissingItems > 0
+                        ? (
+                            postImportSupplementFailed > 0
+                                ? t(`🔄 补全完毕！发现 ${postImportMissingItems} 个需补充资产，成功处理了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Retry completed: ${postImportMissingItems} missing entities detected. Supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                                : t(`🔄 补全完毕！发现 ${postImportMissingItems} 个需补充资产，已成功处理 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Retry completed: ${postImportMissingItems} missing entities detected. Supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                        )
+                        : t('重试✅ 工作圆满完成！未发现缺失的资产。', 'Retry completed: no missing entities detected, workflow finished.'),
+                });
+                
+                onLog?.('Phase 2 Asset Generation Retry Completed.', 'success');
+            }
+        } catch (error) {
+            console.error("Retry Phase 2 failed:", error);
+            onLog?.(`Retry Phase 2 failed: ${error.message || String(error)}`, 'error');
+            alert(`Retry Phase 2 failed: ${error.message}`);
         } finally {
-            setIsSavingAnalysisAttentionNotes(false);
+            setIsRetryingPhase2(false);
         }
     };
 
-    const saveAnalysisAttentionNotesValue = async (nextNotes) => {
-        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
-        const mergedEpisodeInfo = {
-            ...(activeEpisode?.episode_info || {}),
-            analysis_attention_notes: String(nextNotes || '').trim(),
-        };
-        await onUpdateEpisodeInfo(activeEpisode.id, { episode_info: mergedEpisodeInfo });
-    };
+    if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
-    const handleSupplementSubmitClick = async () => {
-        if (isAnalyzing) return;
-        const generatedContent = String(llmRawResultContent || llmResultContent || '').trim();
-        if (!generatedContent) {
-            alert(t('请先完成第一次 AI 场景分析，再执行“修正生成结果”。', 'Please finish the first AI Scene Analysis before running "Refine Generated Result".'));
-            return;
-        }
-
-        let basePromptForSupplement = '';
-        try {
-            const promptRes = await fetchPrompt('scene_analysis.txt');
-            basePromptForSupplement = String(promptRes?.content || '').trim();
-        } catch {
-            basePromptForSupplement = '';
-        }
-
-        // Always include original scene-analysis system prompt for second-pass supplement submit.
-        // Fallback order: fetched prompt -> current systemPrompt editor content.
-        if (!basePromptForSupplement) {
-            basePromptForSupplement = String(systemPrompt || '').trim();
-        }
-
-        const currentReport = buildSubjectConsistencyReport(generatedContent);
-        const followupIssues = collectFollowupIssues(currentReport, [], []);
-        const supplementPrompt = buildIssueDrivenSupplementPrompt(basePromptForSupplement, followupIssues);
-
-        const supplementInput = buildSupplementSubmissionInput({
-            generatedContent,
-            subjectCheckText: subjectConsistencyResultText,
-            coreCoverageText: coreCoverageResultText,
-            attentionNotes: analysisAttentionNotes,
-        });
-
-        // Keep supplement submit behavior aligned with primary scene analysis:
-        // superuser previews/edits prompt first, then manually runs submission.
-        if (isSuperuser) {
-            setAnalysisUiReport(null);
-            setAnalysisFlowStatus({ phase: 'idle', message: '' });
-            setSystemPrompt(supplementPrompt);
-            setUserPrompt(supplementInput);
-            setShowAnalysisModal(true);
-            if (onLog) onLog('Superuser supplement submit: prompt preview opened before submission.', 'info');
-            return;
-        }
-
-        if (onLog) onLog('Manual supplement submit started (input=generated analysis output).', 'start');
-        await executeAnalysis(supplementInput, supplementPrompt, false);
-    };
-
-    
+    return (
+        <div className="p-4 sm:p-8 h-full flex flex-col w-full max-w-full overflow-hidden">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 shrink-0">
+                <h2 className="text-2xl font-bold flex items-center gap-2">
+                    {buildEpisodeDisplayLabel({
+                        episodeNumber: activeEpisode?.episode_number,
+                        title: activeEpisode?.title,
+                    })}
+                    <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">
+                        {isRawMode ? t('原始编辑器', 'Raw Editor') : `${segments.length} ${t('段', 'Segments')}`}
+                    </span>
+                </h2>
+                <div className="flex items-center gap-2">
+                    {isRawMode && (
+                        <>
+                            <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} />
+                            <button 
+                                onClick={handleAnalysisClick} 
+                                disabled={isAnalyzing}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isAnalyzing ? 'bg-purple-900/50 text-purple-200 cur

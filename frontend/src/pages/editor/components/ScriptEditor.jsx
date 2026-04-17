@@ -104,6 +104,7 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
+    fetchProjectSubjectInventoryPrompt,
 } from '../../../services/api';
 
 import RefineControl from '../../../components/RefineControl.jsx';
@@ -4572,7 +4573,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         fullContent = `${metaParts.join('\n')}\n\nScript to Analyze:\n\n${rawContent}`;
                      }
                 }
-                
+
+                try {
+                    const projectIdForInventory = project?.id;
+                    if (projectIdForInventory) {
+                        const inventoryObj = await fetchProjectSubjectInventoryPrompt(projectIdForInventory);
+                        if (inventoryObj && inventoryObj.inventory_block) {
+                            let inventoryStr = `\n\n${inventoryObj.inventory_block.trim()}\n\n${(inventoryObj.inventory_guidance || '').trim()}\n\n`;
+                            fullContent = `[Project Existing Subject Index]${inventoryStr}${fullContent}`;
+                        }
+                    }
+                } catch(e) {
+                    console.error("Failed to fetch inventory", e);
+                }
+
                 setUserPrompt(fullContent);
                 setShowAnalysisModal(true);
                 setIsAnalyzing(false); // Enable back since we are just showing the modal

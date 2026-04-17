@@ -3994,6 +3994,43 @@ async def preview_scene_analysis_route(
         "diagnostics": bundle.get("diagnostics") or [],
     }
 
+@router.get("/projects/{project_id}/subject_inventory_prompt")
+async def get_project_subject_inventory_prompt(
+    project_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        _require_project_access(db, project_id, current_user)
+        inventory = _build_project_subject_inventory(db, project_id, limit_per_type=80)
+        
+        inventory_block = _format_project_subject_inventory_block(inventory)
+        inventory_system_guard = (
+            "\n\n"
+            "[Existing Subjects Reuse Guard - High Priority]\n"
+            "The injected Project Existing Subject Index contains authoritative existing reusable subjects for this project.\n"
+            "You MUST reuse these existing subjects first whenever they match the script.\n"
+            "Do NOT rename, redefine, replace, overwrite, or regenerate them as new entities.\n"
+            "Only create a new subject when the script clearly requires an entity that is not already present in the inventory.\n"
+            "If the injected inventory is empty, you must still treat it as an explicit empty baseline rather than as a missing section.\n"
+            "If you output entity JSON, existing inventory subjects must be reused by reference and MUST NOT be duplicated as newly generated entities."
+        )
+        inventory_guidance = (
+            "Project Existing Subject Index reuse rules:\n"
+            "- Treat the above Project Existing Subject Index as authoritative identifiers for this project.\n"
+            "- This inventory block is always present, even when all categories are empty.\n"
+            "- Extract and reuse the Entities as your baselines. Do not duplicate existing inventory subjects in newly generated entity outputs."
+        )
+
+        return {
+            "inventory_block": inventory_block,
+            "inventory_guidance": inventory_guidance,
+            "inventory_system_guard": inventory_system_guard
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch subject inventory prompt: {e}")
+        return JSONResponse(status_code=500, content={"detail": str(e)})
+
 @router.post("/analyze_scene", response_model=Dict[str, Any])
 async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
     """
@@ -4769,7 +4806,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             inventory_system_guard = (
                 "\n\n"
                 "[Existing Subjects Reuse Guard - High Priority]\n"
-                "The injected System-level Subjects Inventory contains authoritative existing reusable subjects for this project.\n"
+                "The injected Project Existing Subject Index contains authoritative existing reusable subjects for this project.\n"
                 "You MUST reuse these existing subjects first whenever they match the script.\n"
                 "Do NOT rename, redefine, replace, overwrite, or regenerate them as new entities.\n"
                 "When names and descriptions are provided, treat both as canonical recognition anchors.\n"
@@ -4777,24 +4814,24 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "If the injected inventory is empty, you must still treat it as an explicit empty baseline rather than as a missing section.\n"
                 "If you output entity JSON, existing inventory subjects must be reused by reference and MUST NOT be duplicated as newly generated entities."
             )
-            system_instruction = f"{system_instruction}{inventory_system_guard}"
-            inventory_guidance = (
-                "System-level subject reuse rules:\n"
-                "- Treat the above inventory as authoritative identifiers for this project.\n"
-                "- This inventory block is always present, even when all categories are empty.\n"
-                "- Prefer reusing listed subject_ref names directly in Scene Subjects and Part 2 outputs.\n"
-                "- Preserve anchor semantics when generating/repairing character, prop, and environment subjects.\n"
-                "- Use both the provided names and descriptions/anchors as recognition baselines.\n"
-                "- Do not duplicate existing inventory subjects in newly generated entity outputs."
-            )
-            user_content = f"{inventory_block}\n\n{inventory_guidance}\n\n{user_content}"
-            logger.info(
-                "Injected system-level subject inventory into analyze_scene prompt: source=%s chars=%s props=%s envs=%s",
-                inventory_source,
-                len(inventory.get("characters") or []),
-                len(inventory.get("props") or []),
-                len(inventory.get("environments") or []),
-            )
+            if "[Project Existing Subject Index]" in user_content:
+                logger.info("Project Existing Subject Index already present in user_content; skipping automatic injection.")
+            else:
+                system_instruction = f"{system_instruction}{inventory_system_guard}"
+                inventory_guidance = (
+                    "Project Existing Subject Index reuse rules:\n"
+                    "- Treat the above Project Existing Subject Index as authoritative identifiers for this project.\n"
+                    "- This inventory block is always present, even when all categories are empty.\n"
+                    "- Extract and reuse the Entities as your baselines. Do not duplicate existing inventory subjects in newly generated entity outputs."
+                )
+                user_content = f"{inventory_block}\n\n{inventory_guidance}\n\n{user_content}"
+                logger.info(
+                    "Injected system-level subject inventory into analyze_scene prompt: source=%s chars=%s props=%s envs=%s",
+                    inventory_source,
+                    len(inventory.get("characters") or []),
+                    len(inventory.get("props") or []),
+                    len(inventory.get("environments") or []),
+                )
         except Exception as inventory_inject_err:
             logger.warning("[analyze_scene] failed to inject system-level subject inventory: %s", inventory_inject_err)
 
@@ -9676,6 +9713,8 @@ class EpisodeUpdate(BaseModel):
     script_content: Optional[str] = None
     episode_info: Optional[Dict] = None
     ai_scene_analysis_result: Optional[str] = None
+    ai_scene_analysis_subject_index: Optional[str] = None
+    ai_scene_analysis_adaptation: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeOut(BaseModel):
@@ -9685,6 +9724,8 @@ class EpisodeOut(BaseModel):
     script_content: Optional[str]
     episode_info: Optional[Dict] = {}
     ai_scene_analysis_result: Optional[str] = None
+    ai_scene_analysis_subject_index: Optional[str] = None
+    ai_scene_analysis_adaptation: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = []
     script_segments: List[ScriptSegmentOut] = []
     class Config:
@@ -11979,36 +12020,45 @@ def _build_project_subject_inventory(db: Session, project_id: int, limit_per_typ
 
 
 def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, str]]]) -> str:
+    type_names = {
+        "characters": "角色",
+        "props": "道具",
+        "environments": "场景",
+        "covers": "封面"
+    }
+
     def _format_bucket(bucket_name: str) -> str:
         items = inventory.get(bucket_name) or []
         if not items:
             return f"{bucket_name}: (none)"
 
+        type_cn = type_names.get(bucket_name, bucket_name)
         lines: List[str] = [f"{bucket_name} ({len(items)}):"]
         for item in items:
             bits: List[str] = []
-            subject_ref = str(item.get("subject_ref") or "").strip()
-            entity_id = str(item.get("id") or "").strip()
-            if entity_id:
-                bits.append(f"id={entity_id}")
-            if subject_ref:
-                bits.append(subject_ref)
-            if item.get("name_en"):
-                bits.append(f"name_en={item['name_en']}")
-            if item.get("anchor_description"):
-                bits.append(f"anchor={item['anchor_description']}")
-            if item.get("description"):
-                bits.append(f"hint={item['description']}")
+            bits.append(f"资产实体类型={type_cn}")
+            
+            name = str(item.get("name") or "").strip()
+            if name:
+                bits.append(f"实体中文名={name}")
+                
+            name_en = str(item.get("name_en") or "").strip()
+            if name_en:
+                bits.append(f"实体英文名={name_en}")
+                
+            archetype = str(item.get("archetype") or "").strip()
+            if archetype:
+                bits.append(f"archetype={archetype}")
+                
             lines.append(f"  - {' | '.join(bits)}")
         return "\n".join(lines)
 
     return (
-        "[System-level Subjects Inventory]\n"
-        "Existing Entity Inventory By Category (project baseline dependencies; reusable as-is; DO NOT rewrite/rename/redefine):\n"
+        "[Project Existing Subject Index]\n"
+        "Existing Entity Inventory By Category:\n"
         f"{_format_bucket('characters')}\n"
         f"{_format_bucket('props')}\n"
-        f"{_format_bucket('environments')}\n"
-        "Constraint: Existing entities are immutable references for this analysis. You may depend on them, but must not overwrite, rename, redefine, or regenerate them."
+        f"{_format_bucket('environments')}"
     )
 
 

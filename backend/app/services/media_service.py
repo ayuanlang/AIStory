@@ -1138,6 +1138,28 @@ class MediaGenerationService:
 
         return self._normalize_str_list(fallback_values)
 
+    def _sanitize_kie_prompt_mentions(self, prompt: Any, tool_conf: Dict[str, Any]) -> str:
+        text = str(prompt or "")
+        if not text:
+            return ""
+            
+        elements = tool_conf.get("kling_elements")
+        valid_element_names = set()
+        if isinstance(elements, list):
+            for e in elements:
+                if isinstance(e, dict):
+                    name = str(e.get("name") or "").strip()
+                    if name:
+                        valid_element_names.add(name)
+
+        def _repl(match):
+            name = match.group(1)
+            if name in valid_element_names:
+                return match.group(0)
+            return name
+            
+        return re.sub(r'@([\w\u4e00-\u9fa5A-Za-z0-9_]+)', _repl, text)
+
     def _sanitize_sora_prompt_mentions(self, prompt: Any) -> str:
         text = str(prompt or "")
         if not text:
@@ -9407,6 +9429,15 @@ class MediaGenerationService:
         ).strip() or None
         prompt = self._sanitize_kie_placeholder_prompt(prompt, subject_type_hint, subject_name_hint)
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
+
+        # Fix 422: "kling_elements is required when prompt contains role references like @element_dog"
+        # KIE validates all video API calls using its unified proxy struct which treats `@` as kling elements.
+        prompt = self._sanitize_kie_prompt_mentions(prompt, tool_conf)
+        raw_multi_prompt = tool_conf.get("multi_prompt")
+        if isinstance(raw_multi_prompt, list):
+            for mp in raw_multi_prompt:
+                if isinstance(mp, dict) and isinstance(mp.get("prompt"), str):
+                    mp["prompt"] = self._sanitize_kie_prompt_mentions(mp["prompt"], tool_conf)
 
         resolved_setting_id = None
         try:
