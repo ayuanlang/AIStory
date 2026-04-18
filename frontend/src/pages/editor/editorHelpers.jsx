@@ -1349,20 +1349,13 @@ export function getProjectPreferredAspectRatio(projectInfoLike, episodeInfoLike)
 }
 
 export function buildShotDiptychPlan(aspectRatio) {
-    const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
-    const ratioValue = parts.widthPart / parts.heightPart;
-    // Keep the two-panel canvas close to square after a single split:
-    // wide targets stack top-bottom, tall targets sit left-right.
-    const layout = ratioValue >= 1 ? 'vertical' : 'horizontal';
-    const exactCombinedAspectRatio = layout === 'horizontal'
-        ? buildAspectRatioString(parts.widthPart * 2, parts.heightPart)
-        : buildAspectRatioString(parts.widthPart, parts.heightPart * 2);
-
+    // 根据用户要求：整个两宫格统一以1:1比例生成，只要匀称布满画面即可，统一以上下宫格方式裁切。
+    // 即：总比例 1:1，上下排列，每个格子比例为 2:1。
     return {
-        layout,
-        targetAspectRatio: buildAspectRatioString(parts.widthPart, parts.heightPart) || '16:9',
-        exactCombinedAspectRatio: exactCombinedAspectRatio || (layout === 'horizontal' ? '32:9' : '9:32'),
-        ratioValue,
+        layout: 'vertical',
+        targetAspectRatio: '2:1',
+        exactCombinedAspectRatio: '1:1',
+        ratioValue: 2,
     };
 }
 

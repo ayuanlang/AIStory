@@ -289,7 +289,7 @@ async function pollTask(taskId, {
             const info = res.data;
 
             if (!info || typeof info !== 'object') {
-                const err = new Error('Task polling received an invalid response format (not an object). This could indicate a proxy error or large payload truncation.');
+const err = new Error('Task polling received an invalid response format (not an object). This could indicate a proxy error or large payload truncation.');
                 err.response = { status: 502 }; // Treat as bad gateway to trigger retry below
                 throw err;
             }
@@ -324,7 +324,7 @@ async function pollTask(taskId, {
             if (isRetriable) {
                 const now = Date.now();
                 if (!notFoundSince) notFoundSince = now; // reuse this grace period or add another
-                // We'll give network errors a generous 360s tolerance window
+// We'll give network errors a generous 360s tolerance window
                 if ((now - notFoundSince) <= 360000) {
                     await new Promise(r => setTimeout(r, Math.max(interval, 3000)));
                     continue;
@@ -1018,7 +1018,13 @@ export const generateProjectStoryGlobal = async (projectId, payload) => {
 }
 
 export const analyzeProjectNovel = async (projectId, payload) => {
-    return await asyncLLMPost(`/projects/${projectId}/story_generator/analyze_novel`, payload);
+    const fnName = 'script_analysis';
+    const sysReq = {
+        ...payload,
+        function_name: fnName,
+        system_api_id: Number(localStorage.getItem('func_api_' + fnName)) || null
+    };
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/analyze_novel`, sysReq);
 }
 
 // Project Story Generator (Global/Project) draft input persistence (no LLM call)
@@ -1138,19 +1144,29 @@ export const fetchSceneShotsPrompt = async (sceneId) => {
 }
 
 export const generateSceneShots = async (sceneId, promptData = null, runtimeHooks = {}) => {
-    promptData = promptData || {};
-    promptData.function_name = 'script_analysis';
-    promptData.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
-    
+// Inject intelligent routing meta for AI shots
+    const enrichedPromptData = promptData ? { ...promptData } : {};
+    enrichedPromptData.function_name = 'ai_shot';
+    const apiContextStr = localStorage.getItem('__function_api_context');
+    if (apiContextStr) {
+        try {
+            const ctx = JSON.parse(apiContextStr);
+            if (ctx['ai_shot'] && ctx['ai_shot'].system_api_id) {
+                enrichedPromptData.system_api_id = ctx['ai_shot'].system_api_id;
+            }
+        } catch (e) {
+            console.warn('[API] generateSceneShots: Failed to parse function API context', e);
+        }
+    }
     // This now returns the Staging result (timestamp, content=[]), not the applied shots
     const payloadMeta = {
-        hasUserPrompt: Boolean(promptData?.user_prompt),
-        hasSystemPrompt: Boolean(promptData?.system_prompt),
-        userPromptLen: String(promptData?.user_prompt || '').length,
-        systemPromptLen: String(promptData?.system_prompt || '').length,
+        hasUserPrompt: Boolean(enrichedPromptData?.user_prompt),
+        hasSystemPrompt: Boolean(enrichedPromptData?.system_prompt),
+        userPromptLen: String(enrichedPromptData?.user_prompt || '').length,
+        systemPromptLen: String(enrichedPromptData?.system_prompt || '').length,
     };
     try {
-        return await asyncLLMPost(`/scenes/${sceneId}/ai_generate_shots`, promptData, {
+        return await asyncLLMPost(`/scenes/${sceneId}/ai_generate_shots`, enrichedPromptData, {
             onTaskCreated: runtimeHooks?.onTaskCreated,
             pollOptions: runtimeHooks?.pollOptions,
         });
@@ -1171,7 +1187,21 @@ export const regenerateSceneShots = async (sceneId, payload = null, runtimeHooks
     payload.function_name = 'script_analysis';
     payload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
     try {
-        return await asyncLLMPost(`/scenes/${sceneId}/ai_regenerate_shots`, payload, {
+        const enrichedPayload = payload ? { ...payload } : {};
+        enrichedPayload.function_name = 'ai_shot';
+        const apiContextStr = localStorage.getItem('__function_api_context');
+        if (apiContextStr) {
+            try {
+                const ctx = JSON.parse(apiContextStr);
+                if (ctx['ai_shot'] && ctx['ai_shot'].system_api_id) {
+                    enrichedPayload.system_api_id = ctx['ai_shot'].system_api_id;
+                }
+            } catch (e) {
+                console.warn('[API] regenerateSceneShots: Failed to parse function API context', e);
+            }
+        }
+
+        return await asyncLLMPost(`/scenes/${sceneId}/ai_regenerate_shots`, enrichedPayload, {
             onTaskCreated: runtimeHooks?.onTaskCreated,
             pollOptions: runtimeHooks?.pollOptions,
         });
@@ -1268,12 +1298,21 @@ export const stopProjectEpisodeScripts = async (projectId) => {
 }
 
 export const startSceneAiShotsBatch = async (episodeId, payload = {}) => {
-    payload = payload || {};
-    payload.function_name = payload.function_name || 'script_analysis';
-    if (payload.system_api_id === undefined) {
-        payload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
+const enrichedPayload = { ...payload };
+    enrichedPayload.function_name = 'ai_shot';
+    const apiContextStr = localStorage.getItem('__function_api_context');
+    if (apiContextStr) {
+        try {
+            const ctx = JSON.parse(apiContextStr);
+            if (ctx['ai_shot'] && ctx['ai_shot'].system_api_id) {
+                enrichedPayload.system_api_id = ctx['ai_shot'].system_api_id;
+            }
+        } catch (e) {
+            console.warn('[API] startSceneAiShotsBatch: Failed to parse function API context', e);
+        }
     }
-    const response = await api.post(`/episodes/${episodeId}/scenes/ai_shots/batch/start`, payload);
+
+    const response = await api.post(`/episodes/${episodeId}/scenes/ai_shots/batch/start`, enrichedPayload);
     return response.data;
 }
 
@@ -1942,7 +1981,20 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
     } = options || {};
 
     const effectiveRequestOptions = { ...(requestOptions || {}) };
-    if (effectiveRequestOptions.function_name) { effectiveRequestOptions.system_api_id = Number(localStorage.getItem('func_api_' + effectiveRequestOptions.function_name)) || null; }
+    let derivedFnName = effectiveRequestOptions.function_name;
+    if (!derivedFnName && effectiveRequestOptions.asset_type) {
+        if (['start_frame', 'end_frame', 'keyframe', 'joint_diptych'].includes(effectiveRequestOptions.asset_type)) {
+            derivedFnName = 'generate_shot_images';
+        } else if (['subject', 'character', 'prop', 'scene'].includes(effectiveRequestOptions.asset_type)) {
+            derivedFnName = 'generate_subjects';
+        } else if (effectiveRequestOptions.asset_type === 'cover') {
+            derivedFnName = 'generate_cover';
+        }
+    }
+    if (derivedFnName) {
+        effectiveRequestOptions.function_name = derivedFnName;
+        effectiveRequestOptions.system_api_id = Number(localStorage.getItem('func_api_' + derivedFnName)) || null;
+    }
     const userPrefs = getCachedUserPreferences() || DEFAULT_USER_PREFERENCES;
     const advanced = userPrefs?.advanced_model && typeof userPrefs.advanced_model === 'object'
         ? userPrefs.advanced_model
@@ -2095,12 +2147,13 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         job_timeout_ms,
         job_poll_interval_ms,
         on_job_created,
-        ...requestOptions
+        ...restOptions
     } = options || {};
 
-    if (requestOptions.function_name) {
-        requestOptions.system_api_id = Number(localStorage.getItem('func_api_' + requestOptions.function_name)) || null;
-    }
+const requestOptions = { ...(restOptions || {}) };
+    let derivedFnName = requestOptions.function_name || 'generate_videos';
+    requestOptions.function_name = derivedFnName;
+    requestOptions.system_api_id = Number(localStorage.getItem('func_api_' + derivedFnName)) || null;
     const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(options || {}, 'callback_polling')
         ? options?.callback_polling !== false
         : DEFAULT_CALLBACK_POLLING_ENABLED;
@@ -2787,13 +2840,20 @@ export const updateAdminMaintenanceConfig = async (payload = {}) => {
     return response.data;
 };
 
+let _cachedMaintenanceStatus = null;
+let _cachedMaintenanceStatusTime = 0;
 export const getMaintenanceStatus = async () => {
+    if (_cachedMaintenanceStatus && Date.now() - _cachedMaintenanceStatusTime < 30 * 1000) {
+        return _cachedMaintenanceStatus;
+    }
     const response = await api.get('/admin/maintenance-status', {
         headers: {
             'Cache-Control': 'no-cache',
             Pragma: 'no-cache',
         },
     });
+    _cachedMaintenanceStatus = response.data;
+    _cachedMaintenanceStatusTime = Date.now();
     return response.data;
 };
 
@@ -3172,3 +3232,23 @@ export const updateFunctionApiConfig = async (functionName, payload) => {
 export const getAdminQueueTasks = async () => (await api.get('/admin/queue/tasks')).data;
 export const cancelAdminQueueTask = async (jobId) => (await api.post(`/admin/queue/tasks/${jobId}/cancel`)).data;
 export const cancelAllQueuedAdminTasks = async () => (await api.post('/admin/queue/tasks/cancel-queued')).data;
+
+export const getApiRoutingMode = async () => {
+    const response = await api.get('/settings/system/api_routing_mode');
+    return response.data;
+};
+
+export const updateApiRoutingMode = async (payload) => {
+    const response = await api.post('/settings/system/api_routing_mode', payload);
+    return response.data;
+};
+
+export const exportFunctionApiConfigs = async () => {
+    const res = await api.get('/settings/system/function_api_configs/export');
+    return res.data;
+};
+
+export const importFunctionApiConfigs = async (payload) => {
+    const res = await api.post('/settings/system/function_api_configs/import', payload);
+    return res.data;
+};

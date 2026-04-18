@@ -4303,9 +4303,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 });
 
                 const rebound = Number(res?.bound || 0);
+
                 const updatedShots = Number(res?.updated_shots || 0);
                 if (!cancelled && (rebound > 0 || updatedShots > 0)) {
                     onLog?.(`Recovered ${rebound} historical media-slot links. Updated ${updatedShots} shots.`, 'success');
+
                     await refreshShots();
                 }
             } catch (e) {
@@ -7212,6 +7214,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         >
                             {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
                         </button>
+
                         <div className="relative inline-flex items-center ml-2 border border-white/20 rounded bg-transparent">
                             <div className="relative flex items-center">
                                 <button 
@@ -7264,6 +7267,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     </>
                                 )}
                             </div>
+
 
                             {isBatchGenerating && (
                                 <button

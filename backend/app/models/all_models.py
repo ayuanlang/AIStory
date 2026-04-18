@@ -326,6 +326,7 @@ class Asset(Base):
     
     owner = relationship("User", back_populates="assets")
 
+
 class APISetting(Base):
     __tablename__ = "api_settings"
     __table_args__ = (

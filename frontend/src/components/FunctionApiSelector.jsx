@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { getFunctionApiConfigs } from '../services/api';
+import { getUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
 export const useFunctionApis = () => {
     const [configs, setConfigs] = useState({});
@@ -20,7 +21,9 @@ export const useFunctionApis = () => {
     return configs;
 };
 
+
 const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '' }) => {
+
     const apiList = configs?.[functionName] || [];
     const storageKey = 'func_api_' + functionName;
     const [value, setValue] = useState(Number(localStorage.getItem(storageKey)) || '');
@@ -47,17 +50,21 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
 
     return (
         <div className={`flex items-center gap-2 ${className}`}>
+
             <span className="text-xs text-white/50 whitespace-nowrap">{label}</span>
+
             <select
                 value={value || ''}
                 onChange={(e) => handleChange(Number(e.target.value))}
                 onClick={(e) => e.stopPropagation()}
-                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none focus:border-primary/50 min-w-[120px]"
+                className="w-full bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none focus:border-primary/50 min-w-[120px]"
             >
-                <option value="" disabled>Select API...</option>
+                      <option value="" disabled>{tUI('选择 API...', 'Select API...')}</option>
                 {apiList.map(api => (
                     <option key={api.system_api_id} value={api.system_api_id}>
+
                         {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}{api.is_fallback ? " (备用)" : ""}
+
                     </option>
                 ))}
             </select>

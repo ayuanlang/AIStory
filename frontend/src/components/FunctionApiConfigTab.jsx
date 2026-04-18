@@ -1,6 +1,8 @@
+
 ﻿import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, Save, GripVertical, Download, Upload } from 'lucide-react';
 import { getFunctionApiConfigs, updateFunctionApiConfig, getSystemSettingsManage, getApiRoutingConfig, updateApiRoutingConfig } from '../services/api';
+
 
 const FUNCTION_LABELS = {
     generate_subjects: '文生文 (角色/道具/环境文本)',
@@ -10,7 +12,8 @@ generate_subjects_i2i: '图生图 (角色/道具/环境)',
     generate_shot_images: '生成分镜图片',
     generate_videos: '生成视频',
     script_analysis: '剧本分析',
-    subject_image_analysis: '实体图片分析'
+    subject_image_analysis: '实体图片分析',
+    ai_shot: 'AI生成分镜(脚本)'
 };
 
 export default function FunctionApiConfigTab() {
@@ -125,8 +128,10 @@ export default function FunctionApiConfigTab() {
                 system_api_id: parseInt(item.system_api_id, 10),
                 priority: parseInt(item.priority, 10) || 0,
                 is_fallback: Boolean(item.is_fallback),
+
                 alias: item.alias || '',
                 applicable_languages: item.applicable_languages || null
+
             })).filter(item => !isNaN(item.system_api_id));
 
             const res = await updateFunctionApiConfig(funcName, { api_settings: items });
@@ -144,6 +149,7 @@ export default function FunctionApiConfigTab() {
     };
 
     const handleExport = () => {
+
         const dataStr = JSON.stringify(configs, null, 2);
         const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
         const exportFileDefaultName = 'function_api_configs.json';
@@ -160,11 +166,13 @@ export default function FunctionApiConfigTab() {
 
     const handleImportFileChange = async (e) => {
         const file = e.target.files[0];
+
         if (!file) return;
 
         const reader = new FileReader();
         reader.onload = async (event) => {
             try {
+
                 const json = JSON.parse(event.target.result);
                 // Upload each function config
                 for (const funcName of Object.keys(json)) {
@@ -179,6 +187,7 @@ export default function FunctionApiConfigTab() {
         };
         reader.readAsText(file);
         e.target.value = null; // Reset input
+
     };
 
     if (loading) return <div className="text-gray-400 p-4">Loading configurations...</div>;
@@ -200,6 +209,7 @@ export default function FunctionApiConfigTab() {
 
     return (
         <div className="space-y-8 pb-10">
+
             <div>
                 <div className="flex justify-between items-center mb-2">
                     <h3 className="text-xl font-medium text-white mb-2">功能专属 API 映射设置</h3>
@@ -290,6 +300,7 @@ export default function FunctionApiConfigTab() {
                         </label>
                     </div>
                 </div>
+
 
             </div>
 
@@ -403,6 +414,7 @@ export default function FunctionApiConfigTab() {
                                                     />
                                                 </div>
                                             </div>
+
                                             <div className="flex-1 flex gap-4 pr-4 border-r border-white/10 overflow-x-auto">
                                                 <div className="flex items-center h-8 shrink-0">
                                                     <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
@@ -415,6 +427,7 @@ export default function FunctionApiConfigTab() {
                                                         作为兜底
                                                     </label>
                                                 </div>
+
                                             </div>
                                             <button
                                                 onClick={() => handleRemoveApi(funcName, originalIndex)}

@@ -421,6 +421,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const t = (zh, en) => tUI(uiLang, zh, en);
     const location = useLocation();
     const [projects, setProjects] = useState([]);
+    const [projectPage, setProjectPage] = useState(0);
+    const [hasMoreProjects, setHasMoreProjects] = useState(true);
+    const [isLoadMoreProjects, setIsLoadMoreProjects] = useState(false);
+    const PROJECT_LIMIT = 20;
     const [isProjectsLoading, setIsProjectsLoading] = useState(false);
     const [hasLoadedProjectsOnce, setHasLoadedProjectsOnce] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
@@ -568,29 +572,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         if (location.pathname !== '/projects') {
             return;
         }
-        try {
-            const raw = sessionStorage.getItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
-            if (!raw) return;
-
-            const snapshot = JSON.parse(raw);
-            const projectId = snapshot?.selectedProjectId;
-            if (!projectId) {
-                sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
-                return;
-            }
-
-            setActiveTab('projects');
-            setSelectedProjectId(projectId);
-            setRestoredEditorState({
-                activeTab: snapshot?.activeTab || 'overview',
-                activeEpisodeId: snapshot?.activeEpisodeId ?? null,
-                editingShotId: snapshot?.editingShotId ?? null,
-                editingShotSceneId: snapshot?.editingShotSceneId ?? null,
-            });
-            sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
-        } catch (e) {
-            sessionStorage.removeItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
-        }
+        // Removed snapshot restoration to ensure project cards page on refresh
     }, [location.pathname]);
 
     const handleThemeChange = (key, showToast = true) => {
@@ -644,20 +626,53 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         loadProjectCreateOptions();
     }, []);
 
-    const loadProjects = useCallback(async () => {
-        setIsProjectsLoading(true);
+const loadProjects = useCallback(async (isLoadMore = false) => {
+        if (isLoadMore) {
+            setIsLoadMoreProjects(true);
+        } else {
+            setIsProjectsLoading(true);
+        }
+        
         try {
-            const data = await fetchProjects();
+            const currentObjPage = isLoadMore ? projectPage + 1 : 0;
+            const currentLimit = isLoadMore ? PROJECT_LIMIT : (projectPage + 1) * PROJECT_LIMIT;
+            const data = await fetchProjects(isLoadMore ? currentObjPage * PROJECT_LIMIT : 0, currentLimit);
             const sorted = sortProjectsNewestFirst(data);
-            setProjects(sorted);
             
+            if (isLoadMore) {
+                if (data.length < PROJECT_LIMIT) {
+                    setHasMoreProjects(false);
+                } else {
+                    setHasMoreProjects(true);
+                }
+            } else {
+                if (data.length < currentLimit) {
+                    setHasMoreProjects(false);
+                } else {
+                    setHasMoreProjects(true);
+                }
+            }
+
+            let allProjects = sorted;
+            if (isLoadMore) {
+                setProjectPage(currentObjPage);
+                setProjects(prev => {
+                    allProjects = [...prev, ...sorted];
+                    return allProjects;
+                });
+            } else {
+                setProjects(sorted);
+            }
+
             // Turn off loading immediately to render the project list without delay
             setIsProjectsLoading(false);
+            setIsLoadMoreProjects(false);
             setHasLoadedProjectsOnce(true);
 
             // Fetch extra stats quietly in the background
             (async () => {
                 try {
+
                     const sortedArray = Array.isArray(sorted) ? sorted : [];
                     const nextCounts = {};
                     sortedArray.forEach((item) => {
@@ -666,6 +681,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                     setProjectShareCounts(nextCounts);
                 } catch (e) {
                     console.error("Failed to initialize project shares", e);
+
                 }
 
                 try {
@@ -695,7 +711,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                         nextUnreadCounts[projectId] = Number(nextUnreadCounts[projectId] || 0) + 1;
                     });
 
-                    (Array.isArray(sorted) ? sorted : []).forEach((item) => {
+                    (Array.isArray(allProjects) ? allProjects : []).forEach((item) => {
                         const projectId = Number(item?.id || 0);
                         if (projectId > 0 && nextUnreadCounts[projectId] == null) {
                             nextUnreadCounts[projectId] = 0;
@@ -710,9 +726,10 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         } catch (error) {
             console.error("Failed to load projects", error);
             setIsProjectsLoading(false);
+            setIsLoadMoreProjects(false);
             setHasLoadedProjectsOnce(true);
         }
-    }, [currentUser?.id]);
+    }, [projectPage, PROJECT_LIMIT]);
 
     useEffect(() => {
         if (activeTab === 'projects') {
@@ -833,9 +850,8 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                 aspect_ratio: String(newAspectRatio || '').trim(),
                 image_size: String(newImageSize || '').trim(),
                 video_sound: Boolean(newVideoSoundEnabled),
-                ...Object.fromEntries(
-                    Object.entries(newSceneAnalysisConfig || {}).map(([key, value]) => [key, String(value || '').trim()])
-                ),
+                has_existing_assets: Boolean(newHasExistingAssets),
+                ...Object.fromEntries((Object.entries(newSceneAnalysisConfig || {}).map(([key, value]) => [key, String(value || '').trim()]))),
             },
         });
         
@@ -1936,6 +1952,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                             placeholder={t('可留空。用于记录项目背景、目标或备注', 'Can be left empty. Add context, goals, or notes for this project')}
                                         />
 
+
                                         <div className="mb-6 pb-3 mt-4 border-t border-white/10 pt-6">
                                             <button onClick={() => setIsCreateCollaboratorsCollapsed(!isCreateCollaboratorsCollapsed)} className="w-full flex items-center justify-between mb-4">
                                                 <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
@@ -2043,6 +2060,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                 )}
                                             </AnimatePresence>
                                         </div>
+
 
 
                                     </motion.div>
@@ -2184,6 +2202,19 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                                                 </motion.div>
                                             </div>
                                         ))}
+                                    </div>
+                                )}
+                                
+                                {projects.length > 0 && hasMoreProjects && (
+                                    <div className="mt-8 mb-4 flex justify-center">
+                                        <button
+                                            onClick={() => loadProjects(true)}
+                                            disabled={isLoadMoreProjects}
+                                            className="px-6 py-2 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                                        >
+                                            {isLoadMoreProjects && <Loader2 className="w-4 h-4 animate-spin" />}
+                                            {isLoadMoreProjects ? t('?????...', 'Loading...') : t('????', 'Load More')}
+                                        </button>
                                     </div>
                                 )}
                             </>

@@ -186,6 +186,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
     const [subjectIndexText, setSubjectIndexText] = useState('');
+    const [adaptationText, setAdaptationText] = useState('');
     const [isEditingSubjectIndex, setIsEditingSubjectIndex] = useState(false);
     const [isRetryingPhase2, setIsRetryingPhase2] = useState(false);
     const [systemPrompt, setSystemPrompt] = useState('');
@@ -223,22 +224,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const needsUpdate = extractedText !== activeEpisode.ai_scene_analysis_subject_index || extractedAdaptationText !== activeEpisode.ai_scene_analysis_adaptation;
-            if (needsUpdate) {
+            // 剧本分析界面的修改是持久化的，不再从llm直接回填与持久化：
+            // 我们只进行UI展现刷新（用户自行通过编辑决定保存）
+            if (extractedText !== subjectIndexText) {
                 setSubjectIndexText(extractedText);
-                const updatePayload = {};
-                if (extractedText !== activeEpisode.ai_scene_analysis_subject_index) {
-                    updatePayload.ai_scene_analysis_subject_index = extractedText;
-                }
-                if (extractedAdaptationText !== activeEpisode.ai_scene_analysis_adaptation) {
-                    updatePayload.ai_scene_analysis_adaptation = extractedAdaptationText;
-                }
-                if (Object.keys(updatePayload).length > 0) {
-                    updateEpisode(activeEpisode.id, updatePayload)
-                        .catch(err => console.log('Auto-update Subject Index/Adaptation failed.', err));
-                }
-            } else if (extractedText && !subjectIndexText) {
-                setSubjectIndexText(extractedText);
+            }
+            if (extractedAdaptationText !== adaptationText) {
+                setAdaptationText(extractedAdaptationText);
             }
         }
     }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.id]);
@@ -895,7 +887,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
 
         const normalizeName = (item) => normalizeEntityToken(
-            item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || ''
+            item?.subject_name_exact || item?.name || item?.subject_name || item?.name_en || item?.name_zh || ''
         );
 
         const mergePayload = (base, patch, onlyMissingTypes = false) => {
@@ -1512,9 +1504,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
 
         return {
-            characters: mergeBy(base.characters, patch.characters, (item) => normalizeSubjectKey(item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || '')),
-            props: mergeBy(base.props, patch.props, (item) => normalizeSubjectKey(item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || '')),
-            environments: mergeBy(base.environments, patch.environments, (item) => normalizeSubjectKey(item?.name || item?.subject_name_exact || item?.subject_name || item?.name_en || item?.name_zh || '')),
+            characters: mergeBy(base.characters, patch.characters, (item) => normalizeSubjectKey(item?.subject_name_exact || item?.name || item?.subject_name || item?.name_en || item?.name_zh || '')),
+            props: mergeBy(base.props, patch.props, (item) => normalizeSubjectKey(item?.subject_name_exact || item?.name || item?.subject_name || item?.name_en || item?.name_zh || '')),
+            environments: mergeBy(base.environments, patch.environments, (item) => normalizeSubjectKey(item?.subject_name_exact || item?.name || item?.subject_name || item?.name_en || item?.name_zh || '')),
         };
     };
 
@@ -2687,6 +2679,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         setSubjectIndexText(activeEpisode?.ai_scene_analysis_subject_index || '');
+        setAdaptationText(activeEpisode?.ai_scene_analysis_adaptation || '');
         setAnalysisAttentionNotes(String(activeEpisode?.episode_info?.analysis_attention_notes || ''));
         setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
         setCoreCoverageResultText(String(activeEpisode?.episode_info?.core_coverage_check_result || ''));
@@ -5960,6 +5953,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 onChange={(e) => handleLlmRawContentChange(e.target.value)}
                                 onBlur={handleSaveLlmRawContent}
                             />
+
+                            {/* Script Adaptation Notes */}
+                            {adaptationText && (
+                                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 mt-4 mb-4">
+                                    <div className="font-bold text-amber-300 text-sm mb-3 flex items-center gap-2">
+                                        📝 {t('剧本改编补充说明', 'Script Adaptation Notes')}
+                                    </div>
+                                    <textarea
+                                        className="w-full h-32 p-3 bg-black/50 border border-amber-500/20 rounded-md text-amber-100 font-mono text-[12px] resize-none focus:outline-none"
+                                        value={adaptationText}
+                                        readOnly
+                                    />
+                                </div>
+                            )}
 
                             <div className="rounded-lg border border-white/10 bg-black/20 p-4 mt-4">
                                 <div className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">

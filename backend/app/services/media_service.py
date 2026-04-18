@@ -607,7 +607,9 @@ class MediaGenerationService:
         if re.search(r"negative\s*prompt\s*:", base_prompt, flags=re.IGNORECASE):
             return base_prompt
         if base_prompt:
-            return f"{base_prompt}\n\nNegative prompt constraints: {neg_prompt}"
+            return f"""{base_prompt}
+
+Negative prompt constraints: {neg_prompt}"""
         return f"Negative prompt constraints: {neg_prompt}"
 
     def _looks_like_scene_subject_placeholder_prompt(self, prompt: Any) -> bool:
@@ -625,7 +627,7 @@ class MediaGenerationService:
         if not text:
             return ""
         prefix = f"{str(label or '').strip().lower()}:"
-        for block in re.split(r"\n\s*\n", text):
+        for block in re.split(r"\n\\s*\n", text):
             stable_block = str(block or "").strip()
             if not stable_block:
                 continue
@@ -3663,16 +3665,26 @@ class MediaGenerationService:
         if media_retry_mode and total_attempt_limit is not None and len(deduped_attempts) > total_attempt_limit:
             deduped_attempts = deduped_attempts[:total_attempt_limit]
 
+        attempt_sequence = ", ".join(
+            [f"[{i+1}]{att.get('tag')}:{self._normalize_provider_name(att.get('provider'), category)}/{((att.get('config') or {}).get('model') or 'unknown')}" for i, att in enumerate(deduped_attempts)]
+        )
+
         logger.info(
-            "Media routing plan | category=%s user_id=%s provider=%s model=%s active_retry_limit=%s fallback_limit=%s total_attempt_limit=%s planned_attempts=%s",
+            "Media routing plan (API Selection Process) | category=%s user_id=%s "
+            "strategy=%s explicit_selection=%s allow_fallback=%s "
+            "primary_provider=%s primary_model=%s active_retry_limit=%s fallback_limit=%s total_attempt_limit=%s planned_attempts=%s sequence=%s",
             category,
             user_id,
+            strategy,
+            explicit_selection,
+            allow_priority_fallback_when_explicit,
             effective_provider,
             baseline_config.get("model"),
             retry_limit,
             effective_fallback_candidate_limit,
             total_attempt_limit if media_retry_mode else len(deduped_attempts),
             len(deduped_attempts),
+            attempt_sequence,
         )
 
         final_error: Dict[str, Any] = {"error": "Generation failed"}
@@ -3861,11 +3873,11 @@ class MediaGenerationService:
 
                 _debug_log(f"API_ROUTING_MODE mode={'new_function_based' if use_function_based_routing else 'old_legacy'} user_id={user_id} category={resolved_category} provider={provider or '<none>'} model={requested_model or '<none>'}")  
 
-                if use_function_based_routing:
-                    user_setting = None
-                else:
-                    user_setting = self._get_active_user_setting(session, user_id, resolved_category)
-                
+
+
+                _debug_log(f"API_ROUTING_MODE mode={'new_function_based' if use_function_based_routing else 'old_legacy'} user_id={user_id} category={resolved_category} provider={provider or '<none>'} model={requested_model or '<none>'}")
+
+                user_setting = self._get_active_user_setting(session, user_id, resolved_category)
                 requested_provider = self._normalize_provider_name(str(provider or "").strip(), resolved_category)
                 requested_model_value = str(requested_model or "").strip()      
                 from app.api.settings import get_task_default_system_setting    
@@ -3924,7 +3936,7 @@ class MediaGenerationService:
                         _debug_log(f"Error querying FunctionAPIConfig for function_name={function_name}: {e}", "warning")
 
                 # Check for direct system_api_id parameter override (e.g. from frontend dropdowns)
-                if user_binding_status != "function_api_direct_route" and system_api_id is not None:
+                if use_function_based_routing and system_api_id is not None:
                     user_system_api_id = int(system_api_id)
                     selected_user_strategy = "unified_function_api"
                     user_setting_id = "func_based_" + getattr(category, "name", str(category))
@@ -5533,21 +5545,13 @@ class MediaGenerationService:
             signed_headers = "content-type;host;x-tc-action"
             
             hashed_payload = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-            canonical_request = (http_method + "\n" +
-                                    canonical_uri + "\n" +
-                                    canonical_querystring + "\n" +
-                                    canonical_headers + "\n" +
-                                    signed_headers + "\n" +
-                                    hashed_payload)
+            canonical_request = (http_method + "\n" + canonical_uri + "\n" + canonical_querystring + "\n" + canonical_headers + "\n" + signed_headers + "\n" + hashed_payload)
             
             # 2. String to Sign
             algorithm = "TC3-HMAC-SHA256"
             credential_scope = date + "/" + service + "/tc3_request"
             hashed_canonical = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
-            string_to_sign = (algorithm + "\n" +
-                                str(timestamp) + "\n" +
-                                credential_scope + "\n" +
-                                hashed_canonical)
+            string_to_sign = (algorithm + "\n" + str(timestamp) + "\n" + credential_scope + "\n" + hashed_canonical)
             
             # 3. Calculate Signature
             def sign(key, msg): return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()

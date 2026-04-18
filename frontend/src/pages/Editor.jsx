@@ -984,21 +984,9 @@ const Editor = ({
         return Object.keys(report).length > 0 ? report : null;
     };
 
-    const getEntitiesPayloadFromSubjectIndexTable = (text) => {
+        const getEntitiesPayloadFromSubjectIndexTable = (text) => {
         const raw = String(text || '');
         if (!raw.trim()) return null;
-
-        const normalizeImportSubjectKey = (value) => {
-            const rawValue = String(value || '').trim();
-            if (!rawValue) return '';
-            const normalized = normalizeEntityToken(
-                rawValue
-                    .replace(/^CHAR\s*:\s*/i, '')
-                    .replace(/^PROP\s*:\s*/i, '')
-                    .replace(/^ENV\s*:\s*/i, '')
-            );
-            return String(normalized || '').replace(/[^\p{L}\p{N}\u4e00-\u9fff]/gu, '');
-        };
 
         const sectionMatch = raw.match(/###\s*Subject\s*Index[\s\S]*?(?=\n###\s+|$)/i);
         const section = sectionMatch ? sectionMatch[0] : raw;
@@ -1053,7 +1041,7 @@ const Editor = ({
                         const subjectName = String(cells[nameIdx] || '').trim();
                         if (!type || !subjectName) continue;
 
-                        const dedupKey = `${type}:${normalizeImportSubjectKey(subjectName)}`;
+                        const dedupKey = `${type}:${normalizeEntityToken(subjectName)}`;
                         if (seen.has(dedupKey)) continue;
                         seen.add(dedupKey);
 
@@ -1100,7 +1088,7 @@ const Editor = ({
             else if (typeToken.includes('environment') || typeToken.includes('场景') || typeToken.includes('环境') || typeToken.includes('env')) type = 'environment';
             if (!type) continue;
 
-            const dedupKey = `${type}:${normalizeImportSubjectKey(subjectName)}`;
+            const dedupKey = `${type}:${normalizeEntityToken(subjectName)}`;
             if (seen.has(dedupKey)) continue;
             seen.add(dedupKey);
 
@@ -1475,7 +1463,7 @@ const Editor = ({
             ? await fetchEntities(id).catch(() => [])
             : []);
         let knownEntities = Array.isArray(existingEntities) ? [...existingEntities] : [];
-        const normalizeEntityKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${normalizeImportSubjectKey(name)}`;
+        const normalizeEntityKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${normalizeEntityToken(name)}`;
         const existingEntityMap = new Map();
         for (const e of (existingEntities || [])) {
             const t = String(e?.type || '').trim().toLowerCase();
@@ -1586,8 +1574,8 @@ const Editor = ({
                     if (data.characters && Array.isArray(data.characters)) {
                         for (const char of data.characters) {
                             const entityName = String(
-                                char?.name ||
                                 char?.subject_name_exact ||
+                                    char?.name ||
                                 char?.subject_name ||
                                 char?.name_zh ||
                                 char?.name_en ||
@@ -1666,8 +1654,8 @@ const Editor = ({
                     if (data.props && Array.isArray(data.props)) {
                         for (const prop of data.props) {
                                       const entityName = String(
-                                          prop?.name ||
                                           prop?.subject_name_exact ||
+                                            prop?.name ||
                                           prop?.subject_name ||
                                           prop?.name_zh ||
                                           prop?.name_en ||
@@ -1734,8 +1722,8 @@ const Editor = ({
                     if (data.environments && Array.isArray(data.environments)) {
                         for (const env of data.environments) {
                                       const entityName = String(
-                                          env?.name ||
                                           env?.subject_name_exact ||
+                                            env?.name ||
                                           env?.subject_name ||
                                           env?.name_zh ||
                                           env?.name_en ||
@@ -1807,8 +1795,8 @@ const Editor = ({
                     if (resolvedPosters) {
                         for (const poster of resolvedPosters) {
                                       const entityName = String(
-                                          poster?.name ||
                                           poster?.subject_name_exact ||
+                                            poster?.name ||
                                           poster?.subject_name ||
                                           poster?.name_zh ||
                                           poster?.name_en ||
@@ -1938,8 +1926,8 @@ const Editor = ({
 
                 if (scriptLines.length > 0) {
                     const content = scriptLines.join('\n');
-                    await updateEpisode(activeEpisodeId, { script_content: content });
-                    addLog(`Imported ${scriptLines.length} lines of Script content.`, "success");
+                    // await updateEpisode(activeEpisodeId, { script_content: content });
+                    addLog(`Parsed ${scriptLines.length} lines of Script content from LLM result. Skipped auto-backfilling to script_content to preserve original text.`, "success");
                     importStats.scriptLines = scriptLines.length;
                     changesMade = true;
                 } else {

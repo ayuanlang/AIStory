@@ -152,6 +152,23 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    try {
+      const token = localStorage.getItem('token');
+      if (token) {
+        const pEntries = window.performance?.getEntriesByType("navigation") || [];
+        const isReload = pEntries.length > 0 ? pEntries[0].type === "reload" : window.performance?.navigation?.type === 1;
+        
+        if (isReload) {
+          // If we reloaded while authenticated, redirect to /projects (project cards page)
+          if (window.location.pathname !== '/projects' || window.location.search) {
+             window.location.href = '/projects';
+          }
+        }
+      }
+    } catch (e) {}
+  }, []);
+
   const currentPath = typeof window !== 'undefined' ? window.location.pathname : '/';
   const allowAuthDuringMaintenance = currentPath === '/auth';
 

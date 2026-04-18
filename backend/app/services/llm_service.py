@@ -1290,7 +1290,12 @@ class LLMService:
         if resolved_user_id:
             try:
                 from app.services.agent_service import agent_service
-                fallback_candidates = agent_service.get_fallback_configs(
+                __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
+                if __override_fallback_candidates is not None:
+                    override_ids = [int(x) for x in __override_fallback_candidates]
+                    fallback_candidates = agent_service.get_fallback_configs_by_ids(override_ids)
+                else:
+                    fallback_candidates = agent_service.get_fallback_configs(
                     int(resolved_user_id),
                     category=category,
                     exclude_setting_id=int(active_setting_id) if str(active_setting_id or "").isdigit() else None,
@@ -2775,7 +2780,13 @@ class LLMService:
             )
 
         # ── fallback candidates: up to 3 ──
-        fallbacks = agent_service.get_fallback_configs(
+        active_cfg_obj = dict((config.get('config') or {}))
+        __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
+        if __override_fallback_candidates is not None:
+            override_ids = [int(x) for x in __override_fallback_candidates]
+            fallbacks = agent_service.get_fallback_configs_by_ids(override_ids)
+        else:
+            fallbacks = agent_service.get_fallback_configs(
             user_id, category=category, exclude_setting_id=active_setting_id,
             modality=modality, limit=3,
         )
@@ -2864,7 +2875,13 @@ class LLMService:
                 )
 
         # ── fallback candidates: up to 3 ──
-        fallbacks = agent_service.get_fallback_configs(
+        active_cfg_obj = dict((config.get('config') or {}))
+        __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
+        if __override_fallback_candidates is not None:
+            override_ids = [int(x) for x in __override_fallback_candidates]
+            fallbacks = agent_service.get_fallback_configs_by_ids(override_ids)
+        else:
+            fallbacks = agent_service.get_fallback_configs(
             user_id, category=category, exclude_setting_id=active_setting_id,
             modality=modality, limit=3,
         )

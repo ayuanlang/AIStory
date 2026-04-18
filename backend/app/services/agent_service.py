@@ -2145,6 +2145,25 @@ Output ONLY the JSON object now."""
             logger.error("Error fetching default system LLM config: %s", e)
         return {}
 
+    def get_fallback_configs_by_ids(self, ids: List[int]) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        try:
+            with SessionLocal() as session:
+                rows = session.query(SystemAPISetting).filter(SystemAPISetting.id.in_(ids)).all()
+                row_map = {row.id: row for row in rows}
+                for i in ids:
+                    row = row_map.get(i)
+                    if not row: continue
+                    cfg = dict(row.config or {})
+                    if self._is_deprecated_system_config(cfg, getattr(row, "deprecated", None)):
+                        continue
+                    if self._is_apikey_missing(cfg):
+                        continue
+                    results.append(self._build_legacy_agent_api_structure(row, cfg))
+        except Exception as e:
+            logger.error(f"[get_fallback_configs_by_ids] err={e}")
+        return results
+
     def get_fallback_configs(
         self,
         user_id: int,

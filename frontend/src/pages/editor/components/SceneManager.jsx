@@ -899,6 +899,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
 };
 
 export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, onSwitchToShots, uiLang = 'zh' }) => {
+    const functionApiConfigs = useFunctionApis();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const defaultSceneRegenRequirement = t('补充所缺实体', 'Supplement missing entities');
     const SCENE_AI_SHOTS_BATCH_KIND = 'scene-ai-shots-batch';
@@ -4079,7 +4080,8 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                     {t('场景', 'Scenes')}
                     <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">{filteredScenes.length}/{scenes.length} {t('场景', 'Scenes')}</span>
                 </h2>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
+                    <FunctionApiSelector functionName="ai_shot" configs={functionApiConfigs} />
                     <button
                         onClick={runBatchGenerateAiShotsForAllScenes}
                         disabled={batchAiShotsProgress.running || scenes.length === 0 || isStoppingBatchAiShots}

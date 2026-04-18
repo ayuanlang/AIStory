@@ -584,6 +584,8 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
 
 
+
+
                         <select 
                             value={filterType}
                             onChange={(e) => setFilterType(e.target.value)}

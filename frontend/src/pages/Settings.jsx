@@ -3,8 +3,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound, Link as LinkIcon, Copy } from 'lucide-react';
 import { API_URL } from '@/config';
+
 import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
+
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
 
@@ -251,7 +253,9 @@ const Settings = () => {
     const [transactions, setTransactions] = useState([]);
     const [isBillingLoading, setIsBillingLoading] = useState(false);
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
+
     const [functionApiConfigs, setFunctionApiConfigs] = useState([]);
+
 
     // Unified Top Up entry: support /settings?tab=billing and cross-app 402 redirects.
     useEffect(() => {
@@ -328,21 +332,6 @@ const Settings = () => {
         } catch {
             // ignore event dispatch failures
         }
-    };
-
-    const handleExitSettings = () => {
-        const params = new URLSearchParams(location.search || '');
-        const returnToRaw = params.get('return_to') || '';
-        const returnTo = decodeURIComponent(returnToRaw || '').trim();
-        if (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//')) {
-            navigate(returnTo);
-            return;
-        }
-        if (window.history.length > 1) {
-            navigate(-1);
-            return;
-        }
-        navigate('/projects');
     };
 
     const handleThemeChange = (themeKey) => {
@@ -589,7 +578,9 @@ const Settings = () => {
         }).finally(() => setIsBillingLoading(false));
     };
 
+
     const loadFunctionApiConfigs = async () => {
+
         try {
             const funcConfigs = await getFunctionApiConfigs();
             setFunctionApiConfigs(Array.isArray(funcConfigs) ? funcConfigs : []);
@@ -1547,17 +1538,9 @@ const Settings = () => {
                         <Download size={14} />
                         <span>{t('导出', 'Export')}</span>
                     </button>
-                    <button
-                        onClick={() => trackMenuAction('settings.action.exit', t('退出', 'Exit'), handleExitSettings)}
-                        className="flex-1 sm:flex-none flex items-center justify-center space-x-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-xs transition-colors whitespace-nowrap"
-                        title={t('退出设置并返回来源页面', 'Exit settings and return to caller page')}
-                    >
-                        <ArrowLeft size={14} />
-                        <span>{t('退出', 'Exit')}</span>
-                    </button>
-                    <input 
-                        type="file" 
-                        ref={fileInputRef} 
+                    <input
+                        type="file"
+                        ref={fileInputRef}
                         className="hidden" 
                         accept=".json" 
                         onChange={handleFileChange} 
@@ -1909,6 +1892,7 @@ const Settings = () => {
                 </div>
             ) : activeTab === 'api_settings' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+
                     <div className="rounded-xl border border-blue-400/30 bg-blue-500/10 p-4 relative">
                             <div className="flex justify-between items-start md:items-center">
                                 <div>
@@ -1980,9 +1964,10 @@ const Settings = () => {
                             {functionApiConfigs.length === 0 && <div className="text-sm text-gray-500">{t('暂无功能 API 配置', 'No function API configs available')}</div>}
                         </div>
                     </div>
+
             ) : null}
         </div>
-    )
+    );
 }
 
 export default Settings;

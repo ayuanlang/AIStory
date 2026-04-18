@@ -6855,7 +6855,7 @@ def apply_system_ai_assistant(
         pricing_scheme = {
             "strategy": "supplier_price_x_multiplier",
             "multiplier": suggestion.multiplier,
-            "cny_to_credit_rate": 100,  # 1积分=1分钱=0.01�?
+            "cny_to_credit_rate": 100,  # 1积分=1分钱=0.01?
             "supplier_currency": suggestion.supplier_currency or "CNY",
             "supplier_price_basis": suggestion.supplier_price_basis or "money",
             "conversion_note": "Only CNY monetary prices are accepted. Non-CNY must be converted via exchange-rate tool first.",
@@ -9936,7 +9936,35 @@ def get_defaults():
     return DEFAULTS
 
 # --- Function API Config Routes ---
-from app.schemas.settings import FunctionAPIConfigUpdate, FunctionAPIConfigOut
+from app.schemas.settings import FunctionAPIConfigUpdate, FunctionAPIConfigOut  
+from app.models.all_models import APIRoutingConfig
+
+@router.get("/settings/system/api_routing_mode")
+def get_api_routing_mode(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not an admin")
+    conf = db.query(APIRoutingConfig).first()
+    if not conf:
+        conf = APIRoutingConfig(use_function_based_routing=False)
+        db.add(conf)
+        db.commit()
+        db.refresh(conf)
+    return {"use_function_based_routing": conf.use_function_based_routing}
+
+@router.post("/settings/system/api_routing_mode")
+def update_api_routing_mode(payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not an admin")
+    conf = db.query(APIRoutingConfig).first()
+    if not conf:
+        conf = APIRoutingConfig(use_function_based_routing=False)
+        db.add(conf)
+
+    val = payload.get("use_function_based_routing", False)
+    conf.use_function_based_routing = val
+    db.commit()
+    db.refresh(conf)
+    return {"use_function_based_routing": conf.use_function_based_routing}
 
 @router.get("/settings/system/function_api_configs", response_model=List[FunctionAPIConfigOut])
 def get_all_function_api_configs(
@@ -10017,6 +10045,48 @@ def update_function_api_config(
         if c["function_name"] == function_name:
             return c
     raise HTTPException(status_code=500, detail="Failed to retrieve updated config")
+
+@router.get("/settings/system/function_api_configs/export")
+def export_function_api_configs(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Access forbidden")
+    configs = db.query(FunctionAPIConfig).all()
+    result = []
+    for c in configs:
+        result.append({
+            "function_name": c.function_name,
+            "api_settings": c.api_settings
+        })
+    return {"configs": result}
+
+@router.post("/settings/system/function_api_configs/import")
+def import_function_api_configs(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Access forbidden")
+    configs_data = payload.get("configs", [])
+    if not isinstance(configs_data, list):
+        raise HTTPException(status_code=400, detail="Invalid format: 'configs' must be a list.")
+    
+    db.query(FunctionAPIConfig).delete()
+    
+    for item in configs_data:
+        fname = item.get("function_name")
+        api_settings = item.get("api_settings", [])
+        if not fname:
+            continue
+        new_conf = FunctionAPIConfig(function_name=fname, api_settings=api_settings)
+        db.add(new_conf)
+        
+    db.commit()
+    return {"message": "Import successful", "imported_count": len(configs_data)}
+
 
 
 

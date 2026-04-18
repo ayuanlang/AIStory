@@ -642,8 +642,142 @@
 - `name/name_en` 必须是纯净角色名。
 - 禁止形式：`CHAR:[@Name]`、`[@Name]`、`[Name]`、`@Name`。
 - `CHAR:[@Name]` 仅限引用语境；JSON 内一律 `Name`。
+<<<<<<< Updated upstream
+=======
+- 字段语言职责固定（Mandatory）：沿用总则第 12 条与 Part 2 共同双语字段复核；Character 条目只做执行。
+- 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics` 保持显式一致；若这些字段存在而提示词未体现，视为无效 JSON 示例与无效输出。
+- 单语种示例收口规则（Mandatory）：本节只保留 1 组角色 JSON 权威示例，用于展示单个语种项目下的人物设计基线。跨语种覆盖由 Part 2A-2C 整体共同完成，不要求每一类实体都同时放中文与英文两组示例；真实输出必须按当前剧本重设计。
+- 中文项目语境示例：
+```json
+{
+  "characters": [
+    {
+      "subject_no": "S001",
+      "name": "林月",
+      "name_en": "Lin Yue",
+      "description_cn": "调查记者，28岁左右，身高约178cm，头身比约1:9.3，腰线明显偏高、上短下长、腿线更长，下半身视觉长度约占整身63%，上半身约占37%，整体接近黄金分割比例并明确避免五五分，观察时动作克制，整体气质冷静专注。",
+      "gender": "F",
+      "role": "Investigative Reporter",
+      "archetype": "Calm Truth Seeker",
+      "appearance_cn": "28岁，东亚女性，身高约178cm，头身比约1:9.3，脸部线条利落，下颌边界清楚，眼神专注，肤质保留真实毛孔与微细纹理，肩颈舒展，腰线明显偏高，胯位利落，腿线显著长于上身，下半身视觉占比约63%，上半身约37%，整体避免五五分与上下身等分，并通过轻度纵向拉伸形成更明确的主角级长腿比例，胸腰臀比例清楚、女性曲线更明确，整体修长苗条但有自然起伏。",
+      "clothing": "当前服装：深海军蓝修身短款机能夹克（肩线利落、短衣长到高腰以上，哑光防泼水面料），珍珠白柔垂内搭，高腰黑色利落短裤，黑色过膝皮靴，细窄皮带，极简几何耳饰。时尚对标：角色定位=女性调查记者；当代风格参考=都市专业女性中的锋利功能时装通勤路线，强调利落长线条、低饱和冷色层次、结构感剪裁、精致配饰与克制高级感，而不是普通职场模板；版型/材质/配色关键词=修身短上装、高腰短裤、过膝长靴、轻机能面料、海军蓝+珍珠白+黑。其他剧本衣着描述：无。",
+      "action_characteristics": "动作克制、重心稳定、转身幅度小、观察时先停顿后移动。",
+      "generation_prompt_cn": "写实现代剧情风格，林月角色四视图设定图，整张资产表按 16:9 横向四宫格画布执行。项目类型为实拍/真人体系，重点表现真实皮肤微纹理、自然人体比例、可信服装材质与电影化棚拍布光。她是28岁左右的东亚女性调查记者，人物气质为冷静求证型，身高约178cm，头身比约1:9.3，脸部线条利落，下颌边界清楚，眼神专注，鼻梁笔直，肩颈舒展，腰线明显上提，胯位利落，腿线显著长于上身，下半身视觉长度约占整身63%，上半身约占37%，整体接近黄金分割并明确避免五五分与上下身等分，同时做轻度纵向拉伸强化主角读感，胸腰臀比例清楚且曲线自然。四个面板保持同一身份、同一服装与同一比例系统，机位锚点为棚拍胸口高度固定机位，视角顺序严格为面部特写、正面全身、侧面全身、反面全身。版式固定为左侧第一宫面部特写大宫格约占画布34%，且左一只能是面部特写，不得替换成半身、中景、全身或任何其他视图；右侧正面全身、侧面全身、反面全身三宫均分剩余66%。正面、侧面、反面保持完整全身与鞋履可读。当前服装统一为深海军蓝修身短款机能夹克、珍珠白柔垂内搭、高腰黑色利落短裤、黑色过膝皮靴、细窄皮带与极简几何耳饰，通过高腰短装与长靴组合把长腿比例明确落地。站姿重心稳定，肩线平直，动作前有短暂停顿。布光采用左前方柔和主光、机位轴线低强度补光、右后方轻轮廓光，呈现真实皮肤与面料层次。纯白背景，画面干净，角色资产识别清晰。",
+      "generation_prompt_en": "Photoreal contemporary drama character sheet for Lin Yue, an East Asian female investigative reporter with calm truth-seeking restraint. Treat the sheet as a 16:9 horizontal asset canvas. The project type is Live Action, so keep realistic skin microtexture, natural anatomy, coherent garment behavior, and cinematic motivated studio lighting as the visual baseline. She appears around 28 years old, about 178 cm tall, with an approximately 1:9.3 head-to-body proportion, focused eyes, a straight nose bridge, a defined jawline, a visibly elevated waistline, clean hip break, elongated leg line, and a lower body taking about 63% of total height while the upper body stays around 37%, maintaining a clear golden-ratio readability rather than a 1:1 upper-lower split. Keep a subtle vertical stretch in silhouette to reinforce lead-character height and long-leg readability while staying believable. Keep the four panels in strict order: facial Close-up, full-body Front, full-body Side, full-body Back from one fixed chest-height observer position. Set the left Close-up panel to about 34% of canvas width, and that first left panel must remain a facial Close-up only, never a half-body, medium, or full-body substitute. Place the three right structural panels in the remaining 66% with equal vertical split. Front/Side/Back panels keep full-body readability with clear shoe visibility. Keep one consistent wardrobe set across all panels: a fitted cropped dark navy utility jacket, a pearl-white softly draped inner top, high-waist tailored black shorts, black over-the-knee leather boots, slim geometric earrings, and a narrow belt defining the elevated waistline. Keep stable posture, level shoulders, and a measured pause-before-motion stance. Light with soft front-left key, controlled axis fill, and gentle back-right rim for clear skin and fabric separation. Pure white background with clean character-sheet composition.",
+      "negative_prompt_en": "beauty-filter skin, cheap glamour styling, pin-up posing, anime proportions, extra limbs, floating hair clumps, oversmoothed pores, text, watermark",
+      "anchor_description": "female investigative reporter, clean jawline, asymmetrical fringe silhouette, measured pause-before-motion stance",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "Original Chinese-project character; preserve facial structure, fringe silhouette, restrained posture, and current wardrobe anchors."
+      }
+    }
+  ]
+}
+```
+
+- 角色 JSON 示例统一收口（Mandatory）：Part 2A 仅保留 1 组中文项目权威示例；英文项目覆盖由 Part 2B/2C 的示例共同承担，真实输出按当前项目语言与同一 JSON 结构扩展即可。
+
+#### Part 2B — Props
+- 字段语言职责固定（Mandatory）：沿用总则第 12 条与 Part 2 共同双语字段复核；Prop 条目只做执行。
+- 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `type`、`description_cn`、`anchor_description` 保持显式一致；若 `description_cn` 已给出材质、磨损、开合、裂痕、雕刻等信息，提示词不得抽象化吞掉这些特征。
+- 单语种示例收口规则（Mandatory）：本节只保留 1 组道具 JSON 权威示例，用于展示单个语种项目下的道具体系；跨语种覆盖由 Part 2A-2C 整体共同完成，不要求本节同时放中文与英文两组示例。真实输出不得复用示例对象名称、材质组合或地域标签。
+- 英文项目语境示例：
+```json
+{
+  "props": [
+    {
+      "subject_no": "S102",
+      "name": "警徽挂绳证件卡",
+      "name_en": "Police ID Badge Lanyard",
+      "type": "held/static",
+      "description_cn": "英文项目警探常用证件挂绳，包含深蓝织带、透明硬质证件套、金属夹扣与带磨痕的椭圆徽章，卡面为英文姓名与部门信息。",
+      "generation_prompt_cn": "写实英文项目道具四视图：警徽挂绳证件卡，作为英语语境都市警务系统中的关键识别道具表达，整张资产表按 16:9 横向四宫格画布执行。保留深蓝织带、透明硬质证件套、金属夹扣、带磨痕的椭圆徽章以及英文卡面排版。机位锚点位于转台中心略高视角，视角顺序严格为微距卡面特写、正面、侧面、反面。布光为柔和上方主光、前侧低强度补光、后侧轻轮廓光，使塑料、织带纤维、金属磨损与英文印刷清晰可读。纯白背景，物体主体表达完整，版式利于资产比对。",
+      "generation_prompt_en": "Photoreal prop sheet for a Police ID Badge Lanyard designed for an English-language urban law-enforcement context. Treat the sheet as a 16:9 horizontal asset canvas. Preserve deep navy woven strap texture, rigid clear badge holder geometry, brushed metal clip wear, worn oval badge edge, and English name-and-department card layout as stable identity anchors. Use a centered turntable camera slightly above object midline and keep strict panel order: macro card-face Close-up, Front, Side, Back. Light with soft overhead key, restrained frontal fill, and clean rim separation for plastic, fiber, metal, and print readability. White background with object-only composition and clear technical presentation for asset tracking.",
+      "negative_prompt_en": "Chinese text, toy-like plastic, fantasy badge design, extra accessories, cluttered background, hands, watermark",
+      "anchor_description": "navy woven lanyard, rigid clear badge holder, worn oval badge, brushed metal clip, English card layout",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "Original English-project prop; preserve the badge structure, English card layout, and material wear anchors."
+      }
+    }
+  ]
+}
+```
+
+#### Part 2C — Environments
+- 字段语言职责固定（Mandatory）：沿用总则第 12 条与 Part 2 共同双语字段复核；Environment 条目只做执行。
+- 字段-提示词一致性硬规则（Mandatory）：`generation_prompt_cn/generation_prompt_en` 必须与 `name/name_en`、`atmosphere`、`visual_params`、`description_cn`、`anchor_description`、`visual_dependencies`、`dependency_strategy.logic` 保持显式一致；不得只写泛化 cinematic 空镜，而看不出这个环境是什么、处于哪个方向/景别/时段版本、继承了哪个 base。
+- 封面环境固定命名规则（Mandatory）：封面特制 Scene 对应的环境必须进入 `environments[]`，并使用固定命名：`name="封面海报"`、`name_en="Cover Poster"`。它是一个特殊 environment 条目，但 JSON 结构必须与普通环境完全一致，不得新增专属键，不得单列独立 `cover_poster` 对象。
+- 封面环境规则承载方式（Mandatory）：海报标题、标题安全区、`4:3` 画幅、移动端 UI 避让要求，必须写进这个特殊环境条目的 `description_cn` 与 `generation_prompt_cn/en` 中，作为环境规则描述的一部分，而不是拆成额外 JSON 字段。也就是说，封面相关信息要“写在环境描述里”，不再单独建 schema。
+- 封面环境大片参考写回规则（Mandatory）：封面环境的 `description_cn` 不得只写“国际大片海报感”这种抽象结论，必须明确说明参考了哪些大片海报的哪些具体视觉元素，例如主角群像压迫式站位、前景道具引导、逆光轮廓、冷暖对冲、城市夜雨反射、标题压顶留白、单点高亮焦区等。可以引用影片名作为风格参照，但必须同步落到可见元素层，不得只列片名不解释。
+- 封面环境提示词硬规则（Mandatory）：该特殊环境条目的 `generation_prompt_cn/en` 必须明确说明：这是整集封面海报环境、采用 `4:3` 横向海报画布、标题使用项目语言、标题位于中上部安全区，并显式避开右侧移动端按钮区与底部字幕/菜单区。封面可体现剧情分格感，但最终必须保持单张国际大片海报式环境主视觉，不得变成拼格海报或多图拼贴。
+- 封面环境全量依赖硬规则（Mandatory）：封面海报环境的 `visual_dependencies` 不能只写单个基础环境。凡实际出现在封面主视觉中的关键角色 `CHAR:[@...]`、关键道具 `PROP:[...]`、核心环境 `ENV:[...]`，都必须全部写入 `visual_dependencies`，按逗号分隔顺序列出并在 JSON 中落为数组；禁止遗漏封面中已经明确出现的任何主 subjects。`dependency_strategy.logic` 也必须同步说明这些人物、道具、环境是如何被整合进同一张封面海报主视觉的。
+- 单语种示例收口规则（Mandatory）：本节保留 1 组普通环境 JSON 权威示例，并额外增加 1 组封面特殊环境示例，用于展示“常规环境”和“封面环境”共用同一 JSON 结构的写法；跨语种覆盖由 Part 2A-2C 整体共同完成，不要求本节同时放中文与英文两组示例。真实输出不得直接复用示例空间。
+- 中文项目语境示例（普通环境 + 封面特殊环境追加示例）：
+```json
+{
+  "environments": [
+    {
+      "subject_no": "S003",
+      "name": "港口办公室_正向_中景_夜",
+      "name_en": "Harbor Office Front Mid Night",
+      "atmosphere": "Rainy tense night with restrained noir contrast",
+      "visual_params": "Mid/Interior/Night",
+      "description_cn": "港口办公区夜景，玻璃隔断与桌面灯形成主视觉锚点，空间可达且便于角色进出与机位移动。",
+      "generation_prompt_cn": "电影级写实剧情环境，港口办公室正向中景夜景版本，氛围为雨夜、克制紧张、轻 noir 对比。以 Harbor Office Front Wide Night 为基础参考，延续建筑结构、材质锚点与空间可达性，并切换为当前中景观察版本。环境增量：机位位于走廊门槛处并朝内看向主办公桌区域；轴线由左侧切换到右侧；可见集合为玻璃隔断、台灯、挂钟与窗面反射；主光来自前右侧实景台灯，辅以走廊冷色补光；构图为中广景，主主体为桌面工作区，次主体为窗面反射线。前景为门框与地垫，中景为桌组与台灯，后景为雨夜城市反射光。以纯环境表达为准，保持空间层次与调度清晰。",
+      "generation_prompt_en": "Cinematic photoreal drama environment for Harbor Office Front Mid Night, a rainy interior night variant with restrained tension and mild noir contrast. Use Harbor Office Front Wide Night as visual base, preserving architecture, material anchors, and navigable layout while shifting to this forward-facing medium version. Environment Delta = {Viewpoint Anchor/Viewing Direction: corridor-threshold viewpoint facing inward to the main desk zone; Axis Side: left -> right; Background Set Change: Visible Set = [glass partition, desk lamp, wall clock, window reflection band], Secondary Set = [rear storage shelves reduced in prominence]; Lighting Direction Change: practical key from front-right desk lamp plus cool corridor spill fill; Framing Change: medium-wide with desk cluster as primary subject and window reflection line as secondary subject; Dynamic Parts State: None}. FG: door frame edge and entry mat. MG: desk cluster and practical lamp anchor. BG: rain-streaked city reflections through glass. Environment-only visual composition with clear spatial readability.",
+      "negative_prompt_en": "clean environment-only composition, stable architectural realism, restrained contrast, controlled color range, unobstructed spatial layering, legible material texture, clean signage-free frame",
+      "anchor_description": "glass partition, desk lamp row, wall clock, rain-streaked window reflections, navigable office aisle",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "Original Chinese-project environment; preserve office layout, glass partition, lamp row, and rainy harbor-night spatial anchors."
+      }
+    }}
+  ]
+}
+```
 
 
+
+#### Part 2D — Covers (封面实体)
+- 专属 covers 数组硬规则（Mandatory）：封面输出作为一个特别的 subjects 类型，不放在环境里，进入 covers[] 数组。
+- 封面固定命名规则（Mandatory）：封面特制 Scene 对应的实体必须进入 covers[]，并使用固定命名：
+ame="封面海报"、
+ame_en="Cover Poster"。
+- 封面提示词硬规则（Mandatory）：该特殊条目的 generation_prompt_cn/en 必须明确说明采用 4:3 横向海报画布...。
+- 封面全量依赖硬规则（Mandatory）：封面的 isual_dependencies 必须包揽实际出现在封面主视觉中的关键角色、道具、基础环境。
+
+`json
+{
+  "covers": [
+    {
+      "subject_no": "S004",
+      "name": "封面海报",
+      "name_en": "Cover Poster",
+      "atmosphere": "Premium theatrical tension with dramatic layered poster depth",
+      "visual_params": "Poster/Cover/4:3",
+      "description_cn": "整集封面海报专用，固定使用 4:3 横向海报画布...",
+      "generation_prompt_cn": "电影级写实封面海报，整张画面按 4:3 横向执行。必须显式继承封面涉及的全部关键依靠...",
+      "generation_prompt_en": "Premium theatrical cover-poster named Cover Poster...",
+      "negative_prompt_en": "comic grid, tiled collage, split-screen montage...",
+      "anchor_description": "cover poster layout, upper-middle title safe zone",
+      "visual_dependencies": ["CHAR:[@林月]", "CHAR:[@程雾]", "PROP:[证据档案袋]", "ENV:[港口办公室 正向 中景 夜]"],
+      "dependency_strategy": {
+        "type": "Type A",
+        "logic": "Derived as a special cover-poster environment that consolidates every cover-involved key subject..."
+      }
+    }
+  ]
+}
+`
+>>>>>>> Stashed changes
+
+#### Part 2E — Project Visual Backfill JSON (Mandatory)
+
+<<<<<<< Updated upstream
 
 #### Part 2B — Props （对应最终 JSON 对象的 "props" 数组）
 
@@ -658,6 +792,8 @@
 
 
 #### Part 2D — Project Visual Backfill （对应最终 JSON 对象的 "project_visual_backfill" 对象）
+=======
+>>>>>>> Stashed changes
 - 在 Part 2C 之后，必须额外输出一个 JSON 对象：`project_visual_backfill`。
 - 该对象用于回填项目信息中的视觉字段，必须包含且仅包含以下键：
   - `Global_Style`（字符串）
