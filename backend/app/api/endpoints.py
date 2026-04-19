@@ -27772,10 +27772,13 @@ def _align_kling_elements_to_prompt_mentions(
 
 
 def _merge_kling_elements(explicit_elements: Any, auto_elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    max_elements = 3
     merged: List[Dict[str, Any]] = []
     seen: set[str] = set()
 
     def _push(candidate: Any) -> None:
+        if len(merged) >= max_elements:
+            return
         if not isinstance(candidate, dict):
             return
 
@@ -27812,9 +27815,13 @@ def _merge_kling_elements(explicit_elements: Any, auto_elements: List[Dict[str, 
     if isinstance(explicit_elements, list):
         for element in explicit_elements:
             _push(element)
+            if len(merged) >= max_elements:
+                break
 
     for element in auto_elements:
         _push(element)
+        if len(merged) >= max_elements:
+            break
 
     return merged
 

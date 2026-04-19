@@ -10638,13 +10638,21 @@ Negative prompt constraints: {neg_prompt}"""
 
             raw_kling_elements = tool_conf.get("kling_elements")
             normalized_elements: List[Dict[str, Any]] = []
+            seen_element_names: set[str] = set()
+            max_kling_elements = 3
             if isinstance(raw_kling_elements, list):
                 for element in raw_kling_elements:
+                    if len(normalized_elements) >= max_kling_elements:
+                        break
                     if not isinstance(element, dict):
                         continue
                     name = str(element.get("name") or "").strip()
                     description = str(element.get("description") or "").strip()
                     if not name or not description:
+                        continue
+
+                    normalized_name = name.lower()
+                    if normalized_name in seen_element_names:
                         continue
 
                     normalized_element: Dict[str, Any] = {
@@ -10670,9 +10678,30 @@ Negative prompt constraints: {neg_prompt}"""
                             normalized_element["element_input_video_urls"] = urls
 
                     normalized_elements.append(normalized_element)
+                    seen_element_names.add(normalized_name)
+
+            if isinstance(raw_kling_elements, list) and len(raw_kling_elements) > len(normalized_elements):
+                logger.info(
+                    "KIE Kling3 elements truncated/deduped before submit | raw=%s normalized=%s max=%s",
+                    len(raw_kling_elements),
+                    len(normalized_elements),
+                    max_kling_elements,
+                )
 
             if normalized_elements:
                 kling_input["kling_elements"] = normalized_elements
+                logger.info(
+                    "KIE Kling3 final elements detail | elements=%s",
+                    [
+                        {
+                            "name": str(item.get("name") or "").strip(),
+                            "image_url_count": len(item.get("element_input_urls") or []) if isinstance(item.get("element_input_urls"), list) else 0,
+                            "video_url_count": len(item.get("element_input_video_urls") or []) if isinstance(item.get("element_input_video_urls"), list) else 0,
+                        }
+                        for item in normalized_elements
+                        if isinstance(item, dict)
+                    ],
+                )
 
             payload = {
                 "model": kling_model,
