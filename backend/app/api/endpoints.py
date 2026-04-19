@@ -3359,6 +3359,83 @@ def _inject_user_advanced_llm_preferences(llm_config: Optional[Dict[str, Any]], 
     return llm_config
 
 
+def _pick_first_non_empty_text(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                text = _pick_first_non_empty_text(item)
+                if text:
+                    return text
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _extract_project_creativity_value(project_metadata: Any) -> str:
+    if not isinstance(project_metadata, dict):
+        return ""
+
+    basic_information = project_metadata.get("basic_information") if isinstance(project_metadata.get("basic_information"), dict) else {}
+    basic_info = project_metadata.get("basic_info") if isinstance(project_metadata.get("basic_info"), dict) else {}
+    e_global_info = project_metadata.get("e_global_info") if isinstance(project_metadata.get("e_global_info"), dict) else {}
+    story_input = project_metadata.get("story_generator_global_input") if isinstance(project_metadata.get("story_generator_global_input"), dict) else {}
+
+    return _pick_first_non_empty_text(
+        project_metadata.get("creativity"),
+        basic_information.get("creativity"),
+        basic_info.get("creativity"),
+        e_global_info.get("creativity"),
+        story_input.get("creativity"),
+    )
+
+
+def _map_project_creativity_to_temperature(creativity_value: Any) -> Optional[float]:
+    raw = str(creativity_value or "").strip()
+    if not raw:
+        return None
+
+    normalized = raw.lower()
+
+    if "遵守剧本优先" in raw or "strict to script" in normalized:
+        return 0.35
+    if "增加想象力" in raw or "increase imagination" in normalized:
+        return 0.95
+    if "正常" in raw or "normal" in normalized:
+        return 0.7
+
+    return None
+
+
+def _inject_project_creativity_temperature(
+    llm_config: Optional[Dict[str, Any]],
+    project_metadata: Any,
+    *,
+    context: str,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(llm_config, dict):
+        return llm_config
+
+    creativity_value = _extract_project_creativity_value(project_metadata)
+    temperature = _map_project_creativity_to_temperature(creativity_value)
+    if temperature is None:
+        return llm_config
+
+    cfg = llm_config.get("config") if isinstance(llm_config.get("config"), dict) else {}
+    cfg["temperature"] = float(temperature)
+    llm_config["config"] = cfg
+    logger.info(
+        "[%s] applied creativity-driven temperature creativity=%s temperature=%s",
+        context,
+        creativity_value,
+        temperature,
+    )
+    return llm_config
+
+
 def _to_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -4122,6 +4199,28 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         logger.info(f"[analyze_scene] request.episode_id={getattr(request, 'episode_id', None)}")
     except Exception:
         pass
+
+    if not request.project_metadata and getattr(request, "episode_id", None):
+        try:
+            _auto_ep = db.query(Episode).filter(Episode.id == request.episode_id).first()
+            if _auto_ep:
+                _auto_pr = db.query(Project).filter(Project.id == _auto_ep.project_id).first()
+                if _auto_pr and isinstance(_auto_pr.global_info, dict):
+                    request.project_metadata = _auto_pr.global_info
+                    logger.info("[analyze_scene] Automatically populated project_metadata from DB")
+        except Exception as e:
+            logger.warning(f"[analyze_scene] Failed to auto-fetch project_metadata: {e}")
+
+    if not request.project_metadata and getattr(request, "episode_id", None):
+        try:
+            _auto_ep = db.query(Episode).filter(Episode.id == request.episode_id).first()
+            if _auto_ep:
+                _auto_pr = db.query(Project).filter(Project.id == _auto_ep.project_id).first()
+                if _auto_pr and isinstance(_auto_pr.global_info, dict):
+                    request.project_metadata = _auto_pr.global_info
+                    logger.info("[analyze_scene] Automatically populated project_metadata from DB")
+        except Exception as e:
+            logger.warning(f"[analyze_scene] Failed to auto-fetch project_metadata: {e}")
     if request.project_metadata:
         try:
             keys = list(request.project_metadata.keys())
@@ -4861,6 +4960,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         if not config or not config.get("api_key"):
              raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
         config = _inject_user_advanced_llm_preferences(config, current_user)
+        config = _inject_project_creativity_temperature(
+            config,
+            request.project_metadata,
+            context="analyze_scene",
+        )
 
         # --- Debug / Truncation tracing ---
         debug_meta: Dict[str, Any] = {
@@ -8569,6 +8673,11 @@ async def generate_project_story_dna_global(
     llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project.global_info,
+        context="generate_project_story_dna_global",
+    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -9066,6 +9175,11 @@ async def analyze_project_novel_to_story_generator_fields(
     llm_config = agent_service.get_active_llm_config(current_user.id, system_api_id=system_api_id, function_name=function_name)
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project.global_info,
+        context="analyze_project_novel",
+    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     resolved_id = ((llm_config or {}).get("config") or {}).get("__resolved_setting_id")
@@ -10580,6 +10694,11 @@ async def generate_episode_story_dna(
     )
 
     llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project.global_info,
+        context="generate_episode_story_dna",
+    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -10806,6 +10925,11 @@ async def generate_episode_scenes_from_story(
     )
 
     llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project.global_info,
+        context="generate_episode_scenes_from_story",
+    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -11392,6 +11516,11 @@ async def generate_project_episode_scripts_from_global_framework(
     llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project.global_info,
+        context="generate_episode_scripts",
+    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
 
@@ -12680,6 +12809,11 @@ async def regenerate_scene(
     fallback_key_props = db_scene.key_props
 
     llm_config = agent_service.get_active_llm_config(current_user_id)
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project.global_info,
+        context="regenerate_scene",
+    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
@@ -14481,6 +14615,11 @@ async def ai_generate_shots(
             raise HTTPException(status_code=400, detail="No active LLM config")
             
         llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
+        llm_config = _inject_project_creativity_temperature(
+            llm_config,
+            project.global_info,
+            context="ai_generate_shots",
+        )
         
         # Billing (Reserve for token pricing)
         provider = llm_config.get("provider") 
@@ -14787,6 +14926,11 @@ async def ai_regenerate_shots(
             raise HTTPException(status_code=400, detail="No active LLM config")
 
         llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
+        llm_config = _inject_project_creativity_temperature(
+            llm_config,
+            project.global_info,
+            context="ai_regenerate_shots",
+        )
 
         provider = llm_config.get("provider")
         model = llm_config.get("model")

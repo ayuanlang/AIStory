@@ -3233,28 +3233,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const episode = getInfoValue(['series_episode', 'episode']);
             const type = getInfoValue(['type']);
             const basePositioning = getInfoValue(['base_positioning']);
-            if (title) metaParts.push(`Title: ${title}`);
-            if (episode) metaParts.push(`Episode: ${episode}`);
-            if (type) metaParts.push(`Type: ${type}`);
-            if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
+
+
+
+
             if (language) {
-                metaParts.push(`Language: ${language}`);
+
             }
 
-            metaParts.push('[Technical & Visual Parameters]');
             const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
             const tone = getInfoValue(['tone', 'mood']);
             const lighting = getInfoValue(['lighting', 'light']);
-            if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
-            if (tone) metaParts.push(`Tone: ${tone}`);
-            if (lighting) metaParts.push(`Lighting: ${lighting}`);
-            
+
+
+
             const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
             const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
-            if (eraField) metaParts.push(`Era / Period (年代): ${eraField}`);
-            if (regionField) metaParts.push(`Region / Country (国家地域): ${regionField}`);
-            
-            metaParts.push('Use this project context as first-class constraints before generating the subjects.');
+
+
 
             if (Object.keys(projectInfo).length > 0) {
                 finalSubjectIndexText = `${metaParts.join('\n')}\n\n[Subject Index extracted from Phase 1]\n${finalSubjectIndexText}`;
@@ -3331,6 +3327,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             failedItems: [],
                         },
                         importedSubjectCounts: sceneImportReport?.importedSubjectCounts,
+                        dbPersistedCounts: sceneImportReport?.dbPersistedCounts,
+                        dbRunInsertedCounts: sceneImportReport?.dbRunInsertedCounts,
                     };
                 }
             }
@@ -4553,17 +4551,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const episode = getInfoValue(['series_episode', 'episode']);
                             const type = getInfoValue(['type']);
                             const basePositioning = getInfoValue(['base_positioning']);
-                            if (title) metaParts.push(`Title: ${title}`);
-                            if (episode) metaParts.push(`Episode: ${episode}`);
-                            if (type) metaParts.push(`Type: ${type}`);
-                            if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
+
+
+
+
                             if (language) {
-                                metaParts.push(`Language: ${language}`);
+
                             } else {
-                                metaParts.push('Language: (empty)');
-                                metaParts.push('Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.');
+
+
                             }
-                            metaParts.push('[Technical & Visual Parameters]');
+
                             const aspectRatio = getVisualValue(['aspect_ratio']);
                             const imageSize = getVisualValue(['image_size']);
                             const horizontalResolution = getVisualValue(['horizontal_resolution']);
@@ -4573,26 +4571,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
                             const tone = getInfoValue(['tone', 'mood']);
                             const lighting = getInfoValue(['lighting', 'light']);
-                            if (aspectRatio) metaParts.push(`Aspect Ratio: ${aspectRatio}`);
-                            if (imageSize) metaParts.push(`Image Size: ${imageSize}`);
-                            if (horizontalResolution) metaParts.push(`Horizontal Resolution: ${horizontalResolution}`);
-                            if (verticalResolution) metaParts.push(`Vertical Resolution: ${verticalResolution}`);
-                            if (frameRate) metaParts.push(`Frame Rate: ${frameRate}`);
-                            if (quality) metaParts.push(`Quality: ${quality}`);
-                            if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
-                            if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
-                            if (tone) metaParts.push(`Tone: ${tone}`);
-                            if (lighting) metaParts.push(`Lighting: ${lighting}`);
+
+
+
+
+
+
+
+
+
+
                             const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
                             const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
                             const shotPrefField = getInfoValue(['shot_preference', 'lens_preference', 'camera_preference']);
                             const broadcastSafetyField = getInfoValue(['broadcast_security_level', 'broadcast_safety_level', 'safety_level', 'broadcast_safety']);
-                            if (eraField) metaParts.push(`Era / Period (年代): ${eraField}`);
-                            if (regionField) metaParts.push(`Region / Country (国家地域): ${regionField}`);
-                            if (shotPrefField) metaParts.push(`Shot / Lens Preference (镜头偏好): ${shotPrefField}`);
-                            if (broadcastSafetyField) metaParts.push(`Broadcast Security Level (播出安全等级): ${broadcastSafetyField}`);
-                            metaParts.push('Use this project context as first-class constraints before analyzing the script.');
-                     
+
+
+
+
+
                      if (metaParts.length > 1) {
                         fullContent = `${metaParts.join('\n')}\n\nScript to Analyze:\n\n${rawContent}`;
                      }
@@ -4825,6 +4822,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
+                if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
+                    importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
+                }
+                if (postImportSceneSubjectReport?.dbPersistedCounts) {
+                    importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
+                }
                 if (postImportSceneSubjectReport?.importedSubjectCounts) {
                     importReport.importedSubjectCounts = {
                         character: (importReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
@@ -5021,26 +5024,67 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
             const bypassConfirmed = window.confirm("检测到当前分集已存在“实体资产(Subjects Index)”，是否跳过场景解构（Phase 1），直接生成实体设计资产（Phase 2）？\n\n点击“确定”跳过 Phase 1，点击“取消”从头重新进行完整分析。");
             if (bypassConfirmed) {
+                const startedAt = Date.now();
+                setAnalysisUiReport({
+                    status: 'running',
+                    startedAt,
+                    durationMs: 0,
+                    phaseTimings: null,
+                    importReport: null,
+                    runtimeMeta: null,
+                    warning: '',
+                    error: '',
+                });
+
                 setAnalysisFlowStatus({
                     phase: 'processing_output_workspace',
                     message: "🚀 跳过 Phase 1，直接进入资产设计...",
                 });
-                
+
                 try {
                     // We just jump straight to Phase 2 logic (runPostImportSceneSubjectPipeline).
                     // We mock an empty import report to keep the pipeline happy.
                     const mockImportReport = { importedSceneRows: [] };
                     const dummyAnalyzedText = activeEpisode.ai_scene_analysis_result || activeEpisode.ai_scene_analysis_subject_index; // Pass something fallback
-                    
-                    await runPostImportSceneSubjectPipeline(mockImportReport, activeEpisode.ai_scene_analysis_subject_index);
-                    
+
+                    const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, activeEpisode.ai_scene_analysis_subject_index);
+
+                    const finalImportReport = {
+                        ...mockImportReport,
+                        sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                        dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
+                        dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
+                        importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
+                    };
+
                     setAnalysisFlowStatus({
                         phase: 'completed',
                         message: "🎉 补充实体资产生成完毕！",
                     });
+
+                    setAnalysisUiReport({
+                        status: 'completed',
+                        startedAt,
+                        durationMs: Date.now() - startedAt,
+                        phaseTimings: null,
+                        importReport: finalImportReport,
+                        runtimeMeta: null,
+                        warning: '',
+                        error: '',
+                    });
                 } catch (err) {
                     console.error(err);
                     setAnalysisFlowStatus({ phase: 'failed', message: "❌ 资产生成失败: " + err.message });
+                    setAnalysisUiReport({
+                        status: 'failed',
+                        startedAt,
+                        durationMs: Date.now() - startedAt,
+                        phaseTimings: null,
+                        importReport: null,
+                        runtimeMeta: null,
+                        warning: '',
+                        error: err.message,
+                    });
                 }
                 return; // Early return to completely bypass standard analysis flow
             }
@@ -5214,6 +5258,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
+                if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
+                    importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
+                }
+                if (postImportSceneSubjectReport?.dbPersistedCounts) {
+                    importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
+                }
                 if (postImportSceneSubjectReport?.importedSubjectCounts) {
                     importReport.importedSubjectCounts = {
                         character: (importReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
@@ -5342,6 +5392,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...analysisUiReport.importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
+                if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
+                    newImportReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
+                }
+                if (postImportSceneSubjectReport?.dbPersistedCounts) {
+                    newImportReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
+                }
                 if (postImportSceneSubjectReport?.importedSubjectCounts) {
                     newImportReport.importedSubjectCounts = {
                         character: (newImportReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
