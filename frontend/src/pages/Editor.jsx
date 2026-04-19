@@ -1343,6 +1343,9 @@ const Editor = ({
             entities: [],
         };
         const importedSceneRows = [];
+        const createdSceneIds = [];
+        let dbPersistedCounts = null;
+        let dbRunInsertedCounts = null;
         let postImportStatusNote = '';
         const llmFinalReport = extractFinalConsistencyReport(text);
         const projectVisualBackfill = getProjectVisualBackfillFromJsonText(text);
@@ -2203,6 +2206,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                     const newScene = await createScene(activeEpisodeId, scData);
                                     currentSceneDbId = newScene.id;
                                     importedSceneRows[importedSceneRows.length - 1].id = newScene.id;
+                                    createdSceneIds.push(newScene.id);
                                     existingScenes.push(newScene); 
                                     importStats.scenesCreated += 1;
                                     addLog(`Created Scene ${scData.scene_no}`, "success");
@@ -2488,6 +2492,73 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                 }
             }
 
+            try {
+                if (id) {
+                    const [dbEntitiesRaw, dbScenesRaw] = await Promise.all([
+                        fetchEntities(id).catch(() => []),
+                        activeEpisodeId ? fetchScenes(activeEpisodeId).catch(() => []) : Promise.resolve([]),
+                    ]);
+                    const dbEntities = Array.isArray(dbEntitiesRaw) ? dbEntitiesRaw : [];
+                    const normalizeType = (value) => String(value || '').trim().toLowerCase();
+                    const dbCharacterCount = dbEntities.filter((item) => normalizeType(item?.type) === 'character').length;
+                    const dbPropCount = dbEntities.filter((item) => normalizeType(item?.type) === 'prop').length;
+                    const dbEnvironmentCount = dbEntities.filter((item) => normalizeType(item?.type) === 'environment').length;
+                    dbPersistedCounts = {
+                        scenes: {
+                            currentEpisode: Array.isArray(dbScenesRaw) ? dbScenesRaw.length : 0,
+                        },
+                        entities: {
+                            total: dbEntities.length,
+                            character: dbCharacterCount,
+                            prop: dbPropCount,
+                            environment: dbEnvironmentCount,
+                        },
+                    };
+
+                    const createdEntityIdSet = new Set(
+                        (Array.isArray(createdSubjectItems) ? createdSubjectItems : [])
+                            .map((item) => item?.id)
+                            .filter((idValue) => idValue !== null && idValue !== undefined)
+                            .map((idValue) => String(idValue))
+                    );
+                    const createdSceneIdSet = new Set(
+                        (Array.isArray(createdSceneIds) ? createdSceneIds : [])
+                            .filter((idValue) => idValue !== null && idValue !== undefined)
+                            .map((idValue) => String(idValue))
+                    );
+                    const dbInsertedEntities = dbEntities.filter((item) => createdEntityIdSet.has(String(item?.id)));
+                    const dbInsertedScenes = (Array.isArray(dbScenesRaw) ? dbScenesRaw : []).filter((item) => createdSceneIdSet.has(String(item?.id)));
+
+                    const dbInsertedCharacterCount = dbInsertedEntities.filter((item) => normalizeType(item?.type) === 'character').length;
+                    const dbInsertedPropCount = dbInsertedEntities.filter((item) => normalizeType(item?.type) === 'prop').length;
+                    const dbInsertedEnvironmentCount = dbInsertedEntities.filter((item) => normalizeType(item?.type) === 'environment').length;
+                    const dbInsertedPosterCount = dbInsertedEntities.filter((item) => normalizeType(item?.type) === 'poster').length;
+
+                    dbRunInsertedCounts = {
+                        scenes: {
+                            created: dbInsertedScenes.length,
+                        },
+                        entities: {
+                            total: dbInsertedEntities.length,
+                            character: dbInsertedCharacterCount,
+                            prop: dbInsertedPropCount,
+                            environment: dbInsertedEnvironmentCount,
+                            poster: dbInsertedPosterCount,
+                        },
+                    };
+                    addLog(
+                        `[DB Verify] episode_scenes=${dbPersistedCounts.scenes.currentEpisode}, entities_total=${dbPersistedCounts.entities.total} (character=${dbPersistedCounts.entities.character}, prop=${dbPersistedCounts.entities.prop}, environment=${dbPersistedCounts.entities.environment})`,
+                        'info'
+                    );
+                    addLog(
+                        `[DB Verify This Run] created_scenes=${dbRunInsertedCounts.scenes.created}, created_entities=${dbRunInsertedCounts.entities.total} (character=${dbRunInsertedCounts.entities.character}, prop=${dbRunInsertedCounts.entities.prop}, environment=${dbRunInsertedCounts.entities.environment}, poster=${dbRunInsertedCounts.entities.poster})`,
+                        'info'
+                    );
+                }
+            } catch (dbCountErr) {
+                addLog(`DB verification count query failed: ${dbCountErr?.message || dbCountErr}`, 'warning');
+            }
+
             const importedSubjectsTotal = importedSubjectCounts.character + importedSubjectCounts.prop + importedSubjectCounts.environment;
             const skippedSubjectsTotal = skippedSubjectItems.length;
             const autoSupplementCreatedTotal = Array.isArray(sceneSubjectAutoSupplementReport?.createdItems)
@@ -2510,6 +2581,16 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                 `Parse diagnostics: source=${importDiagnostics.entitiesPayloadSource}, subject_index_rows=${importDiagnostics.subjectIndexTableRows}, subject_index_extracted=${importDiagnostics.subjectIndexExtracted}, generic_json_blocks=${importStats.genericJsonBlocks}`,
                 `Markers: script=${importDiagnostics.markers.script}, scene=${importDiagnostics.markers.scene}, shot=${importDiagnostics.markers.shot}`,
             ];
+            if (dbPersistedCounts) {
+                summaryLines.push(
+                    `DB persisted: scenes(current_episode)=${dbPersistedCounts.scenes.currentEpisode}, entities(total=${dbPersistedCounts.entities.total}, character=${dbPersistedCounts.entities.character}, prop=${dbPersistedCounts.entities.prop}, environment=${dbPersistedCounts.entities.environment})`
+                );
+            }
+            if (dbRunInsertedCounts) {
+                summaryLines.push(
+                    `DB this run inserted: scenes(created=${dbRunInsertedCounts.scenes.created}), entities(created_total=${dbRunInsertedCounts.entities.total}, character=${dbRunInsertedCounts.entities.character}, prop=${dbRunInsertedCounts.entities.prop}, environment=${dbRunInsertedCounts.entities.environment}, poster=${dbRunInsertedCounts.entities.poster})`
+                );
+            }
             if (postImportStatusNote) summaryLines.push(postImportStatusNote);
             if (!suppressAlerts) {
                 alert(summaryLines.join('\n'));
@@ -2522,6 +2603,8 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                 skippedSubjectItems,
                 importedSceneRows,
                 sceneSubjectAutoSupplementReport,
+                dbPersistedCounts,
+                dbRunInsertedCounts,
                 importStats,
                 importDiagnostics,
                 postImportStatusNote,
@@ -2546,6 +2629,8 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                 skippedSubjectItems,
                 importedSceneRows,
                 sceneSubjectAutoSupplementReport,
+                dbPersistedCounts,
+                dbRunInsertedCounts,
                 importStats,
                 importDiagnostics,
                 postImportStatusNote,

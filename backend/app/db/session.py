@@ -24,6 +24,12 @@ if not is_sqlite and _is_postgres:
     if _effective_max_overflow < 16:
         _effective_max_overflow = 16
 
+# Export effective pool values so other modules can make decisions based on
+# the real runtime pool configuration instead of raw env/config values.
+DB_POOL_SIZE_EFFECTIVE = _effective_pool_size
+DB_MAX_OVERFLOW_EFFECTIVE = _effective_max_overflow
+DB_POOL_CAPACITY_EFFECTIVE = DB_POOL_SIZE_EFFECTIVE + DB_MAX_OVERFLOW_EFFECTIVE
+
 engine_kwargs = {
     "connect_args": {"check_same_thread": False, "timeout": 30} if is_sqlite else {},
 }

@@ -5556,14 +5556,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
                             <div className="text-white/80 space-y-2 bg-black/20 p-3 rounded-md border border-white/5">
                                 <div>
-                                    <span className="font-medium">✨ {t('新登场资产', 'New Assets')}:</span> {t('为您提炼了', 'Generated')}
-                                    <span className="text-purple-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.character || 0} </span>{t('位角色', 'characters')}、
-                                    <span className="text-emerald-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.environment || 0} </span>{t('个空镜', 'environments')}、
-                                    <span className="text-amber-300 font-semibold"> {analysisUiReport.importReport?.importedSubjectCounts?.prop || 0} </span>{t('个道具', 'props')}。
+                                    <span className="font-medium">✨ {t('资产入库统计', 'Asset Insert Stats')}:</span> {t('本次新增', 'Inserted this run')}
+                                    <span className="text-purple-300 font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.entities?.character ?? analysisUiReport.importReport?.dbPersistedCounts?.entities?.character ?? analysisUiReport.importReport?.importedSubjectCounts?.character ?? 0} </span>{t('位角色', 'characters')}、
+                                    <span className="text-emerald-300 font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.entities?.environment ?? analysisUiReport.importReport?.dbPersistedCounts?.entities?.environment ?? analysisUiReport.importReport?.importedSubjectCounts?.environment ?? 0} </span>{t('个空镜', 'environments')}、
+                                    <span className="text-amber-300 font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.entities?.prop ?? analysisUiReport.importReport?.dbPersistedCounts?.entities?.prop ?? analysisUiReport.importReport?.importedSubjectCounts?.prop ?? 0} </span>{t('个道具', 'props')}
+                                    <span className="ml-1 text-white/70">(
+                                        {t('当前总量', 'Current total')}:
+                                        <span className="text-purple-200 font-semibold"> {analysisUiReport.importReport?.dbPersistedCounts?.entities?.character ?? analysisUiReport.importReport?.importedSubjectCounts?.character ?? 0} </span>{t('角色', 'characters')}、
+                                        <span className="text-emerald-200 font-semibold"> {analysisUiReport.importReport?.dbPersistedCounts?.entities?.environment ?? analysisUiReport.importReport?.importedSubjectCounts?.environment ?? 0} </span>{t('空镜', 'environments')}、
+                                        <span className="text-amber-200 font-semibold"> {analysisUiReport.importReport?.dbPersistedCounts?.entities?.prop ?? analysisUiReport.importReport?.importedSubjectCounts?.prop ?? 0} </span>{t('道具', 'props')}
+                                    )</span>。
                                 </div>
                                 <div>
-                                    <span className="font-medium">🔍 {t('场景画面搭建', 'Scene Construction')}:</span> {t('核对了', 'Checked')}
-                                    <span className="text-white font-semibold"> {analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount || 0} </span>{t('个场景', 'shots')}。
+                                    <span className="font-medium">🔍 {t('场景画面搭建', 'Scene Construction')}:</span> {t('本次新增', 'Inserted this run')}
+                                    <span className="text-white font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.scenes?.created ?? analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode ?? analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount ?? 0} </span>{t('个场景', 'shots')}
+                                    <span className="ml-1 text-white/70">({t('当前分集总量', 'Current episode total')}: <span className="text-white font-semibold">{analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode ?? analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount ?? 0}</span>)</span>。
                                     {analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount > 0 ? (
                                         <span className="ml-1 break-all">
                                             {t('其中', 'Among them,')} <span className="text-red-300">{analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount}</span> {t('个画面细节原本是缺失的，系统已自动帮您生成填补了', 'missing visual details were automatically generated and filled:')} <span className="text-emerald-300">{analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.createdItems?.length || 0}</span> {t('个实体', 'entities')}。

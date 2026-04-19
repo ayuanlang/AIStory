@@ -4650,155 +4650,38 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         user_content = f"Script to Analyze:\n\n{request.text}"
         
         if request.project_metadata:
-            metadata = request.project_metadata if isinstance(request.project_metadata, dict) else {}
+            project_context = _build_project_prompt_context(request.project_metadata)
+            meta_str = str(project_context.get("project_context_section") or "").strip()
 
-            def _norm_key(key: Any) -> str:
-                return str(key or "").strip().lower().replace("-", "_").replace(" ", "_")
-
-            metadata_norm = {
-                _norm_key(k): v for k, v in metadata.items()
-            }
-
-            def _clean_str(value: Any) -> str:
-                text = str(value or "").strip()
-                return text
-
-            def _pick(*keys: str) -> str:
-                for key in keys:
-                    value = None
-                    if key in metadata:
-                        value = metadata.get(key)
-                    else:
-                        nk = _norm_key(key)
-                        if nk in metadata_norm:
-                            value = metadata_norm.get(nk)
-                    if value is not None:
-                        value = _clean_str(value)
-                        if value:
-                            return value
-                return ""
-
-            def _pick_arr(*keys: str) -> List[str]:
-                for key in keys:
-                    value = None
-                    if key in metadata:
-                        value = metadata.get(key)
-                    else:
-                        nk = _norm_key(key)
-                        if nk in metadata_norm:
-                            value = metadata_norm.get(nk)
-                    if value is None:
-                        continue
-                    if isinstance(value, list):
-                        normalized = [str(v or "").strip() for v in value]
-                        normalized = [v for v in normalized if v]
-                        if normalized:
-                            return normalized
-                    elif isinstance(value, str):
-                        parts = [p.strip() for p in re.split(r"[,，;；\n]", value) if p and p.strip()]
-                        if parts:
-                            return parts
-                return []
-
-            visual_standard = {}
-            tech_params = metadata.get("tech_params") if "tech_params" in metadata else metadata_norm.get("tech_params")
-            if isinstance(tech_params, dict):
-                visual_standard = tech_params.get("visual_standard") or tech_params.get("visual standard") or {}
-            if not isinstance(visual_standard, dict):
-                visual_standard = {}
-
-            visual_norm = {
-                _norm_key(k): v for k, v in visual_standard.items()
-            }
-
-            def _pick_visual(*keys: str) -> str:
-                for key in keys:
-                    value = None
-                    if key in visual_standard:
-                        value = visual_standard.get(key)
-                    else:
-                        nk = _norm_key(key)
-                        if nk in visual_norm:
-                            value = visual_norm.get(nk)
-                    if value is not None:
-                        value = _clean_str(value)
-                        if value:
-                            return value
-                for key in keys:
-                    value = None
-                    if key in metadata:
-                        value = metadata.get(key)
-                    else:
-                        nk = _norm_key(key)
-                        if nk in metadata_norm:
-                            value = metadata_norm.get(nk)
-                    if value is not None:
-                        value = _clean_str(value)
-                        if value:
-                            return value
-                return ""
-
-            project_language = _pick("language", "project_language")
-            borrowed_films = _pick_arr("borrowed_films", "borrowedFilms", "reference_films")
-
-            meta_parts = [
-                "Project Context (prepend and treat as high-priority constraints):",
-                "[Basic Info]",
-            ]
-            if _pick("script_title", "title"):
-                meta_parts.append(f"Title: {_pick('script_title', 'title')}")
-            if _pick("series_episode", "episode"):
-                meta_parts.append(f"Episode: {_pick('series_episode', 'episode')}")
-            if _pick("type"):
-                meta_parts.append(f"Type: {_pick('type')}")
-            if _pick("base_positioning"):
-                meta_parts.append(f"Base Positioning: {_pick('base_positioning')}")
+            metadata = project_context.get("metadata") if isinstance(project_context.get("metadata"), dict) else {}
+            project_language = str(metadata.get("project_language") or "").strip()
+            extra_rules: List[str] = []
             if project_language:
-                meta_parts.append(f"Language: {project_language}")
                 if any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
-                    meta_parts.append("Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.")
-                    meta_parts.append("Subject Naming Rule (EN): Use spaces between English words in name_en and keep it as a readable Title Case phrase (e.g., 'Demon Slayer Captain', 'Harbor Office Front Mid Night'). Do NOT use snake_case, kebab-case, camelCase, or concatenated forms like 'DemonSlayerCaptain' or 'HarborOffice_Front_Mid_Night'.")
-                    meta_parts.append("Subject Prompt Rule: Every subject JSON item must include BOTH generation_prompt_cn and generation_prompt_en, and the two prompts must be semantically aligned.")
+                    extra_rules.extend([
+                        "Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.",
+                        "Subject Naming Rule (EN): Use spaces between English words in name_en and keep it as a readable Title Case phrase (e.g., 'Demon Slayer Captain', 'Harbor Office Front Mid Night'). Do NOT use snake_case, kebab-case, camelCase, or concatenated forms like 'DemonSlayerCaptain' or 'HarborOffice_Front_Mid_Night'.",
+                        "Subject Prompt Rule: Every subject JSON item must include BOTH generation_prompt_cn and generation_prompt_en, and the two prompts must be semantically aligned.",
+                    ])
             else:
-                meta_parts.append("Language: (empty)")
-                meta_parts.append("Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.")
+                extra_rules.append(
+                    "Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language."
+                )
 
-            meta_parts.append("[Technical & Visual Parameters]")
-            if _pick_visual("aspect_ratio"):
-                meta_parts.append(f"Aspect Ratio: {_pick_visual('aspect_ratio')}")
-            if _pick_visual("image_size"):
-                meta_parts.append(f"Image Size: {_pick_visual('image_size')}")
-            if _pick_visual("horizontal_resolution"):
-                meta_parts.append(f"Horizontal Resolution: {_pick_visual('horizontal_resolution')}")
-            if _pick_visual("vertical_resolution"):
-                meta_parts.append(f"Vertical Resolution: {_pick_visual('vertical_resolution')}")
-            if _pick_visual("frame_rate"):
-                meta_parts.append(f"Frame Rate: {_pick_visual('frame_rate')}")
-            if _pick_visual("quality"):
-                meta_parts.append(f"Quality: {_pick_visual('quality')}")
-            if _pick("Global_Style"):
-                meta_parts.append(f"Global Style: {_pick('Global_Style')}")
-            if borrowed_films:
-                meta_parts.append(f"Borrowed Films: {', '.join(borrowed_films)}")
-            if _pick("tone"):
-                meta_parts.append(f"Tone: {_pick('tone')}")
-            if _pick("lighting"):
-                meta_parts.append(f"Lighting: {_pick('lighting')}")
-            if _pick("era", "era_setting", "period", "time_setting"):
-                meta_parts.append(f"Era / Period (年代): {_pick('era', 'era_setting', 'period', 'time_setting')}")
-            if _pick("region_culture", "region", "country"):
-                meta_parts.append(f"Region / Country (国家地域): {_pick('region_culture', 'region', 'country')}")
+            if extra_rules:
+                if meta_str:
+                    meta_str = f"{meta_str}\n" + "\n".join(extra_rules)
+                else:
+                    meta_str = "\n".join(extra_rules)
 
-            meta_parts.append("Use this project context as first-class constraints before analyzing the script.")
-
-            meta_str = "\n".join(meta_parts)
-            user_content = f"{meta_str}\n\n{user_content}"
-            logger.info(
-                "Injected Project Context into Prompt (summary): lines=%s chars=%s tokens_est=%s",
-                len(meta_parts),
-                len(meta_str),
-                _estimate_tokens(meta_str),
-            )
+            if meta_str:
+                user_content = f"{meta_str}\n\n{user_content}"
+                logger.info(
+                    "Injected Project Context into Prompt (summary): lines=%s chars=%s tokens_est=%s",
+                    len(meta_str.splitlines()),
+                    len(meta_str),
+                    _estimate_tokens(meta_str),
+                )
 
         # Inject project entity inventory as system-level subject baseline for recognizability.
         try:
@@ -13253,8 +13136,8 @@ def _resolve_effective_shot_generation_mode(
     return None
 
 
-def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
-    project_info = project.global_info or {}
+def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
+    project_info = project_info_input or {}
     if isinstance(project_info, str):
         try:
             project_info = json.loads(project_info)
@@ -13266,18 +13149,17 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     basic_info_nested = project_info.get("basic_information") if isinstance(project_info.get("basic_information"), dict) else {}
     e_global_info = project_info.get("e_global_info") if isinstance(project_info.get("e_global_info"), dict) else {}
     story_input = project_info.get("story_generator_global_input") if isinstance(project_info.get("story_generator_global_input"), dict) else {}
-    episode_info: Dict[str, Any] = {}
+    context_sources = [project_info, basic_info_nested, e_global_info, story_input]
 
     def _norm_key(key: Any) -> str:
         return str(key or "").strip().lower().replace("-", "_").replace(" ", "_")
 
-    def normalize_dict_keys(d: Any) -> Dict[str, Any]:
+    def _normalize_dict_keys(d: Any) -> Dict[str, Any]:
         if not isinstance(d, dict):
             return {}
         return {_norm_key(k): v for k, v in d.items()}
 
-    context_sources = [episode_info, project_info, basic_info_nested, e_global_info, story_input]
-    context_sources_norm = [normalize_dict_keys(src) for src in context_sources]
+    context_sources_norm = [_normalize_dict_keys(src) for src in context_sources]
 
     def _clean_text(value: Any) -> str:
         return str(value or "").strip()
@@ -13319,7 +13201,7 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     visual_standard = tech_params.get("visual_standard") or tech_params.get("visual standard") or {}
     if not isinstance(visual_standard, dict):
         visual_standard = {}
-    visual_standard_norm = normalize_dict_keys(visual_standard)
+    visual_standard_norm = _normalize_dict_keys(visual_standard)
 
     def get_visual_val(keys) -> str:
         if isinstance(keys, str):
@@ -13335,7 +13217,33 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
                     return text
         return get_context_val(keys)
 
-    global_style = get_context_val(["Global_Style", "Global Style", "global_style", "Style"]) or "Cinematic"
+    global_style = get_context_val(["global_style", "Global_Style", "Global Style", "Style"]) or "Cinematic"
+    borrowed_films = get_context_list(["borrowed_films", "borrowedFilms", "reference_films", "referenceFilms"])
+
+    title = get_context_val(["script_title", "title"])
+    episode_label = get_context_val(["series_episode", "episode"])
+    project_type = get_context_val(["type", "genre", "category", "film_type"])
+    base_positioning = get_context_val(["base_positioning"])
+    project_language = get_context_val(["language", "project_language", "lang"])
+    tone = get_context_val(["tone", "mood", "atmosphere"])
+    lighting = get_context_val(["lighting", "light_style", "light"])
+    character_relationships = get_context_val(["character_relationships"])
+    project_notes = get_context_val(["notes"])
+    region_culture = get_context_val(["region_culture", "region", "country", "culture", "country_region"])
+    era_setting = get_context_val(["era", "era_setting", "period", "time_setting"])
+    shot_preference = get_context_val(["shot_preference", "lens_preference", "camera_preference"])
+    broadcast_security_level = get_context_val([
+        "broadcast_security_level",
+        "broadcast_safety_level",
+        "safety_broadcast_level",
+        "safety_level",
+        "broadcast_safety",
+        "compliance_level",
+    ])
+    expected_model_family = get_context_val(["expected_model_family", "expected_model", "target_model", "model_family"])
+    generation_workflow = get_context_val(["generation_workflow", "workflow", "pipeline"])
+    continuity_priority = get_context_val(["continuity_priority", "continuity", "continuity_mode"])
+    prompt_mode = get_context_val(["shot_generation_mode", "shot_prompt_mode", "prompt_mode"])
 
     field_mappings = {
         "Type": ["Type", "Genre", "Category", "Film Type"],
@@ -13351,29 +13259,9 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
             context_lines.append(f"{field}: {val}")
     additional_context = "\n".join(context_lines) if context_lines else ""
 
-    borrowed_films = get_context_list(["borrowed_films", "borrowedFilms", "reference_films", "referenceFilms"])
-
-    title = get_context_val(["script_title", "title"])
-    episode_label = get_context_val(["series_episode", "episode"])
-    project_type = get_context_val(["type", "genre", "category", "film_type"])
-    base_positioning = get_context_val(["base_positioning"])
-    project_language = get_context_val(["language", "project_language", "lang"])
-    tone = get_context_val(["tone", "mood", "atmosphere"])
-    lighting = get_context_val(["lighting", "light_style", "light"])
-    character_relationships = get_context_val(["character_relationships"])
-    project_notes = get_context_val(["notes"])
-    region_culture = get_context_val(["region_culture", "region", "country", "culture", "country_region"])
-    era_setting = get_context_val(["era", "era_setting", "period", "time_setting"])
-    shot_preference = get_context_val(["shot_preference", "lens_preference", "camera_preference"])
-    broadcast_security_level = get_context_val(["broadcast_security_level", "broadcast_safety_level", "safety_level", "broadcast_safety"])
-    expected_model_family = get_context_val(["expected_model_family", "expected_model", "target_model", "model_family"])
-    generation_workflow = get_context_val(["generation_workflow", "workflow", "pipeline"])
-    continuity_priority = get_context_val(["continuity_priority", "continuity", "continuity_mode"])
-    prompt_mode = get_context_val(["shot_generation_mode", "shot_prompt_mode", "prompt_mode"])
-
     project_context_lines = [
         "# Project Context",
-        "Treat this project metadata as first-class constraints when generating the shot list.",
+        "Treat this project metadata as first-class constraints when generating outputs.",
         "[Basic Info]",
     ]
     if title:
@@ -13386,6 +13274,8 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
         project_context_lines.append(f"Base Positioning: {base_positioning}")
     if project_language:
         project_context_lines.append(f"Language: {project_language}")
+    else:
+        project_context_lines.append("Language: (empty)")
     if global_style:
         project_context_lines.append(f"Global Style: {global_style}")
     if tone:
@@ -13434,11 +13324,10 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     if continuity_priority:
         project_context_lines.append(f"Continuity Priority: {continuity_priority}")
 
-    project_context_section = ""
-    if len(project_context_lines) > 4:
-        project_context_section = "\n".join(project_context_lines)
+    project_context_lines.append("Use this project context as first-class constraints before analyzing the script.")
+    project_context_section = "\n".join(project_context_lines)
 
-    shot_generation_metadata = {
+    metadata = {
         "title": title,
         "episode": episode_label,
         "project_type": project_type,
@@ -13451,11 +13340,15 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
         "lighting": lighting,
         "region_culture": region_culture,
         "era_setting": era_setting,
+        "broadcast_security_level": broadcast_security_level,
+        "broadcast_safety_level": broadcast_security_level,
+        "safety_broadcast_level": broadcast_security_level,
         "expected_model_family": expected_model_family,
         "generation_workflow": generation_workflow,
         "continuity_priority": continuity_priority,
         "shot_generation_mode": prompt_mode,
         "shot_prompt_mode": prompt_mode,
+        "prompt_mode": prompt_mode,
     }
 
     return {
@@ -13464,8 +13357,12 @@ def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
         "additional_context": additional_context,
         "project_context_section": project_context_section,
         "borrowed_films": borrowed_films,
-        "metadata": shot_generation_metadata,
+        "metadata": metadata,
     }
+
+
+def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
+    return _build_project_prompt_context(project.global_info)
 
 def _build_shot_prompts(
     db: Session,

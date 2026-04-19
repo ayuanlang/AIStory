@@ -10,7 +10,12 @@ from typing import Any, Callable, Dict, List, Optional
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.db.session import SessionLocal, engine
+from app.db.session import (
+    DB_POOL_CAPACITY_EFFECTIVE,
+    DB_POOL_SIZE_EFFECTIVE,
+    SessionLocal,
+    engine,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +28,8 @@ _QUEUE_STARTED = False
 _QUEUE_STOP_EVENT = threading.Event()
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "900") or 900.0))
-_POOL_CAPACITY = max(1, int(settings.DB_POOL_SIZE or 0) + int(settings.DB_MAX_OVERFLOW or 0))
-_DEFAULT_WORKER_THREADS = min(8, max(2, int(settings.DB_POOL_SIZE or 2)))
+_POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
+_DEFAULT_WORKER_THREADS = min(8, max(2, int(DB_POOL_SIZE_EFFECTIVE or 2)))
 _REQUESTED_WORKER_THREADS = max(1, int(os.getenv("GENERATION_QUEUE_WORKER_THREADS", str(_DEFAULT_WORKER_THREADS)) or _DEFAULT_WORKER_THREADS))
 # Leave headroom for API requests and auth flows by capping queue workers.
 _WORKER_THREAD_CAP = max(1, _POOL_CAPACITY // 2)
@@ -70,10 +75,31 @@ def _try_acquire_queue_leader_lock() -> bool:
     if _QUEUE_LEADER_CONN is not None:
         return True
 
+    def _open_dedicated_lock_connection():
+        # Keep leader-lock connection outside SQLAlchemy pool so it does not
+        # permanently consume one pooled API connection.
+        import psycopg2
+
+        dsn = str(settings.DATABASE_URL or "").strip()
+        if dsn.startswith("postgres://"):
+            dsn = dsn.replace("postgres://", "postgresql://", 1)
+        if dsn.startswith("postgresql+psycopg2://"):
+            dsn = dsn.replace("postgresql+psycopg2://", "postgresql://", 1)
+
+        conn = psycopg2.connect(
+            dsn,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
+        conn.autocommit = True
+        return conn
+
     conn = None
     acquired = False
     try:
-        conn = engine.raw_connection()
+        conn = _open_dedicated_lock_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT pg_try_advisory_lock(%s)", (_QUEUE_ADVISORY_LOCK_ID,))
@@ -90,7 +116,10 @@ def _try_acquire_queue_leader_lock() -> bool:
             return True
         return False
     except Exception as exc:
-        logger.warning("generation queue leader lock probe failed; starting without cross-process guard | err=%s", exc)
+        logger.warning(
+            "generation queue leader lock probe failed; starting without cross-process guard | err=%s",
+            exc,
+        )
         return True
     finally:
         if conn is not None:
