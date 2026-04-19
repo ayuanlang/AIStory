@@ -11,7 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, ExternalLink } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -5551,23 +5551,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         onLog?.('Generating Start Frame...', 'info');
         
-        let success = false;
-        let attempts = 0;
-        const maxAttempts = 1;
-
-        while (!success && attempts < maxAttempts) {
+        try {
              if (abortGenerationRef.current) {
                  onLog?.('Start Frame generation stopped by user.', 'warning');
-                 break;
+                 return;
              }
-
-             attempts++;
-             if (attempts > 1) {
-                 onLog?.(`Retrying Start Frame (Attempt ${attempts}/${maxAttempts})...`, 'warning');
-                 showNotification(`Retrying Start Frame (Attempt ${attempts}/${maxAttempts})...`, 'info');
-             }
-
-             try {
                 const refs = resolveShotStartFrameRefs(shotSnapshot, rawPrompt, resolvedEntities);
                 if (extraProviderOptions && extraProviderOptions.auto_refs) {
                     refs.push(...extraProviderOptions.auto_refs);
@@ -5620,36 +5608,32 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     onLog?.('Start Frame Generated', 'success');
                     showNotification('Start Frame Generated', 'success');
                     refreshShotAssetsMeta();
-                    success = true;
                 } else {
                     throw new Error("No image URL returned");
                 }
-            } catch (e) {
-                console.error(`Attempt ${attempts} failed:`, e);
-                if (isClientInterruptionError(e)) {
-                    const recovered = await tryRecoverShotMediaAfterInterruption({
-                        shotId: targetShotId,
-                        mediaKey: 'start',
-                    });
-                    if (recovered) {
-                        keepRunningUi = true;
-                        success = true;
-                        break;
-                    }
-                }
-                if (createdImageJobId) {
+        } catch (e) {
+            console.error('Start Frame generation failed:', e);
+            if (isClientInterruptionError(e)) {
+                const recovered = await tryRecoverShotMediaAfterInterruption({
+                    shotId: targetShotId,
+                    mediaKey: 'start',
+                });
+                if (recovered) {
+                    keepRunningUi = true;
                     clearPendingImageJob(targetShotId, 'start');
-                    createdImageJobId = '';
-                }
-                if (attempts >= maxAttempts) {
-                    onLog?.(`Generation failed after ${maxAttempts} attempts: ${e.message}`, 'error');
-                    showNotification(`Generation failed: ${e.message}`, 'error');
+                    setShotGeneratingState(targetShotId, 'start', false);
+                    return;
                 }
             }
-        }
-        if (!keepRunningUi) {
+            if (createdImageJobId) {
+                clearPendingImageJob(targetShotId, 'start');
+                createdImageJobId = '';
+            }
+            onLog?.(`Generation failed: ${e.message}`, 'error');
+            showNotification(`Generation failed: ${e.message}`, 'error');
             clearPendingImageJob(targetShotId, 'start');
             setShotGeneratingState(targetShotId, 'start', false);
+            throw e;
         }
     };
 
@@ -5676,23 +5660,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         onLog?.('Generating End Frame...', 'info');
 
-        let success = false;
-        let attempts = 0;
-        const maxAttempts = 1;
-
-        while (!success && attempts < maxAttempts) {
+        try {
              if (abortGenerationRef.current) {
                  onLog?.('End Frame generation stopped by user.', 'warning');
-                 break;
+                 return;
              }
-
-             attempts++;
-             if (attempts > 1) {
-                 onLog?.(`Retrying End Frame (Attempt ${attempts}/${maxAttempts})...`, 'warning');
-                 showNotification(`Retrying End Frame (Attempt ${attempts}/${maxAttempts})...`, 'info');
-             }
-
-             try {
                 const tech = JSON.parse(shotSnapshot.technical_notes || '{}');
                 const uniqueRefs = getEndFrameVisibleRefs(shotSnapshot, rawPrompt, resolvedEntities);
                 if (extraProviderOptions && extraProviderOptions.auto_refs) {
@@ -5747,36 +5719,32 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     onLog?.('End Frame Generated', 'success');
                     showNotification('End Frame Generated', 'success');
                     refreshShotAssetsMeta();
-                    success = true;
                 } else {
                      throw new Error("No image URL returned");
                 }
-            } catch (e) {
-                console.error(`Attempt ${attempts} failed:`, e);
-                if (isClientInterruptionError(e)) {
-                    const recovered = await tryRecoverShotMediaAfterInterruption({
-                        shotId: targetShotId,
-                        mediaKey: 'end',
-                    });
-                    if (recovered) {
-                        keepRunningUi = true;
-                        success = true;
-                        break;
-                    }
-                }
-                if (createdImageJobId) {
+        } catch (e) {
+            console.error('End Frame generation failed:', e);
+            if (isClientInterruptionError(e)) {
+                const recovered = await tryRecoverShotMediaAfterInterruption({
+                    shotId: targetShotId,
+                    mediaKey: 'end',
+                });
+                if (recovered) {
+                    keepRunningUi = true;
                     clearPendingImageJob(targetShotId, 'end');
-                    createdImageJobId = '';
-                }
-                if (attempts >= maxAttempts) {
-                    onLog?.(`Generation failed after ${maxAttempts} attempts: ${e.message}`, 'error');
-                    showNotification(`Generation failed: ${e.message}`, 'error');
+                    setShotGeneratingState(targetShotId, 'end', false);
+                    return;
                 }
             }
-        }
-        if (!keepRunningUi) {
+            if (createdImageJobId) {
+                clearPendingImageJob(targetShotId, 'end');
+                createdImageJobId = '';
+            }
+            onLog?.(`Generation failed: ${e.message}`, 'error');
+            showNotification(`Generation failed: ${e.message}`, 'error');
             clearPendingImageJob(targetShotId, 'end');
             setShotGeneratingState(targetShotId, 'end', false);
+            throw e;
         }
     };
 
@@ -8740,7 +8708,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                                             disabled={!canPreview}
                                                                                             className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
                                                                                         >
-                                                                                            <ExternalLink size={12} />
+                                                                                            <LinkIcon size={12} />
                                                                                             {t('查看', 'Open')}
                                                                                         </button>
                                                                                         <button
