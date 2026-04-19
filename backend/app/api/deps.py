@@ -1,14 +1,13 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
-from sqlalchemy.orm import Session
 import logging
 import os
 import time
 import threading
 from types import SimpleNamespace
 from app.core.config import settings
-from app.db.session import get_db
+from app.db.session import SessionLocal
 from app.models.all_models import User
 
 logger = logging.getLogger(__name__)
@@ -221,7 +220,6 @@ def _read_cached_entry(username: str, uid: int = 0) -> dict:
 def warm_user_auth_cache_from_db(limit: int = 2000) -> int:
     """Preload active users into in-memory auth cache to reduce cold-start DB bursts."""
     try:
-        from app.db.session import SessionLocal
         from app.models.all_models import User as UserModel
 
         session = SessionLocal()
@@ -243,7 +241,7 @@ def warm_user_auth_cache_from_db(limit: int = 2000) -> int:
     except Exception:
         return 0
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -272,6 +270,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if cached_entry and time.time() <= float(cached_entry.get("expires_at") or 0.0):
         return _entry_to_principal(cached_entry)
     
+    user = None
+    db = SessionLocal()
     try:
         user = db.query(User).filter(User.username == username).first()
         if user is not None:
@@ -292,6 +292,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable, please retry",
         )
+    finally:
+        db.close()
 
     if user is None:
         raise credentials_exception

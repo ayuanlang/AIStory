@@ -1,6 +1,7 @@
 
 import logging
 import re as _re
+import threading
 import time as _time
 
 from sqlalchemy import create_engine, event
@@ -32,6 +33,8 @@ if not is_sqlite:
         "max_overflow": settings.DB_MAX_OVERFLOW,
         "pool_timeout": settings.DB_POOL_TIMEOUT,
         "pool_recycle": settings.DB_POOL_RECYCLE,
+        "pool_use_lifo": True,
+        "pool_reset_on_return": "rollback",
         "connect_args": _connect_args,
     })
 
@@ -103,6 +106,26 @@ if not is_sqlite:
 
 engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
 
+if not is_sqlite:
+    _logger.info(
+        "DB pool configured | size=%s overflow=%s timeout=%ss recycle=%ss pre_ping=%s lifo=%s",
+        settings.DB_POOL_SIZE,
+        settings.DB_MAX_OVERFLOW,
+        settings.DB_POOL_TIMEOUT,
+        settings.DB_POOL_RECYCLE,
+        settings.DB_POOL_PRE_PING,
+        True,
+    )
+    if int(settings.DB_POOL_SIZE or 0) <= 5:
+        _logger.warning(
+            "DB_POOL_SIZE=%s is low for concurrent traffic and may cause QueuePool timeouts",
+            settings.DB_POOL_SIZE,
+        )
+
+_pool_stats_lock = threading.Lock()
+_pool_checked_out = 0
+_pool_last_warn_at = 0.0
+
 # Enable WAL mode for SQLite to allow concurrent read/write access.
 # Without WAL, a long-lived read transaction (e.g. streaming SSE) holds a
 # SHARED lock that blocks ALL write operations from other connections.
@@ -119,6 +142,39 @@ if is_sqlite:
 def _handle_db_error(context):
     if context.connection is not None and context.is_disconnect:
         context.invalidate_connection = True
+
+
+@event.listens_for(engine.pool, "checkout")
+def _on_pool_checkout(dbapi_con, con_record, con_proxy):
+    global _pool_checked_out, _pool_last_warn_at
+    if is_sqlite:
+        return
+
+    now = _time.time()
+    with _pool_stats_lock:
+        _pool_checked_out += 1
+        checked_out = _pool_checked_out
+
+    high_watermark = int(settings.DB_POOL_SIZE or 0) + int(settings.DB_MAX_OVERFLOW or 0) - 2
+    if high_watermark > 0 and checked_out >= high_watermark and now - _pool_last_warn_at >= 10:
+        _pool_last_warn_at = now
+        _logger.warning(
+            "DB pool near capacity | checked_out=%s threshold=%s size=%s overflow=%s",
+            checked_out,
+            high_watermark,
+            settings.DB_POOL_SIZE,
+            settings.DB_MAX_OVERFLOW,
+        )
+
+
+@event.listens_for(engine.pool, "checkin")
+def _on_pool_checkin(dbapi_con, con_record):
+    global _pool_checked_out
+    if is_sqlite:
+        return
+
+    with _pool_stats_lock:
+        _pool_checked_out = max(0, _pool_checked_out - 1)
 SessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,

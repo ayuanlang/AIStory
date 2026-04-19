@@ -6090,6 +6090,7 @@ async def process_agent_command(
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     try:
+        _release_db_connection(db, "agent_command_before_process")
         result = await agent_service.process_command(request_for_agent, db, current_user)
         usage_payload = result.usage if isinstance(result.usage, dict) else {}
         _finalize_model_invocation_billing(
@@ -6175,6 +6176,7 @@ async def process_system_management_agent_command(
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     try:
+        _release_db_connection(db, "system_agent_command_before_process")
         result = await agent_service.process_system_management_command(request, db, current_user)
         usage_payload = result.usage if isinstance(result.usage, dict) else {}
         _finalize_model_invocation_billing(
@@ -19809,6 +19811,7 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
             # If no config, we can't verify signature.
             raise HTTPException(status_code=500, detail="Configuration Missing")
 
+        _release_db_connection(db, "wechat_notify_wait_body")
         headers = request.headers
         body = await request.body()
         
@@ -30605,4 +30608,5 @@ def apply_entity_analysis(
 
 @router.post("/analyze_scene/stream")
 async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _release_db_connection(db, "stream_analyze_scene_before_delegate")
     return await analyze_scene(request=request, current_user=current_user, db=db, async_mode="0", is_stream=True)
