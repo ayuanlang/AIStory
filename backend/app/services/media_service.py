@@ -11381,7 +11381,21 @@ Negative prompt constraints: {neg_prompt}"""
             or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
         )
 
-        poll_timeout_seconds = 120 if callback_assisted_job else 600
+        # Callback-assisted jobs still need long polling fallback when provider callbacks are delayed.
+        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        if callback_assisted_job:
+            try:
+                poll_timeout_seconds = max(
+                    120,
+                    int(
+                        os.getenv(
+                            "KIE_CALLBACK_ASSISTED_POLL_TIMEOUT_SECONDS",
+                            "900",
+                        )
+                    ),
+                )
+            except Exception:
+                poll_timeout_seconds = 900
         try:
             if tool_conf.get("poll_timeout_seconds") is not None:
                 poll_timeout_seconds = max(120, int(tool_conf.get("poll_timeout_seconds")))
