@@ -2680,6 +2680,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setSubjectIndexText(activeEpisode?.ai_scene_analysis_subject_index || '');
         setAdaptationText(activeEpisode?.ai_scene_analysis_adaptation || '');
+        setLlmAssetRawResultContent(activeEpisode?.ai_scene_analysis_subject_index || '');
         setAnalysisAttentionNotes(String(activeEpisode?.episode_info?.analysis_attention_notes || ''));
         setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
         setCoreCoverageResultText(String(activeEpisode?.episode_info?.core_coverage_check_result || ''));
@@ -5571,38 +5572,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <span className="font-medium">🔍 {t('场景画面搭建', 'Scene Construction')}:</span> {t('本次新增', 'Inserted this run')}
                                     <span className="text-white font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.scenes?.created ?? analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode ?? analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount ?? 0} </span>{t('个场景', 'shots')}
                                     <span className="ml-1 text-white/70">({t('当前分集总量', 'Current episode total')}: <span className="text-white font-semibold">{analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode ?? analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount ?? 0}</span>)</span>。
-                                    {analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount > 0 ? (
-                                        <span className="ml-1 break-all">
-                                            {t('其中', 'Among them,')} <span className="text-red-300">{analysisUiReport.importReport?.sceneSubjectPostImportReport?.missingItemCount}</span> {t('个画面细节原本是缺失的，系统已自动帮您生成填补了', 'missing visual details were automatically generated and filled:')} <span className="text-emerald-300">{analysisUiReport.importReport?.sceneSubjectPostImportReport?.supplementReport?.createdItems?.length || 0}</span> {t('个实体', 'entities')}。
-                                        </span>
-                                    ) : (
-                                        <span className="ml-1 text-emerald-300/90">{t('所有画面元素完整，随时可以直接生成画面。', 'All visual elements are complete and ready for generation.')}</span>
-                                    )}
-                                </div>
-                                <div>
-                                    <span className="font-medium">💡 {t('逻辑连贯性', 'Logic Check')}:</span> {
-                                        subjectConsistencyReport
-                                            ? (subjectConsistencyReport.ok ? (
-                                                <span className="text-emerald-400">
-                                                    {t('逻辑清晰，可以推进到下一环节（建立资产）。', 'Logic is clear, ready to proceed to establish assets.')}
-                                                    {project?.global_info?.has_existing_assets && (
-                                                        <span className="ml-1 text-emerald-300">
-                                                            {t('已勾选自有资产，您可以直接去资产库上传图片。', 'Existing assets selected. You can directly upload images in the asset library.')}
-                                                        </span>
-                                                    )}
-                                                </span>
-                                            ) : <span className="text-amber-400">{t('发现部分实体可能存在指代不清，建议稍作人工核对。', 'Found some ambiguous entities, quick manual review recommended.')}</span>)
-                                            : <span className="text-emerald-400">{t('没问题，所有的道具和角色都对得上号~', 'Basic logic check passed.')}</span>
-                                    }
                                 </div>
                                 <div>
                                     <span className="font-medium">⏱️ {t('运行时长', 'Duration')}:</span> <span className="text-blue-300 font-semibold">{formatDurationMs(analysisUiReport.durationMs || analysisUiReport?.phaseTimings?.totalMs)}</span>
                                 </div>
                             </div>
                             <div className="text-xs text-white/60 space-y-1 pt-1">
-                                <div>
-                                    * {t('如果提示有极少数过渡性道具生成失败，您可以直接忽略，不影响视频生成的大局。', 'If a few minor transitional props failed to generate, you can safely ignore them.')}
-                                </div>
                                 <div>
                                     * {t('如果不满意，也可以在刚才的“补充说明”写清要求，点击下方的“修改并调整后重新生成”。', 'Not satisfied? Add notes below and click "Refine" to try again.')}
                                 </div>
@@ -5622,12 +5597,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div className="text-sm text-primary uppercase font-extrabold tracking-wide">{t('输入脚本（Input）', 'Script Input')}</div>
                                 <div className="text-[10px] text-muted-foreground">{(rawContent || '').length} {t('字符', 'chars')}</div>
                             </div>
-                            <textarea 
+                            <textarea
                                 className="w-full flex-1 min-h-[420px] p-6 bg-transparent text-white/90 font-mono text-sm leading-relaxed focus:outline-none custom-scrollbar resize-none"
                                 placeholder={t('在这里粘贴或输入你的剧本...', 'Paste or type your script here...')}
                                 value={rawContent}
                                 onChange={(e) => setRawContent(e.target.value)}
                             />
+
+                            <div className="border-t border-amber-500/20 bg-amber-500/10 px-6 py-4">
+                                <div className="font-bold text-amber-300 text-xs mb-2 flex items-center gap-2">
+                                    📝 {t('剧本改编补充说明', 'Script Adaptation Notes')}
+                                </div>
+                                <textarea
+                                    className="w-full h-24 p-3 bg-black/50 border border-amber-500/20 rounded-md text-amber-200/90 font-mono text-xs resize-none focus:outline-none custom-scrollbar"
+                                    value={adaptationText || ''}
+                                    readOnly
+                                    placeholder={t('（未运行时为空）', '(Empty when not running)')}
+                                />
+                            </div>
 
                             {isEpisodeOnePage && (
                                 <div className="border-t border-white/10 px-6 py-4 bg-black/10">
@@ -5936,44 +5923,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 </div>
                             )}
 
-                            <div className="px-6 pb-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">{t('Subject 检核结果（独立保存）', 'Subject Check Result (Saved Separately)')}</div>
-                            <textarea
-                                className="w-full h-28 px-6 pb-4 bg-transparent text-white/70 font-mono text-[11px] leading-relaxed focus:outline-none custom-scrollbar resize-none border-t border-white/5"
-                                placeholder={t('Subject 检核结果将独立保存到当前分集。', 'Subject check result is saved separately for this episode.')}
-                                value={subjectConsistencyResultText}
-                                readOnly
-                            />
-
-                            <div className="px-6 pb-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">{t('Core 覆盖检核结果（独立保存）', 'Core Coverage Check Result (Saved Separately)')}</div>
-                            <textarea
-                                className="w-full h-28 px-6 pb-4 bg-transparent text-white/70 font-mono text-[11px] leading-relaxed focus:outline-none custom-scrollbar resize-none border-t border-white/5"
-                                placeholder={t('Core 覆盖检核结果将独立保存到当前分集。', 'Core coverage check result is saved separately for this episode.')}
-                                value={coreCoverageResultText}
-                                readOnly
-                            />
-
-                            <div className="px-6 pb-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">{t('LLM 原文', 'LLM Raw Response')}</div>
+                            <div className="px-6 pb-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">{t('第一次调用 LLM 原文（场景解构）', 'Phase 1 LLM Raw Response')}</div>
                             <textarea
                                 className="w-full h-44 px-6 pb-6 bg-transparent text-white/70 font-mono text-[11px] leading-relaxed focus:outline-none custom-scrollbar resize-none border-t border-white/5"
-                                placeholder={t('原始 LLM 返回文本会显示在这里。', 'Original LLM response text is shown here.')}
+                                placeholder={t('第一次 LLM 返回的剧本解构数据会显示在这里。', 'Phase 1 LLM response text is shown here.')}
                                 value={llmRawResultContent || ''}
                                 onChange={(e) => handleLlmRawContentChange(e.target.value)}
                                 onBlur={handleSaveLlmRawContent}
                             />
 
-                            {/* Script Adaptation Notes */}
-                            {adaptationText && (
-                                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 mt-4 mb-4">
-                                    <div className="font-bold text-amber-300 text-sm mb-3 flex items-center gap-2">
-                                        📝 {t('剧本改编补充说明', 'Script Adaptation Notes')}
-                                    </div>
-                                    <textarea
-                                        className="w-full h-32 p-3 bg-black/50 border border-amber-500/20 rounded-md text-amber-100 font-mono text-[12px] resize-none focus:outline-none"
-                                        value={adaptationText}
-                                        readOnly
-                                    />
-                                </div>
-                            )}
+                            <div className="px-6 pb-2 pt-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">{t('第二次调用 LLM 原文（实体资产）', 'Phase 2 LLM Asset Generation Response')}</div>
+                            <textarea
+                                className="w-full h-44 px-6 pb-6 bg-transparent text-amber-100/70 font-mono text-[11px] leading-relaxed focus:outline-none custom-scrollbar resize-none border-t border-white/5"
+                                placeholder={t('第二次 LLM 返回的实体补充生成数据会显示在这里。', 'Phase 2 LLM asset generation response text is shown here.')}
+                                value={llmAssetRawResultContent || ''}
+                                onChange={(e) => setLlmAssetRawResultContent(e.target.value)}
+                            />
 
                             <div className="rounded-lg border border-white/10 bg-black/20 p-4 mt-4">
                                 <div className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">
