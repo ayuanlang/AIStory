@@ -1743,6 +1743,40 @@ def _repair_shots_media_urls_from_assets(
     return shots
 
 
+def _refresh_managed_media_url(url: Any, db: Session) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return raw
+    if not oss_storage_service.is_enabled(db):
+        return raw
+    try:
+        return str(oss_storage_service.refresh_url(raw) or raw)
+    except Exception:
+        return raw
+
+
+def _refresh_shot_media_urls(shot: Shot, db: Session) -> Shot:
+    if not shot:
+        return shot
+
+    shot.image_url = _refresh_managed_media_url(getattr(shot, "image_url", None), db)
+    shot.video_url = _refresh_managed_media_url(getattr(shot, "video_url", None), db)
+
+    notes = _asset_meta_to_dict(getattr(shot, "technical_notes", None))
+    if not notes:
+        return shot
+
+    end_frame_url = str(notes.get("end_frame_url") or "").strip()
+    refreshed_end = _refresh_managed_media_url(end_frame_url, db)
+    if refreshed_end and refreshed_end != end_frame_url:
+        notes["end_frame_url"] = refreshed_end
+        if isinstance(shot.technical_notes, dict):
+            shot.technical_notes = notes
+        else:
+            shot.technical_notes = json.dumps(notes, ensure_ascii=False)
+    return shot
+
+
 def _replace_legacy_temp_urls_in_shot_payload(
     db: Session,
     current_user: User,
@@ -12994,8 +13028,12 @@ def _compact_shot_list_technical_notes(raw_notes: Any) -> Tuple[Optional[str], s
     return compact_payload, end_frame_url, prompt_preview_cn
 
 
-def _build_compact_shot_payload(row: Any) -> Dict[str, Any]:
+def _build_compact_shot_payload(row: Any, db: Session) -> Dict[str, Any]:
     compact_notes, end_frame_url, prompt_preview_cn = _compact_shot_list_technical_notes(getattr(row, "technical_notes", None))
+    image_url = _refresh_managed_media_url(getattr(row, "image_url", None), db)
+    video_url = _refresh_managed_media_url(getattr(row, "video_url", None), db)
+    end_frame_url = _refresh_managed_media_url(end_frame_url, db)
+
     prompt_preview_en = ""
     for candidate in (
         getattr(row, "video_content", None),
@@ -13025,8 +13063,8 @@ def _build_compact_shot_payload(row: Any) -> Dict[str, Any]:
         "shot_logic_cn": getattr(row, "shot_logic_cn", None),
         "keyframes": getattr(row, "keyframes", None),
         "scene_code": getattr(row, "scene_code", None),
-        "image_url": getattr(row, "image_url", None),
-        "video_url": getattr(row, "video_url", None),
+        "image_url": image_url or None,
+        "video_url": video_url or None,
         "prompt": getattr(row, "prompt", None),
         "technical_notes": compact_notes,
         "end_frame_url": end_frame_url or None,
@@ -13108,10 +13146,11 @@ def read_episode_shots(
             Shot.technical_notes.label("technical_notes"),
         )
         rows = compact_query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
-        return [_build_compact_shot_payload(row) for row in rows]
+        return [_build_compact_shot_payload(row, db) for row in rows]
 
     shots = query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
-    return _repair_shots_media_urls_from_assets(db, current_user, project, shots)
+    repaired = _repair_shots_media_urls_from_assets(db, current_user, project, shots)
+    return [_refresh_shot_media_urls(shot, db) for shot in repaired]
 
 
 @router.get("/shots/{shot_id}", response_model=ShotOut)
@@ -13126,6 +13165,7 @@ def read_shot_detail(
 
     project = _require_project_access(db, shot.project_id, current_user)
     _repair_shot_media_urls_from_assets(db, current_user, project, shot)
+    _refresh_shot_media_urls(shot, db)
     return shot
 
 class AIShotGenRequest(BaseModel):
@@ -15695,6 +15735,9 @@ def read_entities(
         missing_local,
         dumped_missing,
     )
+    if oss_storage_service.is_enabled(db):
+        for ent in repaired_entities or []:
+            ent.image_url = _refresh_managed_media_url(getattr(ent, "image_url", None), db)
     return repaired_entities
 
 @router.post("/projects/{project_id}/entities", response_model=EntityOut)

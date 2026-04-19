@@ -738,7 +738,25 @@ class OSSStorageService:
 
     def refresh_url(self, url: str) -> str:
         """Refresh a managed URL if it is a presigned URL or uses Qiniu signed URL, else return it."""
-        return url
+        raw = str(url or "").strip()
+        if not raw:
+            return raw
+
+        pool, key = self._extract_managed_target(raw)
+        if not pool or not key:
+            return raw
+
+        cred, _ = self._pick_credential(pool)
+        if not cred:
+            return raw
+
+        try:
+            client = self._build_client(pool, cred)
+            refreshed = self._build_public_url(client, pool, key, cred)
+            return str(refreshed or raw)
+        except Exception as exc:
+            logger.warning("OSS refresh_url failed | key=%s err=%s", key, exc)
+            return raw
 
     def delete_url(self, url: str) -> bool:
         pool, key = self._extract_managed_target(url)
