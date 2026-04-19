@@ -525,6 +525,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [shotGenerationHistory, setShotGenerationHistory] = useState([]);
     const [shotGenerationHistoryLoading, setShotGenerationHistoryLoading] = useState(false);
     const [shotGenerationHistoryDeletingId, setShotGenerationHistoryDeletingId] = useState('');
+    const shotHistoryPendingRef = useRef(false);
     const GENERATION_STATE_TTL_MS = 1000 * 60 * 60;
     const SHOT_MEDIA_STARTUP_GRACE_MS = 15000;
     const IMAGE_JOB_STATE_TTL_MS = 1000 * 60 * 60;
@@ -787,10 +788,71 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     useEffect(() => {
         if (!editingShot?.id) {
             setShotGenerationHistory([]);
+            shotHistoryPendingRef.current = false;
             return;
         }
         fetchShotGenerationHistory(editingShot);
     }, [editingShot, fetchShotGenerationHistory]);
+
+    useEffect(() => {
+        const stableShotId = String(editingShot?.id || '').trim();
+        if (!stableShotId) {
+            shotHistoryPendingRef.current = false;
+            return;
+        }
+
+        let disposed = false;
+
+        const checkPendingAndRefresh = () => {
+            if (disposed) return;
+
+            let pendingImageJobs = {};
+            try {
+                if (imageJobStateStorageKey) {
+                    const rawImage = localStorage.getItem(imageJobStateStorageKey);
+                    const parsedImage = rawImage ? JSON.parse(rawImage) : {};
+                    pendingImageJobs = parsedImage && typeof parsedImage === 'object' ? parsedImage : {};
+                }
+            } catch {
+                pendingImageJobs = {};
+            }
+            const hasPendingImage = Object.values(pendingImageJobs || {}).some((payload) => {
+                return String(payload?.shotId || '').trim() === stableShotId;
+            });
+
+            let pendingVideoJobs = {};
+            try {
+                if (videoJobStateStorageKey) {
+                    const rawVideo = localStorage.getItem(videoJobStateStorageKey);
+                    const parsedVideo = rawVideo ? JSON.parse(rawVideo) : {};
+                    pendingVideoJobs = parsedVideo && typeof parsedVideo === 'object' ? parsedVideo : {};
+                }
+            } catch {
+                pendingVideoJobs = {};
+            }
+            const hasPendingVideo = Boolean(pendingVideoJobs?.[stableShotId]);
+
+            const hasPending = hasPendingImage || hasPendingVideo;
+            const hadPending = Boolean(shotHistoryPendingRef.current);
+            shotHistoryPendingRef.current = hasPending;
+
+            if (hadPending && !hasPending) {
+                [0, 1500, 4000].forEach((delayMs) => {
+                    window.setTimeout(() => {
+                        void fetchShotGenerationHistory(stableShotId);
+                    }, delayMs);
+                });
+            }
+        };
+
+        checkPendingAndRefresh();
+        const timer = window.setInterval(checkPendingAndRefresh, 1500);
+
+        return () => {
+            disposed = true;
+            window.clearInterval(timer);
+        };
+    }, [editingShot?.id, fetchShotGenerationHistory, imageJobStateStorageKey, videoJobStateStorageKey]);
 
     const handleDeleteShotGenerationHistoryItem = useCallback(async (item) => {
         const kind = String(item?.kind || '').trim();

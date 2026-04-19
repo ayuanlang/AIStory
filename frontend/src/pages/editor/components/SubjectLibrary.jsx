@@ -328,6 +328,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [subjectGenerationHistoryLoading, setSubjectGenerationHistoryLoading] = useState(false);
     const [subjectGenerationHistoryDeletingId, setSubjectGenerationHistoryDeletingId] = useState('');
     const subjectImageJobsRef = useRef({});
+    const subjectHistoryJobPresenceRef = useRef({});
     const subjectImageJobPollingRef = useRef(false);
     const subjectImageJobPollTokenRef = useRef(0);
     const subjectImageJobTerminalLogRef = useRef(new Set());
@@ -1273,6 +1274,44 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     useEffect(() => {
         subjectImageJobsRef.current = subjectImageJobs || {};
     }, [subjectImageJobs]);
+
+    useEffect(() => {
+        const trackedEntityIds = Array.from(new Set([
+            String(selectedEntity?.id || '').trim(),
+            String(viewingEntity?.id || '').trim(),
+        ].filter(Boolean)));
+
+        if (trackedEntityIds.length === 0) {
+            subjectHistoryJobPresenceRef.current = {};
+            return;
+        }
+
+        const prevPresence = subjectHistoryJobPresenceRef.current || {};
+        const nextPresence = {};
+        const refreshEntityIds = [];
+
+        trackedEntityIds.forEach((entityId) => {
+            const hasRunningJob = Boolean(subjectImageJobs?.[entityId]);
+            nextPresence[entityId] = hasRunningJob;
+
+            const hadRunningJob = Boolean(prevPresence[entityId]);
+            if (hadRunningJob && !hasRunningJob) {
+                refreshEntityIds.push(entityId);
+            }
+        });
+
+        subjectHistoryJobPresenceRef.current = nextPresence;
+
+        if (refreshEntityIds.length > 0) {
+            refreshEntityIds.forEach((entityId) => {
+                [0, 1500, 4000].forEach((delayMs) => {
+                    window.setTimeout(() => {
+                        void fetchSubjectGenerationHistory(entityId);
+                    }, delayMs);
+                });
+            });
+        }
+    }, [fetchSubjectGenerationHistory, selectedEntity?.id, subjectImageJobs, viewingEntity?.id]);
 
     useEffect(() => {
         if (Object.keys(subjectImageJobs || {}).length === 0) return;
