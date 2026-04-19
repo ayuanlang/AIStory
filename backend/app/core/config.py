@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_RESET: str = os.getenv("RATE_LIMIT_RESET", "3/minute")
     CORS_ORIGINS: str = _env_or_default(
         "CORS_ORIGINS",
-        "http://localhost:3000,http://localhost:5173,https://aistory.pro,https://www.aistory.pro",
+        "http://localhost:3000,http://localhost:5173,https://aistory.pro,https://www.aistory.pro,https://aistory-frontend.onrender.com",
     )
     CORS_ALLOW_ORIGIN_REGEX: str = _env_or_default("CORS_ALLOW_ORIGIN_REGEX", r"^https://.*\.onrender\.com$")
     MAX_ASSET_UPLOAD_MB: int = int(os.getenv("MAX_ASSET_UPLOAD_MB", "100"))

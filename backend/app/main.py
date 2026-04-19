@@ -715,6 +715,12 @@ origins = [item.strip() for item in (settings.CORS_ORIGINS or "").split(",") if 
 frontend_origin = (settings.FRONTEND_BASE_URL or "").strip()
 if frontend_origin and frontend_origin not in origins:
     origins.append(frontend_origin)
+render_frontend_origin = os.getenv("RENDER_FRONTEND_URL", "").strip()
+if render_frontend_origin and render_frontend_origin not in origins:
+    origins.append(render_frontend_origin)
+default_render_frontend_origin = "https://aistory-frontend.onrender.com"
+if default_render_frontend_origin not in origins:
+    origins.append(default_render_frontend_origin)
 if os.getenv("RENDER_EXTERNAL_URL"):
     render_origin = os.getenv("RENDER_EXTERNAL_URL").strip()
     if render_origin and render_origin not in origins:
@@ -788,6 +794,8 @@ def _origin_is_cors_allowed(origin: str) -> bool:
     if not candidate:
         return False
     if candidate in origins:
+        return True
+    if candidate.lower().startswith("https://") and candidate.lower().endswith(".onrender.com"):
         return True
     if compiled_origin_regex and compiled_origin_regex.match(candidate):
         return True

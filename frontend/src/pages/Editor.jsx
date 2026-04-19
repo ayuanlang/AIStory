@@ -384,8 +384,13 @@ const Editor = ({
                 }
                 
                 setEpisodes(eps);
-                if (eps.length > 0 && !activeEpisodeId) {
-                    setActiveEpisodeId(eps[0].id);
+                if (eps.length > 0) {
+                    const hasActiveEpisode = !!activeEpisodeId && eps.some((ep) => String(ep.id) === String(activeEpisodeId));
+                    if (!hasActiveEpisode) {
+                        setActiveEpisodeId(eps[0].id);
+                    }
+                } else if (activeEpisodeId) {
+                    setActiveEpisodeId(null);
                 }
 
                 const currentStage = p?.global_info?.workflow_stage || 'script';

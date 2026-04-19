@@ -587,8 +587,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, []);
 
     const resolveGenerationHistoryMediaKind = useCallback((item) => {
+        const explicitMediaKindFromItem = String(item?.mediaKind || '').trim().toLowerCase();
+        if (explicitMediaKindFromItem) return explicitMediaKindFromItem;
+
         const explicitMediaKind = String(extractGenerationHistoryField(item, 'ownerMediaKind') || '').trim().toLowerCase();
         if (explicitMediaKind) return explicitMediaKind;
+
+        const topLevelType = String(item?.type || '').trim().toLowerCase();
+        if (topLevelType === 'video') return 'video';
+
         const assetType = String(extractGenerationHistoryField(item, 'asset_type') || '').trim().toLowerCase();
         if (assetType.includes('end')) return 'end';
         if (assetType.includes('start')) return 'start';
@@ -632,6 +639,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     const fetchShotGenerationHistory = useCallback(async (shot) => {
         const stableShotId = String(shot?.id || shot || '').trim();
+        const stableProjectId = String(projectId || '').trim();
         if (!stableShotId) {
             setShotGenerationHistory([]);
             return;
@@ -639,28 +647,142 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         setShotGenerationHistoryLoading(true);
         try {
-            const [imagePool, videoPool] = await Promise.all([
-                getGenerationJobPool({ kind: 'image', running_only: false, limit: 300 }),
-                getGenerationJobPool({ kind: 'video', running_only: false, limit: 300 }),
-            ]);
-            const normalized = normalizeScopedGenerationHistory([
-                ...(Array.isArray(imagePool?.items) ? imagePool.items : []),
-                ...(Array.isArray(videoPool?.items) ? videoPool.items : []),
-            ]);
-            const filtered = normalized.filter((item) => {
-                if (item.projectId && String(projectId || '').trim() && item.projectId !== String(projectId || '').trim()) {
-                    return false;
-                }
-                return item.shotId === stableShotId;
+            const pageSize = 120;
+            const maxPages = 10;
+            const persistedAssets = [];
+            for (let page = 0; page < maxPages; page += 1) {
+                const pageRows = await fetchAssets({
+                    shot_id: stableShotId,
+                    project_id: stableProjectId || undefined,
+                    skip: page * pageSize,
+                    limit: pageSize,
+                });
+                const rows = Array.isArray(pageRows) ? pageRows : [];
+                if (!rows.length) break;
+
+                const mappedRows = rows
+                    .filter((row) => {
+                        const meta = row?.meta_info && typeof row.meta_info === 'object' ? row.meta_info : {};
+                        const metaShotId = String(meta?.shot_id || row?.shot_id || '').trim();
+                        if (metaShotId !== stableShotId) return false;
+
+                        if (stableProjectId) {
+                            const metaProjectId = String(meta?.project_id || row?.project_id || '').trim();
+                            if (metaProjectId && metaProjectId !== stableProjectId) return false;
+                        }
+
+                        const assetType = String(row?.type || '').toLowerCase();
+                        return assetType === 'image' || assetType === 'video';
+                    })
+                    .map((row) => {
+                        const meta = row?.meta_info && typeof row.meta_info === 'object' ? row.meta_info : {};
+                        const frameType = String(meta?.frame_type || meta?.asset_type || '').toLowerCase();
+                        const mediaKind = String(row?.type || '').toLowerCase() === 'video'
+                            ? 'video'
+                            : (frameType.includes('end') ? 'end' : (frameType.includes('start') ? 'start' : 'image'));
+                        return {
+                            id: row?.id,
+                            job_id: `asset:${row?.id}`,
+                            kind: String(row?.type || '').toLowerCase() === 'video' ? 'video' : 'image',
+                            type: String(row?.type || '').toLowerCase(),
+                            status: 'completed',
+                            shotId: stableShotId,
+                            projectId: String(meta?.project_id || '').trim(),
+                            mediaKind,
+                            resultUrl: String(row?.url || '').trim(),
+                            displayLabel: mediaKind === 'video'
+                                ? t('视频生成', 'Video Generation')
+                                : (mediaKind === 'end' ? t('结束帧生成', 'End Frame Generation') : t('起始帧生成', 'Start Frame Generation')),
+                            createdAtMs: Date.parse(String(row?.created_at || '')) || 0,
+                            created_at: row?.created_at,
+                        };
+                    });
+
+                persistedAssets.push(...mappedRows);
+                if (persistedAssets.length >= 40 || rows.length < pageSize) break;
+            }
+
+            const merged = [...persistedAssets];
+            const dedupMap = new Map();
+            merged.forEach((item) => {
+                const key = String(item?.job_id || item?.id || '').trim() || `${String(item?.resultUrl || '').trim()}|${String(item?.createdAtMs || 0)}`;
+                if (!key) return;
+                if (!dedupMap.has(key)) dedupMap.set(key, item);
             });
-            setShotGenerationHistory(filtered.slice(0, 16));
+
+            const fallbackFromShot = [];
+            const shotStartUrl = String(shot?.image_url || '').trim();
+            const shotVideoUrl = String(shot?.video_url || '').trim();
+            let shotEndUrl = '';
+            try {
+                const shotTech = JSON.parse(shot?.technical_notes || '{}');
+                shotEndUrl = String(shotTech?.end_frame_url || '').trim();
+            } catch (_) {
+                shotEndUrl = '';
+            }
+
+            const shotTs = Date.parse(String(shot?.updated_at || shot?.created_at || '')) || Date.now();
+            if (shotStartUrl) {
+                fallbackFromShot.push({
+                    id: `shot-current-start-${stableShotId}`,
+                    job_id: `shot-current-start-${stableShotId}`,
+                    kind: 'image',
+                    type: 'image',
+                    status: 'completed',
+                    shotId: stableShotId,
+                    projectId: stableProjectId,
+                    mediaKind: 'start',
+                    resultUrl: shotStartUrl,
+                    displayLabel: t('起始帧生成（当前）', 'Start Frame (Current)'),
+                    createdAtMs: shotTs,
+                });
+            }
+            if (shotEndUrl) {
+                fallbackFromShot.push({
+                    id: `shot-current-end-${stableShotId}`,
+                    job_id: `shot-current-end-${stableShotId}`,
+                    kind: 'image',
+                    type: 'image',
+                    status: 'completed',
+                    shotId: stableShotId,
+                    projectId: stableProjectId,
+                    mediaKind: 'end',
+                    resultUrl: shotEndUrl,
+                    displayLabel: t('结束帧生成（当前）', 'End Frame (Current)'),
+                    createdAtMs: shotTs,
+                });
+            }
+            if (shotVideoUrl) {
+                fallbackFromShot.push({
+                    id: `shot-current-video-${stableShotId}`,
+                    job_id: `shot-current-video-${stableShotId}`,
+                    kind: 'video',
+                    type: 'video',
+                    status: 'completed',
+                    shotId: stableShotId,
+                    projectId: stableProjectId,
+                    mediaKind: 'video',
+                    resultUrl: shotVideoUrl,
+                    displayLabel: t('视频生成（当前）', 'Video (Current)'),
+                    createdAtMs: shotTs,
+                });
+            }
+
+            const finalList = Array.from(dedupMap.values())
+                .concat(fallbackFromShot)
+                .sort((a, b) => (Number(b?.createdAtMs || 0) - Number(a?.createdAtMs || 0)));
+            onLog?.(
+                `[ShotHistoryDiag] shot_id=${stableShotId} source=assets_only assets=${persistedAssets.length} fallback=${fallbackFromShot.length} final=${finalList.length}`,
+                finalList.length > 0 ? 'info' : 'warning'
+            );
+            setShotGenerationHistory(finalList.slice(0, 16));
         } catch (e) {
             onLog?.(`Failed to load shot generation history: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
             setShotGenerationHistory([]);
         } finally {
             setShotGenerationHistoryLoading(false);
         }
-    }, [getGenerationJobPool, normalizeScopedGenerationHistory, onLog, projectId]);
+    }, [fetchAssets, onLog, projectId, t]);
 
     useEffect(() => {
         if (!editingShot?.id) {

@@ -91,6 +91,39 @@ export const normalizeFrameTrimMargins = (draft) => {
 export const brokenMediaUrls = new Set();
 export const brokenSceneImageUrls = new Set();
 export const warmMediaUrls = new Set();
+const brokenMediaUrlTs = new Map();
+const SIGNED_URL_BROKEN_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_BROKEN_TTL_MS = 6 * 60 * 60 * 1000;
+
+const isLikelySignedMediaUrl = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    const lowered = raw.toLowerCase();
+    if (lowered.includes('x-amz-signature=') || lowered.includes('x-amz-algorithm=')) return true;
+    if (lowered.includes('rh-comfy-auth=')) return true;
+    if (lowered.includes('token=') && lowered.includes('e=')) return true;
+    return false;
+};
+
+const getBrokenUrlTtlMs = (url) => (isLikelySignedMediaUrl(url) ? SIGNED_URL_BROKEN_TTL_MS : DEFAULT_BROKEN_TTL_MS);
+
+const purgeExpiredBrokenMediaUrl = (url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized) return;
+    const ts = Number(brokenMediaUrlTs.get(normalized) || 0);
+    if (!Number.isFinite(ts) || ts <= 0) return;
+    const ttl = getBrokenUrlTtlMs(normalized);
+    if ((Date.now() - ts) < ttl) return;
+    brokenMediaUrlTs.delete(normalized);
+    brokenMediaUrls.delete(normalized);
+};
+
+export const clearBrokenMediaUrl = (url) => {
+    const normalized = String(url || '').trim();
+    if (!normalized) return;
+    brokenMediaUrlTs.delete(normalized);
+    brokenMediaUrls.delete(normalized);
+};
 
 export const shouldBypassBrokenMediaCache = (url) => {
     const raw = String(url || '').trim();
@@ -108,17 +141,21 @@ export const rememberBrokenMediaUrl = (url) => {
     const normalized = String(url || '').trim();
     if (!normalized) return;
     if (shouldBypassBrokenMediaCache(normalized)) return;
+    brokenMediaUrlTs.set(normalized, Date.now());
     brokenMediaUrls.add(normalized);
 };
 
 export const isBrokenMediaUrl = (url) => {
     if (shouldBypassBrokenMediaCache(url)) return false;
-    return brokenMediaUrls.has(String(url || '').trim());
+    const normalized = String(url || '').trim();
+    purgeExpiredBrokenMediaUrl(normalized);
+    return brokenMediaUrls.has(normalized);
 };
 
 export const rememberWarmMediaUrl = (url) => {
     const normalized = String(url || '').trim();
-    if (!normalized || isBrokenMediaUrl(normalized)) return;
+    if (!normalized) return;
+    clearBrokenMediaUrl(normalized);
     warmMediaUrls.add(normalized);
 };
 

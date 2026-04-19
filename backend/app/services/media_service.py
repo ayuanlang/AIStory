@@ -11382,11 +11382,18 @@ Negative prompt constraints: {neg_prompt}"""
         )
 
         # Callback-assisted jobs still need long polling fallback when provider callbacks are delayed.
-        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        kie_min_poll_timeout_seconds = max(
+            120,
+            int(os.getenv("KIE_MIN_POLL_TIMEOUT_SECONDS", "900") or 900),
+        )
+        raw_tool_poll_timeout = tool_conf.get("poll_timeout_seconds")
+        raw_tool_timeout = tool_conf.get("timeout")
+
+        poll_timeout_seconds = max(kie_min_poll_timeout_seconds, DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS)
         if callback_assisted_job:
             try:
                 poll_timeout_seconds = max(
-                    120,
+                    kie_min_poll_timeout_seconds,
                     int(
                         os.getenv(
                             "KIE_CALLBACK_ASSISTED_POLL_TIMEOUT_SECONDS",
@@ -11395,14 +11402,14 @@ Negative prompt constraints: {neg_prompt}"""
                     ),
                 )
             except Exception:
-                poll_timeout_seconds = 900
+                poll_timeout_seconds = kie_min_poll_timeout_seconds
         try:
             if tool_conf.get("poll_timeout_seconds") is not None:
-                poll_timeout_seconds = max(120, int(tool_conf.get("poll_timeout_seconds")))
+                poll_timeout_seconds = max(kie_min_poll_timeout_seconds, int(tool_conf.get("poll_timeout_seconds")))
             elif tool_conf.get("timeout") is not None:
-                poll_timeout_seconds = max(120, int(tool_conf.get("timeout")))
+                poll_timeout_seconds = max(kie_min_poll_timeout_seconds, int(tool_conf.get("timeout")))
         except Exception:
-            poll_timeout_seconds = 600
+            poll_timeout_seconds = max(kie_min_poll_timeout_seconds, DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS)
 
         # Strategy:
         # - keep callback as the preferred completion path when available
@@ -11419,12 +11426,15 @@ Negative prompt constraints: {neg_prompt}"""
             pass
 
         logger.info(
-            "KIE poll strategy | task_id=%s callback_enabled=%s callback_assisted_job=%s timeout_seconds=%s interval_seconds=%s",
+            "KIE poll strategy | task_id=%s callback_enabled=%s callback_assisted_job=%s timeout_seconds=%s interval_seconds=%s min_timeout_seconds=%s raw_poll_timeout=%s raw_timeout=%s",
             task_id,
             callback_enabled,
             callback_assisted_job,
             poll_timeout_seconds,
             poll_interval_seconds,
+            kie_min_poll_timeout_seconds,
+            raw_tool_poll_timeout,
+            raw_tool_timeout,
         )
 
         poll_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))

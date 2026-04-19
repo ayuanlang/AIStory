@@ -7276,31 +7276,31 @@ def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
         Entity.image_url != ""
     ).first()
     if poster_entity:
-        return poster_entity.image_url
+        return _refresh_managed_media_url(poster_entity.image_url, db)
 
     project = db.query(Project).filter(Project.id == project_id).first()
     if project and isinstance(project.global_info, dict):
         configured_cover = str(project.global_info.get("cover_image") or project.global_info.get("coverImage") or "").strip()
         if configured_cover:
-            return configured_cover
+            return _refresh_managed_media_url(configured_cover, db)
 
     # 1. Try to find first valid image in Shots
     # Check if project_id is populated in shots first (optimization)
     shot = db.query(Shot).filter(Shot.project_id == project_id, Shot.image_url != None, Shot.image_url != "").first()
     if shot:
-        return shot.image_url
+        return _refresh_managed_media_url(shot.image_url, db)
         
     # If project_id not reliable in shots, try join (fallback)
     shot = db.query(Shot).join(Scene).join(Episode).filter(Episode.project_id == project_id, Shot.image_url != None, Shot.image_url != "").first()
     if shot:
-        return shot.image_url
+        return _refresh_managed_media_url(shot.image_url, db)
 
     # 2. Try Scenes? (Scene logic currently undefined as no direct image column, skip to Entities)
     
     # 3. Try Entities (Subjects)
     entity = db.query(Entity).filter(Entity.project_id == project_id, Entity.image_url != None, Entity.image_url != "").first()
     if entity:
-        return entity.image_url
+        return _refresh_managed_media_url(entity.image_url, db)
         
     # 4. Try Assets? (Maybe, but user said Shots, Scenes, Subjects)
     
@@ -9343,7 +9343,7 @@ def read_projects(
             Entity.image_url != ""
         ).all()
         for p_id, image_url in posters:
-            poster_map[p_id] = image_url
+            poster_map[p_id] = _refresh_managed_media_url(image_url, session)
             
         # First valid shot images (optimized using first() equivalent query or just aggregating)
         shot_subq = session.query(
@@ -9360,7 +9360,7 @@ def read_projects(
         ).all()
         for p_id, image_url in shots:
             if p_id not in shot_map:
-                shot_map[p_id] = image_url
+                shot_map[p_id] = _refresh_managed_media_url(image_url, session)
                 
         # First valid entities
         entity_subq = session.query(
@@ -9377,7 +9377,7 @@ def read_projects(
         ).all()
         for p_id, image_url in entities:
             if p_id not in entity_map:
-                entity_map[p_id] = image_url
+                entity_map[p_id] = _refresh_managed_media_url(image_url, session)
 
         ret = []
         for row in result:
@@ -15449,7 +15449,8 @@ def read_shots(
         Shot.episode_id == episode.id,
         Shot.scene_id == scene_id
     ).all()
-    return _repair_shots_media_urls_from_assets(db, current_user, project, shots)
+    repaired = _repair_shots_media_urls_from_assets(db, current_user, project, shots)
+    return [_refresh_shot_media_urls(shot, db) for shot in repaired]
 
 @router.post("/scenes/{scene_id}/shots", response_model=ShotOut)
 def create_shot(
@@ -15514,7 +15515,7 @@ def create_shot(
         else:
              logger.error(f"[create_shot] CRITICAL FAILURE. Shot {db_shot.id} not found immediately after commit!")
 
-        return db_shot
+        return _refresh_shot_media_urls(db_shot, db)
     except Exception as e:
         logger.error(f"[create_shot] EXCEPTION: {e}")
         db.rollback()
@@ -15544,7 +15545,7 @@ def update_shot(
         
     db.commit()
     db.refresh(db_shot)
-    return db_shot
+    return _refresh_shot_media_urls(db_shot, db)
 
 @router.delete("/shots/{shot_id}")
 def delete_shot(
@@ -16223,6 +16224,7 @@ def update_entity(
         
     db.commit()
     db.refresh(entity)
+    entity.image_url = _refresh_managed_media_url(getattr(entity, "image_url", None), db)
     return entity
 
 class SoraCharacterGenRequest(BaseModel):
@@ -18240,25 +18242,39 @@ def get_assets(
                 return {}
         return {}
 
+    strict_meta_filter = str(os.getenv("ASSETS_META_FILTER_STRICT", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
     def _matches_meta_filters(meta: Dict[str, Any]) -> bool:
         if project_id:
             p_id = meta.get('project_id')
-            if p_id and str(p_id) != str(project_id):
+            if strict_meta_filter:
+                if str(p_id or '').strip() != str(project_id):
+                    return False
+            elif p_id and str(p_id) != str(project_id):
                 return False
 
         if entity_id:
             e_id = meta.get('entity_id')
-            if e_id and str(e_id) != str(entity_id):
+            if strict_meta_filter:
+                if str(e_id or '').strip() != str(entity_id):
+                    return False
+            elif e_id and str(e_id) != str(entity_id):
                 return False
 
         if shot_id:
             s_id = meta.get('shot_id')
-            if s_id and str(s_id) != str(shot_id):
+            if strict_meta_filter:
+                if str(s_id or '').strip() != str(shot_id):
+                    return False
+            elif s_id and str(s_id) != str(shot_id):
                 return False
 
         if scene_id:
             sc_id = meta.get('scene_id')
-            if sc_id and str(sc_id) != str(scene_id):
+            if strict_meta_filter:
+                if str(sc_id or '').strip() != str(scene_id):
+                    return False
+            elif sc_id and str(sc_id) != str(scene_id):
                 return False
 
         return True
@@ -18819,7 +18835,7 @@ def rebind_shot_media_from_assets(
                 stats["skipped_existing"] += 1
                 continue
             if not payload.dry_run:
-                shot.image_url = asset.url
+                shot.image_url = _refresh_managed_media_url(asset.url, db)
                 changed = True
 
         elif slot == "video":
@@ -18827,7 +18843,7 @@ def rebind_shot_media_from_assets(
                 stats["skipped_existing"] += 1
                 continue
             if not payload.dry_run:
-                shot.video_url = asset.url
+                shot.video_url = _refresh_managed_media_url(asset.url, db)
                 changed = True
 
         elif slot == "end":
@@ -18844,7 +18860,7 @@ def rebind_shot_media_from_assets(
                 continue
 
             if not payload.dry_run:
-                tech["end_frame_url"] = asset.url
+                tech["end_frame_url"] = _refresh_managed_media_url(asset.url, db)
                 shot.technical_notes = json.dumps(tech, ensure_ascii=False)
                 changed = True
 
@@ -26837,11 +26853,25 @@ def get_generation_job_pool(
 
     t_filter_sort_start = time.perf_counter()
     if safe_shot_id:
-        def _match_shot_id(itm):
-            v1 = str(itm.get("shot_id") or "").strip()
-            v2 = str((itm.get("metadata") or {}).get("shot_id") or "").strip()  
-            return v1 == safe_shot_id or v2 == safe_shot_id
-        items = [itm for itm in items if _match_shot_id(itm)]
+        def _extract_job_shot_id(itm: Dict[str, Any]) -> str:
+            if not isinstance(itm, dict):
+                return ""
+            metadata = itm.get("metadata") if isinstance(itm.get("metadata"), dict) else {}
+            payload = itm.get("payload") if isinstance(itm.get("payload"), dict) else {}
+            context = itm.get("context") if isinstance(itm.get("context"), dict) else {}
+            return str(
+                itm.get("shot_id")
+                or itm.get("ownerShotId")
+                or metadata.get("shot_id")
+                or metadata.get("ownerShotId")
+                or payload.get("shot_id")
+                or payload.get("ownerShotId")
+                or context.get("shot_id")
+                or context.get("ownerShotId")
+                or ""
+            ).strip()
+
+        items = [itm for itm in items if _extract_job_shot_id(itm) == safe_shot_id]
 
     items.sort(key=lambda item: _job_sort_key(item), reverse=True)
     items = items[:safe_limit]

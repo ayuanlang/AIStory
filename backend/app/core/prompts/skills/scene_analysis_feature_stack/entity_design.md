@@ -104,6 +104,7 @@
 - **信息组织层级（语法流）**：
   - 默认顺序结构：`身份定位与功能 -> 全面外貌（需融合2.1基线比例） -> 服装与鞋履 -> 动作特征 -> 构图机位/光影要求`。
 - **特定字段转化规范（从概念到画面）**：
+  - `description_cn`：将输入Subjects Index的 entity_attributes 属性原文直接填写到此处。
   - `archetype`：将输入Subjects Index的Action Characteristics属性原文直接填写到此处。
   - `gender` / `role`：不可只停留在 JSON 标签，必须转化为具体的画面语义（如特定的职业装束起势、眼神状态）。
   - `appearance_cn` / `clothing`：具体版型、材质与配色必须全部进入 Prompt。
@@ -144,7 +145,7 @@
 
 #### 3.1.5 纯净去剧情角色化与门禁自检 (Clean Plate Gatekeeping)
 - **落实全局 Clean Plate 规则**：环境仅指代抽象空间结构、材质以及可辅助渲染氛围的无剧情背景群众。由于高频误差来自对 OTS 的分镜头过写，严禁包含任何剧情推进语句或明确身份的主线/配角指代。
-- **背景人群规模强制声明与负面提示防冲突**：如果上游提取的环境中包含“人群/路人/观众等”（如繁华街道），允许在提示词中描述这些无脸化、无具体身份、纯作氛围背景的人群实体。**并且在生成中英文提示词时，必须根据上游设定明确描述其具体的大致数量、规模或分布密度（例如“座无虚席”、“人头攒动 (crowded/packed)”、“寥寥数人 (sparse/empty)”等），严禁仅泛泛而谈“有人”。同时特别注意：对于这种明确包含背景人群的环境，绝不允许在 `negative_prompt_en` 中写入 `people, crowd, humans` 等排斥性词汇（否则会导致生成指令自相矛盾）；而应改为在负面提示中重点排除 `specific characters, main character outfits, detailed faces` 等会破坏路人模糊氛围的词。**
+- **背景人群多样性与规模强制声明、防冲突机制**：如果上游提取的环境中包含“人群/路人/观众等”（如繁华街道），允许在提示词中描述这些无脸化、无具体身份、纯作氛围背景的人群实体。**在生成中英文提示词时，必须满足两点要求：1) 必须根据上游设定明确描述其具体的大致数量、规模或分布密度（例如“座无虚席”、“人头攒动 (crowded/packed)”、“寥寥数人 (sparse/empty)”等），严禁仅泛泛而谈“有人”。2) 必须为这些无剧情群众补充一定的表情与轻度环境动作描写，体现出人群内部的状态差异与多样性，切忌让所有人呈现如出一辙的僵硬姿势。** 同时特别注意：对于这种明确包含背景人群的环境，绝不允许在 `negative_prompt_en` 中写入 `people, crowd, humans` 等排斥性词汇（否则会导致生成指令自相矛盾）；而应改为在负面提示中重点排除 `specific characters, main character outfits, detailed faces` 等会破坏路人模糊氛围的词。
 - **环境门禁扫描**：提交前必须额外扫描并确保不存在以下可能引发剧情人物残留的词或模式：`CHAR:[@`、`over shoulder`、`over-the-shoulder`、`A over B`、`B over A`、`shoulder silhouette`、`behind head`、`blurred shoulder`、`back-of-head`、`arm entering frame`、`hand in foreground`、`hair edge`、`mirror reflection of a main character`、`specific character shadow`。命中任一即整条报废重写。
 
 ### 3.2 对话正反打与 OTS (Clean Plate Logic)
@@ -196,6 +197,7 @@
 #### JSON 内容共性硬约束
 - **Scene Subjects 零遗漏硬约束**：JSON 数组必须完整覆盖前置提供/识别出的**所有**实体；不得只保留“核心代表项”。任意防遗漏声明都不如直接在 JSON 里全量打满重要。
 - **命名绝对防篡改（极度严格）**：所有资产的 `name` / `name_en`（以及所带层级结构中的名称）必须与输入的 subjects index 完全匹配！完全匹配！完全匹配！绝对禁止自行发挥、修改、扩写、删减字词、重翻译或改变任何符号与格式。
+- **description_cn 传导硬约束**：必须将上游输入的 `entity_attributes` 字段属性原文一字不改、**原样填写**到本实体对应的 `description_cn` 字段中，不要做任何二次创作或删减。
 - **固定双语输出字段契约**：严格沿用定义的中英双轨字段要求，特别是 `generation_prompt_cn/en`。
 - **继承约束**：每个实体都必须提供 `visual_dependencies`（数组）与 `dependency_strategy`（包含 `type` 和 `logic` 两个对象属性），详见前文状态演化链要求。
 

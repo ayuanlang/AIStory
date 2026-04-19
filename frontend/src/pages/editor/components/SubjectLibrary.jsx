@@ -418,6 +418,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     const fetchSubjectGenerationHistory = useCallback(async (entity) => {
         const stableEntityId = String(entity?.id || entity || '').trim();
+        const stableProjectId = String(projectId || '').trim();
         if (!stableEntityId) {
             setSubjectGenerationHistory([]);
             return;
@@ -425,16 +426,51 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         setSubjectGenerationHistoryLoading(true);
         try {
-            const data = await fetchAssets();
-            const filtered = data.filter((item) => {
-                const meta = item?.meta_info && typeof item.meta_info === 'object' ? item.meta_info : {};
-                if (item.projectId && String(projectId || '').trim() && item.projectId !== String(projectId || '').trim()) {
-                    // return false; 
-                }
-                if (String(meta?.entity_id || '').trim() !== stableEntityId) return false;
-                if (String(item.type).toLowerCase() !== 'image') return false;
-                return true;
-            }).map((item) => {
+            const pageSize = 120;
+            const maxPages = 8;
+            const matched = [];
+
+            for (let page = 0; page < maxPages; page += 1) {
+                const data = await fetchAssets({
+                    type: 'image',
+                    entity_id: stableEntityId,
+                    project_id: stableProjectId || undefined,
+                    skip: page * pageSize,
+                    limit: pageSize,
+                });
+                const rows = Array.isArray(data) ? data : [];
+                if (!rows.length) break;
+
+                const pageMatched = rows.filter((item) => {
+                    const meta = item?.meta_info && typeof item.meta_info === 'object' ? item.meta_info : {};
+                    const itemEntityId = String(
+                        meta?.entity_id
+                        || meta?.ownerEntityId
+                        || item?.entity_id
+                        || item?.ownerEntityId
+                        || ''
+                    ).trim();
+                    if (itemEntityId !== stableEntityId) return false;
+
+                    if (stableProjectId) {
+                        const itemProjectId = String(
+                            meta?.project_id
+                            || meta?.ownerScopeId
+                            || item?.project_id
+                            || item?.projectId
+                            || ''
+                        ).trim();
+                        if (itemProjectId && itemProjectId !== stableProjectId) return false;
+                    }
+
+                    return String(item.type).toLowerCase() === 'image';
+                });
+
+                matched.push(...pageMatched);
+                if (matched.length >= 24 || rows.length < pageSize) break;
+            }
+
+            const filtered = matched.map((item) => {
                 const meta = item?.meta_info && typeof item.meta_info === 'object' ? item.meta_info : {};
                 return {
                     id: item.id,
@@ -5225,7 +5261,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                                 disabled={!canPreview}
                                                                                 className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
                                                                             >
-                                                                                <ExternalLink size={12} />
+                                                                                <LinkIcon size={12} />
                                                                                 {t('查看', 'Open')}
                                                                             </button>
                                                                             <button
