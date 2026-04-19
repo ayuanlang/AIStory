@@ -8104,16 +8104,28 @@ def create_project(
     project.global_info = _ensure_project_generation_defaults(project.global_info)
         
     db_project = Project(title=project.title, global_info=project.global_info, owner_id=current_user.id) 
-    db.add(db_project)
-    db.flush()
-    _sync_project_managed_shares(
-        db,
-        db_project,
-        current_user,
-        share_users=project.share_users,
-        reviewer_users=project.reviewer_users,
-    )
-    db.commit()
+    try:
+        db.add(db_project)
+        db.flush()
+        _sync_project_managed_shares(
+            db,
+            db_project,
+            current_user,
+            share_users=project.share_users,
+            reviewer_users=project.reviewer_users,
+        )
+        db.commit()
+    except SQLAlchemyTimeoutError:
+        db.rollback()
+        logger.warning(
+            "create_project DB pool timeout | user_id=%s title=%s",
+            current_user.id,
+            (project.title or "")[:80],
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="数据库连接繁忙，请稍后重试",
+        )
     db.refresh(db_project)
     # New project has no images
     db_project.cover_image = None

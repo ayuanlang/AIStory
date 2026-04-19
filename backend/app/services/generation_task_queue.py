@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.db.session import SessionLocal, engine
 
 logger = logging.getLogger(__name__)
@@ -22,9 +23,22 @@ _QUEUE_STARTED = False
 _QUEUE_STOP_EVENT = threading.Event()
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "900") or 900.0))
-_QUEUE_WORKER_THREADS = max(1, int(os.getenv("GENERATION_QUEUE_WORKER_THREADS", "30") or 30))
+_POOL_CAPACITY = max(1, int(settings.DB_POOL_SIZE or 0) + int(settings.DB_MAX_OVERFLOW or 0))
+_DEFAULT_WORKER_THREADS = min(8, max(2, int(settings.DB_POOL_SIZE or 2)))
+_REQUESTED_WORKER_THREADS = max(1, int(os.getenv("GENERATION_QUEUE_WORKER_THREADS", str(_DEFAULT_WORKER_THREADS)) or _DEFAULT_WORKER_THREADS))
+# Leave headroom for API requests and auth flows by capping queue workers.
+_WORKER_THREAD_CAP = max(1, _POOL_CAPACITY // 2)
+_QUEUE_WORKER_THREADS = max(1, min(_REQUESTED_WORKER_THREADS, _WORKER_THREAD_CAP))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None
+
+if _REQUESTED_WORKER_THREADS > _QUEUE_WORKER_THREADS:
+    logger.warning(
+        "generation queue workers capped to avoid DB pool starvation | requested=%s capped=%s pool_capacity=%s",
+        _REQUESTED_WORKER_THREADS,
+        _QUEUE_WORKER_THREADS,
+        _POOL_CAPACITY,
+    )
 
 
 def _release_queue_leader_lock() -> None:

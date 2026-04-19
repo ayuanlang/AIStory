@@ -12,6 +12,17 @@ from app.core.config import settings
 _logger = logging.getLogger(__name__)
 
 is_sqlite = "sqlite" in settings.DATABASE_URL
+_is_postgres = "postgresql" in settings.DATABASE_URL
+
+_effective_pool_size = int(settings.DB_POOL_SIZE or 0)
+_effective_max_overflow = int(settings.DB_MAX_OVERFLOW or 0)
+if not is_sqlite and _is_postgres:
+    # Guard against legacy low pool values that frequently cause QueuePool timeouts
+    # under moderate concurrency on Render.
+    if _effective_pool_size < 8:
+        _effective_pool_size = 8
+    if _effective_max_overflow < 16:
+        _effective_max_overflow = 16
 
 engine_kwargs = {
     "connect_args": {"check_same_thread": False, "timeout": 30} if is_sqlite else {},
@@ -29,8 +40,8 @@ if not is_sqlite:
         })
     engine_kwargs.update({
         "pool_pre_ping": settings.DB_POOL_PRE_PING,
-        "pool_size": settings.DB_POOL_SIZE,
-        "max_overflow": settings.DB_MAX_OVERFLOW,
+        "pool_size": _effective_pool_size,
+        "max_overflow": _effective_max_overflow,
         "pool_timeout": settings.DB_POOL_TIMEOUT,
         "pool_recycle": settings.DB_POOL_RECYCLE,
         "pool_use_lifo": True,
@@ -109,17 +120,25 @@ engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
 if not is_sqlite:
     _logger.info(
         "DB pool configured | size=%s overflow=%s timeout=%ss recycle=%ss pre_ping=%s lifo=%s",
-        settings.DB_POOL_SIZE,
-        settings.DB_MAX_OVERFLOW,
+        _effective_pool_size,
+        _effective_max_overflow,
         settings.DB_POOL_TIMEOUT,
         settings.DB_POOL_RECYCLE,
         settings.DB_POOL_PRE_PING,
         True,
     )
-    if int(settings.DB_POOL_SIZE or 0) <= 5:
+    if _effective_pool_size != int(settings.DB_POOL_SIZE or 0) or _effective_max_overflow != int(settings.DB_MAX_OVERFLOW or 0):
+        _logger.warning(
+            "DB pool values auto-adjusted for stability | configured_size=%s configured_overflow=%s effective_size=%s effective_overflow=%s",
+            settings.DB_POOL_SIZE,
+            settings.DB_MAX_OVERFLOW,
+            _effective_pool_size,
+            _effective_max_overflow,
+        )
+    if _effective_pool_size <= 5:
         _logger.warning(
             "DB_POOL_SIZE=%s is low for concurrent traffic and may cause QueuePool timeouts",
-            settings.DB_POOL_SIZE,
+            _effective_pool_size,
         )
 
 _pool_stats_lock = threading.Lock()
@@ -155,15 +174,15 @@ def _on_pool_checkout(dbapi_con, con_record, con_proxy):
         _pool_checked_out += 1
         checked_out = _pool_checked_out
 
-    high_watermark = int(settings.DB_POOL_SIZE or 0) + int(settings.DB_MAX_OVERFLOW or 0) - 2
+    high_watermark = _effective_pool_size + _effective_max_overflow - 2
     if high_watermark > 0 and checked_out >= high_watermark and now - _pool_last_warn_at >= 10:
         _pool_last_warn_at = now
         _logger.warning(
             "DB pool near capacity | checked_out=%s threshold=%s size=%s overflow=%s",
             checked_out,
             high_watermark,
-            settings.DB_POOL_SIZE,
-            settings.DB_MAX_OVERFLOW,
+            _effective_pool_size,
+            _effective_max_overflow,
         )
 
 
