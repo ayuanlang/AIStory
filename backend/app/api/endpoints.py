@@ -29084,8 +29084,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             )
                             start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
                             auto_matches = []
-                            if shot.associated_entities:
-                                auto_matches.extend(_collect_associated_entities_refs(shot.associated_entities, entity_lookup))
                             auto_matches.extend([x for x in _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup) if x not in auto_matches])
                             start_refs: List[str] = []
                             if isinstance(tech.get("ref_image_urls"), list):
@@ -29183,8 +29181,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             if isinstance(tech.get("end_ref_image_urls"), list):
                                 refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
                             else:
-                                if shot.associated_entities:
-                                    refs.extend(_collect_associated_entities_refs(shot.associated_entities, entity_lookup))
                                 refs.extend([x for x in _collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup) if x not in refs])
 
                             deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
