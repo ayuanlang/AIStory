@@ -25613,6 +25613,7 @@ async def _run_generate_video(
             req.ref_image_url,
             req.last_frame_url,
             req.keyframes,
+            req.ref_video_urls,
         )
 
         try:
@@ -28301,10 +28302,35 @@ def _append_video_api_ref_mapping(
     ref_image_url: Optional[Union[str, List[str]]],
     last_frame_url: Optional[str],
     keyframes: Optional[List[str]] = None,
+    reference_video_urls: Optional[List[str]] = None,
 ) -> str:
     text = str(prompt or "").strip()
+    if not text:
+        return text
+
+    # Remove legacy inline URL-index tags injected into prompt anchors.
+    text = re.sub(
+        r"\(\s*ref_image_url\s*:\s*#\d+\s*\)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\|\s*ref_image_url\s*:\s*#\d+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"^\s*API\s+ref\s+mapping\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
-    if not text or not ordered_refs:
+    if not ordered_refs and not isinstance(reference_video_urls, list):
         return text
 
     index_map: Dict[str, int] = {}
@@ -28312,7 +28338,7 @@ def _append_video_api_ref_mapping(
         if url not in index_map:
             index_map[url] = idx
 
-    parts: List[str] = []
+    image_slots: List[str] = []
     if isinstance(ref_image_url, list):
         start_urls = [str(x).strip() for x in ref_image_url if str(x).strip()]
     else:
@@ -28321,25 +28347,63 @@ def _append_video_api_ref_mapping(
     end_url = str(last_frame_url or "").strip()
     keyframe_urls = [str(x).strip() for x in (keyframes or []) if str(x).strip()]
 
-    start_indices = [index_map[u] for u in start_urls if u in index_map]
-    end_idx = index_map.get(end_url)
-    keyframe_indices = [index_map[u] for u in keyframe_urls if u in index_map]
+    for u in start_urls:
+        idx = index_map.get(u)
+        if idx is not None:
+            image_slots.append(f"图{idx}")
+    if end_url:
+        idx = index_map.get(end_url)
+        if idx is not None:
+            image_slots.append(f"图{idx}")
+    for u in keyframe_urls:
+        idx = index_map.get(u)
+        if idx is not None:
+            image_slots.append(f"图{idx}")
 
-    if start_indices:
-        if len(start_indices) == 1:
-            parts.append(f"ref_image_url=#{start_indices[0]}")
-        else:
-            parts.append("ref_image_url=[" + ",".join(f"#{i}" for i in start_indices) + "]")
-    if end_idx:
-        parts.append(f"last_frame_url=#{end_idx}")
-    if keyframe_indices:
-        parts.append("keyframes=[" + ",".join(f"#{i}" for i in keyframe_indices) + "]")
-
-    if not parts:
+    image_slots = [x for x in dict.fromkeys(image_slots) if x]
+    video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
+    media_slots = image_slots + video_slots
+    if not media_slots:
         return text
 
-    mapping_line = "API ref mapping: " + "; ".join(parts)
-    if mapping_line.lower() in text.lower():
+    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    entity_tokens: List[str] = []
+    seen_entities: set[str] = set()
+    for m in regex.finditer(text):
+        raw_name = m.group(1) or m.group(2) or ""
+        normalized = _normalize_entity_anchor_token(raw_name)
+        if not normalized or normalized in seen_entities:
+            continue
+        seen_entities.add(normalized)
+        entity_name = str(raw_name or "").strip()
+        if not entity_name:
+            continue
+        token_text = str(m.group(0) or "")
+        token_upper = token_text.upper()
+        if token_upper.startswith("CHAR"):
+            display = f"CHAR:[@{entity_name}]"
+        elif token_upper.startswith("PROP"):
+            display = f"PROP:[{entity_name}]"
+        elif token_upper.startswith("ENV"):
+            display = f"ENV:[{entity_name}]"
+        else:
+            display = f"[{entity_name}]"
+        entity_tokens.append(display)
+
+    if not entity_tokens:
+        return text
+
+    pairs: List[str] = []
+    for idx, entity_token in enumerate(entity_tokens):
+        if idx >= len(media_slots):
+            break
+        pairs.append(f"{entity_token}->{media_slots[idx]}")
+
+    if not pairs:
+        return text
+
+    mapping_line = "实体参考映射: " + "; ".join(pairs)
+    if mapping_line in text:
         return text
     return f"{text}\n\n{mapping_line}"
 
@@ -28526,6 +28590,22 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             None,
         )
 
+        video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
+        video_prompt_cn = ""
+        if video_prompt_cn_raw:
+            video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, entity_lookup)
+            video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, entity_lookup, global_style, video_cn_ref_index_map)
+            video_prompt_cn = _append_video_api_ref_mapping(
+                video_prompt_cn,
+                ordered_video_refs,
+                normalized_refs,
+                normalized_last_frame_url,
+                None,
+            )
+            tech["video_prompt_cn"] = video_prompt_cn
+            item_db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
+            item_db.commit()
+
         logger.info(
             "[shot_media_batch] video ref resolution | shot_id=%s shot_label=%s video_mode=%s refs=%s last_frame=%s auto_entity_refs=%s fallback_to_refs=%s",
             shot.id,
@@ -28543,8 +28623,15 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         except Exception:
             duration_val = 5.0
 
+        multi_prompt_payload = None
+        if video_prompt_cn:
+            multi_prompt_payload = [
+                {"prompt": video_prompt, "type": "en"},
+                {"prompt": video_prompt_cn, "type": "zh"}
+            ]
         video_req = VideoGenerationRequest(
             prompt=video_prompt,
+            multi_prompt=multi_prompt_payload,
             ref_image_url=normalized_refs,
             last_frame_url=normalized_last_frame_url,
             ref_mode=video_mode,
@@ -29205,6 +29292,22 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             None,
                         )
 
+                        video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
+                        video_prompt_cn = ""
+                        if video_prompt_cn_raw:
+                            video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, entity_lookup)
+                            video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, entity_lookup, global_style, video_cn_ref_index_map)
+                            video_prompt_cn = _append_video_api_ref_mapping(
+                                video_prompt_cn,
+                                ordered_video_refs,
+                                normalized_refs,
+                                normalized_last_frame_url,
+                                None,
+                            )
+                            tech["video_prompt_cn"] = video_prompt_cn
+                            db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
+                            db.commit()
+
                         logger.info(
                             "[shot_media_batch] video ref resolution | shot_id=%s shot_label=%s video_mode=%s refs=%s last_frame=%s auto_entity_refs=%s fallback_to_refs=%s",
                             shot.id,
@@ -29222,8 +29325,15 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         except Exception:
                             duration_val = 5.0
 
+                        multi_prompt_payload = None
+                        if video_prompt_cn:
+                            multi_prompt_payload = [
+                                {"prompt": video_prompt, "type": "en"},
+                                {"prompt": video_prompt_cn, "type": "zh"}
+                            ]
                         video_req = VideoGenerationRequest(
                             prompt=video_prompt,
+                            multi_prompt=multi_prompt_payload,
                             ref_image_url=normalized_refs,
                             last_frame_url=normalized_last_frame_url,
                             ref_mode=video_mode,
