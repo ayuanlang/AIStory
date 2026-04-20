@@ -28103,7 +28103,14 @@ def _normalize_video_ref_mode(value: Any) -> str:
 
 def _dedupe_media_ref_urls(values: Optional[List[str]]) -> List[str]:
     refs = [str(x).strip() for x in (values or []) if str(x).strip()]
-    return [x for x in dict.fromkeys(refs) if x]
+    unique_refs = []
+    seen = set()
+    for x in refs:
+        base = x.split("?")[0]
+        if base not in seen:
+            seen.add(base)
+            unique_refs.append(x)
+    return unique_refs
 
 
 def _system_api_supports_last_frame_flag(provider: Any, model: Any) -> Optional[bool]:
@@ -28355,6 +28362,9 @@ def _append_video_api_ref_mapping(
     for idx, url in enumerate(ordered_refs, start=1):
         if url not in index_map:
             index_map[url] = idx
+        base_url = url.split("?")[0]
+        if base_url not in index_map:
+            index_map[base_url] = idx
 
     image_slots: List[str] = []
     if isinstance(ref_image_url, list):
@@ -28405,7 +28415,9 @@ def _append_video_api_ref_mapping(
                 continue
 
             image_url = str(row.get("image_url") or "").strip()
-            if not image_url or image_url not in index_map:
+            image_base = image_url.split("?")[0]
+            mapped_idx = index_map.get(image_url) or index_map.get(image_base)
+            if not image_url or mapped_idx is None:
                 continue
 
             has_ascii = bool(re.search(r"[a-z0-9]", norm_key, flags=re.IGNORECASE))
@@ -28422,14 +28434,9 @@ def _append_video_api_ref_mapping(
                 # Check if name already has @, if so don't add another one
                 raw_name = str(row.get('name') or '')
                 char_name = raw_name[1:] if raw_name.startswith('@') else raw_name
-                
+
                 display = f"{display_type}:[@{char_name}]" if display_type == "CHAR" else f"{display_type}:[{char_name}]"
-                pairs.append((index_map[image_url], f"{display}->图{index_map[image_url]}"))
-
-    if not pairs:
-        return text
-
-    # Sort pairs by image index (图1, 图2, 等等) so it perfectly aligns sequentially
+                pairs.append((mapped_idx, f"{display}参考图{mapped_idx}"))
     pairs.sort(key=lambda x: x[0])
     ordered_pairs_strings = [p[1] for p in pairs]
 

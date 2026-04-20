@@ -6460,14 +6460,33 @@ Negative prompt constraints: {neg_prompt}"""
                 return {"error": "RunningHub image-to-video requires a reference image input", "submit_failed": True}
             
             primary_field = _runninghub_video_primary_image_field()
-            payload[primary_field] = first_image
             
-            if "/openapi/v2/rhart-video" not in endpoint_lower:
-                if primary_field != "imageUrls":
-                    payload["imageUrls"] = image_refs[:3]
-                if primary_field != "firstImageUrl":
-                    payload["firstImageUrl"] = first_image
-            
+            if ref_mode == "entity_refs":
+                if "/openapi/v2/rhart-video" in endpoint_lower and "/multimodal-video" not in endpoint_lower:
+                    if "sparkvideo" in submit_url.lower():
+                        submit_url = submit_url.replace("/image-to-video", "/multimodal-video")
+                        endpoint_lower = submit_url.lower()
+
+                unique_refs = []
+                seen = set()
+                for x in image_refs:
+                    base = x.split('?')[0]
+                    if base not in seen:
+                        seen.add(base)
+                        unique_refs.append(x)
+                
+                payload["imageUrls"] = unique_refs
+                # 实体参考图模式下，如果是多模态接口不传单图属性（如 firstFrameUrl 等）避免报错
+                if primary_field not in ["imageUrls"] and "/multimodal-video" not in endpoint_lower:
+                    payload[primary_field] = first_image
+            else:
+                payload[primary_field] = first_image
+
+                if "/openapi/v2/rhart-video" not in endpoint_lower:
+                    if primary_field != "imageUrls":
+                        payload["imageUrls"] = image_refs[:3]
+                    if primary_field != "firstImageUrl":
+                        payload["firstImageUrl"] = first_image
             if resolved_last_frame and ("/openapi/v2/rhart-video/sparkvideo" in endpoint_lower):
                 payload["lastFrameUrl"] = resolved_last_frame
             elif resolved_last_frame and "/rhart-video-" in endpoint_lower:
