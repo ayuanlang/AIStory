@@ -25608,6 +25608,8 @@ async def _run_generate_video(
             ref_names,
         )
         entity_lookup = _build_project_entity_lookup(db, req.project_id) if hasattr(req, 'project_id') and req.project_id else {}
+        
+        # Only inject the mapping prompt for entity_refs mode
         prompt_text = _append_video_api_ref_mapping(
             prompt_text,
             flat_refs,
@@ -25615,7 +25617,7 @@ async def _run_generate_video(
             req.last_frame_url,
             req.keyframes,
             req.ref_video_urls,
-            entity_lookup=entity_lookup,
+            entity_lookup=entity_lookup if is_reference_image_mode else None,
         )
 
         try:
@@ -28050,6 +28052,7 @@ def _collect_prompt_entity_ref_images_relaxed(prompt: str, entity_lookup: Dict[s
         return []
 
     refs: List[str] = []
+
     allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
 
     refs.extend(_collect_prompt_entity_ref_images(text, entity_lookup))
@@ -28330,6 +28333,18 @@ def _append_video_api_ref_mapping(
         text,
         flags=re.IGNORECASE | re.MULTILINE,
     )
+    text = re.sub(
+        r"^\s*实体参考映射\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(
+        r"^\s*实体参考图映射\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
@@ -28381,6 +28396,9 @@ def _append_video_api_ref_mapping(
             norm_key = str(key or "").strip()
             if not norm_key: continue
             
+            if norm_key.lower() in {"global style", "camera movement", "action beat chain", "dynamic atmosphere", "lighting style"}:
+                continue
+
             allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
             entity_type = str(row.get("entity_type") or "").strip().lower()
             if entity_type and entity_type not in allowed_types:
@@ -28400,25 +28418,22 @@ def _append_video_api_ref_mapping(
             if matched and image_url not in seen_urls:
                 seen_urls.add(image_url)
                 display_type = "CHAR" if entity_type in {"subject", "character", "char"} else ("ENV" if "env" in entity_type else "PROP")
-                display = f"{display_type}:[@{row.get('name')}]" if display_type == "CHAR" else f"{display_type}:[{row.get('name')}]"
-                pairs.append(f"{display}->图{index_map[image_url]}")
-
-    # Fallback to pure bracket Regex for ones that might not be in lookup
-    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
-    for m in regex.finditer(text):
-        raw_name = m.group(1) or m.group(2) or ""
-        normalized = _normalize_entity_anchor_token(raw_name)
-        if not normalized: continue
-        
-        # If it was matched, verify if we can assign an image?
-        # But if it wasn't in entity_lookup with a valid URL, what media_slot should we give it?
-        # Old code blindly mapped them 1-to-1 with media_slots.
-        pass
+                
+                # Check if name already has @, if so don't add another one
+                raw_name = str(row.get('name') or '')
+                char_name = raw_name[1:] if raw_name.startswith('@') else raw_name
+                
+                display = f"{display_type}:[@{char_name}]" if display_type == "CHAR" else f"{display_type}:[{char_name}]"
+                pairs.append((index_map[image_url], f"{display}->图{index_map[image_url]}"))
 
     if not pairs:
         return text
 
-    mapping_line = "实体参考图映射: " + "; ".join(pairs)
+    # Sort pairs by image index (图1, 图2, 等等) so it perfectly aligns sequentially
+    pairs.sort(key=lambda x: x[0])
+    ordered_pairs_strings = [p[1] for p in pairs]
+
+    mapping_line = "实体参考图映射: " + "; ".join(ordered_pairs_strings)
     if mapping_line in text:
         return text
     return f"{text}\n\n{mapping_line}"

@@ -1,4 +1,29 @@
-async def _handle_zlhub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+import re
+import uuid
+import json
+import asyncio
+import logging
+import requests
+import urllib.parse
+import base64
+from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger(__name__)
+
+def _debug_log(msg):
+    logger.debug(msg)
+
+def _strip_base64_from_log(payload):
+    try:
+        s = str(payload)
+        if len(s) > 200:
+            return s[:200] + '... [truncated]'
+        return s
+    except Exception:
+        return ""
+
+class ZlhubMixin:
+    async def _handle_zlhub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         if gen_type != "video":
             return {"error": "zlhub generation type not supported yet", "submit_failed": True}
 

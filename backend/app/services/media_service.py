@@ -3049,6 +3049,7 @@ Negative prompt constraints: {neg_prompt}"""
         last_frame_url: Optional[str] = None,
         duration: int = 5,
         keyframes: Optional[List[str]] = None,
+        ref_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         runtime_config = dict(api_config or {})
         runtime_inner_cfg = self._safe_json_dict(runtime_config.get("config"))
@@ -3254,7 +3255,7 @@ Negative prompt constraints: {neg_prompt}"""
                 if effective_provider == "vidu":
                     return await self._handle_vidu_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, keyframes=effective_keyframes, negative_prompt=negative_prompt)
                 if effective_provider == "runninghub":
-                    return await self._handle_runninghub_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
+                    return await self._handle_runninghub_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt, ref_mode=ref_mode)
                 if effective_provider == "apiyi":
                     return await self._handle_apiyi_generation(
                         "video",
@@ -3287,6 +3288,7 @@ Negative prompt constraints: {neg_prompt}"""
                         duration=effective_duration,
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
+                        ref_mode=ref_mode,
                     )
 
                 _debug_log(f"Unsupported Video provider: {effective_provider}", "warning")
@@ -3387,6 +3389,7 @@ Negative prompt constraints: {neg_prompt}"""
         last_frame_url: Optional[str] = None,
         duration: int = 5,
         keyframes: Optional[List[str]] = None,
+        provider_options: Optional[Dict[str, Any]] = None,
         requested_model: Optional[str] = None,
         explicit_selection: bool = False,
         allow_priority_fallback_when_explicit: bool = False,
@@ -3712,6 +3715,8 @@ Negative prompt constraints: {neg_prompt}"""
                 selected_retry_price_group or "-",
             )
 
+            ref_mode = provider_options.get("ref_mode") if isinstance(provider_options, dict) else None
+            
             result = await self._execute_generation_by_provider(
                 category=category,
                 provider=selected_provider,
@@ -3726,6 +3731,7 @@ Negative prompt constraints: {neg_prompt}"""
                 last_frame_url=last_frame_url,
                 duration=duration,
                 keyframes=keyframes,
+                ref_mode=ref_mode,
             )
 
             if result and not result.get("error"):
@@ -4500,6 +4506,7 @@ Negative prompt constraints: {neg_prompt}"""
             last_frame_url=last_frame_url,
             duration=duration,
             keyframes=keyframes,
+            provider_options=provider_options,
             requested_model=(llm_config or {}).get("model"),
             explicit_selection=explicit_selection_for_video,
             modality="image-to-video" if reference_image_url else "text-to-video",
@@ -5939,7 +5946,7 @@ Negative prompt constraints: {neg_prompt}"""
 
         return None
 
-    async def _handle_runninghub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+    async def _handle_runninghub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None, ref_mode: Optional[str] = None):
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = str(config.get("api_key") or "").strip()
         if not api_key:
@@ -6236,6 +6243,8 @@ Negative prompt constraints: {neg_prompt}"""
             "endpoint": endpoint,
         }
 
+        logger.info("RunningHub payload building... Ref Mode: %s | Endpoint: %s | Images: %s", ref_mode, endpoint, len(image_refs))
+
         if gen_type == "image":
             payload: Dict[str, Any] = {"prompt": prompt}
 
@@ -6488,6 +6497,12 @@ Negative prompt constraints: {neg_prompt}"""
             "aspectRatio": payload.get("aspectRatio"),
             "size": payload.get("size"),
         })
+
+        print(f"\n========== RUNNINGHUB VIDEO PAYLOAD DEBUG ==========")
+        print(f"ref_mode: {ref_mode}")
+        print(f"endpoint: {endpoint}")
+        print(f"payload: {payload}")
+        print(f"======================================================\n")
 
         _debug_log(f"[RunningHub] Video Payload: {_format_payload_for_log(payload)}")
         return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHub", extra_metadata=base_metadata)
@@ -7516,7 +7531,7 @@ Negative prompt constraints: {neg_prompt}"""
             return first_item
         return batch_result
 
-    async def _handle_zlhub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+    async def _handle_zlhub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None, ref_mode: Optional[str] = None):
         if gen_type != "video":
             return {"error": "zlhub generation type not supported yet", "submit_failed": True}
 
