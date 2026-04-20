@@ -1,4 +1,4 @@
-
+﻿
 from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query, Response
 from fastapi.responses import StreamingResponse
 import logging
@@ -360,7 +360,7 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
             "Detail",
             "Background: white",
         ],
-        "cn_required": ["六视图", "正面", "背面", "侧面", "四分之三", "特写", "细节", "背景", "纯白"],
+        "cn_required": ["鍏鍥?, "姝ｉ潰", "鑳岄潰", "渚ч潰", "鍥涘垎涔嬩笁", "鐗瑰啓", "缁嗚妭", "鑳屾櫙", "绾櫧"],
     },
     "props": {
         "en_required": [
@@ -376,11 +376,11 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
             "Background: white",
             "Strictly Object Only",
         ],
-        "cn_required": ["道具", "六视图", "正面", "背面", "侧面", "四分之三", "特写", "细节", "仅物体", "背景", "纯白"],
+        "cn_required": ["閬撳叿", "鍏鍥?, "姝ｉ潰", "鑳岄潰", "渚ч潰", "鍥涘垎涔嬩笁", "鐗瑰啓", "缁嗚妭", "浠呯墿浣?, "鑳屾櫙", "绾櫧"],
     },
     "environments": {
         "en_required": ["[Global Style] Viewpoint at", "No people or characters in scene"],
-        "cn_required": ["环境", "无人物", "背景"],
+        "cn_required": ["鐜", "鏃犱汉鐗?, "鑳屾櫙"],
     },
 }
 
@@ -464,7 +464,7 @@ def _prune_recent_analyze_scene_tasks_locked(now_ts: float) -> None:
     for key in stale_keys:
         _ANALYZE_SCENE_RECENT_TASKS.pop(key, None)
 
-# ── Generic async-task polling endpoint ──────────────────────────────────
+# 鈹€鈹€ Generic async-task polling endpoint 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 @router.get("/tasks/{task_id}")
 def poll_task(task_id: str, current_user: User = Depends(get_current_user)):
     info = _get_task_status(task_id, user_id=current_user.id)
@@ -542,7 +542,7 @@ SHOT_MEDIA_BATCH_THREADS_LOCK = threading.Lock()
 
 _GENERATION_JOB_POOL_CACHE_TTL_SECONDS = max(1.0, float(os.getenv("GENERATION_JOB_POOL_CACHE_TTL_SECONDS", "3") or 3.0))
 _GENERATION_JOB_POOL_CACHE_MAX_ITEMS = max(32, int(os.getenv("GENERATION_JOB_POOL_CACHE_MAX_ITEMS", "256") or 256))
-_GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_STALE_DELETE_SECONDS", "172800") or 172800))
+_GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_STALE_DELETE_SECONDS", "3600") or 3600))
 _GENERATION_JOB_POOL_CACHE_LOCK = threading.Lock()
 _GENERATION_JOB_POOL_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -600,12 +600,7 @@ def _submit_generation_background_task(
     return enqueue_generation_task(job_id=job_id, kind=kind, user_id=user_id, payload=payload)
 
 
-async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, payload: Dict[str, Any]) -> None:
-    """Async processor - does NOT block while awaiting API responses.
-    
-    KEY CHANGE: Now uses await instead of asyncio.run()
-    This allows the event loop to handle other tasks while waiting for generation.
-    """
+def _process_generation_queue_task(kind: str, job_id: str, user_id: int, payload: Dict[str, Any]) -> None:
     safe_kind = str(kind or "").strip().lower()
     req_payload = dict(payload or {})
     if safe_kind == "montage":
@@ -630,12 +625,14 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        await _run_generate_image_job(
-            job_id,
-            int(user_id),
-            req_payload,
-            provider_callback_ticket=provider_callback_ticket,
-            provider_callback_url=provider_callback_url,
+        asyncio.run(
+            _run_generate_image_job(
+                job_id,
+                int(user_id),
+                req_payload,
+                provider_callback_ticket=provider_callback_ticket,
+                provider_callback_url=provider_callback_url,
+            )
         )
         return
     if safe_kind == "video":
@@ -645,12 +642,14 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        await _run_generate_video_job(
-            job_id,
-            int(user_id),
-            req_payload,
-            provider_callback_ticket=provider_callback_ticket,
-            provider_callback_url=provider_callback_url,
+        asyncio.run(
+            _run_generate_video_job(
+                job_id,
+                int(user_id),
+                req_payload,
+                provider_callback_ticket=provider_callback_ticket,
+                provider_callback_url=provider_callback_url,
+            )
         )
         return
     raise ValueError(f"Unsupported generation queue task kind: {kind}")
@@ -2001,10 +2000,10 @@ def _build_ref_display_names(value: Any, limit: int = 20) -> List[str]:
 
 
 _PROMO_TYPE_HINTS = (
-    "宣传",
-    "推广",
-    "营销",
-    "品牌",
+    "瀹ｄ紶",
+    "鎺ㄥ箍",
+    "钀ラ攢",
+    "鍝佺墝",
     "campaign",
     "promotion",
     "promotional",
@@ -3094,9 +3093,9 @@ def _snapshot_image_job_stats() -> Dict[str, Any]:
 def _vendor_failed_message(provider: Optional[str], reason: Any) -> str:
     vendor = str(provider or "").strip() or "unknown"
     detail = str(reason or "unknown error").strip()
-    if "供应商调用失败" in detail:
+    if "渚涘簲鍟嗚皟鐢ㄥけ璐? in detail:
         return detail
-    return f"{vendor}供应商调用失败: {detail}"
+    return f"{vendor}渚涘簲鍟嗚皟鐢ㄥけ璐? {detail}"
 
 
 def _build_scene_analysis_blocking_failure_detail(
@@ -3108,15 +3107,15 @@ def _build_scene_analysis_blocking_failure_detail(
     reasons_cn: List[str] = []
 
     if "ANALYSIS_STRUCTURE_INCOMPLETE" in codes:
-        reasons_cn.append("结果缺少必要结构段，无法形成完整的场景分析")
+        reasons_cn.append("缁撴灉缂哄皯蹇呰缁撴瀯娈碉紝鏃犳硶褰㈡垚瀹屾暣鐨勫満鏅垎鏋?)
     if "ANALYSIS_SUBJECTS_UNVERIFIED" in codes:
-        reasons_cn.append("角色/环境/道具的一致性校验未完成，当前结果不可靠")
+        reasons_cn.append("瑙掕壊/鐜/閬撳叿鐨勪竴鑷存€ф牎楠屾湭瀹屾垚锛屽綋鍓嶇粨鏋滀笉鍙潬")
     if "ANALYSIS_SUBJECTS_INCOMPLETE" in codes:
-        reasons_cn.append("角色/环境/道具覆盖不完整，当前结果不能继续使用")
+        reasons_cn.append("瑙掕壊/鐜/閬撳叿瑕嗙洊涓嶅畬鏁达紝褰撳墠缁撴灉涓嶈兘缁х画浣跨敤")
     if "ANALYSIS_OUTPUT_TRUNCATED" in codes:
-        reasons_cn.append("返回内容疑似被截断，结果不完整")
+        reasons_cn.append("杩斿洖鍐呭鐤戜技琚埅鏂紝缁撴灉涓嶅畬鏁?)
     if "ANALYSIS_JSON_INVALID" in codes:
-        reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
+        reasons_cn.append("杩斿洖鍐呭鐨勭粨鏋勭墖娈垫崯鍧忥紝绯荤粺鏃犳硶瀹夊叏瑙ｆ瀽")
 
     raw_reasons: List[str] = []
     raw_reasons.extend([str(x or "").strip() for x in (integrity_warnings or []) if str(x or "").strip()])
@@ -3125,15 +3124,15 @@ def _build_scene_analysis_blocking_failure_detail(
 
     detail_parts: List[str] = []
     if reasons_cn:
-        detail_parts.append("；".join(reasons_cn[:3]))
+        detail_parts.append("锛?.join(reasons_cn[:3]))
 
     if raw_reasons:
-        detail_parts.append("技术明细：" + "；".join(raw_reasons[:3]))
+        detail_parts.append("鎶€鏈槑缁嗭細" + "锛?.join(raw_reasons[:3]))
 
-    body = "；".join([part for part in detail_parts if part])
+    body = "锛?.join([part for part in detail_parts if part])
     if body:
-        return "场景分析结果不可用：" + body + "。请直接重新执行剧本分析。"
-    return "场景分析结果不可用：返回内容结构不完整或校验未通过。请直接重新执行剧本分析。"
+        return "鍦烘櫙鍒嗘瀽缁撴灉涓嶅彲鐢細" + body + "銆傝鐩存帴閲嶆柊鎵ц鍓ф湰鍒嗘瀽銆?
+    return "鍦烘櫙鍒嗘瀽缁撴灉涓嶅彲鐢細杩斿洖鍐呭缁撴瀯涓嶅畬鏁存垨鏍￠獙鏈€氳繃銆傝鐩存帴閲嶆柊鎵ц鍓ф湰鍒嗘瀽銆?
 
 
 @router.post("/fix-db-schema")
@@ -3401,11 +3400,11 @@ def _map_project_creativity_to_temperature(creativity_value: Any) -> Optional[fl
 
     normalized = raw.lower()
 
-    if "遵守剧本优先" in raw or "strict to script" in normalized:
+    if "閬靛畧鍓ф湰浼樺厛" in raw or "strict to script" in normalized:
         return 0.35
-    if "增加想象力" in raw or "increase imagination" in normalized:
+    if "澧炲姞鎯宠薄鍔? in raw or "increase imagination" in normalized:
         return 0.95
-    if "正常" in raw or "normal" in normalized:
+    if "姝ｅ父" in raw or "normal" in normalized:
         return 0.7
 
     return None
@@ -4757,7 +4756,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             project_language = str(metadata.get("project_language") or "").strip()
             extra_rules: List[str] = []
             if project_language:
-                if any(tag in project_language.lower() for tag in ["zh", "cn", "中文", "chinese"]):
+                if any(tag in project_language.lower() for tag in ["zh", "cn", "涓枃", "chinese"]):
                     extra_rules.extend([
                         "Subject Naming Rule: For this project, subject 'name' must be Chinese by default. Use English in 'name' only for explicit proper nouns that are canonically English.",
                         "Subject Naming Rule (EN): Use spaces between English words in name_en and keep it as a readable Title Case phrase (e.g., 'Demon Slayer Captain', 'Harbor Office Front Mid Night'). Do NOT use snake_case, kebab-case, camelCase, or concatenated forms like 'DemonSlayerCaptain' or 'HarborOffice_Front_Mid_Night'.",
@@ -4870,13 +4869,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         if isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
             def _normalize_subject_type(raw_type: Any) -> str:
                 t = str(raw_type or "").strip().lower()
-                if t in {"character", "characters", "char", "人物", "角色"}:
+                if t in {"character", "characters", "char", "浜虹墿", "瑙掕壊"}:
                     return "character"
-                if t in {"prop", "props", "道具", "物件"}:
+                if t in {"prop", "props", "閬撳叿", "鐗╀欢"}:
                     return "prop"
-                if t in {"environment", "environments", "env", "场景", "环境"}:
+                if t in {"environment", "environments", "env", "鍦烘櫙", "鐜"}:
                     return "environment"
-                if t in {"cover", "covers", "poster", "posters", "封面", "封面海报"}:
+                if t in {"cover", "covers", "poster", "posters", "灏侀潰", "灏侀潰娴锋姤"}:
                     return "cover"
                 return ""
 
@@ -6885,13 +6884,13 @@ def _resolve_project_share_users(
         canonical_usernames.append(str(user.username or identifier).strip())
 
     if missing and not allow_missing:
-        joined = "、".join([str(item).strip() for item in missing if str(item).strip()])
+        joined = "銆?.join([str(item).strip() for item in missing if str(item).strip()])
         if field_name == "share_users":
-            message = f"以下分享人不存在: {joined}"
+            message = f"浠ヤ笅鍒嗕韩浜轰笉瀛樺湪: {joined}"
         elif field_name == "reviewer_users":
-            message = f"以下审核人不存在: {joined}"
+            message = f"浠ヤ笅瀹℃牳浜轰笉瀛樺湪: {joined}"
         else:
-            message = f"以下用户不存在: {joined}"
+            message = f"浠ヤ笅鐢ㄦ埛涓嶅瓨鍦? {joined}"
         raise HTTPException(status_code=404, detail=message)
 
     return resolved_users, canonical_usernames
@@ -7258,10 +7257,10 @@ def _attach_project_flags(project: Project, current_user: User) -> Project:
     return project
 
 def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
-    # 0. 优先使用名为“封面海报”的subject图片
+    # 0. 浼樺厛浣跨敤鍚嶄负鈥滃皝闈㈡捣鎶モ€濈殑subject鍥剧墖
     poster_entity = db.query(Entity).filter(
         Entity.project_id == project_id,
-        Entity.name == "封面海报",
+        Entity.name == "灏侀潰娴锋姤",
         Entity.image_url != None,
         Entity.image_url != ""
     ).first()
@@ -7318,7 +7317,7 @@ def _extract_md_section(md: str, start_header_regex: str) -> Tuple[str, str]:
 
 
 def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
-    """Parse the '## -1) ...全局风格与硬约束...' section from Global Story DNA markdown.
+    """Parse the '## -1) ...鍏ㄥ眬椋庢牸涓庣‖绾︽潫...' section from Global Story DNA markdown.
 
     Returns a dict suitable for persisting into project.global_info.
     Parsing is best-effort; if the section is missing, returns an empty dict.
@@ -7336,7 +7335,7 @@ def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
     }
 
     current_block: Optional[str] = None
-    kv_re = re.compile(r"^(?P<k>[^:：]+)\s*[:：]\s*(?P<v>.*)$")
+    kv_re = re.compile(r"^(?P<k>[^:锛歖+)\s*[:锛歖\s*(?P<v>.*)$")
 
     for raw_line in section.splitlines():
         line = raw_line.strip()
@@ -7350,13 +7349,13 @@ def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
             continue
 
         # Block switches
-        if "项目基本信息" in item:
+        if "椤圭洰鍩烘湰淇℃伅" in item:
             current_block = "project_overview"
             continue
-        if item.startswith("全局风格"):
+        if item.startswith("鍏ㄥ眬椋庢牸"):
             current_block = "global_constraints"
             continue
-        if item.startswith("禁止") or "Hard No" in item:
+        if item.startswith("绂佹") or "Hard No" in item:
             current_block = "hard_no"
             continue
 
@@ -7387,12 +7386,12 @@ def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
             result["project_overview"][normalized_key] = val
         elif current_block == "global_constraints":
             key_map = {
-                "叙事口吻与节奏": "narration_pacing",
-                "现实度与尺度边界": "realism_and_rating",
-                "对白风格": "dialogue_style",
-                "场景与道具约束": "scene_and_props",
-                "人物数量与制作可行性": "production_scope",
-                "连贯性硬规则": "continuity_rules",
+                "鍙欎簨鍙ｅ惢涓庤妭濂?: "narration_pacing",
+                "鐜板疄搴︿笌灏哄害杈圭晫": "realism_and_rating",
+                "瀵圭櫧椋庢牸": "dialogue_style",
+                "鍦烘櫙涓庨亾鍏风害鏉?: "scene_and_props",
+                "浜虹墿鏁伴噺涓庡埗浣滃彲琛屾€?: "production_scope",
+                "杩炶疮鎬х‖瑙勫垯": "continuity_rules",
             }
             normalized_key = key_map.get(key, key)
             result["global_constraints"][normalized_key] = val
@@ -7424,7 +7423,7 @@ def sanitize_llm_markdown_output(text: str) -> str:
 
     reasoning_prefix_re = re.compile(
         r"^\s*(i will|let me|let's|analysis|reasoning|thought process|"
-        r"分析|思路|推理|下面|我将|我认为|先来)\b",
+        r"鍒嗘瀽|鎬濊矾|鎺ㄧ悊|涓嬮潰|鎴戝皢|鎴戣涓簗鍏堟潵)\b",
         flags=re.IGNORECASE,
     )
     markdown_start_re = re.compile(r"^\s*(#|\||-\s|\d+\.\s|>\s|\*\s)")
@@ -7446,7 +7445,7 @@ def sanitize_llm_markdown_output(text: str) -> str:
             break
     if first_md_index is not None and first_md_index > 0:
         preface = "\n".join(lines[:first_md_index]).lower()
-        if any(token in preface for token in ["analysis", "reasoning", "推理", "思路", "我将", "我认为"]):
+        if any(token in preface for token in ["analysis", "reasoning", "鎺ㄧ悊", "鎬濊矾", "鎴戝皢", "鎴戣涓?]):
             lines = lines[first_md_index:]
 
     return "\n".join(lines).strip()
@@ -7681,7 +7680,7 @@ SHOT_MARKDOWN_COLUMN_WHITELIST: Dict[str, Dict[str, str]] = {
 
 
 def _normalize_shot_markdown_col_key(key: str) -> str:
-    return re.sub(r"[\s_\-./()（）:：]", "", str(key or "").strip().lower())
+    return re.sub(r"[\s_\-./()锛堬級:锛歖", "", str(key or "").strip().lower())
 
 
 _SHOT_MARKDOWN_DEFAULT_HEADERS: List[str] = [
@@ -7703,14 +7702,14 @@ _SHOT_MARKDOWN_DEFAULT_HEADERS: List[str] = [
 
 
 _SHOT_REQUIRED_ROW_FIELDS: List[Tuple[str, List[str]]] = [
-    ("Shot ID", ["Shot ID", "shot_id", "镜头ID"]),
-    ("Shot Name", ["Shot Name", "shot_name", "镜头名称"]),
-    ("Scene ID", ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场景编号"]),
-    ("Shot Logic (CN)", ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头画面逻辑说明"]),
-    ("Start Frame", ["Start Frame", "start_frame", "起始画面"]),
-    ("Video Content", ["Video Content", "video_content", "视频内容"]),
-    ("Duration (s)", ["Duration (s)", "Duration", "duration", "时长", "时长(s)"]),
-    ("End Frame", ["End Frame", "end_frame", "结束画面"]),
+    ("Shot ID", ["Shot ID", "shot_id", "闀滃ごID"]),
+    ("Shot Name", ["Shot Name", "shot_name", "闀滃ご鍚嶇О"]),
+    ("Scene ID", ["Scene ID", "scene_id", "Scene Code", "scene_code", "鍦烘櫙ID", "鍦烘櫙缂栧彿"]),
+    ("Shot Logic (CN)", ["Shot Logic (CN)", "shot_logic_cn", "闀滃ご閫昏緫", "闀滃ご鐢婚潰閫昏緫璇存槑"]),
+    ("Start Frame", ["Start Frame", "start_frame", "璧峰鐢婚潰"]),
+    ("Video Content", ["Video Content", "video_content", "瑙嗛鍐呭"]),
+    ("Duration (s)", ["Duration (s)", "Duration", "duration", "鏃堕暱", "鏃堕暱(s)"]),
+    ("End Frame", ["End Frame", "end_frame", "缁撴潫鐢婚潰"]),
 ]
 
 
@@ -7791,7 +7790,7 @@ def _validate_shot_rows_or_raise(
             if not _pick_shot_cell(row, aliases, ""):
                 missing_fields.append(label)
 
-        raw_duration = _pick_shot_cell(row, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
+        raw_duration = _pick_shot_cell(row, ["Duration (s)", "Duration", "duration", "鏃堕暱", "鏃堕暱(s)"], "")
         duration_ok = False
         if raw_duration:
             match = re.search(r"[\d\.]+", str(raw_duration))
@@ -7838,7 +7837,7 @@ def _validate_shot_rows_for_apply_with_tolerance(
             if not _pick_shot_cell(item, aliases, ""):
                 missing_fields.append(label)
 
-        raw_duration = _pick_shot_cell(item, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
+        raw_duration = _pick_shot_cell(item, ["Duration (s)", "Duration", "duration", "鏃堕暱", "鏃堕暱(s)"], "")
         duration_ok = False
         if raw_duration:
             match = re.search(r"[\d\.]+", str(raw_duration))
@@ -8112,7 +8111,7 @@ def create_project(
         )
         raise HTTPException(
             status_code=503,
-            detail="数据库连接繁忙，请稍后重试",
+            detail="鏁版嵁搴撹繛鎺ョ箒蹇欙紝璇风◢鍚庨噸璇?,
         )
     db.refresh(db_project)
     # New project has no images
@@ -8312,7 +8311,7 @@ def create_project_review_thread(
         project_id=project.id,
         requester_user_id=current_user.id,
         reviewer_user_id=reviewer.id,
-        title=(str(payload.title or "").strip() or f"{project.title or 'Project'} 资产审核"),
+        title=(str(payload.title or "").strip() or f"{project.title or 'Project'} 璧勪骇瀹℃牳"),
         status="open",
         latest_round_no=1,
         latest_activity_at=now_iso,
@@ -8938,10 +8937,10 @@ def export_project_story_generator_global_package(
         if not raw.strip():
             return {}
         setup_block = _extract_between(raw, r"###\s*A\)", r"###\s*B\)")
-        development_block = _extract_between(raw, r"###\s*B\)\s*发展", r"###\s*C\)\s*转折")
-        turning_block = _extract_between(raw, r"###\s*C\)\s*转折", r"###\s*D\)\s*高潮")
-        climax_block = _extract_between(raw, r"###\s*D\)\s*高潮", r"###\s*E\)\s*定局")
-        resolution_block = _extract_between(raw, r"###\s*E\)\s*定局", r"##\s*5\)\s*悬念系统")
+        development_block = _extract_between(raw, r"###\s*B\)\s*鍙戝睍", r"###\s*C\)\s*杞姌")
+        turning_block = _extract_between(raw, r"###\s*C\)\s*杞姌", r"###\s*D\)\s*楂樻疆")
+        climax_block = _extract_between(raw, r"###\s*D\)\s*楂樻疆", r"###\s*E\)\s*瀹氬眬")
+        resolution_block = _extract_between(raw, r"###\s*E\)\s*瀹氬眬", r"##\s*5\)\s*鎮康绯荤粺")
         suspense_block = _extract_between(raw, r"##\s*5\)", r"##\s*6\)")
         foreshadowing_block = _extract_between(raw, r"##\s*6\)", r"##\s*7\)")
         background_block = _extract_between(raw, r"##\s*1\)", r"##\s*2\)")
@@ -8951,11 +8950,11 @@ def export_project_story_generator_global_package(
         point_of_no_return = ""
         for line in (setup_block or "").splitlines():
             s = line.strip()
-            if (not hook) and ("开场钩子" in s):
+            if (not hook) and ("寮€鍦洪挬瀛? in s):
                 hook = s
-            elif (not inciting) and ("触发事件" in s):
+            elif (not inciting) and ("瑙﹀彂浜嬩欢" in s):
                 inciting = s
-            elif (not point_of_no_return) and ("不可回头" in s or "立场选择" in s):
+            elif (not point_of_no_return) and ("涓嶅彲鍥炲ご" in s or "绔嬪満閫夋嫨" in s):
                 point_of_no_return = s
 
         return {
@@ -9350,7 +9349,7 @@ def read_projects(
         # Poster entities
         posters = session.query(Entity.project_id, Entity.image_url).filter(
             Entity.project_id.in_(p_ids),
-            Entity.name == "封面海报",
+            Entity.name == "灏侀潰娴锋姤",
             Entity.image_url != None,
             Entity.image_url != ""
         ).all()
@@ -12082,10 +12081,10 @@ def _build_project_subject_inventory(db: Session, project_id: int, limit_per_typ
 
 def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, str]]]) -> str:
     type_names = {
-        "characters": "角色",
-        "props": "道具",
-        "environments": "场景",
-        "covers": "封面"
+        "characters": "瑙掕壊",
+        "props": "閬撳叿",
+        "environments": "鍦烘櫙",
+        "covers": "灏侀潰"
     }
 
     def _format_bucket(bucket_name: str) -> str:
@@ -12097,15 +12096,15 @@ def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, 
         lines: List[str] = [f"{bucket_name} ({len(items)}):"]
         for item in items:
             bits: List[str] = []
-            bits.append(f"资产实体类型={type_cn}")
+            bits.append(f"璧勪骇瀹炰綋绫诲瀷={type_cn}")
             
             name = str(item.get("name") or "").strip()
             if name:
-                bits.append(f"实体中文名={name}")
+                bits.append(f"瀹炰綋涓枃鍚?{name}")
                 
             name_en = str(item.get("name_en") or "").strip()
             if name_en:
-                bits.append(f"实体英文名={name_en}")
+                bits.append(f"瀹炰綋鑻辨枃鍚?{name_en}")
                 
             archetype = str(item.get("archetype") or "").strip()
             if archetype:
@@ -12174,9 +12173,9 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
         if len(headers) < 4:
             continue
 
-        scene_no_idx = _find_idx(headers, ["Scene No", "场次", "场次号"])
-        core_idx = _find_idx(headers, ["Core Scene Info", "核心场景信息", "Core Goal"])
-        original_idx = _find_idx(headers, ["Original Script Text", "原始剧本文本", "Description"])
+        scene_no_idx = _find_idx(headers, ["Scene No", "鍦烘", "鍦烘鍙?])
+        core_idx = _find_idx(headers, ["Core Scene Info", "鏍稿績鍦烘櫙淇℃伅", "Core Goal"])
+        original_idx = _find_idx(headers, ["Original Script Text", "鍘熷鍓ф湰鏂囨湰", "Description"])
 
         if core_idx < 0 and original_idx < 0:
             continue
@@ -12189,11 +12188,11 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
 
         parsed_rows: List[Dict[str, str]] = []
 
-        scene_name_idx = _find_idx(headers, ["Scene Name", "场景名称", "场景名", "Title"])
-        duration_idx = _find_idx(headers, ["Equivalent Duration", "Duration", "时长"])
-        env_name_idx = _find_idx(headers, ["Environment Name", "环境名称", "环境锚点", "Environment"])
-        linked_chars_idx = _find_idx(headers, ["Linked Characters", "关联角色", "角色"])
-        key_props_idx = _find_idx(headers, ["Key Props", "关键道具", "道具"])
+        scene_name_idx = _find_idx(headers, ["Scene Name", "鍦烘櫙鍚嶇О", "鍦烘櫙鍚?, "Title"])
+        duration_idx = _find_idx(headers, ["Equivalent Duration", "Duration", "鏃堕暱"])
+        env_name_idx = _find_idx(headers, ["Environment Name", "鐜鍚嶇О", "鐜閿氱偣", "Environment"])
+        linked_chars_idx = _find_idx(headers, ["Linked Characters", "鍏宠仈瑙掕壊", "瑙掕壊"])
+        key_props_idx = _find_idx(headers, ["Key Props", "鍏抽敭閬撳叿", "閬撳叿"])
 
         while j < len(lines):
             row_line = lines[j].strip()
@@ -12235,13 +12234,13 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
 
 def _normalize_subject_entity_type(raw_type: Any) -> str:
     text = str(raw_type or "").strip().lower()
-    if text in {"character", "characters", "char", "人物", "角色"}:
+    if text in {"character", "characters", "char", "浜虹墿", "瑙掕壊"}:
         return "character"
-    if text in {"prop", "props", "道具", "物件"}:
+    if text in {"prop", "props", "閬撳叿", "鐗╀欢"}:
         return "prop"
-    if text in {"environment", "environments", "env", "场景", "环境"}:
+    if text in {"environment", "environments", "env", "鍦烘櫙", "鐜"}:
         return "environment"
-    if text in {"cover", "covers", "poster", "posters", "cover_poster", "封面", "封面海报"}:
+    if text in {"cover", "covers", "poster", "posters", "cover_poster", "灏侀潰", "灏侀潰娴锋姤"}:
         return "cover"
     return "character"
 
@@ -12379,7 +12378,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                 item.get("appearance_cn"),
             )
             if not description_cn:
-                description_cn = "；".join(
+                description_cn = "锛?.join(
                     value for value in [
                         _pick_text(item.get("appearance_cn")),
                         _pick_text(item.get("clothing")),
@@ -13327,7 +13326,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         if isinstance(value, list):
             return [str(v or "").strip() for v in value if str(v or "").strip()]
         if isinstance(value, str):
-            return [p.strip() for p in re.split(r"[,，;；\n]", value) if p and p.strip()]
+            return [p.strip() for p in re.split(r"[,锛?锛沑n]", value) if p and p.strip()]
         return []
 
     tech_params = get_context_val(["tech_params"], allow_structured=True)
@@ -13418,13 +13417,13 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     if lighting:
         project_context_lines.append(f"Lighting: {lighting}")
     if era_setting:
-        project_context_lines.append(f"Era / Period (年代): {era_setting}")
+        project_context_lines.append(f"Era / Period (骞翠唬): {era_setting}")
     if region_culture:
-        project_context_lines.append(f"Region / Country (国家地域): {region_culture}")
+        project_context_lines.append(f"Region / Country (鍥藉鍦板煙): {region_culture}")
     if shot_preference:
-        project_context_lines.append(f"Shot / Lens Preference (镜头偏好): {shot_preference}")
+        project_context_lines.append(f"Shot / Lens Preference (闀滃ご鍋忓ソ): {shot_preference}")
     if broadcast_security_level:
-        project_context_lines.append(f"Broadcast Safety Level (播出安全等级): {broadcast_security_level}")
+        project_context_lines.append(f"Broadcast Safety Level (鎾嚭瀹夊叏绛夌骇): {broadcast_security_level}")
     if borrowed_films:
         project_context_lines.append(f"Borrowed Films: {', '.join(borrowed_films)}")
     if character_relationships:
@@ -13636,7 +13635,7 @@ def _build_shot_prompts(
                  desc_parts.append(f"Description: {ent.narrative_description}")
             elif ent.description:
                  # Fallback regex extraction from blob
-                 match = re.search(r'(?:Description|描述)[:：]\s*(.*)', ent.description, re.IGNORECASE)
+                 match = re.search(r'(?:Description|鎻忚堪)[:锛歖\s*(.*)', ent.description, re.IGNORECASE)
                  if match:
                       desc_parts.append(f"Description: {match.group(1).strip()}")
             
@@ -13779,10 +13778,10 @@ def _extract_shot_regenerate_marker(raw_logic: str) -> Tuple[Optional[str], str]
     if not text:
         return None, ""
 
-    if re.search(r"=更新分镜\s*$", text):
-        return "update", re.sub(r"\s*=更新分镜\s*$", "", text).strip()
-    if re.search(r"=补充分镜\s*$", text):
-        return "add", re.sub(r"\s*=补充分镜\s*$", "", text).strip()
+    if re.search(r"=鏇存柊鍒嗛暅\s*$", text):
+        return "update", re.sub(r"\s*=鏇存柊鍒嗛暅\s*$", "", text).strip()
+    if re.search(r"=琛ュ厖鍒嗛暅\s*$", text):
+        return "add", re.sub(r"\s*=琛ュ厖鍒嗛暅\s*$", "", text).strip()
     return None, text
 
 
@@ -13812,8 +13811,8 @@ def _build_shot_regenerate_prompts(
         "You are not generating a full fresh shot list. You are producing a selective supplement/update diff against the current staged shot markdown.\n"
         "Return a markdown table only. Do not add prose before or after the table.\n"
         "Only include rows that need to change or be newly inserted. Omit unchanged rows entirely.\n"
-        "For an existing shot that should be modified, preserve its existing Shot ID exactly and append '=更新分镜' to the end of 'Shot Logic (CN)'.\n"
-        "For a newly inserted shot, create a Shot ID derived from its neighboring base shot using an underscore numeric suffix such as '_1', '_2', and append '=补充分镜' to the end of 'Shot Logic (CN)'.\n"
+        "For an existing shot that should be modified, preserve its existing Shot ID exactly and append '=鏇存柊鍒嗛暅' to the end of 'Shot Logic (CN)'.\n"
+        "For a newly inserted shot, create a Shot ID derived from its neighboring base shot using an underscore numeric suffix such as '_1', '_2', and append '=琛ュ厖鍒嗛暅' to the end of 'Shot Logic (CN)'.\n"
         "Every returned row must include a valid marker in 'Shot Logic (CN)' so downstream import can distinguish updates from additions.\n"
         "Do not rewrite or renumber unaffected shots.\n"
         "Keep the table schema compatible with the staged shot markdown table.\n"
@@ -14703,12 +14702,12 @@ async def ai_generate_shots(
             "analysis",
             "reasoning",
             "thought process",
-            "分析",
-            "思路",
-            "推理",
-            "我将",
-            "我认为",
-            "我認為",
+            "鍒嗘瀽",
+            "鎬濊矾",
+            "鎺ㄧ悊",
+            "鎴戝皢",
+            "鎴戣涓?,
+            "鎴戣獚鐐?,
         ]
         try:
             escaped_terms = [re.escape(term) for term in reasoning_prefix_terms if str(term or "").strip()]
@@ -15029,8 +15028,8 @@ async def ai_regenerate_shots(
 
         marker_errors: List[str] = []
         for idx, row in enumerate(validated_rows, start=1):
-            shot_id = _pick_shot_cell(row, ["Shot ID", "shot_id", "镜头ID"], "")
-            shot_logic = _pick_shot_cell(row, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
+            shot_id = _pick_shot_cell(row, ["Shot ID", "shot_id", "闀滃ごID"], "")
+            shot_logic = _pick_shot_cell(row, ["Shot Logic (CN)", "shot_logic_cn", "闀滃ご閫昏緫", "闀滃ご閫昏緫锛堜腑鏂囷級"], "")
             marker_mode, _ = _extract_shot_regenerate_marker(shot_logic)
             if marker_mode not in {"update", "add"}:
                 marker_errors.append(f"row {idx} ({shot_id or 'unknown shot'}) missing required Shot Logic marker")
@@ -15282,33 +15281,33 @@ def apply_scene_ai_result(
                 lower_ln.startswith("start frame:")
                 or lower_ln.startswith("start frame cn:")
                 or lower_ln.startswith("start:")
-                or ln.startswith("起始帧:")
-                or ln.startswith("起始帧：")
+                or ln.startswith("璧峰甯?")
+                or ln.startswith("璧峰甯э細")
             ):
-                start_cn = re.sub(r"^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                start_cn = re.sub(r"^(start\s*frame\s*(cn)?\s*:|start\s*:|璧峰甯s*[:锛歖)", "", ln, flags=re.IGNORECASE).strip()
                 continue
-            if lower_ln.startswith("video:") or lower_ln.startswith("video cn:") or ln.startswith("视频:") or ln.startswith("视频提示词:"):
-                video_cn = re.sub(r"^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+            if lower_ln.startswith("video:") or lower_ln.startswith("video cn:") or ln.startswith("瑙嗛:") or ln.startswith("瑙嗛鎻愮ず璇?"):
+                video_cn = re.sub(r"^(video\s*(cn)?\s*:|瑙嗛鎻愮ず璇峔s*[:锛歖|瑙嗛\s*[:锛歖)", "", ln, flags=re.IGNORECASE).strip()
                 continue
             if (
                 lower_ln.startswith("keyframes:")
                 or lower_ln.startswith("keyframes cn:")
                 or lower_ln.startswith("keyframe:")
-                or ln.startswith("关键帧:")
-                or ln.startswith("关键帧：")
+                or ln.startswith("鍏抽敭甯?")
+                or ln.startswith("鍏抽敭甯э細")
             ):
-                keyframes_cn = re.sub(r"^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                keyframes_cn = re.sub(r"^(key\s*frames?\s*(cn)?\s*:|鍏抽敭甯s*[:锛歖)", "", ln, flags=re.IGNORECASE).strip()
                 continue
             if (
                 lower_ln.startswith("end frame:")
                 or lower_ln.startswith("end frame cn:")
                 or lower_ln.startswith("end:")
-                or ln.startswith("收尾帧:")
-                or ln.startswith("收尾帧：")
-                or ln.startswith("结束帧:")
-                or ln.startswith("结束帧：")
+                or ln.startswith("鏀跺熬甯?")
+                or ln.startswith("鏀跺熬甯э細")
+                or ln.startswith("缁撴潫甯?")
+                or ln.startswith("缁撴潫甯э細")
             ):
-                end_cn = re.sub(r"^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                end_cn = re.sub(r"^(end\s*frame\s*(cn)?\s*:|end\s*:|鏀跺熬甯s*[:锛歖|缁撴潫甯s*[:锛歖)", "", ln, flags=re.IGNORECASE).strip()
                 continue
 
         if not start_cn and not video_cn and not keyframes_cn and not end_cn:
@@ -15320,21 +15319,21 @@ def apply_scene_ai_result(
         return start_cn, video_cn, keyframes_cn, end_cn
 
     known_col_aliases = [
-        "Shot ID", "shot_id", "镜头ID",
-        "Shot Name", "shot_name", "镜头名称",
-        "Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号",
-        "Start Frame", "start_frame", "起始帧",
-        "End Frame", "end_frame", "结束帧",
-        "Video Content", "video_content", "视频内容",
-        "Duration (s)", "Duration", "duration", "时长", "时长(s)",
-        "Associated Entities", "associated_entities", "关联实体",
-        "Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）",
-        "Keyframes", "keyframes", "关键帧",
-        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
-        "Start Frame (CN)", "start_frame_cn", "起始帧（中文）",
-        "Video Content (CN)", "video_prompt_cn", "视频内容（中文）",
-        "Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文",
-        "End Frame (CN)", "end_frame_cn", "结束帧（中文）",
+        "Shot ID", "shot_id", "闀滃ごID",
+        "Shot Name", "shot_name", "闀滃ご鍚嶇О",
+        "Scene ID", "scene_id", "Scene Code", "scene_code", "鍦烘櫙ID", "鍦烘鍙?,
+        "Start Frame", "start_frame", "璧峰甯?,
+        "End Frame", "end_frame", "缁撴潫甯?,
+        "Video Content", "video_content", "瑙嗛鍐呭",
+        "Duration (s)", "Duration", "duration", "鏃堕暱", "鏃堕暱(s)",
+        "Associated Entities", "associated_entities", "鍏宠仈瀹炰綋",
+        "Shot Logic (CN)", "shot_logic_cn", "闀滃ご閫昏緫", "闀滃ご閫昏緫锛堜腑鏂囷級",
+        "Keyframes", "keyframes", "鍏抽敭甯?,
+        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "鎻愮ず璇嶏紙涓枃锛?, "涓枃鎻愮ず璇?,
+        "Start Frame (CN)", "start_frame_cn", "璧峰甯э紙涓枃锛?,
+        "Video Content (CN)", "video_prompt_cn", "瑙嗛鍐呭锛堜腑鏂囷級",
+        "Keyframes (CN)", "keyframes_cn", "鍏抽敭甯э紙涓枃锛?, "鍏抽敭甯т腑鏂?,
+        "End Frame (CN)", "end_frame_cn", "缁撴潫甯э紙涓枃锛?,
     ]
     known_col_norm_set = {_normalize_shot_markdown_col_key(k) for k in known_col_aliases}
 
@@ -15342,7 +15341,7 @@ def apply_scene_ai_result(
         # Dur parsing
         try:
             dur_val = 2.0
-            raw_duration = _pick_shot_cell(s_data, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
+            raw_duration = _pick_shot_cell(s_data, ["Duration (s)", "Duration", "duration", "鏃堕暱", "鏃堕暱(s)"], "")
             if raw_duration:
                 match = re.search(r"[\d\.]+", str(raw_duration))
                 dur_val = float(match.group()) if match else 2.0
@@ -15352,25 +15351,25 @@ def apply_scene_ai_result(
         # Mapping Keys from LLM Table Headers to DB Columns
         # Headers: Shot ID, Shot Name, Start Frame, End Frame, Video Content, Duration (s), Keyframes, Associated Entities, Shot Logic (CN)
         
-        start_frame_text = _pick_shot_cell(s_data, ["Start Frame", "start_frame", "起始帧"], "")
-        end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "结束帧"], "")
-        video_content_text = _pick_shot_cell(s_data, ["Video Content", "video_content", "视频内容"], "")
-        associated_entities_text = _pick_shot_cell(s_data, ["Associated Entities", "associated_entities", "关联实体"], "")
-        shot_logic_cn_text = _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
-        keyframes_text = _pick_shot_cell(s_data, ["Keyframes", "keyframes", "关键帧"], "NO")
-        scene_code_text = _pick_shot_cell(s_data, ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号"], scene.scene_no or "")
-        shot_id_text = _pick_shot_cell(s_data, ["Shot ID", "shot_id", "镜头ID"], str(idx + 1))
-        shot_name_text = _pick_shot_cell(s_data, ["Shot Name", "shot_name", "镜头名称"], "Shot")
+        start_frame_text = _pick_shot_cell(s_data, ["Start Frame", "start_frame", "璧峰甯?], "")
+        end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "缁撴潫甯?], "")
+        video_content_text = _pick_shot_cell(s_data, ["Video Content", "video_content", "瑙嗛鍐呭"], "")
+        associated_entities_text = _pick_shot_cell(s_data, ["Associated Entities", "associated_entities", "鍏宠仈瀹炰綋"], "")
+        shot_logic_cn_text = _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "闀滃ご閫昏緫", "闀滃ご閫昏緫锛堜腑鏂囷級"], "")
+        keyframes_text = _pick_shot_cell(s_data, ["Keyframes", "keyframes", "鍏抽敭甯?], "NO")
+        scene_code_text = _pick_shot_cell(s_data, ["Scene ID", "scene_id", "Scene Code", "scene_code", "鍦烘櫙ID", "鍦烘鍙?], scene.scene_no or "")
+        shot_id_text = _pick_shot_cell(s_data, ["Shot ID", "shot_id", "闀滃ごID"], str(idx + 1))
+        shot_name_text = _pick_shot_cell(s_data, ["Shot Name", "shot_name", "闀滃ご鍚嶇О"], "Shot")
 
         prompt_cn_combined = _pick_shot_cell(
             s_data,
-            ["Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词"],
+            ["Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "鎻愮ず璇嶏紙涓枃锛?, "涓枃鎻愮ず璇?],
             "",
         )
-        start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"], "")
-        video_prompt_cn_text = _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"], "")
-        keyframes_cn_text = _pick_shot_cell(s_data, ["Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文"], "")
-        end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"], "")
+        start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "璧峰甯э紙涓枃锛?], "")
+        video_prompt_cn_text = _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "瑙嗛鍐呭锛堜腑鏂囷級"], "")
+        keyframes_cn_text = _pick_shot_cell(s_data, ["Keyframes (CN)", "keyframes_cn", "鍏抽敭甯э紙涓枃锛?, "鍏抽敭甯т腑鏂?], "")
+        end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "缁撴潫甯э紙涓枃锛?], "")
 
         if prompt_cn_combined:
             start_cn_fallback, video_cn_fallback, keyframes_cn_fallback, end_cn_fallback = _split_combined_cn_prompt(prompt_cn_combined)
@@ -15394,10 +15393,10 @@ def apply_scene_ai_result(
             technical_notes_payload["end_frame_cn"] = end_frame_cn_text
         if start_frame_cn_text or video_prompt_cn_text or keyframes_cn_text or end_frame_cn_text:
             technical_notes_payload["shot_prompt_cn"] = "<br>".join([
-                f"起始帧：{start_frame_cn_text or ''}",
-                f"视频：{video_prompt_cn_text or ''}",
-                f"关键帧：{keyframes_cn_text or ''}",
-                f"收尾帧：{end_frame_cn_text or ''}",
+                f"璧峰甯э細{start_frame_cn_text or ''}",
+                f"瑙嗛锛歿video_prompt_cn_text or ''}",
+                f"鍏抽敭甯э細{keyframes_cn_text or ''}",
+                f"鏀跺熬甯э細{end_frame_cn_text or ''}",
             ])
 
         # Persist newly added/unknown markdown columns for round-trip safety.
@@ -15718,7 +15717,7 @@ def _coerce_visual_dependencies(value: Any) -> List[str]:
             except Exception:
                 candidates = []
         if not candidates:
-            candidates = re.split(r"[\n,，;；|]", raw)
+            candidates = re.split(r"[\n,锛?锛泑]", raw)
     elif value is not None:
         candidates = [value]
 
@@ -15898,14 +15897,14 @@ def _split_prompt_clauses(text: str) -> List[str]:
     stable = str(text or "").strip()
     if not stable:
         return []
-    parts = re.split(r"[\n\r]+|(?<=[。！？.!?；;])", stable)
+    parts = re.split(r"[\n\r]+|(?<=[銆傦紒锛?!?锛?])", stable)
     return [p.strip() for p in parts if str(p or "").strip()]
 
 
 def _extract_prompt_labels(text: str) -> List[str]:
     stable = str(text or "")
     labels: List[str] = []
-    for match in re.finditer(r"([A-Za-z][A-Za-z0-9 _/\-]{1,50})\s*:|([\u4e00-\u9fff]{1,24})\s*[：:]", stable):
+    for match in re.finditer(r"([A-Za-z][A-Za-z0-9 _/\-]{1,50})\s*:|([\u4e00-\u9fff]{1,24})\s*[锛?]", stable):
         token = (match.group(1) or match.group(2) or "").strip().lower()
         token = re.sub(r"\s+", " ", token)
         if token:
@@ -15920,8 +15919,8 @@ def _prompt_structure_profile(text: str) -> Dict[str, Any]:
     return {
         "clause_count": len(clauses),
         "labels": labels,
-        "colon_count": stable.count(":") + stable.count("："),
-        "semicolon_count": stable.count(";") + stable.count("；"),
+        "colon_count": stable.count(":") + stable.count("锛?),
+        "semicolon_count": stable.count(";") + stable.count("锛?),
         "brace_count": stable.count("{") + stable.count("}"),
         "bracket_count": stable.count("[") + stable.count("]"),
         "paren_count": stable.count("(") + stable.count(")"),
@@ -19025,7 +19024,7 @@ _LOGIN_MAINTENANCE_CACHE = {
         "enabled": False,
         "is_active": False,
         "ends_at": None,
-        "message": "系统正在维护",
+        "message": "绯荤粺姝ｅ湪缁存姢",
     },
 }
 
@@ -19035,7 +19034,7 @@ def _default_maintenance_status_payload() -> Dict[str, Any]:
         "enabled": False,
         "is_active": False,
         "ends_at": None,
-        "message": "系统正在维护",
+        "message": "绯荤粺姝ｅ湪缁存姢",
     }
 
 
@@ -19069,7 +19068,7 @@ def _build_maintenance_status_payload(cfg_raw: Any) -> Dict[str, Any]:
     ends_at_raw = str(cfg.get("ends_at") or "").strip()
     message = str(cfg.get("message") or "").strip()
     if not message:
-        message = "系统正在维护"
+        message = "绯荤粺姝ｅ湪缁存姢"
 
     ends_at_dt = _parse_iso_datetime_safe(ends_at_raw)
     is_active = bool(enabled and (not ends_at_dt or datetime.utcnow() < ends_at_dt))
@@ -19088,7 +19087,7 @@ def _store_login_maintenance_cache(status: Dict[str, Any], *, read_failed: bool,
         "enabled": bool(status.get("enabled", False)),
         "is_active": bool(status.get("is_active", False)),
         "ends_at": status.get("ends_at"),
-        "message": str(status.get("message") or "系统正在维护").strip() or "系统正在维护",
+        "message": str(status.get("message") or "绯荤粺姝ｅ湪缁存姢").strip() or "绯荤粺姝ｅ湪缁存姢",
     }
     with _LOGIN_MAINTENANCE_CACHE_LOCK:
         _LOGIN_MAINTENANCE_CACHE["status"] = normalized
@@ -19380,20 +19379,20 @@ def test_smtp_config(
     del db
     target_email = str(payload.to_email or "").strip()
     if not target_email:
-        raise HTTPException(status_code=400, detail="测试邮箱不能为空")
+        raise HTTPException(status_code=400, detail="娴嬭瘯閭涓嶈兘涓虹┖")
 
-    subject = "AI Story SMTP 测试邮件"
+    subject = "AI Story SMTP 娴嬭瘯閭欢"
     content = (
-        "这是一封来自 AI Story 的 SMTP 测试邮件。\n\n"
-        "如果你收到了这封邮件，说明 SMTP 配置可用。"
+        "杩欐槸涓€灏佹潵鑷?AI Story 鐨?SMTP 娴嬭瘯閭欢銆俓n\n"
+        "濡傛灉浣犳敹鍒颁簡杩欏皝閭欢锛岃鏄?SMTP 閰嶇疆鍙敤銆?
     )
 
     try:
         _send_email_via_runtime_smtp(target_email, subject, content, strict=True)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"发送失?? {exc}")
+        raise HTTPException(status_code=400, detail=f"鍙戦€佸け?? {exc}")
 
-    return {"success": True, "message": f"测试邮件已发送到 {target_email}"}
+    return {"success": True, "message": f"娴嬭瘯閭欢宸插彂閫佸埌 {target_email}"}
 
 
 @router.post("/admin/smtp-config/broadcast")
@@ -19406,17 +19405,17 @@ def broadcast_email_to_all_users(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     if str(payload.confirm_phrase or "").strip() != "SEND_TO_ALL_USERS":
-        raise HTTPException(status_code=400, detail="确认口令错误，请输入 SEND_TO_ALL_USERS")
+        raise HTTPException(status_code=400, detail="纭鍙ｄ护閿欒锛岃杈撳叆 SEND_TO_ALL_USERS")
 
     subject = str(payload.subject or "").strip()
     html_content = str(payload.content_html or "")
     text_content = str(payload.content_text or "").strip()
 
     if not subject:
-        raise HTTPException(status_code=400, detail="邮件主题不能为空")
+        raise HTTPException(status_code=400, detail="閭欢涓婚涓嶈兘涓虹┖")
 
     if not html_content.strip() and not text_content:
-        raise HTTPException(status_code=400, detail="邮件内容不能为空（HTML 或文本至少填写一个）")
+        raise HTTPException(status_code=400, detail="閭欢鍐呭涓嶈兘涓虹┖锛圚TML 鎴栨枃鏈嚦灏戝～鍐欎竴涓級")
 
     if not text_content:
         text_content = "This email contains HTML content. Please view it in an HTML-compatible email client."
@@ -19439,7 +19438,7 @@ def broadcast_email_to_all_users(
             invalid_count += 1
 
     if not recipients:
-        raise HTTPException(status_code=400, detail="没有可用的收件邮箱")
+        raise HTTPException(status_code=400, detail="娌℃湁鍙敤鐨勬敹浠堕偖绠?)
 
     sent = 0
     failed = 0
@@ -19487,7 +19486,7 @@ def get_maintenance_config(
     return MaintenanceConfig(
         enabled=bool(status.get("enabled")),
         ends_at=status.get("ends_at"),
-        message=status.get("message") or "系统正在维护",
+        message=status.get("message") or "绯荤粺姝ｅ湪缁存姢",
     )
 
 
@@ -19519,7 +19518,7 @@ def update_maintenance_config(
     next_config = {
         "enabled": bool(idx.enabled),
         "ends_at": ends_at or None,
-        "message": str(idx.message or "系统正在维护").strip() or "系统正在维护",
+        "message": str(idx.message or "绯荤粺姝ｅ湪缁存姢").strip() or "绯荤粺姝ｅ湪缁存姢",
     }
 
     if row and row.get("id") is not None:
@@ -19566,7 +19565,7 @@ def update_maintenance_config(
     return MaintenanceConfig(
         enabled=bool(next_config.get("enabled", False)),
         ends_at=next_config.get("ends_at"),
-        message=next_config.get("message") or "系统正在维护",
+        message=next_config.get("message") or "绯荤粺姝ｅ湪缁存姢",
     )
 
 
@@ -20979,8 +20978,8 @@ def _build_voice_tts_planner_prompts(video_prompt: str) -> Tuple[str, str, Dict[
         "Supported voice names include:\n"
         f"{supported_voices_hint}\n"
         "Examples:\n"
-        "- Input: 伊莎贝拉向后跌倒，老板冲进大楼。 -> text: \"\"\n"
-        "- Input: 老板：\"滚出去！\" -> text: \"滚出去！\"\n"
+        "- Input: 浼婅帋璐濇媺鍚戝悗璺屽€掞紝鑰佹澘鍐茶繘澶фゼ銆?-> text: \"\"\n"
+        "- Input: 鑰佹澘锛歕"婊氬嚭鍘伙紒\" -> text: \"婊氬嚭鍘伙紒\"\n"
         "- Input includes [Character Context] only -> text must still be \"\" unless explicit dialogue exists.\n"
         "Return JSON schema exactly:\\n"
         "{\\n"
@@ -21144,7 +21143,7 @@ def _normalize_kie_voice_name(value: Any) -> str:
         raw,
         raw.split(" - ")[0].strip(),
         raw.split("|")[0].strip(),
-        raw.split("（")[0].strip(),
+        raw.split("锛?)[0].strip(),
         raw.split("(")[0].strip(),
     ]
     for candidate in candidates:
@@ -21193,7 +21192,7 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
 
         if re.fullmatch(r"[a-z]{2}", low):
             return True
-        if low in {"中文", "chinese", "中文 / chinese", "chinese / 中文"}:
+        if low in {"涓枃", "chinese", "涓枃 / chinese", "chinese / 涓枃"}:
             return True
 
         metadata_tokens = [
@@ -21222,10 +21221,10 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
             "subjects_json",
             "existing entity inventory",
             "character context",
-            "角色设定",
-            "角色信息",
-            "角色提示词",
-            "人物提示词",
+            "瑙掕壊璁惧畾",
+            "瑙掕壊淇℃伅",
+            "瑙掕壊鎻愮ず璇?,
+            "浜虹墿鎻愮ず璇?,
         ]
         if any(token in low for token in metadata_tokens):
             return True
@@ -21255,22 +21254,22 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
 
     quote_patterns = [
         r'"([^"\n]{1,400})"',
-        r'“([^”\n]{1,400})”',
-        r'‘([^’\n]{1,400})’',
-        r'「([^」\n]{1,400})」',
-        r'『([^』\n]{1,400})』',
+        r'鈥?[^鈥漒n]{1,400})鈥?,
+        r'鈥?[^鈥橽n]{1,400})鈥?,
+        r'銆?[^銆峔n]{1,400})銆?,
+        r'銆?[^銆廫n]{1,400})銆?,
     ]
     for pattern in quote_patterns:
         for m in re.finditer(pattern, raw):
             _push(m.group(1))
 
     for line in raw_lines:
-        tagged = re.search(r'(?:^|\s)(?:dialogue|line|lines|对白|台词)\s*[:：]\s*(.+)$', line, re.IGNORECASE)
+        tagged = re.search(r'(?:^|\s)(?:dialogue|line|lines|瀵圭櫧|鍙拌瘝)\s*[:锛歖\s*(.+)$', line, re.IGNORECASE)
         if tagged and tagged.group(1):
             _push(tagged.group(1))
             continue
 
-        speaker = re.match(r'^([^:：\n|]{1,24})[:：]\s*(.+)$', line)
+        speaker = re.match(r'^([^:锛歕n|]{1,24})[:锛歖\s*(.+)$', line)
         if speaker and speaker.group(2):
             speaker_name = str(speaker.group(1) or "").strip().lower()
             if speaker_name and not any(k in speaker_name for k in ["prompt", "style", "view", "subject", "camera", "lighting", "character", "entity"]):
@@ -21286,7 +21285,7 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
                 continue
             if "|" in candidate:
                 continue
-            if not re.search(r"[。！？!?]", candidate):
+            if not re.search(r"[銆傦紒锛??]", candidate):
                 continue
             if len(candidate) > 120:
                 continue
@@ -21323,10 +21322,10 @@ def _strip_subject_prompt_context_for_voice(value: Any) -> str:
         "subject prompt",
         "character context",
         "entity context",
-        "角色设定",
-        "角色信息",
-        "角色提示词",
-        "人物提示词",
+        "瑙掕壊璁惧畾",
+        "瑙掕壊淇℃伅",
+        "瑙掕壊鎻愮ず璇?,
+        "浜虹墿鎻愮ず璇?,
         "prompt en:",
         "prompt cn:",
     ]
@@ -21442,11 +21441,11 @@ def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
     text = str(raw).strip().lower()
     if not text:
         return None
-    if text in {"character", "char", "role", "人物", "角色"}:
+    if text in {"character", "char", "role", "浜虹墿", "瑙掕壊"}:
         return "character"
-    if text in {"environment", "env", "scene", "场景", "环境"}:
+    if text in {"environment", "env", "scene", "鍦烘櫙", "鐜"}:
         return "environment"
-    if text in {"prop", "props", "道具", "物件"}:
+    if text in {"prop", "props", "閬撳叿", "鐗╀欢"}:
         return "prop"
     return text
 
@@ -21699,11 +21698,11 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 meta["subject_type"] = resolved_type
                 meta["entity_type"] = resolved_type
                 if resolved_type == "character":
-                    meta["subject_type_cn"] = "角色"
+                    meta["subject_type_cn"] = "瑙掕壊"
                 elif resolved_type == "environment":
-                    meta["subject_type_cn"] = "环境"
+                    meta["subject_type_cn"] = "鐜"
                 elif resolved_type == "prop":
-                    meta["subject_type_cn"] = "道具"
+                    meta["subject_type_cn"] = "閬撳叿"
 
         local_exists = os.path.exists(file_path)
         if local_exists:
@@ -27971,14 +27970,14 @@ def _inject_shot_prompt_anchors(
     if not text:
         return text
 
-    regex = re.compile(r"[\[【](.*?)[\]】]")
+    regex = re.compile(r"[\[銆怾(.*?)[\]銆慮")
     injected_entities: set[str] = set()
 
     def _replace(match: re.Match) -> str:
         token = str(match.group(1) or "").strip()
         normalized = _normalize_entity_anchor_token(token)
         tail = text[match.end():]
-        if re.match(r"^\s*[\(（]", tail):
+        if re.match(r"^\s*[\(锛圿", tail):
             return match.group(0)
 
         if normalized in {"global style", "global_style"} and global_style:
@@ -27993,7 +27992,7 @@ def _inject_shot_prompt_anchors(
             if normalized in injected_entities:
                 # Duplicate reference: skip anchor description to prevent
                 # image models from interpreting repeated descriptions as
-                # multiple subjects (二宫格 / split-panel issue).
+                # multiple subjects (浜屽鏍?/ split-panel issue).
                 if ref_no:
                     return f"{match.group(0)}(ref_image_url: #{ref_no})"
                 return match.group(0)
@@ -28013,7 +28012,7 @@ def _collect_associated_entities_refs(associated_entities_str: Optional[str], en
         return []
         
     refs: List[str] = []
-    names = [x.strip() for x in re.split(r'[,，]', associated_entities_str) if x.strip()]
+    names = [x.strip() for x in re.split(r'[,锛宂', associated_entities_str) if x.strip()]
     
     for name in names:
         norm_name = _normalize_entity_anchor_token(name)
@@ -28034,7 +28033,7 @@ def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict
         return []
 
     refs: List[str] = []
-    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[銆怾(.*?)[\]銆慮|[\[銆怾(.*?)[\]銆慮", re.IGNORECASE)
     for m in regex.finditer(text):
         raw_name = m.group(1) or m.group(2) or ""
         normalized = _normalize_entity_anchor_token(raw_name)
@@ -28279,7 +28278,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
 
     refs: List[str] = []
     index_map: Dict[str, int] = {}
-    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[銆怾(.*?)[\]銆慮|[\[銆怾(.*?)[\]銆慮", re.IGNORECASE)
 
     for m in regex.finditer(text):
         raw_name = m.group(1) or m.group(2) or ""
@@ -28342,13 +28341,13 @@ def _append_video_api_ref_mapping(
         flags=re.IGNORECASE | re.MULTILINE,
     )
     text = re.sub(
-        r"^\s*实体参考映射\s*:\s*.*$",
+        r"^\s*瀹炰綋鍙傝€冩槧灏刓s*:\s*.*$",
         "",
         text,
         flags=re.IGNORECASE | re.MULTILINE,
     )
     text = re.sub(
-        r"^\s*实体参考图映射\s*:\s*.*$",
+        r"^\s*瀹炰綋鍙傝€冨浘鏄犲皠\s*:\s*.*$",
         "",
         text,
         flags=re.IGNORECASE | re.MULTILINE,
@@ -28379,18 +28378,18 @@ def _append_video_api_ref_mapping(
     for u in start_urls:
         idx = index_map.get(u)
         if idx is not None:
-            image_slots.append(f"图{idx}")
+            image_slots.append(f"鍥緖idx}")
     if end_url:
         idx = index_map.get(end_url)
         if idx is not None:
-            image_slots.append(f"图{idx}")
+            image_slots.append(f"鍥緖idx}")
     for u in keyframe_urls:
         idx = index_map.get(u)
         if idx is not None:
-            image_slots.append(f"图{idx}")
+            image_slots.append(f"鍥緖idx}")
 
     image_slots = [x for x in dict.fromkeys(image_slots) if x]
-    video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
+    video_slots = [f"瑙嗛{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
     media_slots = image_slots + video_slots
 
     pairs: List[str] = []
@@ -28437,11 +28436,11 @@ def _append_video_api_ref_mapping(
                 char_name = raw_name[1:] if raw_name.startswith('@') else raw_name
 
                 display = f"{display_type}:[@{char_name}]" if display_type == "CHAR" else f"{display_type}:[{char_name}]"
-                pairs.append((mapped_idx, f"{display}参考图{mapped_idx}"))
+                pairs.append((mapped_idx, f"{display}鍙傝€冨浘{mapped_idx}"))
     pairs.sort(key=lambda x: x[0])
     ordered_pairs_strings = [p[1] for p in pairs]
 
-    mapping_line = "实体参考图映射: " + "; ".join(ordered_pairs_strings)
+    mapping_line = "瀹炰綋鍙傝€冨浘鏄犲皠: " + "; ".join(ordered_pairs_strings)
     if mapping_line in text:
         return text
     return f"{text}\n\n{mapping_line}"
@@ -28883,9 +28882,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                     latest_status["message"] = latest_message
                 elif active_shot_labels:
                     latest_status["message"] = (
-                        f"Processing shots {', '.join(active_shot_labels)} · Video..."
+                        f"Processing shots {', '.join(active_shot_labels)} 路 Video..."
                         if len(active_shot_labels) > 1
-                        else f"Processing shot {active_shot_labels[0]} · Video..."
+                        else f"Processing shot {active_shot_labels[0]} 路 Video..."
                     )
                 _persist_shot_media_batch_status(db, latest_episode, latest_status)
                 _release_db_connection(db, "shot_media_batch_active_video_status")
@@ -29093,7 +29092,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             latest["current_shot_label"] = shot_label
                             latest["current_asset_type"] = "start_frame"
                             latest["current_asset_label"] = "Start Frame"
-                            latest["message"] = f"Processing shot {shot_label} · Start Frame..."
+                            latest["message"] = f"Processing shot {shot_label} 路 Start Frame..."
                             latest["updated_at"] = now_bj_iso()
                             _persist_shot_media_batch_status(db, episode, latest)
                             _release_db_connection(db, "shot_media_batch_start_status")
@@ -29187,7 +29186,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             latest["current_shot_label"] = shot_label
                             latest["current_asset_type"] = "end_frame"
                             latest["current_asset_label"] = "End Frame"
-                            latest["message"] = f"Processing shot {shot_label} · End Frame..."
+                            latest["message"] = f"Processing shot {shot_label} 路 End Frame..."
                             latest["updated_at"] = now_bj_iso()
                             _persist_shot_media_batch_status(db, episode, latest)
                             _release_db_connection(db, "shot_media_batch_end_status")
@@ -29243,7 +29242,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         latest["current_shot_label"] = shot_label
                         latest["current_asset_type"] = "video"
                         latest["current_asset_label"] = "Video"
-                        latest["message"] = f"Processing shot {shot_label} · Video..."
+                        latest["message"] = f"Processing shot {shot_label} 路 Video..."
                         latest["updated_at"] = now_bj_iso()
                         _persist_shot_media_batch_status(db, episode, latest)
                         _release_db_connection(db, "shot_media_batch_video_status")
@@ -30183,7 +30182,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "appearance_cn": "Detailed Chinese Description (Must include height & head-to-body ratio)",
       "clothing": "Detailed Description of clothing (Must include layers, materials, colors, wear)",
       "action_characteristics": "Inferred action traits (e.g. poised, controlled movements)",
-    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
+    "generation_prompt_cn": "涓枃鐢熷浘鎻愮ず璇嶏紙鍐呭璇箟涓庤嫳鏂囨彁绀鸿瘝涓€鑷达紝鍙嚜鐒朵腑鏂囪〃杈撅級",
       "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{char_prompt_template}",
       "anchor_description": "Distinct Visual Feature (e.g., 'Red Scarf', 'Scar on Cheek'). MAX 20 words. Must be obvious for AI recognition.",
       "visual_dependencies": [],
@@ -30205,7 +30204,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "name_en": "English Name",
       "type": "held/static",
       "description_cn": "Chinese Description (Must define Mobility & Mutable States)",
-    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
+    "generation_prompt_cn": "涓枃鐢熷浘鎻愮ず璇嶏紙鍐呭璇箟涓庤嫳鏂囨彁绀鸿瘝涓€鑷达紝鍙嚜鐒朵腑鏂囪〃杈撅級",
       "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{prop_prompt_template}",
       "anchor_description": "Distinct Visual Marker (e.g., 'Golden Dragon Handle'). MAX 20 words. Must be obvious for AI recognition.",
       "visual_dependencies": [],
@@ -30228,7 +30227,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
       "atmosphere": "Atmosphere",
       "visual_params": "Wide/Interior/Day",
       "description_cn": "Chinese Description",
-    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
+    "generation_prompt_cn": "涓枃鐢熷浘鎻愮ず璇嶏紙鍐呭璇箟涓庤嫳鏂囨彁绀鸿瘝涓€鑷达紝鍙嚜鐒朵腑鏂囪〃杈撅級",
       "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{env_prompt_template}",
       "anchor_description": "Distinct Visual Landmark (e.g., 'Giant Red Statue'). MAX 20 words. Must be obvious for AI recognition.",
       "visual_dependencies": [],

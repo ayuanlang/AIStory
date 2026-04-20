@@ -276,7 +276,7 @@ async function pollTask(taskId, {
     let attempts = 0;
   const deadline = Date.now() + timeout;
     let notFoundSince = 0;
-  while (Date.now() < deadline) {
+  while (true) {
                 attempts += 1;
         try {
             const reqConfig = {
@@ -1647,6 +1647,9 @@ const downloadMediaToLocal = async (url, fallbackName) => {
 
 const isTransientPollingError = (error) => {
     const status = Number(error?.response?.status || 0);
+    // 404 means the task no longer exists, DO NOT treat as transient
+    if (status === 404) return false;
+    // 408 Timeout, 409 Conflict, 429 Too Many Requests -> Transient
     if (status === 408 || status === 409 || status === 429) return true;
     if (status >= 500 && status < 600) return true;
     const code = String(error?.code || '').toUpperCase();
@@ -1824,7 +1827,7 @@ const pollGenerationCallbackUntilDone = async (
     const start = Date.now();
     const intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
 
-    while (Date.now() - start < timeoutMs) {
+    while (true) {
         if (cancelledRef?.current) throw new Error(`${kind} callback polling cancelled`);
         try {
             const response = await api.get(
@@ -1869,7 +1872,7 @@ const pollImageJobUntilDone = async (
 ) => {
     const start = Date.now();
     const intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
-    while (Date.now() - start < timeoutMs) {
+    while (true) {
         if (cancelledRef?.current) throw new Error('Image job polling cancelled');
         try {
             const data = await fetchImageJobStatusLimited(jobId, { baseURL });
@@ -1905,7 +1908,7 @@ const pollVideoJobUntilDone = async (
 ) => {
     const start = Date.now();
     const intervalMs = Math.max(2000, Number(pollIntervalMs || 2500));
-    while (Date.now() - start < timeoutMs) {
+    while (true) {
         if (cancelledRef?.current) throw new Error('Video job polling cancelled');
         try {
             const data = await fetchVideoJobStatusLimited(jobId, { baseURL });

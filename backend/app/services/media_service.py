@@ -4511,7 +4511,8 @@ Negative prompt constraints: {neg_prompt}"""
             explicit_selection=explicit_selection_for_video,
             modality="image-to-video" if reference_image_url else "text-to-video",
             api_strategy=selected_strategy,
-            primary_retry_limit=3,
+            primary_retry_limit=0,
+            fallback_candidate_limit=0,
         )
 
         # Download 
@@ -6986,7 +6987,13 @@ Negative prompt constraints: {neg_prompt}"""
                 payload["resolution"] = str(image_size or "2K").strip()
             elif gen_type == "video":
                 payload["type"] = "TEXTTOVIDEO"
-            
+                
+        if callback_url and callback_url != "-1":
+            payload["webhook_url"] = callback_url
+            payload["webhookUrl"] = callback_url
+            payload["callback_url"] = callback_url
+            payload["notify_url"] = callback_url
+
         base_metadata = {
             "provider": provider_name,
             "model": model,
@@ -7828,6 +7835,12 @@ Negative prompt constraints: {neg_prompt}"""
             "content": content_payload,
         }
 
+        if callback_url and callback_url != "-1":
+            payload["webhook_url"] = callback_url
+            payload["webhookUrl"] = callback_url
+            payload["callback_url"] = callback_url
+            payload["notify_url"] = callback_url
+
         normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
         if normalized_ratio:
             payload["ratio"] = normalized_ratio
@@ -8536,8 +8549,7 @@ Negative prompt constraints: {neg_prompt}"""
     async def _submit_and_poll_runninghub(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         retryable_statuses = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
-        max_submit_attempts = 3
-
+        max_submit_attempts = 1
         _debug_log(f"[{log_tag}] RunningHub submit URL: {submit_url} | Payload: {_strip_base64_from_log(payload)}")
 
         def _extract_runninghub_media_url(value: Any) -> Optional[str]:

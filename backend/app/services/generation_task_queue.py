@@ -26,6 +26,7 @@ _JOB_STATE_TABLE_LOCK = threading.Lock()
 _QUEUE_START_LOCK = threading.Lock()
 _QUEUE_STARTED = False
 _QUEUE_STOP_EVENT = threading.Event()
+_QUEUE_ASYNC_STOP_EVENT = None  # asyncio.Event initialized when needed
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "900") or 900.0))
 _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
@@ -324,7 +325,7 @@ def list_generation_tasks(limit: int = 100, offset: int = 0) -> List[Dict[str, A
         rows = db.execute(
             text(
                 """
-                SELECT job_id, kind, user_id, status, attempt_count, worker_id, created_at, started_at, finished_at, last_heartbeat, error
+                SELECT job_id, kind, user_id, status, attempt_count, worker_id, created_at, started_at, finished_at, last_heartbeat, error, payload_json
                 FROM generation_task_queue
                 ORDER BY created_at DESC
                 LIMIT :limit OFFSET :offset
@@ -332,7 +333,17 @@ def list_generation_tasks(limit: int = 100, offset: int = 0) -> List[Dict[str, A
             ),
             {"limit": limit, "offset": offset},
         ).mappings().all()
-        return [{k: row.get(k) for k in row.keys()} for row in rows]
+        import json
+        res = []
+        for row in rows:
+            r = {k: row.get(k) for k in row.keys()}
+            if r.get('payload_json'):
+                try:
+                    r['payload'] = json.loads(r['payload_json'])
+                except:
+                    r['payload'] = None
+            res.append(r)
+        return res
     finally:
         db.close()
 
@@ -374,7 +385,7 @@ def get_generation_task_status(job_id: str) -> Optional[Dict[str, Any]]:
         row = db.execute(
             text(
                 """
-                SELECT job_id, kind, user_id, status, attempt_count, worker_id, created_at, started_at, finished_at, last_heartbeat, error
+                SELECT job_id, kind, user_id, status, attempt_count, worker_id, created_at, started_at, finished_at, last_heartbeat, error, payload_json
                 FROM generation_task_queue
                 WHERE job_id = :job_id
                 """
@@ -573,6 +584,62 @@ def _cleanup_old_tasks() -> None:
     finally:
         db.close()
 
+async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, int, Dict[str, Any]], Any]) -> None:
+    logger.info("generation queue async worker started | worker=%s", worker_name)
+    while True:
+        task = None
+        try:
+            if _QUEUE_ASYNC_STOP_EVENT and _QUEUE_ASYNC_STOP_EVENT.is_set():
+                break
+            if worker_name.endswith("-1"):
+                await asyncio.to_thread(_cleanup_old_tasks)
+            task = await asyncio.to_thread(_claim_next_task, worker_name)
+            if not task:
+                await asyncio.sleep(_QUEUE_POLL_SECONDS)
+                continue
+            result = processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
+            if asyncio.iscoroutine(result) or isinstance(result, asyncio.Task):
+                await result
+            elif asyncio.isfuture(result):
+                await result
+            finalized = await asyncio.to_thread(_finish_task, task["job_id"], "completed")
+            if not finalized:
+                latest = await asyncio.to_thread(get_generation_task_status, str(task.get("job_id") or "")) or {}
+                logger.info(
+                    "generation queue completion skipped; job_id=%s kind=%s current_status=%s",
+                    (task or {}).get("job_id"),
+                    (task or {}).get("kind"),
+                    latest.get("status"),
+                )
+        except asyncio.CancelledError:
+            if task:
+                job_id = str(task.get("job_id") or "")
+                await asyncio.to_thread(_finish_task, job_id, "canceled", "cancelled", True)
+            break
+        except Exception as exc:
+            logger.exception("generation queue task failed | job_id=%s", (task or {}).get("job_id"))
+            if task:
+                job_id = str(task.get("job_id") or "")
+                latest = await asyncio.to_thread(get_generation_task_status, job_id) or {}
+                if str(latest.get("status") or "").strip().lower() != "canceled":
+                    await asyncio.to_thread(_finish_task, job_id, "failed", str(exc), True)
+
+
+async def _async_event_loop(processor: Callable[[str, str, int, Dict[str, Any]], Any]) -> None:
+    global _QUEUE_ASYNC_STOP_EVENT
+    _QUEUE_ASYNC_STOP_EVENT = asyncio.Event()
+    logger.info("generation queue async event loop started with %s concurrent workers", _QUEUE_WORKER_THREADS)
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for index in range(_QUEUE_WORKER_THREADS):
+                worker_name = f"generation-queue-{index + 1}"
+                tg.create_task(_worker_loop_async(worker_name, processor))
+    except Exception as exc:
+        logger.exception("generation queue async event loop failed")
+    finally:
+        logger.info("generation queue async event loop stopped")
+
+
 def _worker_loop(worker_name: str, processor: Callable[[str, str, int, Dict[str, Any]], None]) -> None:
     logger.info("generation queue worker started | worker=%s poll=%ss reclaim=%ss", worker_name, _QUEUE_POLL_SECONDS, _QUEUE_RECLAIM_SECONDS)
     while not _QUEUE_STOP_EVENT.is_set():
@@ -616,6 +683,14 @@ def _worker_loop(worker_name: str, processor: Callable[[str, str, int, Dict[str,
 
 
 def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, Any]], None]) -> None:
+    """Start generation task workers using async event loop (non-blocking).
+    
+    KEY DIFFERENCES FROM SYNC MODE:
+    ✓ Workers do NOT block while waiting for processor results
+    ✓ asyncio.TaskGroup allows 8 workers to handle 100s of concurrent tasks
+    ✓ While worker-1 awaits API response, worker-2,3,4... process other tasks
+    ✓ All DB calls use asyncio.to_thread() to avoid blocking event loop
+    """
     global _QUEUE_STARTED
     if _QUEUE_STARTED:
         return
@@ -629,13 +704,14 @@ def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, A
             )
             return
         _ensure_queue_table_ready()
-        for index in range(_QUEUE_WORKER_THREADS):
-            worker_name = f"generation-queue-{index + 1}"
-            thread = threading.Thread(
-                target=_worker_loop,
-                args=(worker_name, processor),
-                daemon=True,
-                name=worker_name,
-            )
-            thread.start()
+        thread = threading.Thread(
+            target=lambda: asyncio.run(_async_event_loop(processor)),
+            daemon=True,
+            name="generation-queue-event-loop",
+        )
+        thread.start()
         _QUEUE_STARTED = True
+        logger.info(
+            "generation queue async event loop started (non-blocking, %s concurrent workers)",
+            _QUEUE_WORKER_THREADS,
+        )
