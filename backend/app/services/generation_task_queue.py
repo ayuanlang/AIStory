@@ -709,10 +709,12 @@ async def _async_event_loop(processor: Callable[[str, str, int, Dict[str, Any]],
     _QUEUE_ASYNC_STOP_EVENT = asyncio.Event()
     logger.info("generation queue async event loop started with %s concurrent workers", _QUEUE_WORKER_THREADS)
     try:
-        async with asyncio.TaskGroup() as tg:
-            for index in range(_QUEUE_WORKER_THREADS):
-                worker_name = f"generation-queue-{index + 1}"
-                tg.create_task(_worker_loop_async(worker_name, processor))
+        tasks = []
+        for index in range(_QUEUE_WORKER_THREADS):
+            worker_name = f"generation-queue-{index + 1}"
+            tasks.append(asyncio.create_task(_worker_loop_async(worker_name, processor)))
+        if tasks:
+            await asyncio.gather(*tasks)
     except Exception as exc:
         logger.exception("generation queue async event loop failed")
     finally:
