@@ -8,6 +8,23 @@ import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
 import { getUiLang, tUI } from '../lib/uiLang';
 
+const Toggle = ({ active, onClick, color = "bg-green-500", label }) => (
+    <button 
+        onClick={onClick}
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-primary ${active ? color : 'bg-gray-700'}`}
+        title={label}
+    >
+        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${active ? 'translate-x-6' : 'translate-x-1'}`} />
+    </button>
+);
+
+const RuleField = ({ label, children }) => (
+    <label className="block space-y-1">
+        <span className="text-[11px] uppercase tracking-wide text-gray-400">{label}</span>
+        {children}
+    </label>
+);
+
 const UserAdmin = () => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
@@ -36,6 +53,10 @@ const UserAdmin = () => {
     const [isAgentToolPolicySaving, setIsAgentToolPolicySaving] = useState(false);
     const [transactions, setTransactions] = useState([]);
     const [transactionFilterUser, setTransactionFilterUser] = useState(''); // User ID filter
+    const [transactionFilterTaskType, setTransactionFilterTaskType] = useState('');
+    const [transactionFilterProvider, setTransactionFilterProvider] = useState('');
+    const [transactionFilterModel, setTransactionFilterModel] = useState('');
+    const [transactionLimit, setTransactionLimit] = useState(100);
     const [isPricingBootstrapLoaded, setIsPricingBootstrapLoaded] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -4640,7 +4661,13 @@ const UserAdmin = () => {
 
     const fetchTransactionsOnly = async () => {
         try {
-            const data = await getTransactions(50, transactionFilterUser || null);
+            const data = await getTransactions(
+                transactionLimit,
+                transactionFilterUser || null,
+                transactionFilterTaskType || null,
+                transactionFilterProvider || null,
+                transactionFilterModel || null
+            );
             setTransactions(data.sort((a,b)=>b.id-a.id));
         } catch (e) {
             console.error("Failed to load transactions", e);
@@ -4652,7 +4679,7 @@ const UserAdmin = () => {
         if (activeTab === 'transactions') {
             fetchTransactionsOnly();
         }
-    }, [transactionFilterUser, activeTab]);
+    }, [transactionFilterUser, transactionFilterTaskType, transactionFilterProvider, transactionFilterModel, transactionLimit, activeTab]);
 
     useEffect(() => {
         if (activeTab === 'pricing' && !isPricingBootstrapLoaded) {
@@ -4850,32 +4877,6 @@ const UserAdmin = () => {
         
         { id: 'smtp', label: t('邮件 SMTP', 'Email SMTP'), icon: Mail },
     ];
-
-    const Toggle = ({ active, onClick, color = "bg-green-500", label }) => (
-        <button 
-            onClick={onClick}
-            className={`
-                relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-primary
-                ${active ? color : 'bg-gray-700'}
-            `}
-            title={label}
-        >
-            <span
-                className={`${
-                    active ? 'translate-x-6' : 'translate-x-1'
-                } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
-            />
-        </button>
-    );
-
-    const RuleField = ({ label, children }) => (
-        <label className="block space-y-1">
-            <span className="text-[11px] uppercase tracking-wide text-gray-400">{label}</span>
-            {children}
-        </label>
-    );
-
-
 
     const updateUser = async (userId, data) => {
         try {
@@ -6088,25 +6089,56 @@ const UserAdmin = () => {
                     {/* TRANSACTIONS TAB */}
                     {activeTab === 'transactions' && (
                         <div>
-                             <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-3 mb-4">
-                                <h3 className="text-lg font-bold">{t('最近交易（最近 50 条）', 'Recent Transactions (Last 50)')}</h3>
-                                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                                    <span className="text-sm text-gray-400">{t('按用户筛选：', 'Filter by User:')}</span>
-                                    <select 
-                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary min-w-[200px]"
+                             <div className="flex flex-col md:flex-row md:justify-between md:items-start gap-4 mb-6">
+                                <h3 className="text-lg font-bold">{t('交易记录', 'Transaction History')} ({transactions.length} record(s))</h3>
+                                <div className="flex flex-col sm:flex-row sm:items-center flex-wrap gap-2">
+                                    <select
+                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary min-w-[150px]"
                                         value={transactionFilterUser}
                                         onChange={(e) => setTransactionFilterUser(e.target.value)}
                                     >
                                         <option value="">{t('全部用户', 'All Users')}</option>
                                         {users.map(u => (
                                             <option key={u.id} value={u.id}>
-                                                {u.username} (ID: {u.id}) - {u.credits} {t('积分', 'credits')}
+                                                {u.username} (ID: {u.id})
                                             </option>
                                         ))}
                                     </select>
-                                    <button 
+                                    <input
+                                        type="text"
+                                        placeholder={t('按类型 (task_type) 筛选', 'Filter by Type')}
+                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary w-[140px]"
+                                        value={transactionFilterTaskType}
+                                        onChange={(e) => setTransactionFilterTaskType(e.target.value)}
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder={t('按渠道 (provider) 筛选', 'Filter by Provider')}
+                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary w-[160px]"
+                                        value={transactionFilterProvider}
+                                        onChange={(e) => setTransactionFilterProvider(e.target.value)}
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder={t('按模型 (model) 筛选', 'Filter by Model')}
+                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary w-[140px]"
+                                        value={transactionFilterModel}
+                                        onChange={(e) => setTransactionFilterModel(e.target.value)}
+                                    />
+                                    <div className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded px-2">
+                                        <span className="text-xs text-gray-400">{t('Limit:', 'Limit:')}</span>
+                                        <input 
+                                            type="number"
+                                            className="bg-transparent text-sm p-1.5 focus:outline-none w-16 text-gray-200"
+                                            value={transactionLimit}
+                                            onChange={(e) => setTransactionLimit(Number(e.target.value))}
+                                            min="10"
+                                            max="1000"
+                                        />
+                                    </div>
+                                    <button
                                         onClick={fetchTransactionsOnly}
-                                        className="p-2 bg-gray-700 hover:bg-gray-600 rounded text-gray-300"
+                                        className="p-2 ml-1 bg-gray-700 hover:bg-gray-600 rounded text-gray-300 transition-colors"
                                         title={t('刷新', 'Refresh')}
                                     >
                                         <RefreshCw size={16} />
@@ -6115,15 +6147,18 @@ const UserAdmin = () => {
                              </div>
                              <div className="md:hidden space-y-3">
                                     {transactions.map(txn => (
-                                        <div key={`txn-card-${txn.id}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className="min-w-0">
-                                                    <div className="text-sm font-semibold text-white">{formatAdminDateTime(txn.created_at)}</div>
-                                                    <div className="text-xs text-gray-400 mt-1">User #{txn.user_id}</div>
-                                            </div>
-                                                <span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300 shrink-0">{txn.task_type}</span>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-3 text-sm">
+                                      <div key={`txn-card-${txn.id}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+                                          <div className="flex items-start justify-between gap-3">
+                                              <div className="min-w-0">
+                                                  <div className="text-sm font-semibold text-white">{formatAdminDateTime(txn.created_at)}</div>
+                                                  <div className="text-xs text-gray-400 mt-1">User #{txn.user_id}</div>
+                                              </div>
+                                              <div className="flex flex-col items-end gap-1">
+                                                  <span className="bg-gray-800 px-2 py-0.5 rounded text-[10px] uppercase text-gray-300 shrink-0">{txn.provider_alias || txn.provider || '-'}</span>
+                                                  <span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300 shrink-0">{txn.task_type || '-'}</span>
+                                              </div>
+                                          </div>
+                                          <div className="grid grid-cols-2 gap-3 text-sm">
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
                                                 <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('金额', 'Amount')}</div>
                                                     <div className={`font-mono ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>{txn.amount > 0 ? '+' : ''}{txn.amount}</div>
@@ -6147,40 +6182,47 @@ const UserAdmin = () => {
                             </div>
                              <div className="hidden md:block overflow-x-auto">
                                 <table className="w-full text-left border-collapse text-sm">
-                                    <thead>
-                                        <tr className="border-b border-gray-800 text-gray-400">
-                                            <th className="p-3">{t('时间', 'Time')}</th>
-                                            <th className="p-3">{t('用户 ID', 'User ID')}</th>
-                                            <th className="p-3">{t('类型', 'Type')}</th>
-                                            <th className="p-3">{t('详情', 'Details')}</th>
-                                            <th className="p-3 text-right">{t('金额', 'Amount')}</th>
-                                            <th className="p-3 text-right">{t('余额', 'Balance')}</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {transactions.map(txn => (
-                                            <tr key={txn.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
-                                                <td className="p-3 text-gray-400">
-                                                    {formatAdminDateTime(txn.created_at)}
-                                                </td>
-                                                <td className="p-3">{txn.user_id}</td>
-                                                <td className="p-3"><span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300">{txn.task_type}</span></td>
-                                                <td className="p-3 text-xs text-gray-500">
-                                                    <div className="mb-2 w-[350px]">
-                                                        {renderTransactionProviderUsage(txn)}
-                                                    </div>
-                                                    <div className="max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all w-[350px] bg-gray-900/50 p-1 rounded border border-gray-800 font-mono">
-                                                        {JSON.stringify(txn.details, null, 2)}
-                                                    </div>
-                                                </td>
-                                                <td className={`p-3 text-right font-mono ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                                    {txn.amount > 0 ? '+' : ''}{txn.amount}
-                                                </td>
-                                                <td className="p-3 text-right font-mono text-gray-400">{txn.balance_after}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                      <thead>
+                                          <tr className="border-b border-gray-800 text-gray-400">
+                                              <th className="p-3">{t('时间', 'Time')}</th>
+                                              <th className="p-3">{t('用户 ID', 'User ID')}</th>
+                                              <th className="p-3">{t('类型', 'Type')}</th>
+                                              <th className="p-3">{t('渠道', 'Provider')}</th>
+                                              <th className="p-3">{t('模型', 'Model')}</th>
+                                              <th className="p-3 max-w-[300px]">{t('详情', 'Details')}</th>
+                                              <th className="p-3 text-right">{t('金额', 'Amount')}</th>
+                                              <th className="p-3 text-right">{t('余额', 'Balance')}</th>
+                                          </tr>
+                                      </thead>
+                                      <tbody>
+                                          {transactions.map(txn => (
+                                              <tr key={txn.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
+                                                  <td className="p-3 text-gray-400 whitespace-nowrap">
+                                                      {formatAdminDateTime(txn.created_at)}
+                                                  </td>
+                                                  <td className="p-3">{txn.user_id}</td>
+                                                  <td className="p-3"><span className="bg-gray-800 px-2 py-0.5 rounded text-xs uppercase text-gray-300">{txn.task_type || '-'}</span></td>
+                                                  <td className="p-3 text-xs text-gray-400 text-center whitespace-nowrap">{txn.provider_alias || txn.provider || '-'}</td>
+                                                  <td className="p-3 text-xs text-gray-400 text-center whitespace-nowrap">{txn.model || '-'}</td>
+                                                  <td className="p-3 text-xs text-gray-500 w-[300px] min-w-[200px]">
+                                                      {txn.description && (
+                                                        <div className="mb-2 text-[11px] text-gray-300 font-medium">{txn.description} {txn.project_id ? `[Proj: ${txn.project_id}]` : ''} {txn.episode_id ? `[Ep: ${txn.episode_id}]` : ''}</div>
+                                                      )}
+                                                      <div className="mb-2 w-full">
+                                                          {renderTransactionProviderUsage(txn)}
+                                                      </div>
+                                                      <div className="max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all bg-gray-900/50 p-1 w-full rounded border border-gray-800 font-mono">
+                                                          {JSON.stringify(txn.details, null, 2)}
+                                                      </div>
+                                                  </td>
+                                                  <td className={`p-3 text-right font-mono whitespace-nowrap ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                                      {txn.amount > 0 ? '+' : ''}{txn.amount}
+                                                  </td>
+                                                  <td className="p-3 text-right font-mono text-gray-400 whitespace-nowrap">{txn.balance_after}</td>
+                                              </tr>
+                                          ))}
+                                      </tbody>
+                                  </table>
                             </div>
                         </div>
                     )}

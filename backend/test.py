@@ -1,6 +1,4 @@
-with open("app/api/endpoints.py", "r", encoding="utf-8") as f:
-    text = f.read()
-
-lines = text.split("\n")
-for i in range(5070, min(5150, len(lines))):
-    print(f"Line {i+1}: {lines[i]}")
+from app.services.auth_service import create_access_token 
+from datetime import timedelta 
+token = create_access_token(data={'sub': '4'}, expires_delta=timedelta(minutes=15)) 
+print(token) 

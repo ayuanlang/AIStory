@@ -6,11 +6,14 @@ class TransactionOut(BaseModel):
     user_id: int
     amount: int
     balance_after: int
+    description: Optional[str] = None
     task_type: Optional[str] = None
     provider: Optional[str] = None
     provider_alias: Optional[str] = None
     model: Optional[str] = None
     details: Optional[Any] = None
+    project_id: Optional[int] = None
+    episode_id: Optional[int] = None
     created_at: str
     
     class Config:

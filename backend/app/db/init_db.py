@@ -590,6 +590,48 @@ def _ensure_minimum_runtime_schema(*, is_postgres: bool) -> None:
 
     logger.info("Critical schema migration: complete")
 
+
+def _ensure_transaction_schema(is_postgres: bool = False):
+    from sqlalchemy import inspect, text
+    from .session import engine
+    from ..models.all_models import TransactionHistory, TransactionAction
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        inspector = inspect(engine)
+
+        # Ensure transaction_history columns
+        if inspector.has_table("transaction_history"):
+            cols = {c['name'] for c in inspector.get_columns("transaction_history")}
+            with engine.begin() as conn:
+                if "description" not in cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE transaction_history ADD COLUMN description VARCHAR"))
+                    else:
+                        conn.execute(text("ALTER TABLE transaction_history ADD COLUMN description VARCHAR"))
+                    logger.info("Added description to transaction_history")
+
+        # Ensure transaction_action columns
+        if inspector.has_table("transaction_action"):
+            cols = {c['name'] for c in inspector.get_columns("transaction_action")}
+            with engine.begin() as conn:
+                if "project_id" not in cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE transaction_action ADD COLUMN project_id INTEGER REFERENCES projects(id)"))
+                    else:
+                        conn.execute(text("ALTER TABLE transaction_action ADD COLUMN project_id INTEGER REFERENCES projects(id)"))
+                        
+                if "episode_id" not in cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE transaction_action ADD COLUMN episode_id INTEGER REFERENCES episodes(id)"))
+                    else:
+                        conn.execute(text("ALTER TABLE transaction_action ADD COLUMN episode_id INTEGER REFERENCES episodes(id)"))
+                    logger.info("Added project_id and episode_id to transaction_action")
+                    
+    except Exception as e:
+        logger.error(f"Failed to migrate transaction tables: {e}")
+
 def check_and_migrate_tables(*, critical_only: bool = False):
     # logger.info(f"Starting migration check. Dialect: {engine.dialect.name}")
     
@@ -606,6 +648,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             logger.error(f"Failed to ensure system_api_settings table: {e}")
 
         _ensure_minimum_runtime_schema(is_postgres=is_postgres)
+        _ensure_transaction_schema(is_postgres=is_postgres)
 
         try:
             _ensure_missing_table_columns("system_api_settings", SystemAPISetting, is_postgres=is_postgres)
@@ -724,8 +767,18 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             if not inspector.has_table("transaction_action"):
                 TransactionAction.__table__.create(bind=engine, checkfirst=True)
                 logger.info("Created transaction_action table")
+            else:
+                # Add project_id and episode_id to existing transaction_action table
+                ta_cols = {c['name'] for c in inspector.get_columns('transaction_action')}
+                with engine.begin() as conn:
+                    if "project_id" not in ta_cols:
+                        conn.execute(text("ALTER TABLE transaction_action ADD COLUMN project_id INTEGER REFERENCES projects(id)"))
+                        logger.info("Added project_id to transaction_action")
+                    if "episode_id" not in ta_cols:
+                        conn.execute(text("ALTER TABLE transaction_action ADD COLUMN episode_id INTEGER REFERENCES episodes(id)"))
+                        logger.info("Added episode_id to transaction_action")
         except Exception as e:
-            logger.error(f"Failed to ensure transaction_action table: {e}")
+            logger.error(f"Failed to ensure/migrate transaction_action table: {e}")
 
         # Cleanup legacy duplicate table: transaction_actions (plural).
         # Keep this guard conservative: only drop when table exists and is empty.

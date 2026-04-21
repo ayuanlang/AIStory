@@ -3202,10 +3202,13 @@ export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.po
 export const getSystemAIAssistantApply = async (payload = {}) => (await api.post('/settings/system/ai-assistant/apply', payload || {})).data;
 export const aiAssistantExchangeRate = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/exchange-rate', payload || {})).data;
 export const aiAssistantFetchPricing = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/fetch-pricing', payload || {})).data;
-export const getTransactions = async (limit=100, userId=null) => {
+export const getTransactions = async (limit=100, userId=null, taskType=null, provider=null, model=null) => {
     let url = `/billing/transactions?limit=${limit}`;
     if (userId) url += `&user_id=${userId}`;
-    const key = buildSingleFlightKey('GET:/billing/transactions', { limit, userId: userId || '' });
+    if (taskType) url += `&task_type=${taskType}`;
+    if (provider) url += `&provider=${provider}`;
+    if (model) url += `&model=${model}`;
+    const key = buildSingleFlightKey('GET:/billing/transactions', { limit, userId: userId || '', taskType: taskType || '', provider: provider || '', model: model || '' });
     return runSingleFlight(key, async () => (await api.get(url)).data);
 };
 export const updateUserCredits = async (userId, credits, mode='set') => (await api.post(`/billing/users/${userId}/credits`, { amount: credits, mode })).data;

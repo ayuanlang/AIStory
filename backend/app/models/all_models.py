@@ -52,14 +52,14 @@ class TransactionHistory(Base):
     amount = Column(Integer, nullable=False) # Negative for cost, positive for refill
     balance_after = Column(Integer, nullable=False) # Snapshot of balance
     
-    task_type = Column(String, index=True)
-    provider = Column(String, nullable=True)
-    model = Column(String, nullable=True)
-    details = Column(JSON, default={}) # Extra metadata (e.g. prompt length, status)
-    
+    description = Column(String, nullable=True) # 支出/充值描述
+
+    details = Column(JSON, default={}) # Extra metadata (e.g. status)
+
     created_at = Column(String, default=now_bj_iso)
-    
+
     user = relationship("User", back_populates="transactions")
+    action_audit = relationship("TransactionAction", foreign_keys="[TransactionAction.transaction_id]", back_populates="ledger_entry", uselist=False)
 
 class SystemLog(Base):
     __tablename__ = "system_logs"
@@ -70,8 +70,9 @@ class SystemLog(Base):
     details = Column(Text, nullable=True)
     ip_address = Column(String, nullable=True)
     timestamp = Column(String, default=now_bj_iso)
-    
+
     user = relationship("User", back_populates="system_logs")
+
 
 class Project(Base):
     __tablename__ = "projects"
@@ -569,6 +570,11 @@ class TransactionAction(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     transaction_id = Column(Integer, ForeignKey("transaction_history.id"), index=True, nullable=True)
+
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=True)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=True)
+    project = relationship("Project", foreign_keys=[project_id])
+    episode = relationship("Episode", foreign_keys=[episode_id])
     reservation_tx_id = Column(Integer, ForeignKey("transaction_history.id"), index=True, nullable=True)
     settlement_tx_id = Column(Integer, ForeignKey("transaction_history.id"), index=True, nullable=True)
 
@@ -578,6 +584,8 @@ class TransactionAction(Base):
     model = Column(String, index=True, nullable=True)
 
     system_api_id = Column(Integer, ForeignKey("system_api_settings.id"), index=True, nullable=True)
+
+    ledger_entry = relationship("TransactionHistory", foreign_keys="[TransactionAction.transaction_id]", back_populates="action_audit")
     matched_rule_id = Column(Integer, ForeignKey("system_api_billing_rules.id"), index=True, nullable=True)
 
     reserved_cost = Column(Integer, default=0)

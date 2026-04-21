@@ -20145,18 +20145,33 @@ def get_billing_taxonomy_preview(
 @router.get("/billing/transactions", response_model=List[TransactionOut])
 def get_transactions(
     user_id: Optional[int] = None,
+    task_type: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
     limit: int = 100,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser and (user_id and user_id != current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
-    
+
     query = db.query(TransactionHistory)
-    
+
+    if task_type or provider or model:
+        query = query.outerjoin(TransactionAction, TransactionAction.transaction_id == TransactionHistory.id)
+        if task_type:
+            query = query.filter(TransactionAction.task_type == task_type)
+        if provider:
+            query = query.filter(TransactionAction.provider == provider)
+        if model:
+            query = query.filter(TransactionAction.model == model)
+
+    from sqlalchemy.orm import joinedload
+    query = query.options(joinedload(TransactionHistory.action_audit))
+
     # Non-superusers can only see their own
     target_id = user_id if user_id else (None if current_user.is_superuser else current_user.id)
-    
+
     if target_id:
         query = query.filter(TransactionHistory.user_id == target_id)
 
@@ -20164,18 +20179,34 @@ def get_transactions(
     alias_map = _build_provider_alias_lookup(db)
     results: List[Dict[str, Any]] = []
     for row in rows:
-        provider_text = str(getattr(row, "provider", "") or "").strip() or None
+        # Action audit holds provider, model, task_type, etc.
+        action = row.action_audit
+        provider_text = str(getattr(action, "provider", "") or "").strip() or None if action else None
+        model_text = action.model if action else None
+        task_text = action.task_type if action else None
+        project_id = action.project_id if action else None
+        episode_id = action.episode_id if action else None
+        
         provider_alias = _resolve_provider_alias(alias_map, provider_text)
         details_payload = _attach_provider_alias_deep(getattr(row, "details", None), alias_map)
+        
+        # Support fallback description
+        display_description = row.description
+        if not display_description and task_text:
+            display_description = task_text
+            
         payload = {
             "id": row.id,
             "user_id": row.user_id,
             "amount": row.amount,
             "balance_after": row.balance_after,
-            "task_type": row.task_type,
-            "provider": row.provider,
-            "model": row.model,
+            "description": display_description,
+            "task_type": task_text,
+            "provider": provider_text,
+            "model": model_text,
             "details": details_payload,
+            "project_id": project_id,
+            "episode_id": episode_id,
             "created_at": row.created_at,
         }
         if provider_alias:

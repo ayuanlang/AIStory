@@ -2187,6 +2187,8 @@ class BillingService:
         task_type: str,
         provider: Optional[str],
         model: Optional[str],
+        project_id: Optional[int] = None,
+        episode_id: Optional[int] = None,
         transaction_id: Optional[int] = None,
         reservation_tx_id: Optional[int] = None,
         settlement_tx_id: Optional[int] = None,
@@ -2204,6 +2206,8 @@ class BillingService:
     ) -> None:
         action = TransactionAction(
             user_id=int(user_id),
+            project_id=project_id,
+            episode_id=episode_id,
             transaction_id=transaction_id,
             reservation_tx_id=reservation_tx_id,
             settlement_tx_id=settlement_tx_id,
@@ -2421,9 +2425,7 @@ class BillingService:
             user_id=user_id,
             amount=-reserved_cost,
             balance_after=user.credits or 0,
-            task_type=task_type,
-            provider=resolved_provider,
-            model=resolved_model,
+            description=reserve_details.get("description", task_type),
             details=reserve_details
         )
         db.add(tx)
@@ -2435,6 +2437,8 @@ class BillingService:
             task_type=task_type,
             provider=resolved_provider,
             model=resolved_model,
+            project_id=reserve_details.get("project_id"),
+            episode_id=reserve_details.get("episode_id"),
             transaction_id=tx.id,
             reservation_tx_id=tx.id,
             system_api_id=reserve_breakdown.get("system_api_id"),
@@ -2486,6 +2490,11 @@ class BillingService:
         if not user:
             return tx
 
+        tx_action = db.query(TransactionAction).filter(TransactionAction.transaction_id == tx.id).order_by(TransactionAction.id.desc()).first()
+        tx_task_type = tx_action.task_type if tx_action else ""
+        tx_provider = tx_action.provider if tx_action else ""
+        tx_model = tx_action.model if tx_action else ""
+
         reserved_cost = int(abs(tx.amount))
         user.credits = (user.credits or 0) + reserved_cost
 
@@ -2502,9 +2511,7 @@ class BillingService:
             user_id=tx.user_id,
             amount=reserved_cost,
             balance_after=user.credits or 0,
-            task_type=tx.task_type,
-            provider=tx.provider,
-            model=tx.model,
+            description=f"Refund for {tx.description or 'task'}",
             details=refund_details,
         )
         db.add(refund_tx)
@@ -2514,9 +2521,11 @@ class BillingService:
             db,
             user_id=tx.user_id,
             stage="CANCELED",
-            task_type=tx.task_type,
-            provider=tx.provider,
-            model=tx.model,
+            task_type=tx_task_type,
+            provider=tx_provider,
+            model=tx_model,
+            project_id=res_action.project_id if res_action else None,
+            episode_id=res_action.episode_id if res_action else None,
             transaction_id=tx.id,
             reservation_tx_id=tx.id,
             settlement_tx_id=refund_tx.id,
@@ -2555,9 +2564,9 @@ class BillingService:
                 "reservation_tx_id": tx.id,
                 "refund_tx_id": refund_tx.id,
                 "user_id": tx.user_id,
-                "task_type": tx.task_type,
-                "provider": tx.provider,
-                "model": tx.model,
+                "task_type": tx_task_type,
+                "provider": tx_provider,
+                "model": tx_model,
                 "reserved_cost": reserved_cost,
                 "error": str(error_msg or "")[:500] if error_msg else "",
                 "reservation_billing_breakdown": refund_details.get("reservation_billing_breakdown") or {},
@@ -2593,14 +2602,14 @@ class BillingService:
             details.get("provider")
             or details.get("resolved_provider")
             or smart_routing.get("provider")
-            or reservation_tx.provider
+            or res_provider
             or ""
         ).strip() or None
         settle_model = str(
             details.get("model")
             or details.get("resolved_model")
             or smart_routing.get("model")
-            or reservation_tx.model
+            or res_model
             or ""
         ).strip() or None
 
@@ -2612,15 +2621,15 @@ class BillingService:
 
         breakdown = BillingService.estimate_cost_breakdown(
             db,
-            reservation_tx.task_type,
+            res_task_type,
             settle_provider,
             settle_model,
             details=details,
             phase="settle",
             reserved_cost_fallback=reserved_cost,
         )
-        settle_provider = str(breakdown.get("provider") or settle_provider or reservation_tx.provider or "").strip() or None
-        settle_model = str(breakdown.get("model") or settle_model or reservation_tx.model or "").strip() or None
+        settle_provider = str(breakdown.get("provider") or settle_provider or res_provider or "").strip() or None
+        settle_model = str(breakdown.get("model") or settle_model or res_model or "").strip() or None
         actual_cost = int(breakdown.get("total_cost") or 0)
 
         delta = int(actual_cost - reserved_cost)
@@ -2636,9 +2645,7 @@ class BillingService:
                 user_id=user.id,
                 amount=refund,
                 balance_after=user.credits or 0,
-                task_type=reservation_tx.task_type,
-                provider=settle_provider,
-                model=settle_model,
+                description=f"Partial refund for {reservation_tx.description or 'task'}",
                 details={
                     "status": "REFUND",
                     "reason": "RESERVATION_SETTLEMENT",
@@ -2658,9 +2665,7 @@ class BillingService:
                     user_id=user.id,
                     amount=-can_deduct,
                     balance_after=user.credits or 0,
-                    task_type=reservation_tx.task_type,
-                    provider=settle_provider,
-                    model=settle_model,
+                    description=f"Extra charge for {reservation_tx.description or 'task'}",
                     details={
                         "status": "CHARGE",
                         "reason": "RESERVATION_SETTLEMENT",
@@ -2703,7 +2708,7 @@ class BillingService:
             "usage_metadata": BillingService._compact_usage_metadata_for_audit(breakdown.get("usage_metadata") or {}),
             "billing_trace": BillingService._build_billing_trace(
                 breakdown,
-                task_type=reservation_tx.task_type,
+                task_type=res_task_type,
                 provider=settle_provider,
                 model=settle_model,
                 phase="settle",
@@ -2716,8 +2721,8 @@ class BillingService:
         if usage_source:
             res_details["usage_source"] = usage_source
         reservation_tx.details = res_details
-        reservation_tx.provider = settle_provider
-        reservation_tx.model = settle_model
+        res_provider = settle_provider
+        res_model = settle_model
 
         if settlement_tx is not None:
             db.flush()
@@ -2726,9 +2731,11 @@ class BillingService:
             db,
             user_id=user.id,
             stage="SETTLED",
-            task_type=reservation_tx.task_type,
+            task_type=res_task_type,
             provider=settle_provider,
             model=settle_model,
+            project_id=res_action.project_id if res_action else None,
+            episode_id=res_action.episode_id if res_action else None,
             transaction_id=reservation_tx.id,
             reservation_tx_id=reservation_tx.id,
             settlement_tx_id=settlement_tx.id if settlement_tx else None,
@@ -2764,7 +2771,7 @@ class BillingService:
                 "reservation_tx_id": reservation_tx.id,
                 "settlement_tx_id": settlement_tx.id if settlement_tx else None,
                 "user_id": user.id,
-                "task_type": reservation_tx.task_type,
+                "task_type": res_task_type,
                 "provider": settle_provider,
                 "model": settle_model,
                 "reserved_cost": reserved_cost,
@@ -2888,9 +2895,7 @@ class BillingService:
             user_id=user_id,
             amount=-final_cost,
             balance_after=user.credits,
-            task_type=task_type,
-            provider=resolved_provider,
-            model=resolved_model,
+            description=tx_details.get("description", task_type),
             details=tx_details
         )
         db.add(transaction)
@@ -2903,6 +2908,8 @@ class BillingService:
             task_type=task_type,
             provider=resolved_provider,
             model=resolved_model,
+            project_id=tx_details.get("project_id"),
+            episode_id=tx_details.get("episode_id"),
             transaction_id=transaction.id,
             system_api_id=breakdown.get("system_api_id"),
             matched_rule_id=breakdown.get("matched_rule_id"),
@@ -2952,9 +2959,7 @@ class BillingService:
                 user_id=user_id,
                 amount=0,
                 balance_after=user.credits or 0,
-                task_type=task_type,
-                provider=provider,
-                model=model,
+                description=fail_details.get("description", task_type),
                 details=fail_details
             )
             db.add(transaction)

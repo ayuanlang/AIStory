@@ -5829,7 +5829,10 @@ Negative prompt constraints: {neg_prompt}"""
             if normalized == ".jpe":
                 return ".jpg"
             if normalized:
-                return normalized
+                # Discard any query parameters or URL encoding that might have leaked into extension
+                normalized = normalized.split('?')[0].split('%')[0]
+                if normalized.startswith('.') and len(normalized) <= 5: # basic sanity check
+                    return normalized
             guessed = mimetypes.guess_extension(mime or "") or ""
             if guessed == ".jpe":
                 guessed = ".jpg"
@@ -5935,6 +5938,11 @@ Negative prompt constraints: {neg_prompt}"""
         if not raw:
             return None
         if self._is_public_http_url(raw):
+            if "?" in raw or "%" in raw:
+                # RunningHub APIs (especially Vidu) often fail to parse complex URLs like presigned S3 URLs
+                uploaded_url = self._upload_runninghub_binary_ref(raw, api_key=api_key, base_url=base_url)
+                if uploaded_url:
+                    return uploaded_url
             return raw
 
         uploaded_url = self._upload_runninghub_binary_ref(raw, api_key=api_key, base_url=base_url)
@@ -6428,7 +6436,15 @@ Negative prompt constraints: {neg_prompt}"""
             _set_audio_flags(payload)
         elif "start-end-to-video" in endpoint_lower or "start-to-end" in endpoint_lower:
             first_image = image_refs[0] if image_refs else None
-            last_image = resolved_last_frame or (image_refs[1] if len(image_refs) > 1 else None)
+            # Only casually grab the second image if the API endpoint inherently expects two keyframes AND we actually got two images
+            # Do not grab it for start-to-end generic tasks unless the user explicitly provided two references meant to be first & last
+            last_image = resolved_last_frame
+            if not last_image and len(image_refs) >= 2:
+                # To prevent confusing multi-character entity references as an end frame, 
+                # we map it only if there are exactly 2 images, or if we confidently know this mode. 
+                if len(image_refs) == 2:
+                    last_image = image_refs[1]
+            
             if not first_image:
                 return {"error": "RunningHub start-end video requires a first-frame image input", "submit_failed": True}
             if "/rhart-video-" in endpoint_lower:
@@ -6486,11 +6502,16 @@ Negative prompt constraints: {neg_prompt}"""
                 if "/openapi/v2/rhart-video" not in endpoint_lower:
                     if primary_field != "imageUrls":
                         payload["imageUrls"] = image_refs[:3]
-                    if primary_field != "firstImageUrl":
-                        payload["firstImageUrl"] = first_image
+                    
+                    # Prevent setting the second reference image as the 'lastImageUrl' by default
+                    # unless it's a specific Vidu generation parameter or start-end mode.
+                    # This avoids poisoning the last frame generation with e.g. character mapping images.
+                    pass
             if resolved_last_frame and ("/openapi/v2/rhart-video/sparkvideo" in endpoint_lower):
                 payload["lastFrameUrl"] = resolved_last_frame
             elif resolved_last_frame and "/rhart-video-" in endpoint_lower:
+                payload["lastImageUrl"] = resolved_last_frame
+            elif resolved_last_frame:
                 payload["lastImageUrl"] = resolved_last_frame
 
             payload["duration"] = normalized_video_duration
