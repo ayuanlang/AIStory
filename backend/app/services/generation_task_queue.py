@@ -2,6 +2,19 @@ import json
 import logging
 import os
 import asyncio
+
+QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
+def _load_queue_config():
+    if os.path.exists(QUEUE_CONFIG_FILE):
+        try:
+            with open(QUEUE_CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"queue_threads": 20, "callback_threads": 20}
+
+_q_conf = _load_queue_config()
+
 import threading
 import time
 import atexit
@@ -31,9 +44,9 @@ _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS",
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "900") or 900.0))
 _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
 _DEFAULT_WORKER_THREADS = min(8, max(2, int(DB_POOL_SIZE_EFFECTIVE or 2)))
-_REQUESTED_WORKER_THREADS = max(1, int(os.getenv("GENERATION_QUEUE_WORKER_THREADS", str(_DEFAULT_WORKER_THREADS)) or _DEFAULT_WORKER_THREADS))
+_REQUESTED_WORKER_THREADS = max(1, int(_q_conf.get("queue_threads", 20)))
 # Leave headroom for API requests and auth flows by capping queue workers.
-_WORKER_THREAD_CAP = max(1, _POOL_CAPACITY // 2)
+_WORKER_THREAD_CAP = max(20, _POOL_CAPACITY // 2)
 _QUEUE_WORKER_THREADS = max(1, min(_REQUESTED_WORKER_THREADS, _WORKER_THREAD_CAP))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None
@@ -470,7 +483,7 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
         row = db.execute(
             text(
                 """
-                SELECT job_id, kind, user_id, payload_json
+                SELECT job_id, kind, user_id, payload_json, created_at
                 FROM generation_task_queue
                 WHERE status = 'queued'
                    OR (status = 'running' AND COALESCE(last_heartbeat, 0) < :cutoff)
@@ -484,16 +497,19 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
             return None
 
         now = time.time()
+        created_at = row.get("created_at") or now
+        is_expired = (now - created_at) > 1800.0
+
         result = db.execute(
             text(
                 """
                 UPDATE generation_task_queue
-                SET status = 'running',
+                SET status = :next_status,
                     worker_id = :worker_id,
                     started_at = COALESCE(started_at, :started_at),
                     last_heartbeat = :heartbeat,
-                    finished_at = NULL,
-                    error = NULL,
+                    finished_at = :finished_at,
+                    error = :error,
                     attempt_count = attempt_count + 1
                 WHERE job_id = :job_id
                   AND (status = 'queued' OR (status = 'running' AND COALESCE(last_heartbeat, 0) < :cutoff))
@@ -505,10 +521,17 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
                 "started_at": now,
                 "heartbeat": now,
                 "cutoff": cutoff,
+                "next_status": 'failed' if is_expired else 'running',
+                "finished_at": now if is_expired else None,
+                "error": 'Task queued for over 30 minutes. Timed out.' if is_expired else None,
             },
         )
         db.commit()
         if (result.rowcount or 0) < 1:
+            return None
+        
+        if is_expired:
+            logger.warning("Claimed task %s but it was created > 30 mins ago. Marked as failed.", row["job_id"])
             return None
         try:
             payload = json.loads(str(row["payload_json"] or "{}"))
@@ -560,25 +583,52 @@ def _finish_task(job_id: str, *, status: str, error: Optional[str] = None, only_
         db.close()
 
 _QUEUE_LAST_CLEANUP_TIME = 0.0
+_QUEUE_LAST_TIMEOUT_SWEEP_TIME = 0.0
 
 def _cleanup_old_tasks() -> None:
-    global _QUEUE_LAST_CLEANUP_TIME
+    global _QUEUE_LAST_CLEANUP_TIME, _QUEUE_LAST_TIMEOUT_SWEEP_TIME
     now = time.time()
-    if now - _QUEUE_LAST_CLEANUP_TIME < 3600.0:
+    if now - _QUEUE_LAST_TIMEOUT_SWEEP_TIME < 60.0:
         return
-    _QUEUE_LAST_CLEANUP_TIME = now
+    _QUEUE_LAST_TIMEOUT_SWEEP_TIME = now
+    
+    # We sweep for timeouts every minute, but full deletes only every hour.
+    do_full_cleanup = False
+    if now - _QUEUE_LAST_CLEANUP_TIME >= 3600.0:
+        _QUEUE_LAST_CLEANUP_TIME = now
+        do_full_cleanup = True
     cutoff = now - 86400.0  # 1 day cutoff
+    timeout_cutoff = now - 1800.0 # 30 min timeout for running tasks
     db = SessionLocal()
     try:
-        result = db.execute(
+        # Mark 30+ min long running tasks as failed
+        r_timeout = db.execute(
             text(
-                "DELETE FROM generation_task_queue WHERE status IN ('completed', 'failed', 'canceled') AND created_at < :cutoff"
+                """
+                UPDATE generation_task_queue 
+                SET status = 'failed', 
+                    error = 'Task running for over 30 minutes. Timed out.',
+                    finished_at = :now
+                WHERE status = 'running' 
+                  AND COALESCE(started_at, created_at) < :timeout_cutoff
+                """
             ),
-            {"cutoff": cutoff},
+            {"now": now, "timeout_cutoff": timeout_cutoff},
         )
         db.commit()
-        if (result.rowcount or 0) > 0:
-            logger.info("generation queue cleanup deleted %s old tasks", result.rowcount)
+        if (r_timeout.rowcount or 0) > 0:
+            logger.warning("generation queue sweep timed out %s running tasks (>30m)", r_timeout.rowcount)
+
+        if do_full_cleanup:
+            result = db.execute(
+                text(
+                    "DELETE FROM generation_task_queue WHERE status IN ('completed', 'failed', 'canceled') AND created_at < :cutoff"
+                ),
+                {"cutoff": cutoff},
+            )
+            db.commit()
+            if (result.rowcount or 0) > 0:
+                logger.info("generation queue cleanup deleted %s old tasks", result.rowcount)
     except Exception as exc:
         logger.warning("generation queue cleanup failed: %s", exc)
     finally:
@@ -598,10 +648,16 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
                 await asyncio.sleep(_QUEUE_POLL_SECONDS)
                 continue
             result = processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
-            if asyncio.iscoroutine(result) or isinstance(result, asyncio.Task):
-                await result
-            elif asyncio.isfuture(result):
-                await result
+            try:
+                if asyncio.iscoroutine(result) or isinstance(result, asyncio.Task):
+                    await asyncio.wait_for(result, timeout=1800.0)
+                elif asyncio.isfuture(result):
+                    await asyncio.wait_for(result, timeout=1800.0)
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.warning("generation queue task timed out (exceeded 30 minutes) | job_id=%s", (task or {}).get("job_id"))
+                job_id = str(task.get("job_id") or "")
+                await asyncio.to_thread(_finish_task, job_id, "failed", "Task execution exceeded 30 minutes. Timed out.", True)
+                continue
             finalized = await asyncio.to_thread(_finish_task, task["job_id"], "completed")
             if not finalized:
                 latest = await asyncio.to_thread(get_generation_task_status, str(task.get("job_id") or "")) or {}

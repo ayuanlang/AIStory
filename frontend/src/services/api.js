@@ -3233,6 +3233,8 @@ export const updateFunctionApiConfig = async (functionName, payload) => {
 };
 
 export const getAdminQueueTasks = async () => (await api.get('/admin/queue/tasks')).data;
+export const getAdminQueueConfig = async () => (await api.get('/admin/queue/config')).data;
+export const updateAdminQueueConfig = async (payload) => (await api.put('/admin/queue/config', payload)).data;
 export const cancelAdminQueueTask = async (jobId) => (await api.post(`/admin/queue/tasks/${jobId}/cancel`)).data;
 export const cancelAllQueuedAdminTasks = async () => (await api.post('/admin/queue/tasks/cancel-queued')).data;
 

@@ -1,4 +1,19 @@
 
+import json
+import os
+
+QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
+def _load_queue_config():
+    if os.path.exists(QUEUE_CONFIG_FILE):
+        try:
+            with open(QUEUE_CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"queue_threads": 20, "callback_threads": 20}
+
+_q_conf = _load_queue_config()
+
 from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query, Response
 from fastapi.responses import StreamingResponse
 import logging
@@ -518,7 +533,7 @@ GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS = max(5, int(os.getenv("GENERA
 GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS", "2000")))
 GENERATION_CALLBACK_NO_MATCH_LOG_CACHE: Dict[str, float] = {}
 GENERATION_CALLBACK_NO_MATCH_LOG_LOCK = threading.Lock()
-GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, int(os.getenv("GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY", "4") or 4))
+GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, int(_q_conf.get("callback_threads", 20)))
 GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
 GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
@@ -24361,7 +24376,20 @@ async def generate_video_endpoint(
         existing_task = _VIDEO_INFLIGHT_BY_KEY.get(dedup_key)
         if existing_task is None:
             _release_db_connection(db, "generate_video_sync_wait")
-            existing_task = asyncio.create_task(_run_generate_video(req, current_user, db))
+            try:
+                callback_ticket_val = f"video-shot-{req.shot_id}" if getattr(req, "shot_id", None) else None
+                callback_url_val = str(media_service._resolve_provider_callback_url({}, callback_ticket_val) or "").strip() if callback_ticket_val else ""
+            except Exception:
+                callback_ticket_val = f"video-shot-{req.shot_id}" if getattr(req, "shot_id", None) else None
+                callback_url_val = ""
+            
+            existing_task = asyncio.create_task(_run_generate_video(
+                req,
+                current_user,
+                db,
+                provider_callback_ticket=callback_ticket_val,
+                provider_callback_url=callback_url_val
+            ))
             _VIDEO_INFLIGHT_BY_KEY[dedup_key] = existing_task
             created_task = True
         else:
@@ -28269,8 +28297,9 @@ def _merge_entity_refs_for_video_mode(
     if not auto_entity_refs:
         return current_refs, []
 
-    return _dedupe_media_ref_urls(current_refs + auto_entity_refs), auto_entity_refs
-
+    # If entity_refs mode is selected, we ONLY return the entity refs and ignore the base_refs
+    # to avoid mixing first frame/last frame/keyframes into the entity reference list sent to the provider.
+    return _dedupe_media_ref_urls(auto_entity_refs), auto_entity_refs
 
 def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
     text = str(prompt or "")
@@ -28279,6 +28308,8 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
 
     refs: List[str] = []
     index_map: Dict[str, int] = {}
+    import re
+    # We use u3010 and u3011 for chinese brackets 【】
     regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
 
     for m in regex.finditer(text):
@@ -28686,8 +28717,21 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             system_api_id=system_api_id,
         )
         _release_db_connection(item_db, "shot_media_batch_video")
+        try:
+            callback_ticket_val = f"video-shot-{shot.id}"
+            callback_url_val = str(media_service._resolve_provider_callback_url({}, callback_ticket_val) or "").strip()
+        except Exception:
+            callback_ticket_val = f"video-shot-{shot.id}"
+            callback_url_val = ""
+
         asyncio.run(_run_stage_with_retry(
-            lambda: _run_generate_video(req=video_req, current_user=user_principal, db=item_db),
+            lambda: _run_generate_video(
+                req=video_req,
+                current_user=user_principal,
+                db=item_db,
+                provider_callback_ticket=callback_ticket_val,
+                provider_callback_url=callback_url_val
+            ),
         ))
 
         return {
@@ -29386,8 +29430,21 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             system_api_id=system_api_id,
                         )
                         _release_db_connection(db, "shot_media_batch_video")
+                        try:
+                            callback_ticket_val = f"video-shot-{shot.id}"
+                            callback_url_val = str(media_service._resolve_provider_callback_url({}, callback_ticket_val) or "").strip()
+                        except Exception:
+                            callback_ticket_val = f"video-shot-{shot.id}"
+                            callback_url_val = ""
+
                         asyncio.run(_run_stage_with_retry(
-                            lambda: _run_generate_video(req=video_req, current_user=user_principal, db=db),
+                            lambda: _run_generate_video(
+                                req=video_req,
+                                current_user=user_principal,
+                                db=db,
+                                provider_callback_ticket=callback_ticket_val,
+                                provider_callback_url=callback_url_val
+                            ),
                             "video",
                             shot_label,
                         ))
@@ -30812,3 +30869,26 @@ def apply_entity_analysis(
 async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     _release_db_connection(db, "stream_analyze_scene_before_delegate")
     return await analyze_scene(request=request, current_user=current_user, db=db, async_mode="0", is_stream=True)
+
+class QueueConfigBase(BaseModel):
+    queue_threads: int
+    callback_threads: int
+
+@router.get("/admin/queue/config", response_model=QueueConfigBase)
+async def admin_get_queue_config(current_user: User = Depends(get_current_user)):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    return QueueConfigBase(**_load_queue_config())
+
+@router.put("/admin/queue/config", response_model=QueueConfigBase)
+async def admin_update_queue_config(config: QueueConfigBase, current_user: User = Depends(get_current_user)):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    with open(QUEUE_CONFIG_FILE, "w") as f:
+        json.dump(config.dict(), f)
+    
+    # Reload locally and let user know it applies on restart
+    global _q_conf
+    _q_conf = config.dict()
+    
