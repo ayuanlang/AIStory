@@ -656,9 +656,9 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
             except (asyncio.TimeoutError, TimeoutError):
                 logger.warning("generation queue task timed out (exceeded 30 minutes) | job_id=%s", (task or {}).get("job_id"))
                 job_id = str(task.get("job_id") or "")
-                await asyncio.to_thread(_finish_task, job_id, "failed", "Task execution exceeded 30 minutes. Timed out.", True)
+                await asyncio.to_thread(_finish_task, job_id, status="failed", error="Task execution exceeded 30 minutes. Timed out.", only_if_running=True)
                 continue
-            finalized = await asyncio.to_thread(_finish_task, task["job_id"], "completed")
+            finalized = await asyncio.to_thread(_finish_task, task["job_id"], status="completed")
             if not finalized:
                 latest = await asyncio.to_thread(get_generation_task_status, str(task.get("job_id") or "")) or {}
                 logger.info(
@@ -670,7 +670,7 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
         except asyncio.CancelledError:
             if task:
                 job_id = str(task.get("job_id") or "")
-                await asyncio.to_thread(_finish_task, job_id, "canceled", "cancelled", True)
+                await asyncio.to_thread(_finish_task, job_id, status="canceled", error="cancelled", only_if_running=True)
             break
         except Exception as exc:
             logger.exception("generation queue task failed | job_id=%s", (task or {}).get("job_id"))
@@ -678,7 +678,7 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
                 job_id = str(task.get("job_id") or "")
                 latest = await asyncio.to_thread(get_generation_task_status, job_id) or {}
                 if str(latest.get("status") or "").strip().lower() != "canceled":
-                    await asyncio.to_thread(_finish_task, job_id, "failed", str(exc), True)
+                    await asyncio.to_thread(_finish_task, job_id, status="failed", error=str(exc), only_if_running=True)
 
 
 async def _async_event_loop(processor: Callable[[str, str, int, Dict[str, Any]], Any]) -> None:
