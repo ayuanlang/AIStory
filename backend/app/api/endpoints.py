@@ -28519,7 +28519,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
 
     async def _run_stage_with_retry(coro_factory: Any, max_attempts: int = 3) -> Any:
         last_error: Optional[Exception] = None
-        for attempt in range(1, max_attempts + 1):
+        for attempt in range(1, max(2, max_attempts + 1)):
             if cancel_event and cancel_event.is_set():
                 raise _BatchStopRequested("Stop requested")
             try:
@@ -28863,7 +28863,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
 
         async def _run_stage_with_retry(coro_factory: Any, stage_label: str, shot_label: str, max_attempts: int = 3) -> Any:
             last_error: Optional[Exception] = None
-            for attempt in range(1, max_attempts + 1):
+            for attempt in range(1, max(2, max_attempts + 1)):
                 if _is_stop_requested():
                     raise _BatchStopRequested("Stop requested")
 
