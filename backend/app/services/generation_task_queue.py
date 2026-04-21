@@ -328,6 +328,26 @@ def _ensure_queue_table_ready() -> None:
         with engine.begin() as conn:
             conn.execute(text(ddl))
             conn.execute(text(index_ddl))
+            
+            # Auto-migrate missing columns for older schemas
+            columns = [
+                ("kind", "TEXT NOT NULL DEFAULT 'video'"),
+                ("user_id", "INTEGER NOT NULL DEFAULT 0"),
+                ("payload_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("status", "TEXT NOT NULL DEFAULT 'queued'"),
+                ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("worker_id", "TEXT NULL"),
+                ("created_at", "REAL NOT NULL DEFAULT 0"),
+                ("started_at", "REAL NULL"),
+                ("finished_at", "REAL NULL"),
+                ("last_heartbeat", "REAL NULL"),
+                ("error", "TEXT NULL")
+            ]
+            for col_name, col_type in columns:
+                try:
+                    conn.execute(text(f"ALTER TABLE generation_task_queue ADD COLUMN {col_name} {col_type}"))
+                except Exception:
+                    pass
         _QUEUE_TABLE_READY = True
 
 

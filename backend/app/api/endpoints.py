@@ -26203,6 +26203,7 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error=str(e),
         )
+        return JSONResponse(status_code=500, content={"detail": str(e), "job_id": job_id})
     finally:
         with VIDEO_JOB_LOCK:
             snapshot = dict(VIDEO_JOB_STORE.get(job_id) or {})
