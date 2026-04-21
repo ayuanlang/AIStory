@@ -26234,6 +26234,21 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
             "content_type": str(request.headers.get("content-type") or "").strip(),
         }
 
+    import json
+    try:
+        dump_str = json.dumps(payload, ensure_ascii=False)
+        client_host = getattr(getattr(request, "client", None), "host", "Unknown")
+        
+        logger.info("=" * 60)
+        logger.info(f"🔔 [WEBHOOK CALLBACK RECEIVED] [{client_host}] Ticket: {stable_ticket}")
+        if len(dump_str) > 2000:
+            logger.info(f"🔔 [WEBHOOK PAYLOAD] {dump_str[:2000]}...(truncated)")
+        else:
+            logger.info(f"🔔 [WEBHOOK PAYLOAD] {dump_str}")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"Failed to log webhook payload: {e}")
+
     _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
 
     await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, payload)
