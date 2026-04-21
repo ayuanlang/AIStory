@@ -1,0 +1,200 @@
+const resumeAnalysisFromTaskMarker = useCallback(async (marker) => {
+        if (!activeEpisode?.id || !marker?.taskId) return;
+        if (analysisResumeInFlightRef.current || analysisRunInFlightRef.current) return;
+        analysisResumeInFlightRef.current = true;
+
+        const startedAt = Number(marker?.startedAt || Date.now());
+        const elapsedMs = Math.max(0, Date.now() - startedAt);
+        const remainingTimeoutMs = Math.max(0, ANALYSIS_TASK_MAX_AGE_MS - elapsedMs);
+        if (remainingTimeoutMs <= 0) {
+            clearAnalysisTaskMarker(activeEpisode.id);
+            setAnalysisFlowStatus({
+                phase: 'warning',
+                message: t('检测到过期的分析任务恢复标记，已自动清理。', 'Detected an expired analysis task marker and cleared it automatically.'),
+            });
+            analysisResumeInFlightRef.current = false;
+            return;
+        }
+        const phaseMarks = {
+            submitStartedAt: startedAt,
+            analyzeStartedAt: startedAt,
+            llmReturnedAt: 0,
+            importStartedAt: 0,
+            importFinishedAt: 0,
+            persistStartedAt: 0,
+            persistFinishedAt: 0,
+            completedAt: 0,
+        };
+        let runtimeMeta = null;
+        let importReport = null;
+        let postImportSceneSubjectReport = null;
+        let importWarningMessage = '';
+
+        setIsAnalyzing(true);
+        setActiveAnalysisTaskId(String(marker?.taskId || '').trim());
+        analysisStopRequestedRef.current = false;
+        setAnalysisFlowStatus({
+            phase: 'analyzing',
+            message: t('🔄 发现有个没完成的场景任务，接着帮您做完...', 'Detected an in-progress analysis task, reconnecting...'),
+        });
+        setAnalysisUiReport({
+            status: 'running',
+            startedAt,
+            durationMs: 0,
+            phaseTimings: null,
+            importReport: null,
+            runtimeMeta: null,
+            warning: '',
+            error: '',
+        });
+
+        try {
+            const baselineText = String(activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '').trim();
+            const result = await awaitAnalyzeSceneWithRecovery(
+                () => waitForAsyncTask(marker.taskId, { interval: 2500, timeout: remainingTimeoutMs }),
+                { startedAt, baselineText }
+            );
+            const analyzedText = extractAnalysisTextFromResult(result);
+            phaseMarks.llmReturnedAt = Date.now();
+
+            if (result && result.meta) {
+                runtimeMeta = extractAnalysisRuntimeMeta(result.meta);
+                setAnalysisRuntimeMeta(runtimeMeta);
+            } else {
+                runtimeMeta = null;
+                setAnalysisRuntimeMeta(null);
+            }
+
+            const integrityWarnings = collectAnalysisWarnings(result);
+            const displayWarnings = collectAnalysisWarnings(result, { includeLogOnly: false });
+            if (displayWarnings.length > 0) {
+                showAnalysisWarningStatus(displayWarnings);
+            }
+
+            setLlmRawResultContent(analyzedText || '');
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ''));
+            lastLoadedAnalysisRef.current = analyzedText || '';
+
+            phaseMarks.importStartedAt = Date.now();
+            try {
+                importReport = await runAutoImportAndSwitchToScenes(analyzedText || '', { 
+                    switchToScenes: false,
+                    importOptions: { suppressAlerts: true }
+                });
+                if (!importReport) {
+                    importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
+                    setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+                }
+            } catch (importErr) {
+                importWarningMessage = t(
+                    `自动导入失败：${importErr?.message || importErr}`,
+                    `Auto-import failed: ${importErr?.message || importErr}`
+                );
+                setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+            } finally {
+                phaseMarks.importFinishedAt = Date.now();
+            }
+            maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
+
+            const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
+            if (importReport && typeof importReport === 'object') {
+                importReport = {
+                    ...importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                };
+                if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
+                    importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
+                }
+                if (postImportSceneSubjectReport?.dbPersistedCounts) {
+                    importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
+                }
+            }
+
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            phaseMarks.persistStartedAt = Date.now();
+            try {
+                if (!savedByBackend) {
+                    await persistLlmResultContent(analyzedText || '');
+                } else {
+                    await refreshAnalysisFromDB();
+                }
+            } finally {
+                phaseMarks.persistFinishedAt = Date.now();
+            }
+
+            try {
+                const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
+                setSubjectConsistencyReport(firstPassReport);
+                if (!firstPassReport.ok) {
+                    setAnalysisFlowStatus({
+                        phase: 'warning',
+                        message: t('实体一致性检查告警：请查看提示后继续。', 'Entity consistency warning: review the message and continue.'),
+                    });
+                }
+            } catch (_) {
+                // non-blocking
+            }
+
+            if (analysisRunInFlightRef.current || analysisStopRequestedRef.current) {
+                if (onLog) onLog('Resume was superseded by a new analysis run, stopping UI update.', 'warning');
+                return;
+            }
+
+            phaseMarks.completedAt = Date.now();
+            const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
+            setAnalysisUiReport({
+                status: 'completed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings,
+                importReport,
+                runtimeMeta,
+                warning: importWarningMessage,
+                error: '',
+            });
+
+            const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+            const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+            const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: postImportMissingItems > 0
+                    ? (
+                        postImportSupplementFailed > 0
+                            ? t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们成功搞定了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                            : t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们自动补充了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                    )
+                    : t('✅ 工作圆满完成！未发现缺失的资产。', 'Analysis completed: no missing entities detected, workflow finished.'),
+            });
+
+            clearAnalysisTaskMarker(activeEpisode.id);
+        } catch (e) {
+            const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            phaseMarks.completedAt = Date.now();
+            const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
+            setAnalysisFlowStatus(
+                canceled
+                    ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
+                    : { phase: 'failed', message: t(`恢复分析任务失败：${e?.message || e}`, `Failed to resume analysis task: ${e?.message || e}`) }
+            );
+            setAnalysisUiReport({
+                status: canceled ? 'warning' : 'failed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings,
+                importReport,
+                runtimeMeta,
+                warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
+                error: canceled ? '' : (e?.message || String(e || '')),
+            });
+            clearAnalysisTaskMarker(activeEpisode.id);
+        } finally {
+            analysisResumeInFlightRef.current = false;
+            if (!analysisRunInFlightRef.current) {
+                setIsAnalyzing(false);
+                setActiveAnalysisTaskId('');
+                analysisStopRequestedRef.current = false;
+            }
+        }
+    }, [
