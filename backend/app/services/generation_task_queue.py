@@ -699,6 +699,9 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
                 latest = await asyncio.to_thread(get_generation_task_status, job_id) or {}
                 if str(latest.get("status") or "").strip().lower() != "canceled":
                     await asyncio.to_thread(_finish_task, job_id, status="failed", error=str(exc), only_if_running=True)
+            continue
+            # CAUTION: we must continue, otherwise we exit the loop and the worker dies permanently
+            continue
 
 
 async def _async_event_loop(processor: Callable[[str, str, int, Dict[str, Any]], Any]) -> None:
@@ -758,36 +761,43 @@ def _worker_loop(worker_name: str, processor: Callable[[str, str, int, Dict[str,
                 _finish_task(job_id, status="failed", error=str(exc), only_if_running=True)
 
 
+def _worker_thread_main(processor: Callable[[str, str, int, Dict[str, Any]], None]) -> None:
+    """Continuously tries to acquire leader lock and run generation tasks."""
+    while not _QUEUE_STOP_EVENT.is_set():
+        if not _try_acquire_queue_leader_lock():
+            _QUEUE_STOP_EVENT.wait(15.0)
+            continue
+            
+        try:
+            logger.info("generation queue worker acquired leader lock, starting event loop...")
+            _ensure_queue_table_ready()
+            asyncio.run(_async_event_loop(processor))
+        except Exception as exc:
+            logger.exception("generation queue event loop crashed | err=%s", exc)
+            _QUEUE_STOP_EVENT.wait(15.0)
+        finally:
+            if not _QUEUE_STOP_EVENT.is_set():
+                logger.warning("generation queue event loop exited. Re-checking lock...")
+                _QUEUE_STOP_EVENT.wait(5.0)
+
 def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, Any]], None]) -> None:
-    """Start generation task workers using async event loop (non-blocking).
-    
-    KEY DIFFERENCES FROM SYNC MODE:
-    ✓ Workers do NOT block while waiting for processor results
-    ✓ asyncio.TaskGroup allows 8 workers to handle 100s of concurrent tasks
-    ✓ While worker-1 awaits API response, worker-2,3,4... process other tasks
-    ✓ All DB calls use asyncio.to_thread() to avoid blocking event loop
-    """
+    """Start generation task workers using async event loop."""
     global _QUEUE_STARTED
     if _QUEUE_STARTED:
         return
     with _QUEUE_START_LOCK:
         if _QUEUE_STARTED:
             return
-        if not _try_acquire_queue_leader_lock():
-            logger.info(
-                "generation queue worker startup skipped in this process; advisory lock %s is held by another process",
-                _QUEUE_ADVISORY_LOCK_ID,
-            )
-            return
-        _ensure_queue_table_ready()
+            
         thread = threading.Thread(
-            target=lambda: asyncio.run(_async_event_loop(processor)),
+            target=_worker_thread_main,
+            args=(processor,),
             daemon=True,
             name="generation-queue-event-loop",
         )
         thread.start()
         _QUEUE_STARTED = True
         logger.info(
-            "generation queue async event loop started (non-blocking, %s concurrent workers)",
+            "generation queue async event loop thread started, waiting for %s concurrent workers to become leader",
             _QUEUE_WORKER_THREADS,
         )
