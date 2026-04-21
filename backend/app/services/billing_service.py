@@ -2595,6 +2595,11 @@ class BillingService:
             raise HTTPException(status_code=404, detail="User not found")
 
         reserved_cost = int(abs(reservation_tx.amount or 0))
+        res_action = db.query(TransactionAction).filter(TransactionAction.transaction_id == reservation_tx.id).order_by(TransactionAction.id.desc()).first()
+        res_task_type = res_action.task_type if res_action else ""
+        res_provider = res_action.provider if res_action else ""
+        res_model = res_action.model if res_action else ""
+
         details = dict(actual_details or {})
         details.setdefault("billing_mode", "ACTUAL")
         smart_routing = details.get("smart_routing") if isinstance(details.get("smart_routing"), dict) else {}
