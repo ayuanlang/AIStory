@@ -343,9 +343,9 @@ class SystemAPIBillingRuleBase(BaseModel):
     fps_min: Optional[float] = None
     fps_max: Optional[float] = None
     billing_unit_type: Optional[str] = "per_call"
-    billing_cost: Optional[int] = 0
-    billing_cost_input: Optional[int] = 0
-    billing_cost_output: Optional[int] = 0
+    billing_cost: Optional[float] = 0.0
+    billing_cost_input: Optional[float] = 0.0
+    billing_cost_output: Optional[float] = 0.0
     charge_multiplier: Optional[float] = 2.0
     extra_conditions: Optional[Dict[str, Any]] = {}
 
@@ -385,9 +385,9 @@ class SystemAPIBillingRuleUpdate(BaseModel):
     fps_min: Optional[float] = None
     fps_max: Optional[float] = None
     billing_unit_type: Optional[str] = None
-    billing_cost: Optional[int] = None
-    billing_cost_input: Optional[int] = None
-    billing_cost_output: Optional[int] = None
+    billing_cost: Optional[float] = None
+    billing_cost_input: Optional[float] = None
+    billing_cost_output: Optional[float] = None
     charge_multiplier: Optional[float] = None
     extra_conditions: Optional[Dict[str, Any]] = None
 

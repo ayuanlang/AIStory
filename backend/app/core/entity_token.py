@@ -32,7 +32,7 @@ def normalize_entity_token(value: Any) -> str:
     text = re.sub(r"[\u2010-\u2015]", "-", text)
     text = re.sub(r"\s+", " ", text).strip()
 
-    text = re.sub(r"^(CHAR|ENV|PROP)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"^(CHAR|ENV|PROP|VEFX|SFX)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
 
     for _ in range(3):
         next_text = re.sub(r"^[\[\{\(\s]+|[\]\}\)\s]+$", "", text)

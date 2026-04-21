@@ -526,7 +526,7 @@ export const parseTypedSceneSubjectToken = (rawToken, defaultType) => {
         };
     }
 
-    const typedMatch = tokenText.match(/^\s*(CHAR|PROP|ENV)\s*:\s*\[\s*([^\]]+?)\s*\]\s*$/i);
+    const typedMatch = tokenText.match(/^\s*(CHAR|PROP|ENV|VEFX|SFX)\s*:\s*\[\s*([^\]]+?)\s*\]\s*$/i);
     if (!typedMatch) {
         return {
             type: stableDefaultType,
@@ -537,7 +537,7 @@ export const parseTypedSceneSubjectToken = (rawToken, defaultType) => {
     const rawType = String(typedMatch[1] || '').trim().toLowerCase();
     let resolvedType = stableDefaultType;
     if (rawType === 'char') resolvedType = 'character';
-    else if (rawType === 'prop') resolvedType = 'prop';
+    else if (rawType === 'prop' || rawType === 'vefx' || rawType === 'sfx') resolvedType = 'prop';
     else if (rawType === 'env') resolvedType = 'environment';
 
     let cleanName = String(typedMatch[2] || '').trim();

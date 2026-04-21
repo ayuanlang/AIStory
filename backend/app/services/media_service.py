@@ -645,8 +645,8 @@ Negative prompt constraints: {neg_prompt}"""
         cleaned = cleaned.replace("`", "")
         cleaned = cleaned.replace("**", "")
         cleaned = re.sub(r"\{([^{}]+)\}", r"\1", cleaned)
-        cleaned = re.sub(r"\b(?:CHAR|PROP|ENV)\s*:\s*\[\s*@?([^\]\(]+)\s*\]\s*\(([^)]*)\)", r"\1", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\b(?:CHAR|PROP|ENV)\s*:\s*\[\s*@?([^\]]+)\s*\]", r"\1", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(?:CHAR|PROP|ENV|VEFX|SFX)\s*:\s*\[\s*@?([^\]\(]+)\s*\]\s*\(([^)]*)\)", r"\1", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(?:CHAR|PROP|ENV|VEFX|SFX)\s*:\s*\[\s*@?([^\]]+)\s*\]", r"\1", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\([^)]*ref_image_url\s*:[^)]*\)", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
 

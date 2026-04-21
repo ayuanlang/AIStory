@@ -4429,7 +4429,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             text = str(value or "").strip()
             if not text:
                 return ""
-            text = re.sub(r"^(?:CHAR|PROP|ENV)\s*:\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"^(?:CHAR|PROP|ENV|VEFX|SFX)\s*:\s*", "", text, flags=re.IGNORECASE)
             text = text.strip()
             if text.startswith("[") and text.endswith("]"):
                 text = text[1:-1].strip()
@@ -4463,6 +4463,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 re.compile(r"CHAR\s*:\s*\[@([^\]]+)\]", re.IGNORECASE),
                 re.compile(r"PROP\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
                 re.compile(r"ENV\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
+                re.compile(r"VEFX\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
+                re.compile(r"SFX\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
             ]
             found: List[str] = []
             seen = set()
@@ -16938,10 +16940,9 @@ def confirm_user_verification_code(
             user_id=user.id,
             amount=granted_credits,
             balance_after=int(user.credits or 0),
-            task_type="signup_bonus",
-            provider="system",
-            model="email_verification",
+            description="signup_bonus", 
             details={
+                "task_type": "signup_bonus", "provider": "system", "model": "email_verification",
                 "reason": "email_verification_trial_bonus",
                 "target_credits": target_credits,
                 "old_credits": old_credits,
@@ -19855,10 +19856,15 @@ def check_order_status(
                 user_id=order.user_id,
                 amount=order.credits,
                 balance_after=user.credits if user else 0,
-                task_type="recharge",
-                provider="wechat",
-                model="cny",
-                details={"order_no": order_no, "amount_cny": order.amount, "method": "active_query"}
+                description="recharge",
+                details={
+                    "task_type": "recharge",
+                    "provider": "wechat",
+                    "model": "cny",
+                    "order_no": order_no, 
+                    "amount_cny": order.amount, 
+                    "method": "active_query"
+                }
             )
             db.add(trans)
             db.commit()
@@ -19915,10 +19921,9 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
                         user_id=order.user_id,
                         amount=order.credits,
                         balance_after=user.credits if user else 0,
-                        task_type="recharge",
-                        provider="wechat",
-                        model="cny",
+                        description="recharge", 
                         details={
+                            "task_type": "recharge", "provider": "wechat", "model": "cny",
                             "order_no": out_trade_no, 
                             "method": "notify", 
                             "wx_transaction_id": wx_transaction_id,
@@ -19972,10 +19977,14 @@ def mock_pay_order(
         user_id=user.id,
         amount=order.credits,
         balance_after=user.credits,
-        task_type="recharge",
-        provider="wechat",
-        model="cny",
-        details={"order_no": order_no, "amount_cny": order.amount}
+        description="recharge",
+        details={
+            "task_type": "recharge", 
+            "provider": "wechat", 
+            "model": "cny", 
+            "order_no": order_no, 
+            "amount_cny": order.amount
+        }
     )
     db.add(trans)
     
@@ -20244,8 +20253,12 @@ def update_user_credits(
         user_id=user_id,
         amount=user.credits - old_credits,
         balance_after=user.credits,
-        task_type="admin_adjustment",
-        details={"admin_id": current_user.id, "reason": "Manual Update"}
+        description="admin_adjustment",
+        details={
+            "task_type": "admin_adjustment",
+            "admin_id": current_user.id, 
+            "reason": "Manual Update"
+        }
     )
     db.add(trans)
     
@@ -28109,7 +28122,7 @@ def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict
         return []
 
     refs: List[str] = []
-    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    regex = re.compile(r"(?:CHAR|ENV|PROP|VEFX|SFX)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
     for m in regex.finditer(text):
         raw_name = m.group(1) or m.group(2) or ""
         normalized = _normalize_entity_anchor_token(raw_name)
@@ -28357,7 +28370,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
     index_map: Dict[str, int] = {}
     import re
     # We use u3010 and u3011 for chinese brackets 【】
-    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    regex = re.compile(r"(?:CHAR|ENV|PROP|VEFX|SFX)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
 
     for m in regex.finditer(text):
         raw_name = m.group(1) or m.group(2) or ""

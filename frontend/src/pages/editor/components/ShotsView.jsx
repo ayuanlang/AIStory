@@ -3553,7 +3553,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 techObj.video_ref_submit_mode = 'entity_refs';
                 
                 // Clear original auto/manual images and replace with Associated Entities images
-                const cleanName = (s) => String(s || '').replace(/[\[\]【】"''“”‘’]/g, '').replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '').replace(/^@+/, '').trim();
+                const cleanName = (s) => String(s || '').replace(/[\[\]【】"''“”‘’]/g, '').replace(/^(CHAR|ENV|PROP|VEFX|SFX)\s*:\s*/i, '').replace(/^@+/, '').trim();
                 const normalizeForMatch = (s) => cleanName(s).replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
                 const rawNames = (editingShot.associated_entities || '').split(/[,，]/);
                 const names = rawNames.map(cleanName).filter(Boolean);
@@ -8404,7 +8404,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                     {(() => {
                                         const cleanName = (s) => String(s || '')
                                             .replace(/[\[\]【】"''“”‘’]/g, '')
-                                            .replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '')
+                                            .replace(/^(CHAR|ENV|PROP|VEFX|SFX)\s*:\s*/i, '')
                                             .replace(/^@+/, '')
                                             .trim();
                                         const normalizeForMatch = (s) => cleanName(s)

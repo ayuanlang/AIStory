@@ -1051,7 +1051,7 @@ class BillingService:
         return default_pricing
 
     @staticmethod
-    def _estimate_api_cost_from_config(config: Dict[str, Any], details: dict = None) -> int:
+    def _estimate_api_cost_from_config(config: Dict[str, Any], details: dict = None, return_float: bool = False) -> float:
         if not config:
             return 0
 
@@ -1072,14 +1072,21 @@ class BillingService:
             token_cost = ((float(input_tokens) * float(cost_input)) + (float(output_tokens) * float(cost_output))) / divisor
             if cost_input == 0 and cost_output == 0 and base_cost > 0:
                 token_cost = (float(max(total_tokens, input_tokens + output_tokens)) * float(base_cost)) / divisor
-            return max(0, int(round(token_cost)))
+            if return_float: return float(max(0.0, token_cost))
+            
+            import math
+            return max(0, int(math.ceil(token_cost))) if token_cost > 0 else 0
 
         quantity = float(BillingService._safe_non_negative_float(payload.get("billing_quantity", 1), 1.0))
         if unit_type == 'per_call':
             success_output_count = BillingService._to_int(payload.get("success_output_count", payload.get("successful_outputs", 0)), 0)
             if success_output_count > 0:
                 quantity = float(success_output_count)
-            return max(0, int(round(float(base_cost) * float(max(quantity, 1.0)))))
+            cost_val = float(base_cost) * float(max(quantity, 1.0))
+            if return_float: return cost_val
+            
+            import math
+            return max(0, int(math.ceil(cost_val))) if cost_val > 0 else 0
 
         if unit_type == 'per_second':
             quantity = float(payload.get('duration_seconds', payload.get('duration', 0)) or 0)
@@ -1087,8 +1094,12 @@ class BillingService:
             quantity = float(payload.get('duration_seconds', payload.get('duration', 0)) or 0) / 60.0
 
         if quantity <= 0 and unit_type in {'per_second', 'per_minute'}:
-            return 0
-        return max(0, int(round(float(base_cost) * float(quantity))))
+            return 0.0 if return_float else 0
+        cost_val = float(base_cost) * float(quantity)
+        if return_float: return cost_val
+        
+        import math
+        return max(0, int(math.ceil(cost_val))) if cost_val > 0 else 0
 
     @staticmethod
     def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -1373,8 +1384,11 @@ class BillingService:
         cache_hit_tokens = BillingService._to_int(payload.get("cache_hit_tokens", payload.get("cached_tokens", 0)), 0)
         cache_miss_tokens = BillingService._to_int(payload.get("cache_miss_tokens", 0), 0)
 
-        if cache_hit_tokens > 0 and cache_miss_tokens == 0 and total_tokens > cache_hit_tokens:
-            cache_miss_tokens = total_tokens - cache_hit_tokens
+        if cache_hit_tokens > 0 and cache_miss_tokens == 0:
+            if input_tokens > cache_hit_tokens:
+                cache_miss_tokens = input_tokens - cache_hit_tokens
+            elif total_tokens > cache_hit_tokens:
+                cache_miss_tokens = max(0, total_tokens - cache_hit_tokens - output_tokens)
 
         width = BillingService._to_int(payload.get("width", payload.get("output_width", 0)), 0)
         height = BillingService._to_int(payload.get("height", payload.get("output_height", 0)), 0)
@@ -1736,9 +1750,9 @@ class BillingService:
                 + (float(cache_miss_tokens) * float(miss_input_rate))
                 + (float(output_tokens) * float(output_rate))
             ) / divisor
-            amount = max(0, int(round(computed)))
+            amount = max(0.0, float(computed))
         else:
-            amount = BillingService._estimate_api_cost_from_config(raw_cfg, usage)
+            amount = BillingService._estimate_api_cost_from_config(raw_cfg, usage, return_float=True)
 
         raw_multiplier = getattr(rule, "charge_multiplier", None)
         try:
@@ -1748,8 +1762,10 @@ class BillingService:
         # Requirement: null/negative multiplier falls back to 2.0
         charge_multiplier = 2.0 if parsed_multiplier < 0 else parsed_multiplier
 
-        base_cost = int(max(0, amount))
-        charged_cost = int(max(0, round(float(base_cost) * float(charge_multiplier))))
+        import math
+        base_cost = int(max(0, math.ceil(amount))) if amount > 0 else 0
+        final_charged_val = float(amount) * float(charge_multiplier)
+        charged_cost = int(max(0, math.ceil(final_charged_val))) if final_charged_val > 0 else 0
         effective_cfg = BillingService._normalize_api_pricing_config({
             "unit_type": raw_cfg["unit_type"],
             "cost": int(max(0, round(float(raw_cfg["cost"]) * float(charge_multiplier)))),
@@ -2623,6 +2639,28 @@ class BillingService:
             details["input_tokens"] = details.get("prompt_tokens", 0)
         if "output_tokens" not in details and "completion_tokens" in details:
             details["output_tokens"] = details.get("completion_tokens", 0)
+
+        # Fallback input_tokens from reservation if missing
+        res_details_dict = dict(reservation_tx.details or {})
+        missing_input = BillingService._to_int(details.get("input_tokens", 0), 0) <= 0
+        missing_output = BillingService._to_int(details.get("output_tokens", 0), 0) <= 0
+
+        if missing_input:
+            reserved_input = BillingService._to_int(res_details_dict.get("input_tokens", 0), 0)
+            if reserved_input > 0:
+                details["input_tokens"] = reserved_input
+
+        # Infer output_tokens: if we have total_tokens but no output_tokens
+        total_toks = BillingService._to_int(details.get("total_tokens", 0), 0)
+        in_toks = BillingService._to_int(details.get("input_tokens", 0), 0)
+        
+        if missing_output and total_toks > 0 and in_toks > 0:
+            if total_toks >= in_toks:
+                details["output_tokens"] = total_toks - in_toks
+            else:
+                # Proxy anomalous case: total_tokens < input_tokens
+                details["input_tokens"] = total_toks
+                details["output_tokens"] = 0
 
         breakdown = BillingService.estimate_cost_breakdown(
             db,

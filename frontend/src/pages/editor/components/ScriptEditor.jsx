@@ -3380,6 +3380,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         let runtimeMeta = null;
         let importReport = null;
+        let postImportSceneSubjectReport = null;
         let importWarningMessage = '';
 
         setIsAnalyzing(true);
@@ -3448,6 +3449,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
+            const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
+            if (importReport && typeof importReport === 'object') {
+                importReport = {
+                    ...importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                };
+                if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
+                    importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
+                }
+                if (postImportSceneSubjectReport?.dbPersistedCounts) {
+                    importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
+                }
+            }
+
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             phaseMarks.persistStartedAt = Date.now();
             try {
@@ -3473,6 +3488,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // non-blocking
             }
 
+            if (analysisRunInFlightRef.current || analysisStopRequestedRef.current) {
+                if (onLog) onLog('Resume was superseded by a new analysis run, stopping UI update.', 'warning');
+                return;
+            }
+
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
             setAnalysisUiReport({
@@ -3485,6 +3505,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 warning: importWarningMessage,
                 error: '',
             });
+
+            const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+            const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+            const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: postImportMissingItems > 0
+                    ? (
+                        postImportSupplementFailed > 0
+                            ? t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们成功搞定了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
+                            : t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们自动补充了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                    )
+                    : t('✅ 工作圆满完成！未发现缺失的资产。', 'Analysis completed: no missing entities detected, workflow finished.'),
+            });
+
             clearAnalysisTaskMarker(activeEpisode.id);
         } catch (e) {
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
@@ -3508,9 +3544,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             clearAnalysisTaskMarker(activeEpisode.id);
         } finally {
             analysisResumeInFlightRef.current = false;
-            setIsAnalyzing(false);
-            setActiveAnalysisTaskId('');
-            analysisStopRequestedRef.current = false;
+            if (!analysisRunInFlightRef.current) {
+                setIsAnalyzing(false);
+                setActiveAnalysisTaskId('');
+                analysisStopRequestedRef.current = false;
+            }
         }
     }, [
         activeEpisode?.id,
@@ -3528,6 +3566,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         showAnalysisWarningStatus,
         t,
     ]);
+
+    useEffect(() => {
+        return () => {
+            analysisStopRequestedRef.current = true;
+        };
+    }, []);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
@@ -4461,7 +4505,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert("Script content is too short for analysis.");
             return;
         }
-        if (isAnalyzing || analysisRunInFlightRef?.current) {
+        if (isAnalyzing || analysisRunInFlightRef?.current || analysisResumeInFlightRef?.current) {
             onLog?.("Already analyzing, duplicate click prevented.");
             return;
         }
@@ -4648,6 +4692,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         analysisRunInFlightRef.current = true;
+        clearAnalysisTaskMarker(activeEpisode?.id);
         const startedAt = Date.now();
         analysisStopRequestedRef.current = false;
         setIsAnalyzing(true);
@@ -5094,6 +5139,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         analysisRunInFlightRef.current = true;
+        clearAnalysisTaskMarker(activeEpisode?.id);
 
         const startedAt = Date.now();
         analysisStopRequestedRef.current = false;

@@ -13,7 +13,7 @@ export const normalizeEntityToken = (value) => {
         .replace(/\s+/g, ' ')
         .trim();
 
-    text = text.replace(/^(CHAR|ENV|PROP)\s*:\s*/i, '').trim();
+    text = text.replace(/^(CHAR|ENV|PROP|VEFX|SFX)\s*:\s*/i, '').trim();
 
     for (let i = 0; i < 3; i += 1) {
         const next = text

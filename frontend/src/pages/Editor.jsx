@@ -1083,13 +1083,13 @@ const Editor = ({
             const typeToken = String(typeMatch?.[1] || '').trim().toLowerCase();
             let subjectName = String(nameMatch?.[1] || '').trim();
             // remove CHAR: / PROP: prefixes
-            subjectName = subjectName.replace(/^(CHAR|PROP|ENV)\s*:\s*/i, '').trim();
+            subjectName = subjectName.replace(/^(CHAR|PROP|ENV|VEFX|SFX)\s*:\s*/i, '').trim();
             
             if (!typeToken || !subjectName) continue;
 
             let type = '';
             if (typeToken.includes('character') || typeToken.includes('角色') || typeToken.includes('人物') || typeToken.includes('char')) type = 'character';  
-            else if (typeToken.includes('prop') || typeToken.includes('道具') || typeToken.includes('item')) type = 'prop';
+            else if (typeToken.includes('prop') || typeToken.includes('道具') || typeToken.includes('item') || typeToken.includes('vefx') || typeToken.includes('sfx') || typeToken.includes('特效')) type = 'prop';
             else if (typeToken.includes('environment') || typeToken.includes('场景') || typeToken.includes('环境') || typeToken.includes('env')) type = 'environment';
             if (!type) continue;
 
