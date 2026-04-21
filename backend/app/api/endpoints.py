@@ -20348,6 +20348,7 @@ class VideoGenerationRequest(BaseModel):
     episode_id: Optional[int] = None
     scene_id: Optional[int] = None
     shot_id: Optional[int] = None
+    draft_mode: Optional[bool] = False
     shot_number: Optional[str] = None
     shot_name: Optional[str] = None
     entity_name: Optional[str] = None
@@ -21448,6 +21449,7 @@ class ShotMediaBatchStartRequest(BaseModel):
     shot_ids: Optional[List[int]] = None
     overwrite_existing: bool = False
     system_api_id: Optional[int] = None
+    draft_mode: Optional[bool] = False
 
 
 def _sanitize_filename_part(value: Optional[str], max_len: int = 48) -> str:
@@ -25358,6 +25360,25 @@ async def _run_generate_video(
                 if resolved_video_width and resolved_video_height:
                     resolved_video_resolution = f"{int(resolved_video_width)}x{int(resolved_video_height)}"
 
+        if req.draft_mode:
+            draft_aspect = aspect_ratio or "16:9"
+            if draft_aspect == "16:9":
+                resolved_video_width, resolved_video_height = 864, 496
+            elif draft_aspect == "9:16":
+                resolved_video_width, resolved_video_height = 496, 864
+            elif draft_aspect == "4:3":
+                resolved_video_width, resolved_video_height = 752, 560
+            elif draft_aspect == "3:4":
+                resolved_video_width, resolved_video_height = 560, 752
+            elif draft_aspect == "21:9":
+                resolved_video_width, resolved_video_height = 992, 432
+            elif draft_aspect == "1:1":
+                resolved_video_width, resolved_video_height = 640, 640
+            else:
+                resolved_video_width, resolved_video_height = 864, 496
+            resolved_video_resolution = f"{resolved_video_width}x{resolved_video_height}"
+            resolved_video_image_size = "480p"
+
         if _is_token_billing:
             _video_token_cfg = billing_service.resolve_video_token_config(db, reserve_provider, reserve_model)
             est_duration = max(5, int(req.duration or 5)) if (req.duration and req.duration > 0) else 5
@@ -28762,6 +28783,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 {"prompt": video_prompt_cn, "type": "zh"}
             ]
         video_req = VideoGenerationRequest(
+            draft_mode=bool(latest.get("draft_mode")),
             prompt=video_prompt,
             multi_prompt=multi_prompt_payload,
             ref_image_url=normalized_refs,
@@ -29475,6 +29497,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 {"prompt": video_prompt_cn, "type": "zh"}
                             ]
                         video_req = VideoGenerationRequest(
+                            draft_mode=bool(latest.get("draft_mode")),
                             prompt=video_prompt,
                             multi_prompt=multi_prompt_payload,
                             ref_image_url=normalized_refs,
@@ -29682,6 +29705,7 @@ def start_shot_media_batch_job(
         "shot_ids": shot_ids,
         "max_concurrency": batch_max_concurrency,
         "overwrite_existing": bool(req.overwrite_existing),
+        "draft_mode": bool(req.draft_mode),
         "total": len(shot_ids),
         "completed": 0,
         "success": 0,

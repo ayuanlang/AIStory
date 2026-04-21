@@ -464,6 +464,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+    const [isDraftMode, setIsDraftMode] = useState(false);
     const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
     const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
@@ -6246,6 +6247,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiRefVideoUrls, apiLastFrameUrl, durParam, { function_name: 'generate_videos',
                     project_id: projectId,
                     shot_id: targetShotId,
+                    draft_mode: isDraftMode,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
                     ref_mode: effectiveVideoMode,
@@ -7157,6 +7159,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const started = await startShotMediaBatch(activeEpisode.id, {
                 mode,
                 shot_ids: targetShotIds,
+                draft_mode: isDraftMode,
                 overwrite_existing: false,
                 system_api_id: mode === 'videos' ? (Number(localStorage.getItem('func_api_generate_videos')) || undefined) : undefined,
             });
@@ -7366,6 +7369,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         >
                             {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
                         </button>
+
+                        <div className="relative inline-flex items-center ml-2">
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后视频生成的分辨率强制下降到480p（忽略项目配置）', 'Force video resolution to 480p, ignoring project info')}>
+                                <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${isDraftMode ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
+                                    {isDraftMode && <Check className="w-2.5 h-2.5 text-white" />}
+                                </div>
+                                <input type="checkbox" className="hidden" checked={isDraftMode} onChange={(e) => setIsDraftMode(e.target.checked)} />
+                                <span className={isDraftMode ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('草稿(480p)', 'Draft(480p)')}</span>
+                            </label>
+                        </div>
 
                         <div className="relative inline-flex items-center ml-2 border border-white/20 rounded bg-transparent">
                             <div className="relative flex items-center">
