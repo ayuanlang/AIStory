@@ -1398,12 +1398,14 @@ export const deleteAllEntities = async (projectId) => {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const AUTO_DOWNLOAD_PREF_KEY_PREFIX = 'aistory.autoDownloadLocal';
+const DRAFT_MODE_PREF_KEY_PREFIX = 'aistory.draftMode';
 const PROMPT_SUBMIT_LANG_PREF_KEY_PREFIX = 'aistory.promptSubmitLang';
 const USER_PREFERENCES_CACHE_KEY_PREFIX = 'aistory.userPreferences';
 
 const DEFAULT_USER_PREFERENCES = {
     prompt_submit_language: 'en',
     auto_download_local: false,
+    draft_mode: false,
     generation: {},
     advanced_model: {
         temperature: 0.7,
@@ -1435,6 +1437,7 @@ const resolveCurrentUserStorageScope = () => {
 };
 
 const autoDownloadPreferenceStorageKey = () => `${AUTO_DOWNLOAD_PREF_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
+const draftModePreferenceStorageKey = () => `${DRAFT_MODE_PREF_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
 const promptSubmitLanguageStorageKey = () => `${PROMPT_SUBMIT_LANG_PREF_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
 const userPreferencesStorageKey = () => `${USER_PREFERENCES_CACHE_KEY_PREFIX}:${resolveCurrentUserStorageScope()}`;
 
@@ -1504,6 +1507,34 @@ export const normalizePromptSubmitLanguagePreference = (value) => {
     if (raw === 'auto') return 'auto';
     if (raw === 'cn' || raw === 'zh' || raw === 'zh-cn') return 'cn';
     return 'en';
+};
+
+export const getDraftModePreference = () => {
+    const cached = getCachedUserPreferences();
+    if (cached && typeof cached.draft_mode === 'boolean') {
+        return cached.draft_mode;
+    }
+    try {
+        const raw = localStorage.getItem(draftModePreferenceStorageKey());
+        if (raw === '1') return true;
+        if (raw === '0') return false;
+    } catch {
+        // ignore
+    }
+    return false;
+};
+
+export const setDraftModePreference = (enabled) => {
+    try {
+        localStorage.setItem(draftModePreferenceStorageKey(), enabled ? '1' : '0');
+        const current = getCachedUserPreferences() || DEFAULT_USER_PREFERENCES;
+        setCachedUserPreferences({
+            ...current,
+            draft_mode: !!enabled,
+        });
+    } catch {
+        // ignore storage failures
+    }
 };
 
 export const getAutoDownloadLocalPreference = () => {

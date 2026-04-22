@@ -567,7 +567,12 @@ class OSSStorageService:
             if sanitized_metadata:
                 extra["Metadata"] = sanitized_metadata
             if getattr(pool, "default_storage_class", None):
-                extra["StorageClass"] = str(pool.default_storage_class)
+                st_class = str(pool.default_storage_class)
+                provider_nm = str(getattr(pool, "provider", "")).lower()
+                if provider_nm == "backblaze" and st_class == "STANDARD_IA":
+                    pass
+                else:
+                    extra["StorageClass"] = st_class
 
             try:
                 _visible_info(

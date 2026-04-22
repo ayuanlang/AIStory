@@ -4,7 +4,7 @@ import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound, Link as LinkIcon, Copy } from 'lucide-react';
 import { API_URL } from '@/config';
 
-import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
+import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getDraftModePreference, setDraftModePreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
@@ -201,6 +201,7 @@ const Settings = () => {
     const [visionModel, setVisionModel] = useState("Grsai-Vision"); // New Vision Model State
     const [promptLanguage, setPromptLanguage] = useState("mixed");
     const [autoDownloadLocal, setAutoDownloadLocal] = useState(false);
+    const [globalDraftMode, setGlobalDraftMode] = useState(false);
     const [promptSubmitLanguage, setPromptSubmitLanguage] = useState(() => getPromptSubmitLanguagePreference());
     const [advancedTemperature, setAdvancedTemperature] = useState('0.7');
     const [advancedSeed, setAdvancedSeed] = useState('');
@@ -354,6 +355,17 @@ const Settings = () => {
             autoDownloadLocal: next,
         });
         void updateUserPreferences({ auto_download_local: next });
+    };
+
+    const handleGlobalDraftModeChange = (checked) => {
+        const next = !!checked;
+        setGlobalDraftMode(next);
+        setDraftModePreference(next);
+        setGenerationConfig({
+            ...(generationConfig || {}),
+            draftMode: next,
+        });
+        void updateUserPreferences({ draft_mode: next });
     };
 
     const handlePromptSubmitLanguageChange = (value) => {
@@ -765,6 +777,7 @@ const Settings = () => {
 
                     setPromptSubmitLanguage(normalizePromptSubmitLanguagePreference(userPreferences.prompt_submit_language));
                     setAutoDownloadLocal(!!userPreferences.auto_download_local);
+                    setGlobalDraftMode(!!userPreferences.draft_mode);
                     setCharSupplements(withFallback(generation.characterSupplements, DEFAULT_CHARACTER_SUPPLEMENTS));
                     setSceneSupplements(withFallback(generation.sceneSupplements, DEFAULT_SCENE_SUPPLEMENTS));
                     setPromptLanguage(generation.prompt_language || 'mixed');
@@ -883,6 +896,17 @@ const Settings = () => {
                             : false
                     )
             );
+
+            const draftPref = getDraftModePreference();
+            setGlobalDraftMode(
+                draftPref !== null
+                    ? draftPref
+                    : (
+                        Object.prototype.hasOwnProperty.call(generationConfig, 'draftMode')
+                            ? !!generationConfig.draftMode
+                            : false
+                    )
+            );
             
             const iModel = generationConfig.imageModel || "Midjourney";
             const vModel = generationConfig.videoModel || "Runway";
@@ -904,6 +928,7 @@ const Settings = () => {
                          setAdvancedCfg('');
                          setAdvancedReasoningEffort('high');
              setAutoDownloadLocal(getAutoDownloadLocalPreference() ?? false);
+             setGlobalDraftMode(getDraftModePreference() ?? false);
              // Even if no generationConfig, we might have defaults set in state (e.g. Midjourney/Runway)
              // and we should load their configs if savedToolConfigs updates
              loadToolConfig(imageModel, 'image');
@@ -1232,6 +1257,7 @@ const Settings = () => {
             videoModel,
             visionModel,
             autoDownloadLocal,
+            draftMode: globalDraftMode,
         };
         setGenerationConfig({
             ...generationPayload,
@@ -1242,6 +1268,7 @@ const Settings = () => {
             await updateUserPreferences({
                 prompt_submit_language: promptSubmitLanguage,
                 auto_download_local: !!autoDownloadLocal,
+                draft_mode: !!globalDraftMode,
                 generation: generationPayload,
                 advanced_model: advancedModelPayload,
             });
@@ -1584,6 +1611,19 @@ const Settings = () => {
                     </label>
                     <p className="text-[11px] text-muted-foreground">
                         {t('该开关会立即保存到当前用户本地设置。', 'This toggle is saved immediately to current user local settings.')}
+                    </p>
+                    <label className="flex items-center gap-3 text-sm text-white bg-white/5 p-3 rounded-lg border border-white/10 mt-2">
+                        <input
+                            type="checkbox"
+                            checked={!!globalDraftMode}
+                            onChange={(e) => handleGlobalDraftModeChange(e.target.checked)}
+                        />
+                        <span>
+                            {t('默认开启视频生成草稿模式 (480p分辨率)', 'Enable video generation draft mode (480p resolution) by default')}
+                        </span>
+                    </label>
+                    <p className="text-[11px] text-muted-foreground">
+                        {t('进入分镜和视频页面时，是否使用草稿以此设置为准。', 'Determines the default state of the draft mode when entering storyboard or video views.')}
                     </p>
                     <div className="space-y-2 bg-white/5 p-3 rounded-lg border border-white/10">
                         <div className="flex flex-wrap items-center gap-2 md:gap-3">

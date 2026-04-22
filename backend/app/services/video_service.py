@@ -114,10 +114,13 @@ def create_montage(project_id: int, items: list) -> str:
                 # moviepy concatenate might fail if sizes differ.
                 # Let's resize everything to 720p or just the size of the first clip?
                 # Safe bet: Resize to first clip's size if they differ.
-                if clips:
+                if not clips:
+                    first_w, first_h = clip.size
+                else:
                     first_w, first_h = clips[0].size
-                    if clip.size != (first_w, first_h):
-                         clip = clip.resized(new_size=(first_w, first_h))
+
+                if clip.size != (first_w, first_h):
+                    clip = clip.resized(new_size=(first_w, first_h))
                     
                 clips.append(clip)
             except Exception as e:
@@ -133,13 +136,17 @@ def create_montage(project_id: int, items: list) -> str:
         output_path = os.path.join(settings.UPLOAD_DIR, output_filename)
         
         # Write file
+        write_kwargs = {
+            "codec": "libx264",
+            "audio_codec": "aac",
+            "fps": 24,
+            "threads": _MONTAGE_FFMPEG_THREADS,
+            "logger": None # Suppress TQDM output to stdout
+        }
+            
         final_clip.write_videofile(
             output_path, 
-            codec="libx264", 
-            audio_codec="aac",
-            fps=24, 
-            threads=_MONTAGE_FFMPEG_THREADS,
-            logger=None # Suppress TQDM output to stdout
+            **write_kwargs
         )
 
         try:

@@ -2330,7 +2330,18 @@ def _get_generation_callback_payload(ticket: str) -> Dict[str, Any]:
                 GENERATION_CALLBACK_STORE[stable_ticket] = dict(file_payload)
 
     raw_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
-    return dict(raw_payload or {})
+    normalized = dict(raw_payload or {})
+    
+    event_data = normalized.get("eventData")
+    if isinstance(event_data, dict):
+        if "status" not in normalized and "status" in event_data:
+            normalized["status"] = event_data["status"]
+        if "error" not in normalized:
+            error_val = event_data.get("errorMessage") or event_data.get("failedReason") or event_data.get("errorCode")
+            if error_val:
+                normalized["error"] = str(error_val)
+                
+    return normalized
 
 
 def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
@@ -9778,7 +9789,6 @@ class EpisodeUpdate(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
-    ai_entity_design_result: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeOut(BaseModel):
@@ -9790,7 +9800,6 @@ class EpisodeOut(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
-    ai_entity_design_result: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = []
     script_segments: List[ScriptSegmentOut] = []
     class Config:
@@ -20692,6 +20701,9 @@ def _build_video_provider_options(req: VideoGenerationRequest, quality: Optional
     if req.multi_shots is not None:
         options["multi_shots"] = bool(req.multi_shots)
 
+    if req.draft_mode is not None:
+        options["draft"] = bool(req.draft_mode)
+
     # Kling 3.0 API requires input.sound=true when multi_shots=true.
     if bool(options.get("multi_shots")):
         options["sound"] = True
@@ -25368,25 +25380,6 @@ async def _run_generate_video(
                     resolved_video_height = int(inferred_h)
                 if resolved_video_width and resolved_video_height:
                     resolved_video_resolution = f"{int(resolved_video_width)}x{int(resolved_video_height)}"
-
-        if req.draft_mode:
-            draft_aspect = aspect_ratio or "16:9"
-            if draft_aspect == "16:9":
-                resolved_video_width, resolved_video_height = 864, 496
-            elif draft_aspect == "9:16":
-                resolved_video_width, resolved_video_height = 496, 864
-            elif draft_aspect == "4:3":
-                resolved_video_width, resolved_video_height = 752, 560
-            elif draft_aspect == "3:4":
-                resolved_video_width, resolved_video_height = 560, 752
-            elif draft_aspect == "21:9":
-                resolved_video_width, resolved_video_height = 992, 432
-            elif draft_aspect == "1:1":
-                resolved_video_width, resolved_video_height = 640, 640
-            else:
-                resolved_video_width, resolved_video_height = 864, 496
-            resolved_video_resolution = f"{resolved_video_width}x{resolved_video_height}"
-            resolved_video_image_size = "480p"
 
         if _is_token_billing:
             _video_token_cfg = billing_service.resolve_video_token_config(db, reserve_provider, reserve_model)

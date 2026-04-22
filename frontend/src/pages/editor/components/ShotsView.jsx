@@ -17,7 +17,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
 } from '../editorHelpers';
 
 import { 
@@ -5785,6 +5785,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         });
                     } catch (preloadErr) {}
 
+                    if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);
                     clearPendingImageJob(targetShotId, 'start');
                     // Save original prompt to DB (user view), but image was generated with context
                     const newData = { image_url: res.url, start_frame: rawPrompt };
@@ -5895,6 +5896,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         });
                     } catch (preloadErr) {}
 
+                    if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);
                     clearPendingImageJob(targetShotId, 'end');
                     tech.end_frame_url = res.url;
                     tech.video_gen_mode = 'start_end'; // Auto-switch to Start+End
@@ -6270,6 +6272,30 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             if (videoSettled[0].status === 'fulfilled' && videoSettled[0].value && videoSettled[0].value.url) {
                 const res = videoSettled[0].value;
+                if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);
+
+                try {
+                    await new Promise((resolve) => {
+                        const v = document.createElement('video');
+                        v.muted = true;
+                        v.playsInline = true;
+                        v.preload = 'auto';
+                        let done = false;
+                        const finish = () => {
+                            if (done) return;
+                            done = true;
+                            resolve();
+                        };
+                        v.oncanplay = finish;
+                        v.onloadeddata = finish;
+                        v.onerror = finish;
+                        v.src = getFullUrl(res.url);
+                        v.load();
+                        setTimeout(finish, 4000);
+                    });
+                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(res.url);
+                } catch(e) {}
+
                 clearPendingVideoJob(targetShotId);
                 const newData = { video_url: res.url, prompt: rawPrompt };
                 
@@ -8110,6 +8136,19 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                     <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
                                                 </select>
 
+                                                <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-1">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        className="hidden"
+                                                        checked={isDraftMode}
+                                                        onChange={(e) => setIsDraftMode(e.target.checked)}
+                                                    />
+                                                    <div className={`w-2.5 h-2.5 rounded-sm border flex items-center justify-center transition-colors ${isDraftMode ? 'bg-primary border-primary' : 'border-white/30 hover:border-white/50 bg-black/20'}`}>
+                                                        {isDraftMode && <Check className="w-2 h-2 text-white" />}
+                                                    </div>
+                                                    <span className={isDraftMode ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('草稿', 'Draft')}</span>
+                                                </label>
+
                                                 <button 
                                                     onClick={() => generateAssetWithLang('video')} 
                                                     disabled={currentShotGenerating}
@@ -9250,6 +9289,17 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex flex-wrap items-center gap-2">
+                                                                    {assetDetailModal.type === 'video' && (
+                                                                        <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
+                                                                            <input 
+                                                                                type="checkbox" 
+                                                                                checked={isDraftMode}
+                                                                                onChange={(e) => setIsDraftMode(e.target.checked)}
+                                                                                className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-gray-900"
+                                                                            />
+                                                                            {t('草稿(480p)', 'Draft (480p)')}
+                                                                        </label>
+                                                                    )}
                                                                     {renderDetailActionButton({
                                                                         label: t('生成视频', 'Generate Video'),
                                                                         busyLabel: t('视频生成中...', 'Generating Video...'),

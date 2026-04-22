@@ -6341,7 +6341,7 @@ Negative prompt constraints: {neg_prompt}"""
                 "size": payload.get("size"),
             })
 
-            _debug_log(f"[RunningHub] Image Payload: {_format_payload_for_log(payload)}")
+            logger.info(f"[RunningHub] Image Payload: {_format_payload_for_log(payload)}")
             return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHubImage", extra_metadata=base_metadata)
 
         if gen_type == "audio":
@@ -6361,7 +6361,7 @@ Negative prompt constraints: {neg_prompt}"""
             if _pick_tool_value("english_normalization") is not None:
                 payload["english_normalization"] = _normalize_bool(_pick_tool_value("english_normalization"), False)
 
-            _debug_log(f"[RunningHub] Audio Payload: {_format_payload_for_log(payload)}")
+            logger.info(f"[RunningHub] Audio Payload: {_format_payload_for_log(payload)}")
             return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHubAudio", extra_metadata=base_metadata)
 
         if gen_type != "video":
@@ -6381,6 +6381,14 @@ Negative prompt constraints: {neg_prompt}"""
         movement_amplitude = str(_pick_tool_value("movementAmplitude", "movement_amplitude", "motion_amplitude") or "").strip() or None
         if not movement_amplitude and _is_runninghub_vidu_video_endpoint():
             movement_amplitude = "auto"
+            
+        is_draft = _normalize_bool(_pick_tool_value("draft_mode", "draft"), False)
+        if is_draft:
+            payload["draft"] = True
+            if "sparkvideo" in submit_url.lower() and "fast" not in submit_url.lower():
+                submit_url = submit_url.replace("sparkvideo", "sparkvideo-2.0-fast")
+                endpoint_lower = submit_url.lower()
+
         normalized_video_duration = _normalize_runninghub_video_duration(explicit_duration, duration)
         normalized_video_resolution = _normalize_runninghub_video_resolution(explicit_resolution, "720p" if _is_runninghub_vidu_video_endpoint() else None)
 
@@ -6545,7 +6553,7 @@ Negative prompt constraints: {neg_prompt}"""
         print(f"payload: {payload}")
         print(f"======================================================\n")
 
-        _debug_log(f"[RunningHub] Video Payload: {_format_payload_for_log(payload)}")
+        logger.info(f"[RunningHub] Video Payload: {_format_payload_for_log(payload)}")
         return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHub", extra_metadata=base_metadata)
 
     async def _handle_apiyi_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
@@ -7856,6 +7864,10 @@ Negative prompt constraints: {neg_prompt}"""
             "content": content_payload,
         }
 
+        is_draft = bool(self._normalize_bool_value(tool_conf.get("draft_mode")) or self._normalize_bool_value(tool_conf.get("draft")))
+        if is_draft:
+            payload["draft"] = True
+
         if callback_url and callback_url != "-1":
             payload["webhook_url"] = callback_url
             payload["webhookUrl"] = callback_url
@@ -7873,6 +7885,8 @@ Negative prompt constraints: {neg_prompt}"""
 
         for source_key, target_key in (("resolution", "resolution"), ("generate_audio", "generate_audio")):
             value = tool_conf.get(source_key)
+            if source_key == "resolution" and not value:
+                value = image_size or tool_conf.get("image_size") or tool_conf.get("size")
             if value is None:
                 continue
             if source_key == "resolution" and is_seedance2 and is_i2v_request:
@@ -8571,7 +8585,7 @@ Negative prompt constraints: {neg_prompt}"""
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         retryable_statuses = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
         max_submit_attempts = 1
-        _debug_log(f"[{log_tag}] RunningHub submit URL: {submit_url} | Payload: {_strip_base64_from_log(payload)}")
+        logger.info(f"[{log_tag}] RunningHub submit URL: {submit_url} | Payload: {_strip_base64_from_log(payload)}")
 
         def _extract_runninghub_media_url(value: Any) -> Optional[str]:
             if isinstance(value, dict):
