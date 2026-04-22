@@ -9812,6 +9812,10 @@ Negative prompt constraints: {neg_prompt}"""
             gen_type == "image"
             and str(model_lower or "").strip().lower() in {"gpt-image/1.5-image-to-image", "gpt-image/1-5-image-to-image"}
         )
+        is_gpt_image_2 = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower().replace("/", "-").startswith("gpt-image-2")
+        )
         is_seedream_5_lite_i2i = bool(
             gen_type == "image"
             and str(model_lower or "").strip().lower() in {"seedream/5-lite-image-to-image"}
@@ -9828,6 +9832,11 @@ Negative prompt constraints: {neg_prompt}"""
             is_z_image_model = str(model_lower or "").startswith("z-image")
             if is_z_image_model:
                 payload_input["aspect_ratio"] = str(payload_input.get("aspect_ratio") or "1:1").strip() or "1:1"
+                payload_input.pop("image_size", None)
+            elif is_gpt_image_2:
+                ar_val = payload_input.pop("aspect_ratio", None)
+                if ar_val:
+                    payload_input["size"] = ar_val
                 payload_input.pop("image_size", None)
             elif is_gpt_image_15_i2i:
                 # KIE 1.5 Image-To-Image contract:
