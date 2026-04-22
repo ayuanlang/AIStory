@@ -3233,24 +3233,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const episode = getInfoValue(['series_episode', 'episode']);
             const type = getInfoValue(['type']);
             const basePositioning = getInfoValue(['base_positioning']);
-
-
-
-
+            if (title) metaParts.push(`Title: ${title}`);
+            if (episode) metaParts.push(`Episode: ${episode}`);
+            if (type) metaParts.push(`Type: ${type}`);
+            if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
             if (language) {
-
+                metaParts.push(`Language: ${language}`);
             }
-
+            metaParts.push('[Technical & Visual Parameters]');
             const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
             const tone = getInfoValue(['tone', 'mood']);
             const lighting = getInfoValue(['lighting', 'light']);
-
-
-
+            if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
+            if (tone) metaParts.push(`Tone: ${tone}`);
+            if (lighting) metaParts.push(`Lighting: ${lighting}`);
             const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
             const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
-
-
+            if (eraField) metaParts.push(`Era / Period: ${eraField}`);
+            if (regionField) metaParts.push(`Region / Country: ${regionField}`);
+            
+            metaParts.push('Use this project context as first-class constraints before generating the subjects.');
 
             if (Object.keys(projectInfo).length > 0) {
                 finalSubjectIndexText = `${metaParts.join('\n')}\n\n[Subject Index extracted from Phase 1]\n${finalSubjectIndexText}`;
@@ -4679,17 +4681,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const episode = getInfoValue(['series_episode', 'episode']);
                             const type = getInfoValue(['type']);
                             const basePositioning = getInfoValue(['base_positioning']);
-
-
-
-
+                            if (title) metaParts.push(`Title: ${title}`);
+                            if (episode) metaParts.push(`Episode: ${episode}`);
+                            if (type) metaParts.push(`Type: ${type}`);
+                            if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
                             if (language) {
-
+                                metaParts.push(`Language: ${language}`);
                             } else {
-
-
+                                metaParts.push(`Language: (empty)`);
+                                metaParts.push(`Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.`);
                             }
-
+                            metaParts.push('[Technical & Visual Parameters]');
                             const aspectRatio = getVisualValue(['aspect_ratio']);
                             const imageSize = getVisualValue(['image_size']);
                             const horizontalResolution = getVisualValue(['horizontal_resolution']);
@@ -4699,24 +4701,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
                             const tone = getInfoValue(['tone', 'mood']);
                             const lighting = getInfoValue(['lighting', 'light']);
-
-
-
-
-
-
-
-
-
+                            if (aspectRatio) metaParts.push(`Aspect Ratio: ${aspectRatio}`);
+                            if (imageSize) metaParts.push(`Image Size: ${imageSize}`);
+                            if (horizontalResolution) metaParts.push(`Horizontal Resolution: ${horizontalResolution}`);
+                            if (verticalResolution) metaParts.push(`Vertical Resolution: ${verticalResolution}`);
+                            if (frameRate) metaParts.push(`Frame Rate: ${frameRate}`);
+                            if (quality) metaParts.push(`Quality: ${quality}`);
+                            if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
+                            if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
+                            if (tone) metaParts.push(`Tone: ${tone}`);
+                            if (lighting) metaParts.push(`Lighting: ${lighting}`);
 
                             const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
                             const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
                             const shotPrefField = getInfoValue(['shot_preference', 'lens_preference', 'camera_preference']);
                             const broadcastSafetyField = getInfoValue(['broadcast_security_level', 'broadcast_safety_level', 'safety_level', 'broadcast_safety']);
-
-
-
-
+                            if (eraField) metaParts.push(`Era / Period: ${eraField}`);
+                            if (regionField) metaParts.push(`Region / Country: ${regionField}`);
+                            if (shotPrefField) metaParts.push(`Shot / Lens Preference: ${shotPrefField}`);
+                            if (broadcastSafetyField) metaParts.push(`Broadcast Security Level: ${broadcastSafetyField}`);
+                            metaParts.push(`Use this project context as first-class constraints before analyzing the script.`);
 
                      if (metaParts.length > 1) {
                         fullContent = `${metaParts.join('\n')}\n\nScript to Analyze:\n\n${rawContent}`;
