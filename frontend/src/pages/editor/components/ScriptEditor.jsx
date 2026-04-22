@@ -2680,7 +2680,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setSubjectIndexText(activeEpisode?.ai_scene_analysis_subject_index || '');
         setAdaptationText(activeEpisode?.ai_scene_analysis_adaptation || '');
-        setLlmAssetRawResultContent(activeEpisode?.ai_scene_analysis_subject_index || '');
+        setLlmAssetRawResultContent(activeEpisode?.ai_entity_design_result || activeEpisode?.ai_scene_analysis_subject_index || '');
         setAnalysisAttentionNotes(String(activeEpisode?.episode_info?.analysis_attention_notes || ''));
         setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
         setCoreCoverageResultText(String(activeEpisode?.episode_info?.core_coverage_check_result || ''));
@@ -3290,7 +3290,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 projectId,
                 "subject_generation", // explicitly setting functionName
                 null,                 // default systemApiId
-                "2_pass_generate_assets" // overriding sceneAnalysisMode internally just to bust the dedupe cache for the second call
+                "entity_design" // explicitly use entity_design mode to prevent backend from overwriting Phase 1 ai_scene_analysis_result
             );
 
             const analyzedText = extractAnalysisTextFromResult(result);
@@ -3303,6 +3303,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
                     onLog?.(`[Asset Gen Tracking] Warning: AI did not return a valid Entities JSON block. Skipping import to prevent overwriting index.`, "warning");
+                    throw new Error("第二阶段未返回可导入的具体实体数据。AI并未输出正确的JSON资产格式，请查阅原文后重试。");
                 } else {
                     // Automatically import the generated subjects
                     const sceneImportReport = await doImportText(analyzedText, 'json', {
@@ -3336,6 +3337,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } catch (error) {
             console.error("Asset generation step failed:", error);
             onLog?.(`Asset generation failed: ${error.message}`);
+            throw error;
         }
 
         return emptyReport;
@@ -4769,6 +4771,75 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
+        // Bypass Phase 1 if subject index is already present!
+        if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
+            const bypassConfirmed = true;
+            if (bypassConfirmed) {
+                const startedAt = Date.now();
+                setAnalysisUiReport({
+                    status: 'running',
+                    startedAt,
+                    durationMs: 0,
+                    phaseTimings: null,
+                    importReport: null,
+                    runtimeMeta: null,
+                    warning: '',
+                    error: '',
+                });
+
+                setAnalysisFlowStatus({
+                    phase: 'processing_output_workspace',
+                    message: "🚀 跳过 Phase 1，直接进入资产设计...",
+                });
+
+                try {
+                    // We just jump straight to Phase 2 logic (runPostImportSceneSubjectPipeline).
+                    // We mock an empty import report to keep the pipeline happy.
+                    const mockImportReport = { importedSceneRows: [] };
+                    const dummyAnalyzedText = activeEpisode.ai_scene_analysis_result || activeEpisode.ai_scene_analysis_subject_index; // Pass something fallback
+
+                    const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, activeEpisode.ai_scene_analysis_subject_index);
+
+                    const finalImportReport = {
+                        ...mockImportReport,
+                        sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                        dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
+                        dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
+                        importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
+                    };
+
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: "🎉 补充实体资产生成完毕！",
+                    });
+
+                    setAnalysisUiReport({
+                        status: 'completed',
+                        startedAt,
+                        durationMs: Date.now() - startedAt,
+                        phaseTimings: null,
+                        importReport: finalImportReport,
+                        runtimeMeta: null,
+                        warning: '',
+                        error: '',
+                    });
+                } catch (err) {
+                    console.error(err);
+                    setAnalysisFlowStatus({ phase: 'failed', message: "❌ 资产生成失败: " + err.message });
+                    setAnalysisUiReport({
+                        status: 'failed',
+                        startedAt,
+                        durationMs: Date.now() - startedAt,
+                        phaseTimings: null,
+                        importReport: null,
+                        runtimeMeta: null,
+                        warning: '',
+                        error: err.message,
+                    });
+                }
+                return; // Early return to completely bypass standard analysis flow
+            }
+        }
         if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
             if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
@@ -5048,7 +5119,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 startedAt,
                 durationMs: Date.now() - startedAt,
                 phaseTimings,
-                importReport: canceled ? importReport : null,
+                importReport: importReport,
                 runtimeMeta,
                 warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
                 error: canceled ? '' : friendlyAnalysisError,
@@ -5149,7 +5220,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         // Bypass Phase 1 if subject index is already present!
         if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
-            const bypassConfirmed = window.confirm("检测到当前分集已存在“实体资产(Subjects Index)”，是否跳过场景解构（Phase 1），直接生成实体设计资产（Phase 2）？\n\n点击“确定”跳过 Phase 1，点击“取消”从头重新进行完整分析。");
+            const bypassConfirmed = true;
             if (bypassConfirmed) {
                 const startedAt = Date.now();
                 setAnalysisUiReport({
@@ -5484,7 +5555,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 startedAt,
                 durationMs: Date.now() - startedAt,
                 phaseTimings,
-                importReport: canceled ? importReport : null,
+                importReport: importReport,
                 runtimeMeta,
                 warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
                 error: canceled ? '' : friendlyAnalysisError,

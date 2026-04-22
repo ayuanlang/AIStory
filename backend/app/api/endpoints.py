@@ -9778,6 +9778,7 @@ class EpisodeUpdate(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
+    ai_entity_design_result: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeOut(BaseModel):
@@ -9789,6 +9790,7 @@ class EpisodeOut(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
+    ai_entity_design_result: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = []
     script_segments: List[ScriptSegmentOut] = []
     class Config:
@@ -15825,10 +15827,17 @@ def create_entity(
 
     _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
 
+    name_conditions = [Entity.name == entity.name]
+    if entity.name:
+        name_conditions.append(Entity.name_en == entity.name)
+    if entity.name_en:
+        name_conditions.append(Entity.name == entity.name_en)
+        name_conditions.append(Entity.name_en == entity.name_en)
+
+    from sqlalchemy import or_
     existing_entity = db.query(Entity).filter(
         Entity.project_id == project_id,
-        Entity.name == entity.name,
-        Entity.type == entity.type
+        or_(*name_conditions)
     ).first()
     
     if existing_entity:

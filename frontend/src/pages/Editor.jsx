@@ -1471,7 +1471,7 @@ const Editor = ({
             ? await fetchEntities(id).catch(() => [])
             : []);
         let knownEntities = Array.isArray(existingEntities) ? [...existingEntities] : [];
-        const normalizeEntityKey = (type, name) => `${String(type || '').trim().toLowerCase()}::${normalizeEntityToken(name)}`;
+        const normalizeEntityKey = (type, name) => normalizeEntityToken(name);
         const existingEntityMap = new Map();
         for (const e of (existingEntities || [])) {
             const t = String(e?.type || '').trim().toLowerCase();
