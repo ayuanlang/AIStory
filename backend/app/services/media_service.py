@@ -9834,9 +9834,14 @@ Negative prompt constraints: {neg_prompt}"""
                 payload_input["aspect_ratio"] = str(payload_input.get("aspect_ratio") or "1:1").strip() or "1:1"
                 payload_input.pop("image_size", None)
             elif is_gpt_image_2:
-                ar_val = payload_input.pop("aspect_ratio", None)
-                if ar_val:
-                    payload_input["size"] = ar_val
+                ar_val = str(payload_input.pop("aspect_ratio", "")).strip()
+                if ar_val == "16:9": res_str = "1280x720"
+                elif ar_val == "9:16": res_str = "720x1280"
+                elif ar_val == "4:3": res_str = "1024x768"
+                elif ar_val == "3:4": res_str = "768x1024"
+                elif ar_val == "21:9": res_str = "1536x640" 
+                else: res_str = "1024x1024"
+                payload_input["size"] = res_str
                 payload_input.pop("image_size", None)
             elif is_gpt_image_15_i2i:
                 # KIE 1.5 Image-To-Image contract:
