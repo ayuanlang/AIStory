@@ -7370,16 +7370,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
                         </button>
 
-                        <div className="relative inline-flex items-center ml-2">
-                            <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后视频生成的分辨率强制下降到480p（忽略项目配置）', 'Force video resolution to 480p, ignoring project info')}>
-                                <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${isDraftMode ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
-                                    {isDraftMode && <Check className="w-2.5 h-2.5 text-white" />}
-                                </div>
-                                <input type="checkbox" className="hidden" checked={isDraftMode} onChange={(e) => setIsDraftMode(e.target.checked)} />
-                                <span className={isDraftMode ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('草稿(480p)', 'Draft(480p)')}</span>
-                            </label>
-                        </div>
-
                         <div className="relative inline-flex items-center ml-2 border border-white/20 rounded bg-transparent">
                             <div className="relative flex items-center">
                                 <button 
@@ -7455,7 +7445,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                 </div>
                 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-4 ml-auto">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后视频生成的分辨率强制下降到480p（忽略项目配置）', 'Force video resolution to 480p, ignoring project info')}>
+                        <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${isDraftMode ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
+                            {isDraftMode && <Check className="w-2.5 h-2.5 text-white" />}
+                        </div>
+                        <input type="checkbox" className="hidden" checked={isDraftMode} onChange={(e) => setIsDraftMode(e.target.checked)} />
+                        <span className={isDraftMode ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('草稿(480p)', 'Draft(480p)')}</span>
+                    </label>
                      {/* Settings Button Moved to Edit Shot View */}
                 </div>
             </div>
