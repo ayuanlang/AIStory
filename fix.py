@@ -1,6 +1,1 @@
-with open('backend/app/api/endpoints.py', 'r', encoding='utf-8') as f:
-    t = f.read()
-t = t.replace('\"\"\"Async', '\"\"\"Async').replace('\"\"\"\\n    safe', '\"\"\"\\n    safe')
-t = t.replace('\\\"\\\"\\\"Async', '\"\"\"Async').replace('\\\"\\\"\\\"\\n', '\"\"\"\\n')
-with open('backend/app/api/endpoints.py', 'w', encoding='utf-8') as f:
-    f.write(t)
+import sys\nwith open(C:/AS/AIStory/frontend/src/pages/editor/components/ShotsView.jsx, r, encoding=utf-8) as f:\n  c = f.read()\nc = c.replace(isBrokenMediaUrl, rememberWarmMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl)\nc = c.replace(clearPendingImageJob(targetShotId, 'start');, if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);\\nclearPendingImageJob(targetShotId, 'start');)\nc = c.replace(clearPendingImageJob(targetShotId, 'end');, if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);\\nclearPendingImageJob(targetShotId, 'end');)\nc = c.replace(clearPendingVideoJob(targetShotId);, if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);\\nclearPendingVideoJob(targetShotId);)\nwith open(C:/AS/AIStory/frontend/src/pages/editor/components/ShotsView.jsx, w, encoding=utf-8) as f:\n  f.write(c)

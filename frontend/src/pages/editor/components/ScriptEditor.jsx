@@ -3281,6 +3281,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             onLog?.(`[Asset Gen Tracking] Launching second LLM call for 'subject_generation'`);
 
+            const phase1ApiId = Number(localStorage.getItem('func_api_script_analysis')) || null;
+
             const result = await analyzeScene(
                 finalSubjectIndexText,
                 finalPromptContent,
@@ -3291,7 +3293,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 null, // No runtime hooks (we just want it to wait via the default `asyncLLMPost` behavior)
                 projectId,
                 "subject_generation", // explicitly setting functionName
-                null,                 // default systemApiId
+                phase1ApiId,          // Inherit the exact same API model as Phase 1
                 "entity_design" // explicitly use entity_design mode to prevent backend from overwriting Phase 1 ai_scene_analysis_result
             );
 

@@ -1,48 +1,27 @@
-with open("backend/app/services/oss_storage_service.py", "r", encoding="utf-8") as f:
+# -*- coding: utf-8 -*-
+import re
+filepath = "C:/AS/AIStory/backend/app/services/oss_storage_service.py"
+with open(filepath, "r", encoding="utf-8") as f:
     text = f.read()
 
-target1 = '''        if "://" in public_base_url:
-            if is_qiniu and public_base_url.startswith("https://"):
-                return public_base_url.replace("https://", "http://", 1)        
-            return public_base_url'''
+old_str = """            if getattr(pool, "default_storage_class", None):
+                extra["StorageClass"] = str(pool.default_storage_class)
 
-replacement1 = '''        if "://" in public_base_url:
-            return public_base_url'''
+            try:
+                _visible_info("""
 
-target2 = '''        if is_qiniu:
-            return f"http://{public_base_url}"'''
+new_str = """            if getattr(pool, "default_storage_class", None):
+                st_class = str(pool.default_storage_class)
+                provider_nm = str(getattr(pool, "provider", "")).lower()
+                if provider_nm == "backblaze" and st_class == "STANDARD_IA":
+                    pass
+                else:
+                    extra["StorageClass"] = st_class
 
-replacement2 = '''        if is_qiniu:
-            return f"https://{public_base_url}"'''
+            try:
+                _visible_info("""
 
-target3 = '''        try:
-            url = client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": pool.bucket, "Key": key},
-                ExpiresIn=int(getattr(pool, "presign_expires_seconds", 7 * 24 * 3600)),
-            )
-            if self._is_qiniu_provider(pool) and url.startswith("https://"):
-                url = url.replace("https://", "http://", 1)
-            return url
-        except Exception as exc:'''
-
-replacement3 = '''        try:
-            url = client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": pool.bucket, "Key": key},
-                ExpiresIn=int(getattr(pool, "presign_expires_seconds", 7 * 24 * 3600)),
-            )
-            return url
-        except Exception as exc:'''
-
-if target1 in text:
-    text = text.replace(target1, replacement1)
-if target2 in text:
-    text = text.replace(target2, replacement2)
-if target3 in text:
-    text = text.replace(target3, replacement3)
-
-with open("backend/app/services/oss_storage_service.py", "w", encoding="utf-8") as f:
+text = text.replace(old_str, new_str)
+with open(filepath, "w", encoding="utf-8") as f:
     f.write(text)
-
-print("Patch applied for OSS HTTPS")
+print("Patched!")
