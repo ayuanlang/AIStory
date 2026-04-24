@@ -33,8 +33,8 @@ jobs:
               --exclude='./backend/venv' \
               --exclude='./backend/.venv' \
               --exclude='./backend/__pycache__' \
-              --exclude='./deploy.tar.gz' \
-              -czf deploy.tar.gz .
+              -czf /tmp/deploy.tar.gz .
+          mv /tmp/deploy.tar.gz ./deploy.tar.gz
 
       - name: 4. Upload to Alibaba Cloud ECS
         uses: appleboy/scp-action@master
