@@ -58,7 +58,9 @@ jobs:
             rm deploy.tar.gz
             
             echo "--- Setting up Miniconda ---"
-            if [ ! -d "/opt/miniconda3" ]; then
+            # 如果上一次超时留下了损坏的目录，但没有 activate 文件，将其删除重装
+            if [ ! -f "/opt/miniconda3/bin/activate" ]; then
+              rm -rf /opt/miniconda3
               wget https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
               bash miniconda.sh -b -p /opt/miniconda3
               rm miniconda.sh
