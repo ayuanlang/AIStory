@@ -52,6 +52,7 @@ jobs:
           username: root
           key: ${{ secrets.ALIYUN_ECS_PRIVATE_KEY }}
           script: |
+            set -x
             echo "--- Extracting files ---"
             cd /opt/AIStory
             tar -xzf deploy.tar.gz
@@ -85,8 +86,6 @@ jobs:
             /opt/miniconda3/envs/aistory/bin/pip install -r backend/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
             
             echo "--- Restarting Service ---"
-            # 查找并强杀旧的 Uvicorn 进程
-            pkill -f "uvicorn" || true
             
             cd backend
             export PORT=8000
