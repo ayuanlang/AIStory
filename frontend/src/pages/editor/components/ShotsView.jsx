@@ -4130,7 +4130,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     while (!cancelled) {
                         try {
                             const status = await getVideoGenerationJobStatus(jobId);
-                            onLog?.(`[VideoPoll] job_id=${jobId} shot_id=${stableShotId} status=${JSON.stringify(status)}`, 'info');
                             const phase = normalizeGenerationPhase(status?.status);
                             const resultUrl = String(
                                 status?.result?.url

@@ -3337,18 +3337,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             onLog?.(`[Asset Gen Tracking] Launching second LLM call for 'subject_generation'`);
 
-            const result = await analyzeScene(
-                finalSubjectIndexText, 
-                finalPromptContent, 
-                null, 
-                activeEpisode.id, 
-                analysisAttentionNotes, 
-                selectedReuseSubjectAssets, 
-                null, 
-                projectId,
-                "script_analysis",
-                null,
-                "2_pass_generate_assets"
+            const result = await awaitAnalyzeSceneWithRecovery(
+                () => analyzeScene(
+                    finalSubjectIndexText, 
+                    finalPromptContent, 
+                    null, 
+                    activeEpisode?.id || null, 
+                    analysisAttentionNotes, 
+                    selectedReuseSubjectAssets, 
+                    {
+                        onTaskCreated: (taskId) => {
+                            setActiveAnalysisTaskId(String(taskId || '').trim());
+                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt: Date.now(), phase: 2 });
+                        }
+                    }, 
+                    projectId,
+                    "subject_generation",
+                    null,
+                    "2_pass_generate_assets"
+                ),
+                { startedAt: Date.now(), baselineText: '' }
             );
 
             const analyzedText = extractAnalysisTextFromResult(result);

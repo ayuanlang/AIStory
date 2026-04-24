@@ -8172,15 +8172,31 @@ Negative prompt constraints: {neg_prompt}"""
         if prompt_text:
             content_payload.append({"type": "text", "text": prompt_text})
 
-        if resolved_image_refs:
-            if is_seedance2 and seedance2_payload_mode == "reference_media":
-                for item in resolved_image_refs:
+        if is_seedance2 and seedance2_payload_mode == "reference_media":
+            if len(resolved_image_refs) > 1:
+                # If multiple reference images are provided in this mode,
+                # treat the first as a `first_frame` and the rest as `reference_image`.
+                # This is a workaround for a suspected issue where multiple `reference_image`
+                # roles are not handled as expected by the upstream API.
+                content_payload.append({
+                    "type": "image_url",
+                    "image_url": {"url": resolved_image_refs[0]},
+                    "role": "first_frame",
+                })
+                for item in resolved_image_refs[1:]:
                     content_payload.append({
                         "type": "image_url",
                         "image_url": {"url": item},
                         "role": "reference_image",
                     })
-            elif len(resolved_image_refs) == 1 and not resolved_last_frame:
+            elif resolved_image_refs:
+                content_payload.append({
+                    "type": "image_url",
+                    "image_url": {"url": resolved_image_refs[0]},
+                    "role": "reference_image",
+                })
+        elif resolved_image_refs:
+            if len(resolved_image_refs) == 1 and not resolved_last_frame:
                 content_payload.append({
                     "type": "image_url",
                     "image_url": {"url": resolved_image_refs[0]},

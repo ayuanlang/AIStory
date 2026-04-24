@@ -4986,15 +4986,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             system_api_id=getattr(request, "system_api_id", None),
             function_name=getattr(request, "function_name", None),
         )
-        if not config or not config.get("provider"):
-            raise HTTPException(status_code=400, detail="未找到对应的AI模型配置，请检查是否选择了正确的API。")
-        
-        provider_name = config.get('provider')
-        if provider_name == 'apiyi2' and not config.get("api_key"):
-             logger.warning(f"Bypassing api_key check for {provider_name}")
-        elif not config.get("api_key") and "local" not in (config.get("base_url") or ""):
-             raise HTTPException(status_code=400, detail=f"您选择的API {config.get('provider')} / {config.get('model')} 缺少必需的 API密钥，请前往后台管理界面补充该模型的API_KEY。")
-             
+        if not config or not config.get("api_key"):
+             raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
         config = _inject_user_advanced_llm_preferences(config, current_user)
         config = _inject_project_creativity_temperature(
             config,
@@ -20195,64 +20188,6 @@ def get_billing_taxonomy_preview(
         "taskTypesBySourceCategory": task_types_by_source_category,
     }
 
-
-@router.get("/billing/project/{project_id}/stats")
-def get_project_billing_stats(
-    project_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Return credit consumption stats for a project.
-
-    Returns:
-        user_cost  – credits consumed by the current user in this project (negative amount = cost)
-        total_cost – credits consumed by all users in this project
-    """
-    # Verify the requesting user has access to the project
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if not current_user.is_superuser and project.owner_id != current_user.id:
-        # Check shares
-        share = db.query(ProjectShare).filter(
-            ProjectShare.project_id == project_id,
-            ProjectShare.user_id == current_user.id,
-        ).first()
-        if not share:
-            raise HTTPException(status_code=403, detail="Not authorized")
-
-    from sqlalchemy import func as sa_func
-
-    # Total cost (all users): sum of negative amounts on transaction_history for this project
-    total_row = (
-        db.query(sa_func.coalesce(sa_func.sum(TransactionHistory.amount), 0))
-        .filter(
-            TransactionHistory.project_id == project_id,
-            TransactionHistory.amount < 0,
-        )
-        .scalar()
-    )
-    total_cost = abs(int(total_row or 0))
-
-    # Current user's cost in this project
-    user_row = (
-        db.query(sa_func.coalesce(sa_func.sum(TransactionHistory.amount), 0))
-        .filter(
-            TransactionHistory.project_id == project_id,
-            TransactionHistory.user_id == current_user.id,
-            TransactionHistory.amount < 0,
-        )
-        .scalar()
-    )
-    user_cost = abs(int(user_row or 0))
-
-    return {
-        "project_id": project_id,
-        "user_cost": user_cost,
-        "total_cost": total_cost,
-    }
-
-
 @router.get("/billing/transactions", response_model=List[TransactionOut])
 def get_transactions(
     user_id: Optional[int] = None,
@@ -25832,9 +25767,9 @@ async def _run_generate_video(
             len(flat_refs),
             ref_names,
         )
-        prompt_text_before_mapping = prompt_text
-        entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else {}
-
+        entity_lookup = _build_project_entity_lookup(db, req.project_id) if hasattr(req, 'project_id') and req.project_id else {}
+        
+        # Only inject the mapping prompt for entity_refs mode
         prompt_text = _append_video_api_ref_mapping(
             prompt_text,
             flat_refs,
@@ -25842,22 +25777,7 @@ async def _run_generate_video(
             req.last_frame_url,
             req.keyframes,
             req.ref_video_urls,
-            entity_lookup=entity_lookup,
-        )
-        logger.warning(
-            "[GenerateVideo][PromptMap] shot_id=%s project_id=%s req_project_id=%s ref_mode=%s refs=%s keyframes=%s ref_videos=%s entity_lookup=%s changed=%s inline_tags_before=%s inline_tags_after=%s prefixed_after=%s",
-            req.shot_id,
-            resolved_project_id,
-            getattr(req, "project_id", None),
-            normalized_ref_mode or "<empty>",
-            len(flat_refs),
-            len(req.keyframes or []) if isinstance(req.keyframes, list) else 0,
-            len(req.ref_video_urls or []) if isinstance(req.ref_video_urls, list) else 0,
-            len(entity_lookup or {}),
-            prompt_text != prompt_text_before_mapping,
-            len(re.findall(r"ref_image_url\s*:\s*#\d+", prompt_text_before_mapping, flags=re.IGNORECASE)),
-            len(re.findall(r"ref_image_url\s*:\s*#\d+", prompt_text, flags=re.IGNORECASE)),
-            len(re.findall(r"参考图\d+的", prompt_text)),
+            entity_lookup=entity_lookup if is_reference_image_mode else None,
         )
 
         try:
@@ -26523,74 +26443,11 @@ def get_generation_callback_result(ticket: str, response: Response):
 async def submit_generate_video_endpoint(
     req: VideoGenerationRequest,
     request: Request,
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     callback_url = _resolve_callback_url_from_payload(req)
     explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
     req_payload = req.model_dump()
-
-    # Keep queue payload prompt aligned with runtime mapping logic so UI/debug payloads
-    # show the same entity-reference relationship as the actual provider submission.
-    try:
-        submit_prompt = str(req_payload.get("prompt") or "").strip()
-        if submit_prompt:
-            submit_prompt_before = submit_prompt
-            submit_ref_image_url = req_payload.get("ref_image_url")
-            submit_last_frame_url = req_payload.get("last_frame_url")
-            submit_keyframes = req_payload.get("keyframes") if isinstance(req_payload.get("keyframes"), list) else None
-            submit_ref_video_urls = req_payload.get("ref_video_urls") if isinstance(req_payload.get("ref_video_urls"), list) else None
-
-            submit_refs: List[str] = []
-            if isinstance(submit_ref_image_url, list):
-                submit_refs.extend([str(x).strip() for x in submit_ref_image_url if str(x).strip()])
-            elif isinstance(submit_ref_image_url, str) and submit_ref_image_url.strip():
-                submit_refs.append(submit_ref_image_url.strip())
-            if isinstance(submit_keyframes, list):
-                submit_refs.extend([str(x).strip() for x in submit_keyframes if str(x).strip()])
-            if isinstance(submit_last_frame_url, str) and submit_last_frame_url.strip():
-                submit_refs.append(submit_last_frame_url.strip())
-            submit_refs = [x for x in dict.fromkeys([str(x).strip() for x in submit_refs if str(x).strip()]) if x]
-
-            resolved_project_id = _to_positive_int_or_none(req_payload.get("project_id"))
-            if not resolved_project_id:
-                resolved_project_id = _to_positive_int_or_none(getattr(req, "project_id", None))
-            if not resolved_project_id and _to_positive_int_or_none(getattr(req, "shot_id", None)):
-                submit_shot = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
-                if submit_shot:
-                    resolved_project_id = _to_positive_int_or_none(getattr(submit_shot, "project_id", None))
-                    if not resolved_project_id and _to_positive_int_or_none(getattr(submit_shot, "episode_id", None)):
-                        submit_episode = db.query(Episode).filter(Episode.id == int(submit_shot.episode_id)).first()
-                        if submit_episode:
-                            resolved_project_id = _to_positive_int_or_none(getattr(submit_episode, "project_id", None))
-
-            submit_entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else None
-            req_payload["prompt"] = _append_video_api_ref_mapping(
-                submit_prompt,
-                submit_refs,
-                submit_ref_image_url,
-                submit_last_frame_url,
-                submit_keyframes,
-                submit_ref_video_urls,
-                entity_lookup=submit_entity_lookup,
-            )
-            submit_prompt_after = str(req_payload.get("prompt") or "")
-            logger.warning(
-                "[VideoSubmit][PromptMap] shot_id=%s project_id=%s req_project_id=%s refs=%s keyframes=%s ref_videos=%s entity_lookup=%s changed=%s inline_tags_before=%s inline_tags_after=%s prefixed_after=%s",
-                getattr(req, "shot_id", None),
-                resolved_project_id,
-                req_payload.get("project_id"),
-                len(submit_refs),
-                len(submit_keyframes or []),
-                len(submit_ref_video_urls or []),
-                len(submit_entity_lookup or {}),
-                submit_prompt_after != submit_prompt_before,
-                len(re.findall(r"ref_image_url\s*:\s*#\d+", submit_prompt_before, flags=re.IGNORECASE)),
-                len(re.findall(r"ref_image_url\s*:\s*#\d+", submit_prompt_after, flags=re.IGNORECASE)),
-                len(re.findall(r"参考图\d+的", submit_prompt_after)),
-            )
-    except Exception as e:
-        logger.warning("[VideoSubmit] prompt mapping pre-process skipped: %s", e)
     scope_key = _build_generation_task_scope("video", current_user.id, req_payload)
     fingerprint_token = _build_submit_idempotency_token("video", current_user.id, req_payload)
     idempotency_key = explicit_idempotency_key or fingerprint_token
@@ -26786,6 +26643,17 @@ def get_generate_video_job_status(
             result_url,
             owner_id,
         )
+
+    return {
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "error": job.get("error"),
+        "result": job.get("result"),
+    }
+
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -28287,7 +28155,6 @@ def _inject_shot_prompt_anchors(
         token = str(match.group(1) or "").strip()
         normalized = _normalize_entity_anchor_token(token)
         tail = text[match.end():]
-        head = text[max(0, match.start() - 24):match.start()]
         if re.match(r"^\s*[\(（]", tail):
             return match.group(0)
 
@@ -28299,22 +28166,20 @@ def _inject_shot_prompt_anchors(
             anchor = str(row.get("anchor") or "").strip()
             entity_id = str(row.get("entity_id") or "").strip()
             ref_no = (subject_ref_index_map or {}).get(entity_id)
-            has_prefixed_head = bool(re.search(r"参考图\d+的\s*$", head))
-            prefix_text = f"参考图{ref_no}的" if ref_no and not has_prefixed_head else ""
 
             if normalized in injected_entities:
                 # Duplicate reference: skip anchor description to prevent
                 # image models from interpreting repeated descriptions as
                 # multiple subjects (二宫格 / split-panel issue).
                 if ref_no:
-                    return f"{prefix_text}{match.group(0)}(ref_image_url: #{ref_no})"
+                    return f"{match.group(0)}(ref_image_url: #{ref_no})"
                 return match.group(0)
 
             injected_entities.add(normalized)
             anchor_with_ref = anchor
             if ref_no:
                 anchor_with_ref = f"{anchor} | ref_image_url: #{ref_no}"
-            return f"{prefix_text}{match.group(0)}({anchor_with_ref})"
+            return f"{match.group(0)}({anchor_with_ref})"
         return match.group(0)
 
     return regex.sub(_replace, text)
@@ -28607,7 +28472,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
             continue
 
         entity_type = str(row.get("entity_type") or "").strip().lower()
-        if entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
+        if entity_type not in {"subject", "character", "char"}:
             continue
 
         image_url = str(row.get("image_url") or "").strip()
@@ -28619,51 +28484,6 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
 
         entity_id = str(row.get("entity_id") or "").strip()
         if entity_id:
-            index_map[entity_id] = refs.index(image_url) + 1
-
-    # Fallback relaxed matching for ENV/PROP names that may not be captured
-    # by strict token parsing but still appear in normalized prompt text.
-    normalized_text = _normalize_entity_anchor_token(text)
-    if normalized_text and entity_lookup:
-        matched_rows: List[Tuple[int, Dict[str, Any]]] = []
-        allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
-
-        for key, row in entity_lookup.items():
-            norm_key = str(key or "").strip()
-            if not norm_key:
-                continue
-
-            entity_type = str((row or {}).get("entity_type") or "").strip().lower()
-            if entity_type and entity_type not in allowed_types:
-                continue
-
-            image_url = str((row or {}).get("image_url") or "").strip()
-            entity_id = str((row or {}).get("entity_id") or "").strip()
-            if not image_url or not entity_id or entity_id in index_map:
-                continue
-
-            has_ascii = bool(re.search(r"[a-z0-9]", norm_key, flags=re.IGNORECASE))
-            if has_ascii:
-                pattern = rf"(?<![a-z0-9]){re.escape(norm_key)}(?![a-z0-9])"
-                m = re.search(pattern, normalized_text, flags=re.IGNORECASE)
-                if not m:
-                    continue
-                pos = m.start()
-            else:
-                pos = normalized_text.find(norm_key)
-                if pos < 0:
-                    continue
-
-            matched_rows.append((pos, row))
-
-        matched_rows.sort(key=lambda item: item[0])
-        for _, row in matched_rows:
-            image_url = str((row or {}).get("image_url") or "").strip()
-            entity_id = str((row or {}).get("entity_id") or "").strip()
-            if not image_url or not entity_id or entity_id in index_map:
-                continue
-            if image_url not in refs:
-                refs.append(image_url)
             index_map[entity_id] = refs.index(image_url) + 1
 
     return index_map
@@ -28678,8 +28498,7 @@ def _append_video_api_ref_mapping(
     reference_video_urls: Optional[List[str]] = None,
     entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
-    source_text = str(prompt or "").strip()
-    text = source_text
+    text = str(prompt or "").strip()
     if not text:
         return text
 
@@ -28797,49 +28616,19 @@ def _append_video_api_ref_mapping(
                     char_name = norm_key
                 # Anchor injection should follow the asset-level Anchor Description for the matched entity.
                 anchor_text = str(row.get("anchor_description") or "").strip()
-                # Use the actually matched normalized key for replacement so ENV/PROP
-                # using name_en can be replaced consistently with the same match path.
-                replace_name = norm_key or char_name
-                pairs.append((mapped_idx, replace_name, anchor_text))
+                pairs.append((mapped_idx, char_name, anchor_text))
     pairs.sort(key=lambda x: x[0])
 
-    inline_tag_matches = re.findall(r"ref_image_url\s*:\s*#(\d+)", source_text, flags=re.IGNORECASE)
-    logger.warning(
-        "[_append_video_api_ref_mapping] refs=%s start_refs=%s keyframes=%s ref_videos=%s entity_lookup=%s inline_tags=%s pairs=%s",
-        len(ordered_refs),
-        len(start_urls),
-        len(keyframe_urls),
-        len(reference_video_urls or []),
-        len(entity_lookup or {}) if isinstance(entity_lookup, dict) else 0,
-        len(inline_tag_matches),
-        len(pairs),
-    )
-
     if not pairs:
-        logger.warning(
-            "[_append_video_api_ref_mapping] no_pairs_return_original inline_tags=%s media_slots=%s text_has_entity=%s",
-            len(inline_tag_matches),
-            len(media_slots),
-            bool(re.search(r"(?:CHAR|ENV|PROP)\s*:", source_text, flags=re.IGNORECASE)),
-        )
         return text
 
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:
         prefix = f"参考图{mapped_idx}的"
-        escaped_entity = re.escape(entity_name)
-        prefixed_anchor_patterns = [
-            rf"{re.escape(prefix)}(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"{re.escape(prefix)}[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"{re.escape(prefix)}(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])",
-        ]
-        already_prefixed = any(
-            re.search(pattern, updated_text, flags=re.IGNORECASE) is not None
-            for pattern in prefixed_anchor_patterns
-        )
-        if already_prefixed:
+        if prefix in updated_text and entity_name in updated_text:
             continue
 
+        escaped_entity = re.escape(entity_name)
         anchor_patterns = [
             rf"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
             rf"[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
@@ -28875,12 +28664,6 @@ def _append_video_api_ref_mapping(
         if count > 0:
             updated_text = replaced_text
 
-    logger.warning(
-        "[_append_video_api_ref_mapping] mapped_complete pairs=%s prefixed=%s inline_tags_after=%s",
-        len(pairs),
-        len(re.findall(r"参考图\d+的", updated_text)),
-        len(re.findall(r"ref_image_url\s*:\s*#\d+", updated_text, flags=re.IGNORECASE)),
-    )
     return updated_text
 
 
