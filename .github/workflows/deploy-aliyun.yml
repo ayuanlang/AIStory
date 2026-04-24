@@ -41,7 +41,7 @@ jobs:
         with:
           host: ${{ secrets.ALIYUN_ECS_IP }}
           username: root
-          password: ${{ secrets.ALIYUN_ECS_PASSWORD }}
+          key: ${{ secrets.ALIYUN_ECS_PRIVATE_KEY }}
           source: "deploy.tar.gz"
           target: "/opt/AIStory"
 
@@ -50,7 +50,7 @@ jobs:
         with:
           host: ${{ secrets.ALIYUN_ECS_IP }}
           username: root
-          password: ${{ secrets.ALIYUN_ECS_PASSWORD }}
+          key: ${{ secrets.ALIYUN_ECS_PRIVATE_KEY }}
           script: |
             echo "--- Extracting files ---"
             cd /opt/AIStory
