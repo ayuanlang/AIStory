@@ -2469,6 +2469,8 @@ Negative prompt constraints: {neg_prompt}"""
             "runway": "runway",
             "kling": "kling",
             "runninghub": "runninghub",
+            "pixelmove": "pixelmove",
+            "pixelmove video": "pixelmove",
             "zlhub": "zlhub",
             "zlhub video": "zlhub",
             "lzhbu": "zlhub",
@@ -2491,7 +2493,7 @@ Negative prompt constraints: {neg_prompt}"""
         if cat == "image":
               return normalized in {"doubao", "grsai", "kie", "tencent", "stability", "runninghub", "apiyi", "n1n", "aiclub"}
         if cat == "video":
-            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi", "zlhub", "aiclub"}
+            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi", "zlhub", "aiclub", "pixelmove"}
         if cat == "voice":
               return normalized in {"kie", "runninghub"}
         return bool(normalized)
@@ -2958,6 +2960,7 @@ Negative prompt constraints: {neg_prompt}"""
             "wanxiang": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis", "model": "wanx2.1-i2v-plus"},
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
             "runninghub": {"base_url": "https://www.runninghub.cn", "model": "runninghub-model"},
+            "pixelmove": {"base_url": "https://portal.pixelmove.ai", "model": "seedance-2.0"},
         }
 
         rows = self._system_setting_query(session, category=category).order_by(SystemAPISetting.id.asc()).all()
@@ -3278,6 +3281,17 @@ Negative prompt constraints: {neg_prompt}"""
                         aspect_ratio=effective_aspect_ratio,
                         negative_prompt=negative_prompt,
                     )
+                if effective_provider == "pixelmove":
+                    return await self._handle_pixelmove_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        last_frame_url=effective_last_frame_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
                 if effective_provider == "zlhub":
                     return await self._handle_zlhub_generation(
                         "video",
@@ -3510,14 +3524,14 @@ Negative prompt constraints: {neg_prompt}"""
             retry_limit = self._get_media_routing_limit(
                 category,
                 "ROUTING_PRIMARY_RETRY_LIMIT",
-                selected_candidate_retry_limit if selected_candidate_retry_limit is not None else int(primary_retry_limit or 2),
+                selected_candidate_retry_limit if selected_candidate_retry_limit is not None else int(primary_retry_limit if primary_retry_limit is not None else 2),
                 1,
                 5,
             )
             effective_fallback_candidate_limit = self._get_media_routing_limit(
                 category,
                 "ROUTING_FALLBACK_CANDIDATE_LIMIT",
-                effective_fallback_candidate_limit or 1,
+                effective_fallback_candidate_limit if effective_fallback_candidate_limit is not None else 1,
                 0,
                 5,
             )
@@ -3602,7 +3616,7 @@ Negative prompt constraints: {neg_prompt}"""
                 if effective_fallback_candidate_limit and effective_fallback_candidate_limit > 0:
                     fallback_candidates = fallback_candidates[: int(effective_fallback_candidate_limit)]
 
-            retry_limit = max(1, int(primary_retry_limit or 3))
+            retry_limit = max(1, int(primary_retry_limit if primary_retry_limit is not None else 3))
             if legacy_strategy:
                 retry_limit = 2
             for c in candidates:
@@ -3898,6 +3912,7 @@ Negative prompt constraints: {neg_prompt}"""
                 user_binding_status = "no_user_setting" if not user_setting else ("no_system_api_id" if user_system_api_id <= 0 else "pending")
 
                 func_explicit_args = {}
+                function_routing_applied = False
 
                 if use_function_based_routing and function_name:
                     try:
@@ -3928,6 +3943,7 @@ Negative prompt constraints: {neg_prompt}"""
                                 selected_user_strategy = "unified_function_api"
                                 user_setting_id = "func_based_" + getattr(category, "name", str(category))
                                 user_binding_status = "function_api_direct_route"
+                                function_routing_applied = True
                                 
                                 func_explicit_args["explicit_selection"] = target_setting.get("explicit_selection", False) or global_explicit_selection
                                 func_explicit_args["strict_provider"] = target_setting.get("strict_provider", False) or global_strict_provider
@@ -3938,27 +3954,26 @@ Negative prompt constraints: {neg_prompt}"""
                                     api_strategy = "unified_function_api"
                                     id = user_setting_id
                                 user_setting = DummyUserSetting()
+                                _debug_log(f"API selected via function_name={function_name} with system_api_id={user_system_api_id}")
                     except Exception as e:
                         _debug_log(f"Error querying FunctionAPIConfig for function_name={function_name}: {e}", "warning")
 
-                # Check for direct system_api_id parameter override (e.g. from frontend dropdowns)
-                if use_function_based_routing and system_api_id is not None:
+                if not function_routing_applied and system_api_id:
+                    # STRICT BYPASS: If system_api_id is provided directly but without function_name matching, completely ignore user presets.
+                    # We just spoof the user_system_api_id directly. This forces the downstream logic
+                    # to use exactly the requested API configuration.
                     user_system_api_id = int(system_api_id)
-                    selected_user_strategy = "unified_function_api"
-                    user_setting_id = "func_based_" + getattr(category, "name", str(category))
-                    user_binding_status = "function_api_direct_route"
+                    selected_user_strategy = "explicit_request_overwrite"
+                    user_setting_id = "explicit_bypass"
+                    user_binding_status = "system_api_id_provided"
 
-                    if global_explicit_selection:
-                        func_explicit_args["explicit_selection"] = True
-                    if global_strict_provider:
-                        func_explicit_args["strict_provider"] = True
-
-                    # We need to spoof a dummy user_setting so the logic below triggers
-                    class DummyUserSetting:
+                    # Dummy class properly handles `id` attribute safely mapped below.
+                    class BypassUserSetting:
+                        id = -1
+                        api_strategy = "explicit_request_overwrite"
                         system_api_id = user_system_api_id
-                        api_strategy = "unified_function_api"
-                        id = user_setting_id
-                    user_setting = DummyUserSetting()
+                    user_setting = BypassUserSetting()
+                    _debug_log(f"API Bypass configured manually using system_api_id={user_system_api_id}")
 
                 user_binding_detail = "<none>"
                 fallback_debug_cache: Dict[str, Dict[str, Any]] = {}
@@ -4338,10 +4353,10 @@ Negative prompt constraints: {neg_prompt}"""
             requested_model=(llm_config or {}).get("model"),
             explicit_selection=explicit_selection,
             allow_priority_fallback_when_explicit=str(asset_type or "").strip().lower() in {"subject", "entity", "character", "prop", "environment"},
-            fallback_candidate_limit=3,
+            fallback_candidate_limit=0,
             modality="image-to-image" if reference_image_url else "text-to-image",
             api_strategy=selected_strategy,
-            primary_retry_limit=3,
+            primary_retry_limit=1,
         )
 
         storage_metadata = self._build_generated_storage_metadata(
@@ -4840,7 +4855,10 @@ Negative prompt constraints: {neg_prompt}"""
 
             # Apply Draft Mode (Sample Mode) if configured and supported (seedance models)
             if model and ("1-5-pro" in model or "seedance" in model):
-                payload["draft"] = bool(tool_conf.get("draft", False))
+                if "doubao-seedance-2" in model.lower() and (start_img_url or last_frame_url):
+                    pass
+                else:
+                    payload["draft"] = bool(tool_conf.get("draft", False))
             
             # For Doubao (Ark), if image is provided, ratio should typically be omitted 
             # to respect image dimensions (or use 'size'/'resolution' params if available, but ratio causes 400).
@@ -5938,11 +5956,6 @@ Negative prompt constraints: {neg_prompt}"""
         if not raw:
             return None
         if self._is_public_http_url(raw):
-            if "?" in raw or "%" in raw:
-                # RunningHub APIs (especially Vidu) often fail to parse complex URLs like presigned S3 URLs
-                uploaded_url = self._upload_runninghub_binary_ref(raw, api_key=api_key, base_url=base_url)
-                if uploaded_url:
-                    return uploaded_url
             return raw
 
         uploaded_url = self._upload_runninghub_binary_ref(raw, api_key=api_key, base_url=base_url)
@@ -6384,13 +6397,29 @@ Negative prompt constraints: {neg_prompt}"""
             
         is_draft = _normalize_bool(_pick_tool_value("draft_mode", "draft"), False)
         if is_draft:
-            payload["draft"] = True
+            if "doubao-seedance-2" in model_lower and len(image_refs) > 0:
+                pass
+            else:
+                payload["draft"] = True
             if "sparkvideo" in submit_url.lower() and "fast" not in submit_url.lower():
-                submit_url = submit_url.replace("sparkvideo", "sparkvideo-2.0-fast")
+                submit_url = re.sub(
+                    r"/sparkvideo-2\.0(?=/|$)",
+                    "/sparkvideo-2.0-fast",
+                    submit_url,
+                    flags=re.IGNORECASE,
+                )
+                submit_url = re.sub(
+                    r"/sparkvideo(?=/|$)",
+                    "/sparkvideo-2.0-fast",
+                    submit_url,
+                    flags=re.IGNORECASE,
+                )
                 endpoint_lower = submit_url.lower()
 
         normalized_video_duration = _normalize_runninghub_video_duration(explicit_duration, duration)
         normalized_video_resolution = _normalize_runninghub_video_resolution(explicit_resolution, "720p" if _is_runninghub_vidu_video_endpoint() else None)
+        if is_draft:
+            normalized_video_resolution = "480p"
 
         if "video-edit" in endpoint_lower or "edit-video" in endpoint_lower or "video-extend" in endpoint_lower:
             source_video = video_refs[0] if video_refs else None
@@ -6918,6 +6947,330 @@ Negative prompt constraints: {neg_prompt}"""
             return await self._submit_and_poll_video(submit_url, payload, api_key, f"{str(provider_name).lower()}_video", extra_metadata=base_metadata)
 
         return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}
+
+    async def _handle_pixelmove_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
+        if str(gen_type or "").strip().lower() != "video":
+            return {"error": "Pixelmove currently supports video generation only", "submit_failed": True}
+
+        api_key = str(config.get("api_key") or config.get("clientApiKey") or "").strip()
+        tool_conf = config.get("config", {}) or {}
+        tenant_id = str(
+            tool_conf.get("tenant_id")
+            or tool_conf.get("tenantId")
+            or tool_conf.get("x_tenant_id")
+            or config.get("tenant_id")
+            or config.get("tenantId")
+            or ""
+        ).strip()
+
+        if not api_key:
+            return {"error": "No Pixelmove clientApiKey", "submit_failed": True}
+        if not tenant_id:
+            return {"error": "No Pixelmove tenantId", "submit_failed": True}
+
+        base_url = str(config.get("base_url") or tool_conf.get("base_url") or "https://portal.pixelmove.ai").strip().rstrip("/")
+        endpoint = str(tool_conf.get("endpoint") or f"{base_url}/api/v1/bytedance/seedance-2.0").strip() or f"{base_url}/api/v1/bytedance/seedance-2.0"
+
+        prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+
+        allowed_duration_values = self._normalize_duration_enum_values(
+            tool_conf.get("durations_seconds")
+            or tool_conf.get("duration_values")
+            or tool_conf.get("allowed_durations")
+            or [5, 8, 10]
+        )
+        try:
+            duration_in = int(float(duration or tool_conf.get("duration") or 5))
+        except Exception:
+            duration_in = 5
+        if duration_in <= 0:
+            duration_in = 5
+        if allowed_duration_values:
+            mapped_duration = self._map_duration_nearest(duration_in, allowed_duration_values, prefer_higher_on_tie=False)
+            if mapped_duration is not None:
+                duration_in = int(mapped_duration)
+
+        resolution = str(tool_conf.get("resolution") or "720p").strip() or "720p"
+        normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio or tool_conf.get("ratio"))
+        if not normalized_ratio or normalized_ratio == "adaptive":
+            normalized_ratio = "16:9"
+
+        generate_audio = bool(self._normalize_bool_value(tool_conf.get("generate_audio"))) if tool_conf.get("generate_audio") is not None else False
+        try:
+            seed = int(tool_conf.get("seed")) if tool_conf.get("seed") is not None else -1
+        except Exception:
+            seed = -1
+
+        image_refs = self._resolve_ref_list_for_api(
+            ref_image,
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        )
+        image_refs = [u for u in image_refs if self._is_public_http_url(u)]
+
+        extra_image_refs = self._resolve_ref_list_for_api(
+            tool_conf.get("referenceImageUrls") or tool_conf.get("reference_image_urls") or [],
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        )
+        for item in extra_image_refs:
+            if self._is_public_http_url(item) and item not in image_refs:
+                image_refs.append(item)
+
+        video_refs = self._normalize_str_list(tool_conf.get("referenceVideoUrls") or tool_conf.get("reference_video_urls"))
+        video_refs = [u for u in video_refs if self._is_public_http_url(u)]
+
+        audio_refs = self._normalize_str_list(tool_conf.get("referenceAudioUrls") or tool_conf.get("reference_audio_urls"))
+        audio_refs = [u for u in audio_refs if self._is_public_http_url(u)]
+
+        payload: Dict[str, Any] = {
+            "prompt": prompt_text,
+            "duration": int(duration_in),
+            "resolution": resolution,
+            "ratio": normalized_ratio,
+            "generate_audio": generate_audio,
+            "seed": seed,
+        }
+
+        last_frame_resolved = self._resolve_ref_for_api(
+            last_frame_url,
+            force_data_uri_for_local=True,
+            prefer_public_upload_url=True,
+        ) if last_frame_url else None
+        if last_frame_resolved and not self._is_public_http_url(last_frame_resolved):
+            last_frame_resolved = None
+
+        first_frame = image_refs[0] if image_refs else None
+        if first_frame and last_frame_resolved:
+            payload["frame_mode"] = "first-last"
+            payload["first_image"] = first_frame
+            payload["last_image"] = last_frame_resolved
+        else:
+            if image_refs:
+                payload["referenceImageUrls"] = image_refs
+            if video_refs:
+                payload["referenceVideoUrls"] = video_refs
+            if audio_refs:
+                payload["referenceAudioUrls"] = audio_refs
+
+        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        poll_interval_seconds = 2
+        try:
+            if tool_conf.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = min(900, max(60, int(tool_conf.get("poll_timeout_seconds"))))
+        except Exception:
+            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        try:
+            if tool_conf.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(1, int(tool_conf.get("poll_interval_seconds")))
+        except Exception:
+            poll_interval_seconds = 2
+
+        base_metadata = {
+            "provider": "pixelmove",
+            "model": str(config.get("model") or "seedance-2.0").strip() or "seedance-2.0",
+            "prompt": prompt_text,
+            "submit_url": endpoint,
+            "tenant_id": tenant_id,
+            "payload_mode": "first-last" if payload.get("frame_mode") == "first-last" else "multi-reference",
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "X-Tenant-Id": tenant_id,
+            "Content-Type": "application/json",
+        }
+
+        def _extract_task_id(data: Any) -> Optional[str]:
+            if isinstance(data, dict):
+                for key in ("taskId", "task_id", "id"):
+                    val = data.get(key)
+                    if val:
+                        return str(val).strip()
+                inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+                for key in ("taskId", "task_id", "id"):
+                    val = inner.get(key)
+                    if val:
+                        return str(val).strip()
+            return None
+
+        def _extract_result_url(data: Any) -> Optional[str]:
+            if not isinstance(data, dict):
+                return None
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            output = inner.get("output") if isinstance(inner.get("output"), dict) else {}
+            result = inner.get("result") if isinstance(inner.get("result"), dict) else {}
+            candidates = [
+                data.get("url"),
+                data.get("video_url"),
+                data.get("resultUrl"),
+                data.get("result_url"),
+                inner.get("url"),
+                inner.get("video_url"),
+                inner.get("resultUrl"),
+                inner.get("result_url"),
+                output.get("url"),
+                output.get("video_url"),
+                output.get("resultUrl"),
+                output.get("result_url"),
+                result.get("url"),
+                result.get("video_url"),
+                result.get("resultUrl"),
+                result.get("result_url"),
+            ]
+            for item in candidates:
+                text_item = str(item or "").strip()
+                if text_item.startswith(("http://", "https://")):
+                    return text_item
+            for coll_name in ("urls", "videoUrls", "video_urls", "results", "outputs"):
+                coll = data.get(coll_name) or inner.get(coll_name) or output.get(coll_name)
+                if isinstance(coll, list) and coll:
+                    first = coll[0]
+                    if isinstance(first, str) and first.startswith(("http://", "https://")):
+                        return first
+                    if isinstance(first, dict):
+                        nested = str(first.get("url") or first.get("video_url") or first.get("resultUrl") or "").strip()
+                        if nested.startswith(("http://", "https://")):
+                            return nested
+            return None
+
+        def _extract_status(data: Any) -> str:
+            if not isinstance(data, dict):
+                return ""
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            output = inner.get("output") if isinstance(inner.get("output"), dict) else {}
+            raw_status = data.get("status") or data.get("state") or inner.get("status") or inner.get("state") or output.get("status")
+            return str(raw_status or "").strip().lower()
+
+        headers["X-Request-Id"] = str(uuid.uuid4())
+        submit_resp = await asyncio.to_thread(
+            requests.post,
+            endpoint,
+            json=payload,
+            headers=headers,
+            timeout=(20, 90),
+            verify=False,
+        )
+
+        submit_data: Dict[str, Any] = {}
+        if submit_resp.text:
+            try:
+                parsed_submit = submit_resp.json()
+                submit_data = parsed_submit if isinstance(parsed_submit, dict) else {}
+            except Exception:
+                submit_data = {}
+
+        task_id = _extract_task_id(submit_data)
+        if submit_resp.status_code == 409:
+            duplicate_code = str(submit_data.get("code") or submit_data.get("errorCode") or submit_data.get("message") or "").upper()
+            is_duplicate_request_id = "DUPLICATE_REQUEST_ID" in duplicate_code
+            if not is_duplicate_request_id:
+                return {
+                    "error": f"Pixelmove submit failed 409: {submit_resp.text}",
+                    "submit_failed": True,
+                    "details": submit_data or submit_resp.text,
+                }
+            if not task_id:
+                headers["X-Request-Id"] = str(uuid.uuid4())
+                submit_resp_retry = await asyncio.to_thread(
+                    requests.post,
+                    endpoint,
+                    json=payload,
+                    headers=headers,
+                    timeout=(20, 90),
+                    verify=False,
+                )
+                if submit_resp_retry.status_code not in [200, 201, 202]:
+                    return {
+                        "error": f"Pixelmove submit failed after DUPLICATE_REQUEST_ID retry: {submit_resp_retry.status_code}",
+                        "submit_failed": True,
+                        "details": (submit_resp_retry.text or "")[:1000],
+                    }
+                try:
+                    retry_data = submit_resp_retry.json() if submit_resp_retry.text else {}
+                    submit_data = retry_data if isinstance(retry_data, dict) else {}
+                except Exception:
+                    submit_data = {}
+                task_id = _extract_task_id(submit_data)
+        elif submit_resp.status_code not in [200, 201, 202]:
+            return {
+                "error": f"Pixelmove submit failed {submit_resp.status_code}",
+                "submit_failed": True,
+                "details": (submit_resp.text or "")[:1000],
+            }
+
+        if not task_id:
+            direct_url = _extract_result_url(submit_data)
+            if direct_url:
+                return {"url": direct_url, "metadata": {**base_metadata, "raw": submit_data}}
+            return {
+                "error": "Pixelmove submit succeeded but task id missing",
+                "submit_failed": True,
+                "details": submit_data,
+            }
+
+        poll_template = str(tool_conf.get("poll_endpoint") or f"{endpoint.rstrip('/')}/tasks/{{taskId}}")
+        poll_url = poll_template.replace("{taskId}", urllib.parse.quote(task_id)).replace("{task_id}", urllib.parse.quote(task_id))
+
+        max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+        for attempt in range(1, max_attempts + 1):
+            await asyncio.sleep(poll_interval_seconds)
+            poll_headers = dict(headers)
+            poll_headers["X-Request-Id"] = str(uuid.uuid4())
+            try:
+                poll_resp = await asyncio.to_thread(
+                    requests.get,
+                    poll_url,
+                    headers=poll_headers,
+                    timeout=30,
+                    verify=False,
+                )
+            except requests.exceptions.Timeout:
+                continue
+            except Exception:
+                if attempt == max_attempts:
+                    return {"error": "Pixelmove polling exception", "submit_failed": False}
+                continue
+
+            if poll_resp.status_code not in [200, 201]:
+                if poll_resp.status_code == 404:
+                    continue
+                if attempt == max_attempts:
+                    return {
+                        "error": f"Pixelmove polling failed {poll_resp.status_code}",
+                        "submit_failed": False,
+                        "details": (poll_resp.text or "")[:1000],
+                    }
+                continue
+
+            try:
+                poll_data = poll_resp.json() if poll_resp.text else {}
+            except Exception:
+                poll_data = {}
+
+            status_val = _extract_status(poll_data)
+            result_url = _extract_result_url(poll_data)
+
+            if result_url and status_val in {"", "success", "succeeded", "completed", "done", "finished"}:
+                return {"url": result_url, "metadata": {**base_metadata, "raw": poll_data, "task_id": task_id}}
+
+            if status_val in {"success", "succeeded", "completed", "done", "finished"}:
+                if result_url:
+                    return {"url": result_url, "metadata": {**base_metadata, "raw": poll_data, "task_id": task_id}}
+                return {
+                    "error": "Pixelmove generation completed without URL",
+                    "submit_failed": False,
+                    "details": poll_data,
+                }
+
+            if status_val in {"failed", "error", "cancelled", "canceled", "rejected"}:
+                return {
+                    "error": "Pixelmove generation failed",
+                    "submit_failed": False,
+                    "details": poll_data,
+                }
+
+        return {"error": f"Pixelmove polling timeout after {poll_timeout_seconds}s", "submit_failed": False}
 
     async def _handle_aiclub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "aiclub")
@@ -7866,7 +8219,10 @@ Negative prompt constraints: {neg_prompt}"""
 
         is_draft = bool(self._normalize_bool_value(tool_conf.get("draft_mode")) or self._normalize_bool_value(tool_conf.get("draft")))
         if is_draft:
-            payload["draft"] = True
+            if is_seedance2 and is_i2v_request:
+                pass
+            else:
+                payload["draft"] = True
 
         if callback_url and callback_url != "-1":
             payload["webhook_url"] = callback_url
@@ -7887,9 +8243,11 @@ Negative prompt constraints: {neg_prompt}"""
             value = tool_conf.get(source_key)
             if source_key == "resolution" and not value:
                 value = image_size or tool_conf.get("image_size") or tool_conf.get("size")
+            if source_key == "resolution" and is_draft:
+                value = "480p"
             if value is None:
                 continue
-            if source_key == "resolution" and is_seedance2 and is_i2v_request:
+            if source_key == "resolution" and is_seedance2 and is_i2v_request and not is_draft:
                 logger.info(
                     "[ZLHubSeedance2] dropping unsupported i2v resolution | trace_id=%s model=%s resolution=%s",
                     zlhub_trace_id,
@@ -10551,7 +10909,7 @@ Negative prompt constraints: {neg_prompt}"""
             payload = {
                 "prompt": prompt,
                 "duration": "10" if str(duration) in {"10"} else "5",
-                "quality": "1080p" if "1080" in str(tool_conf.get("resolution") or "") else "720p",
+                "quality": "480p" if tool_conf.get("draft") or tool_conf.get("draft_mode") else ("1080p" if "1080" in str(tool_conf.get("resolution") or "") else "720p"),
                 "aspectRatio": normalized_ar if normalized_ar in {"16:9", "4:3", "1:1", "3:4", "9:16"} else "16:9",
                 "waterMark": "",
             }
@@ -10895,6 +11253,10 @@ Negative prompt constraints: {neg_prompt}"""
             multi_shots_supported = runtime_enum_catalog.get("multi_shots_supported")
             if multi_shots_supported is False and "multi_shots" in payload_input_obj:
                 payload_input_obj["multi_shots"] = False
+
+            if tool_conf.get("draft") or tool_conf.get("draft_mode"):
+                if "resolution" in payload_input_obj:
+                    payload_input_obj["resolution"] = "480p"
 
             payload["input"] = payload_input_obj
 

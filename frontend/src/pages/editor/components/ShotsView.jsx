@@ -533,6 +533,21 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const VIDEO_JOB_STATE_TTL_MS = 1000 * 60 * 60;
     const shotsRefreshRequestSeqRef = useRef(0);
 
+    const normalizeGenerationPhase = useCallback((value) => {
+        const phase = String(value || '').trim().toLowerCase();
+        if (!phase) return '';
+        if (['success', 'succeeded', 'completed', 'done'].includes(phase)) return 'succeeded';
+        if (['failed', 'error'].includes(phase)) return 'failed';
+        if (['canceled', 'cancelled'].includes(phase)) return 'canceled';
+        if (['queued', 'pending', 'running', 'processing', 'generating', 'submitted', 'in_progress', 'in-progress'].includes(phase)) return 'running';
+        return phase;
+    }, []);
+
+    const isTerminalGenerationPhase = useCallback((value) => {
+        const normalizedPhase = normalizeGenerationPhase(value);
+        return normalizedPhase === 'succeeded' || normalizedPhase === 'failed' || normalizedPhase === 'canceled';
+    }, [normalizeGenerationPhase]);
+
     const resolveShotSceneId = useCallback((shotId) => {
         const stableShotId = String(shotId || '').trim();
         if (!stableShotId) return '';
@@ -1793,8 +1808,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const status = isVideo
                     ? await getVideoGenerationJobStatus(stableJobId)
                     : await getImageGenerationJobStatus(stableJobId);
-                const phase = String(status?.status || '').trim().toLowerCase();
-                const isTerminal = ['succeeded', 'completed', 'failed', 'error', 'canceled', 'cancelled'].includes(phase) || Boolean(status?.result?.url || status?.result?.video_url || status?.url || status?.video_url);
+                const phase = normalizeGenerationPhase(status?.status);
+                const isTerminal = isTerminalGenerationPhase(phase) || Boolean(status?.result?.url || status?.result?.video_url || status?.url || status?.video_url);
 
                 if (!isTerminal) {
                     setShotGeneratingState(stableShotId, stableMediaKey, true);
@@ -3869,7 +3884,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 while (!cancelled) {
                     try {
                         const status = await getImageGenerationJobStatus(jobId);
-                        const phase = String(status?.status || '').toLowerCase();
+                        const phase = normalizeGenerationPhase(status?.status);
                         const resultUrl = extractImageJobResultUrl(status);
                         errorStreak = 0;
                         waitMs = 2500;
@@ -3892,7 +3907,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             }
                         }
 
-                        if (resultUrl || phase === 'succeeded' || phase === 'completed') {
+                        if (resultUrl || phase === 'succeeded') {
                             if (isJointDiptych) {
                                 clearPendingJointDiptychImageJob(stableShotId);
                                 setShotGeneratingState(stableShotId, 'start', false);
@@ -3959,7 +3974,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             break;
                         }
 
-                        if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
+                        if (phase === 'failed' || phase === 'canceled') {
                             if (isJointDiptych) {
                                 clearPendingJointDiptychImageJob(stableShotId);
                                 setShotGeneratingState(stableShotId, 'start', false);
@@ -4115,7 +4130,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     while (!cancelled) {
                         try {
                             const status = await getVideoGenerationJobStatus(jobId);
-                            const phase = String(status?.status || '').toLowerCase();
+                            onLog?.(`[VideoPoll] job_id=${jobId} shot_id=${stableShotId} status=${JSON.stringify(status)}`, 'info');
+                            const phase = normalizeGenerationPhase(status?.status);
                             const resultUrl = String(
                                 status?.result?.url
                                 || status?.result?.video_url
@@ -4134,7 +4150,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 });
                             }
 
-                            if (resultUrl || phase === 'succeeded' || phase === 'completed') {
+                            if (resultUrl || phase === 'succeeded') {
                                 const serverBoundVideoUrl = resultUrl;
                                 if (serverBoundVideoUrl) {
                                     const newData = { video_url: serverBoundVideoUrl };
@@ -4154,7 +4170,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 break;
                             }
 
-                            if (phase === 'failed' || phase === 'error' || phase === 'canceled' || phase === 'cancelled') {
+                            if (phase === 'failed' || phase === 'canceled') {
                                 const serverBoundVideoUrl = resultUrl;
                                 if (serverBoundVideoUrl) {
                                     const newData = { video_url: serverBoundVideoUrl };
@@ -4227,6 +4243,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         activeEpisode?.id,
         clearPendingVideoJobsByJobId,
         forceClearShotVideoJob,
+        normalizeGenerationPhase,
         onLog,
         onUpdateShot,
         readVideoJobStateStorage,
@@ -6237,7 +6254,25 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             // NEW: Inject Global Context
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
-            const finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
+            let finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
+
+            if (effectiveVideoMode === 'entity_refs_start_end') {
+                const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
+                const endRefUrl = String(tech.end_frame_url || '').trim();
+                const resolvedStartUrl = await resolveBlobUrlIfAny(currentStartFrameUrl);
+                const resolvedEndUrl = await resolveBlobUrlIfAny(endRefUrl);
+                
+                const startIdx = resolvedUniqueRefs.indexOf(resolvedStartUrl) + 1;
+                const endIdx = resolvedUniqueRefs.indexOf(resolvedEndUrl) + 1;
+
+                if (startIdx > 0 && endIdx > 0) {
+                    finalPrompt = `首帧为图片${startIdx}, ` + finalPrompt + `, 尾帧定格为图片${endIdx}`;
+                } else if (startIdx > 0) {
+                    finalPrompt = `首帧为图片${startIdx}, ` + finalPrompt;
+                } else if (endIdx > 0) {
+                    finalPrompt = finalPrompt + `, 尾帧定格为图片${endIdx}`;
+                }
+            }
 
             onLog?.(
                 `Video API payload mode=${effectiveVideoMode}, visible_refs=${uniqueRefs.length}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
@@ -8132,8 +8167,8 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 >
                                                     <option value="start_end">{t('起始+结束', 'Start+End')}</option>
                                                     <option value="start">{t('仅起始', 'Start Only')}</option>
-                                                    <option value="end">{t('仅结束', 'End Only')}</option>
                                                     <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
+                                                    <option value="entity_refs_start_end">{t('参考图+首尾帧', 'Ref+StartEnd')}</option>
                                                 </select>
 
                                                 <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-1">
@@ -8186,6 +8221,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                     wrapperClassName="w-full h-full"
                                                     preload="metadata"
                                                     suspend={assetDetailModal.open && assetDetailModal.type === 'video'}
+                                                    hideBusyOverlay={Boolean(currentGeneratingState.video)}
                                                     uiLang={uiLang}
                                                     onClick={(e) => e?.preventDefault?.()}
                                                 />
@@ -9227,6 +9263,7 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                             className="max-w-full max-h-full object-contain"
                                                                             wrapperClassName="w-full h-full"
                                                                             preload="metadata"
+                                                                            hideBusyOverlay={Boolean(currentGeneratingState.video)}
                                                                             uiLang={uiLang}
                                                                         />
                                                                     ) : <Video className="w-8 h-8 opacity-30" />}
@@ -9334,8 +9371,8 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     >
                                                                         <option value="start_end">{t('起始+结束', 'Start+End')}</option>
                                                                         <option value="start">{t('仅起始', 'Start Only')}</option>
-                                                                        <option value="end">{t('仅结束', 'End Only')}</option>
                                                                         <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
+                                                                        <option value="entity_refs_start_end">{t('参考图+首尾帧', 'Ref+StartEnd')}</option>
                                                                     </select>
                                                                 </div>
                                                                 <div className="text-[11px] text-muted-foreground uppercase font-bold mt-4">

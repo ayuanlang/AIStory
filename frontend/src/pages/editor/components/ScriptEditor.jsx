@@ -1556,7 +1556,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 analysisAttentionNotes,
                 selectedReuseSubjectAssets,
                 null,
-                projectId
+                projectId,
+                null,
+                functionApiConfigs.selectedApi?.system_api_id
             );
 
             const recoveryText = recoveryResult?.result || recoveryResult?.analysis || (typeof recoveryResult === 'string' ? recoveryResult : JSON.stringify(recoveryResult, null, 2));
@@ -2062,7 +2064,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         try {
             // Coverage check is an auxiliary audit call and must not overwrite episode ai_scene_analysis_result.
-            const result = await analyzeScene(userPrompt, systemPrompt, null, null, null, null, null, projectId);
+            const result = await analyzeScene(userPrompt, systemPrompt, null, null, null, null, null, projectId, null, functionApiConfigs.selectedApi?.system_api_id);
             const analyzedText = extractAnalysisTextFromResult(result);
             const report = parseCoreCoverageReport(analyzedText);
             setCoreCoverageReport(report);
@@ -3170,8 +3172,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 subjectIndexText = match[0];
                 onLog?.(`[Asset Gen Tracking] Extracted Subject Index via header (length: ${subjectIndexText.length})`);
             } else {
-                subjectIndexText = authoritativeSubjectText;
-                onLog?.(`[Asset Gen Tracking] Failed to find Subject Index header or dashes! Using fallback full text for asset generation.`, 'warning');
+                onLog?.(`[Asset Gen Tracking] Error: Failed to find Subject Index header or dashes! Aborting asset generation.`, 'error');
+                throw new Error("第一阶段未解析到完整的 Subject Index 区块，请在原文补充横杠或小标题结构后重试。");
             }
         }
 
@@ -3225,6 +3227,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
 
             const language = getInfoValue(['language', 'project_language', 'lang']);
+            const getInfoArray = (aliases = []) => {
+                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
+                for (const [k, v] of Object.entries(projectInfo)) {
+                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
+                    if (Array.isArray(v)) {
+                        const arr = v.map(item => String(item || '').trim()).filter(Boolean);
+                        if (arr.length) return arr;
+                    }
+                    if (typeof v === 'string') {
+                        const arr = v.split(/[\n,，;；]/).map(item => item.trim()).filter(Boolean);
+                        if (arr.length) return arr;
+                    }
+                }
+                return [];
+            };
+            const visualParams = (projectInfo?.tech_params && typeof projectInfo.tech_params === 'object' && projectInfo.tech_params.visual_standard) ? projectInfo.tech_params.visual_standard : {};
+            const getVisualValue = (aliases = []) => {
+                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
+                for (const [k, v] of Object.entries(visualParams || {})) {
+                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
+                    const text = String(v || '').trim();
+                    if (text) return text;
+                }
+                for (const [k, v] of Object.entries(projectInfo)) {
+                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
+                    const text = String(v || '').trim();
+                    if (text) return text;
+                }
+                return '';
+            };
+            const borrowedFilms = getInfoArray(['borrowed_films', 'borrowedFilms', 'reference_films', 'referenceFilms']);
+
             const metaParts = [
                 'Project Context (prepend and treat as high-priority constraints for generating design assets):',
                 '[Basic Info]'
@@ -3239,18 +3273,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
             if (language) {
                 metaParts.push(`Language: ${language}`);
+            } else {
+                 metaParts.push(`Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.`);
             }
             metaParts.push('[Technical & Visual Parameters]');
+            const aspectRatio = getVisualValue(['aspect_ratio']);
+            const imageSize = getVisualValue(['image_size']);
+            const horizontalResolution = getVisualValue(['horizontal_resolution']);
+            const verticalResolution = getVisualValue(['vertical_resolution']);
+            const frameRate = getVisualValue(['frame_rate']);
+            const quality = getVisualValue(['quality']);
             const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
             const tone = getInfoValue(['tone', 'mood']);
             const lighting = getInfoValue(['lighting', 'light']);
+            
+            if (aspectRatio) metaParts.push(`Aspect Ratio: ${aspectRatio}`);
+            if (imageSize) metaParts.push(`Image Size: ${imageSize}`);
+            if (horizontalResolution) metaParts.push(`Horizontal Resolution: ${horizontalResolution}`);
+            if (verticalResolution) metaParts.push(`Vertical Resolution: ${verticalResolution}`);
+            if (frameRate) metaParts.push(`Frame Rate: ${frameRate}`);
+            if (quality) metaParts.push(`Quality: ${quality}`);
             if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
+            if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
             if (tone) metaParts.push(`Tone: ${tone}`);
             if (lighting) metaParts.push(`Lighting: ${lighting}`);
+            
             const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
             const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
+            const shotPrefField = getInfoValue(['shot_preference', 'lens_preference', 'camera_preference']);
+            const broadcastSafetyField = getInfoValue(['broadcast_security_level', 'broadcast_safety_level', 'safety_level', 'broadcast_safety']);
+
             if (eraField) metaParts.push(`Era / Period: ${eraField}`);
             if (regionField) metaParts.push(`Region / Country: ${regionField}`);
+            if (shotPrefField) metaParts.push(`Shot / Lens Preference: ${shotPrefField}`);
+            if (broadcastSafetyField) metaParts.push(`Broadcast Security Level: ${broadcastSafetyField}`);
             
             metaParts.push('Use this project context as first-class constraints before generating the subjects.');
 
@@ -3281,20 +3337,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             onLog?.(`[Asset Gen Tracking] Launching second LLM call for 'subject_generation'`);
 
-            const phase1ApiId = Number(localStorage.getItem('func_api_script_analysis')) || null;
-
             const result = await analyzeScene(
-                finalSubjectIndexText,
-                finalPromptContent,
-                null,
-                activeEpisode?.id || null,
-                analysisAttentionNotes,
-                selectedReuseSubjectAssets,
-                null, // No runtime hooks (we just want it to wait via the default `asyncLLMPost` behavior)
+                finalSubjectIndexText, 
+                finalPromptContent, 
+                null, 
+                activeEpisode.id, 
+                analysisAttentionNotes, 
+                selectedReuseSubjectAssets, 
+                null, 
                 projectId,
-                "subject_generation", // explicitly setting functionName
-                phase1ApiId,          // Inherit the exact same API model as Phase 1
-                "entity_design" // explicitly use entity_design mode to prevent backend from overwriting Phase 1 ai_scene_analysis_result
+                "script_analysis",
+                null,
+                "2_pass_generate_assets"
             );
 
             const analyzedText = extractAnalysisTextFromResult(result);
@@ -5251,7 +5305,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const mockImportReport = { importedSceneRows: [] };
                     const dummyAnalyzedText = activeEpisode.ai_scene_analysis_result || activeEpisode.ai_scene_analysis_subject_index; // Pass something fallback
 
-                    const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, activeEpisode.ai_scene_analysis_subject_index);
+                    const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText);
 
                     const finalImportReport = {
                         ...mockImportReport,
@@ -6203,7 +6257,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                             <div className="rounded-lg border border-white/10 bg-black/20 p-4 mt-4">
                                 <div className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">
-                                    📋 {t('Phase 2 Subject Index', 'Phase 2 Subject Index')}
+                                    📋 {t('Phase 1 Subject Index', 'Phase 1 Subject Index')}
                                 </div>
                                 <div className="space-y-3">
                                     <textarea 

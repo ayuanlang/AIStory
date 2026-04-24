@@ -5,6 +5,8 @@ from app.models.all_models import (
     SystemAPISetting,
     SystemAPIBillingRule,
     TransactionAction,
+    UserGroup,
+    ProjectGroupCreditAllocation
 )
 from fastapi import HTTPException
 import logging
@@ -2417,7 +2419,7 @@ class BillingService:
             phase="reserve",
         )
         reserved_cost = int(reserve_breakdown.get("total_cost") or 0)
-        BillingService.check_can_proceed(user, reserved_cost)
+        BillingService.check_can_proceed(user, reserved_cost, db=db, project_id=details.get("project_id") if details else None)
         resolved_provider = reserve_breakdown.get("resolved_provider") or provider
         resolved_model = reserve_breakdown.get("resolved_model") or model
 
@@ -2435,14 +2437,56 @@ class BillingService:
             ),
         })
 
-        user.credits -= reserved_cost
+        project_id = reserve_details.get("project_id")
+        group = None
+        allocation = None
+        billed_group_credits = 0
+        billed_personal_credits = 0
+
+        if user.current_group_id:
+            group = db.query(UserGroup).filter(UserGroup.id == user.current_group_id).first()
+            if group and project_id:
+                allocation = db.query(ProjectGroupCreditAllocation).filter(
+                    ProjectGroupCreditAllocation.group_id == group.id,
+                    ProjectGroupCreditAllocation.project_id == project_id
+                ).first()
+                if allocation and allocation.credit_limit != -1:
+                    if (allocation.used_credits or 0) + reserved_cost > allocation.credit_limit:
+                        raise HTTPException(status_code=402, detail="Project group credit allocation exceeded.")
+                        
+        remaining_cost = reserved_cost
+        if group and (group.credits or 0) > 0 and remaining_cost > 0:
+            if group.credits >= remaining_cost:
+                billed_group_credits = remaining_cost
+                group.credits -= remaining_cost
+                remaining_cost = 0
+            else:
+                billed_group_credits = group.credits
+                remaining_cost -= group.credits
+                group.credits = 0
+
+        if remaining_cost > 0:
+            if (user.credits or 0) < remaining_cost:
+                 raise HTTPException(status_code=402, detail="Insufficient personal credits.")
+            billed_personal_credits = remaining_cost
+            user.credits -= remaining_cost
+
+        if allocation and reserved_cost > 0:
+            allocation.used_credits = (allocation.used_credits or 0) + reserved_cost
+
+        reserve_details["billed_group_credits"] = billed_group_credits
+        reserve_details["billed_personal_credits"] = billed_personal_credits
+        if group:
+            reserve_details["group_id"] = group.id
 
         tx = TransactionHistory(
             user_id=user_id,
             amount=-reserved_cost,
             balance_after=user.credits or 0,
             description=reserve_details.get("description", task_type),
-            details=reserve_details
+            details=reserve_details,
+            project_id=reserve_details.get("project_id"),
+            episode_id=reserve_details.get("episode_id"),
         )
         db.add(tx)
         db.flush()
@@ -2529,6 +2573,8 @@ class BillingService:
             balance_after=user.credits or 0,
             description=f"Refund for {tx.description or 'task'}",
             details=refund_details,
+            project_id=tx_action.project_id if tx_action else None,
+            episode_id=tx_action.episode_id if tx_action else None,
         )
         db.add(refund_tx)
         db.flush()
@@ -2540,8 +2586,8 @@ class BillingService:
             task_type=tx_task_type,
             provider=tx_provider,
             model=tx_model,
-            project_id=res_action.project_id if res_action else None,
-            episode_id=res_action.episode_id if res_action else None,
+            project_id=tx_action.project_id if tx_action else None,
+            episode_id=tx_action.episode_id if tx_action else None,
             transaction_id=tx.id,
             reservation_tx_id=tx.id,
             settlement_tx_id=refund_tx.id,
@@ -2695,7 +2741,9 @@ class BillingService:
                     "reservation_tx_id": reservation_tx.id,
                     "reserved_cost": reserved_cost,
                     "actual_cost": actual_cost,
-                }
+                },
+                project_id=res_action.project_id if res_action else None,
+                episode_id=res_action.episode_id if res_action else None,
             )
             db.add(settlement_tx)
             refunded_amount = refund
@@ -2716,7 +2764,9 @@ class BillingService:
                         "reserved_cost": reserved_cost,
                         "actual_cost": actual_cost,
                         "delta": delta,
-                    }
+                    },
+                    project_id=res_action.project_id if res_action else None,
+                    episode_id=res_action.episode_id if res_action else None,
                 )
                 db.add(settlement_tx)
                 charged_amount = can_deduct
@@ -2860,17 +2910,41 @@ class BillingService:
         BillingService.check_can_proceed(user, cost)
 
     @staticmethod
-    def check_can_proceed(user: User, cost: int):
+    def check_can_proceed(user: User, cost: int, db: Session = None, project_id: int = None):
         """
-        Raises HTTPException if user doesn't have enough credits.
+        Raises HTTPException if user doesn't have enough credits, considering groups if db provided.
         """
         if user.credits is None:
             user.credits = 0
+
+        # Optimization: fast path if user has enough purely on their own.
+        if user.credits >= cost:
+            return True
+
+        if db and user.current_group_id:
+            group = db.query(UserGroup).filter(UserGroup.id == user.current_group_id).first()
+            if group and (group.credits or 0) > 0:
+                # Need to also check allocation if project_id is provided
+                if project_id:
+                    allocation = db.query(ProjectGroupCreditAllocation).filter(
+                        ProjectGroupCreditAllocation.group_id == group.id,
+                        ProjectGroupCreditAllocation.project_id == project_id
+                    ).first()
+                    if allocation and allocation.credit_limit != -1:
+                        if (allocation.used_credits or 0) + cost > allocation.credit_limit:
+                            # Not allowed to use group credits because of allocation, default back to personal failure
+                            pass
+                        elif (group.credits or 0) + user.credits >= cost:
+                            return True
+                    elif (group.credits or 0) + user.credits >= cost:
+                        return True
+                elif (group.credits or 0) + user.credits >= cost:
+                    return True
             
         if user.credits < cost:
             raise HTTPException(
                 status_code=402, 
-                detail=f"Insufficient credits. Required: {cost}, Available: {user.credits}. Please top up."
+                detail=f"Insufficient credits. Required: {cost}. Please top up or ask your group admin."
             )
         return True
 
@@ -2912,10 +2986,44 @@ class BillingService:
             or ""
         ).strip() or None
         
-        if user.credits < final_cost:
-             raise HTTPException(status_code=402, detail="Insufficient credits during deduction.")
-             
-        user.credits -= final_cost
+        # Credit deduction logic with Multi-tenant support
+        project_id = details.get("project_id") if details else None
+        
+        group = None
+        allocation = None
+        billed_group_credits = 0
+        billed_personal_credits = 0
+
+        if user.current_group_id:
+            group = db.query(UserGroup).filter(UserGroup.id == user.current_group_id).first()
+            if group and project_id:
+                allocation = db.query(ProjectGroupCreditAllocation).filter(
+                    ProjectGroupCreditAllocation.group_id == group.id,
+                    ProjectGroupCreditAllocation.project_id == project_id
+                ).first()
+                if allocation and allocation.credit_limit != -1:
+                    if allocation.used_credits + final_cost > allocation.credit_limit:
+                        raise HTTPException(status_code=402, detail="Project group credit allocation exceeded.")
+        
+        remaining_cost = final_cost
+        if group and (group.credits or 0) > 0 and remaining_cost > 0:
+            if group.credits >= remaining_cost:
+                billed_group_credits = remaining_cost
+                group.credits -= remaining_cost
+                remaining_cost = 0
+            else:
+                billed_group_credits = group.credits
+                remaining_cost -= group.credits
+                group.credits = 0
+
+        if remaining_cost > 0:
+            if (user.credits or 0) < remaining_cost:
+                 raise HTTPException(status_code=402, detail="Insufficient personal credits.")
+            billed_personal_credits = remaining_cost
+            user.credits -= remaining_cost
+            
+        if allocation and final_cost > 0:
+            allocation.used_credits = (allocation.used_credits or 0) + final_cost
         
         # Log Transaction
         tx_details = dict(details or {})
@@ -2933,13 +3041,19 @@ class BillingService:
             model=resolved_model,
             phase="direct_deduct",
         )
+        tx_details["billed_group_credits"] = billed_group_credits
+        tx_details["billed_personal_credits"] = billed_personal_credits
+        if group:
+            tx_details["group_id"] = group.id
 
         transaction = TransactionHistory(
             user_id=user_id,
             amount=-final_cost,
             balance_after=user.credits,
             description=tx_details.get("description", task_type),
-            details=tx_details
+            details=tx_details,
+            project_id=tx_details.get("project_id"),
+            episode_id=tx_details.get("episode_id"),
         )
         db.add(transaction)
         db.flush()

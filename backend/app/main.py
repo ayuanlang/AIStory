@@ -16,7 +16,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
 from app.core.config import settings
-from app.api import endpoints, settings as settings_api
+from app.api import endpoints, settings as settings_api, groups as groups_api
 from app.db.session import engine, SessionLocal
 from app.models.all_models import Base, User
 from sqlalchemy import inspect, text
@@ -1125,12 +1125,41 @@ else:
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_CorsPreflightMiddleware)
 
+import os
+from fastapi.responses import FileResponse, HTMLResponse
+
 app.include_router(endpoints.router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)
+app.include_router(groups_api.router, prefix=settings.API_V1_STR)
 
-@app.get("/")
-def root():
-    return {"message": "Welcome to AI Story API"}
+# --- 静态 SPA (React Vite) 前端挂载配置 ---
+# Vite 建立的 Dist 目录通常在这个路径（基于 Dockerfile 第阶段配置）
+_FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
+
+if os.path.isdir(_FRONTEND_DIST):
+    # 挂载除 API 外的所有静态资源 (js, css, assets 等)
+    app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="frontend-assets")
+    
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa_frontend(full_path: str):
+        # 排除对 /api/v1/ 的前端拦截，将它留给正经的 API Router 处理
+        if full_path.startswith(settings.API_V1_STR.lstrip('/')):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+            
+        file_path = os.path.join(_FRONTEND_DIST, full_path)
+        # 如果命中了具体的静态文件诸如 favicon.ico，则返回它
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+            
+        # 否则所有的前端路由（/about, /user）全部还给 React 的 index.html 自己去识别
+        index_file = os.path.join(_FRONTEND_DIST, "index.html")
+        if os.path.isfile(index_file):
+            return FileResponse(index_file)
+        return HTMLResponse("<h1>Frontend dist/index.html not found!</h1>", status_code=404)
+else:
+    @app.get("/")
+    def root():
+        return {"message": "Welcome to AI Story API (Frontend Not Built)"}
 
 
 @app.get("/healthz")

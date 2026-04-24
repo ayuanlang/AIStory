@@ -104,6 +104,7 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
+    fetchProjectBillingStats,
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
@@ -223,6 +224,7 @@ const Editor = ({
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [currentUserId, setCurrentUserId] = useState(null);
     const [currentUserCredits, setCurrentUserCredits] = useState(0);
+    const [projectBillingStats, setProjectBillingStats] = useState({ user_cost: 0, total_cost: 0 });
     const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
@@ -252,10 +254,36 @@ const Editor = ({
             if (user && typeof user.credits === 'number') {
                 setCurrentUserCredits(user.credits);
             }
+            // Fire-and-forget: load project billing stats in background
+            fetchProjectBillingStats(id)
+                .then(data => {
+                    if (data) {
+                        setProjectBillingStats({ user_cost: data.user_cost || 0, total_cost: data.total_cost || 0 });
+                    }
+                })
+                .catch(() => {/* non-critical, silently ignore */});
         } catch (e) {
             console.error("Failed to load project data", e);
         }
     };
+
+    const refreshProjectBillingStats = useCallback(() => {
+        if (!id) return;
+        fetchProjectBillingStats(id)
+            .then(data => {
+                if (data) {
+                    setProjectBillingStats({ user_cost: data.user_cost || 0, total_cost: data.total_cost || 0 });
+                }
+            })
+            .catch(() => {/* non-critical */});
+    }, [id]);
+
+    // Listen for generation-complete events dispatched by api.js after image/video/voice/analysis
+    useEffect(() => {
+        const handler = () => refreshProjectBillingStats();
+        window.addEventListener('aistory:generation-complete', handler);
+        return () => window.removeEventListener('aistory:generation-complete', handler);
+    }, [refreshProjectBillingStats]);
 
     const evalWorkflowStageTimerRef = useRef(null);
 
@@ -373,6 +401,17 @@ const Editor = ({
                     setCurrentUserId(null);
                     setCurrentUserCredits(0);
                     setUserBatchParallelLimit(3);
+                }
+
+                // Fire-and-forget: load billing stats asynchronously (non-blocking)
+                if (p && id) {
+                    fetchProjectBillingStats(id)
+                        .then(data => {
+                            if (data && !isStale) {
+                                setProjectBillingStats({ user_cost: data.user_cost || 0, total_cost: data.total_cost || 0 });
+                            }
+                        })
+                        .catch(() => {/* non-critical */});
                 }
 
                 let eps = await fetchEpisodes(id).catch(() => []);
@@ -3272,8 +3311,8 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
             <ProjectStatusBar 
                 activeTab={activeTab} 
                 workflowStage={project?.global_info?.workflow_stage}
-                totalProjectCost={project?.total_tokens || 0}
-                userCost={project?.user_tokens || 0}
+                totalProjectCost={projectBillingStats.total_cost}
+                userCost={projectBillingStats.user_cost}
                 userBalance={currentUserCredits}
                 t={t}
                 hasAssets={project?.global_info?.has_existing_assets === true}

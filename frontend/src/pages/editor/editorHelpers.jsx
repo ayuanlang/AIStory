@@ -814,6 +814,7 @@ export const collectMatchedSubjectImageUrlsFromPrompt = ({
 export const resolveUnifiedVideoMode = (techObj = {}) => {
     const rawMode = String(techObj?.video_mode_unified || techObj?.video_ref_submit_mode || techObj?.video_gen_mode || 'start_end').trim().toLowerCase();
     if (rawMode === 'refs_video' || rawMode === 'entity_refs') return 'entity_refs';
+    if (rawMode === 'entity_refs_start_end') return 'entity_refs_start_end';
     return rawMode || 'start_end';
 };
 
@@ -827,6 +828,13 @@ export const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode 
     // In reference-image mode, only keep subject references from prompt matches.
     if (mode === 'entity_refs') {
         return normalizeMediaRefList(entityRefUrls);
+    }
+
+    if (mode === 'entity_refs_start_end') {
+        const combined = [...(entityRefUrls || [])];
+        if (startRef && !combined.includes(startRef)) combined.push(startRef);
+        if (endRef && !combined.includes(endRef)) combined.push(endRef);
+        return normalizeMediaRefList(combined);
     }
 
     if (mode === 'end') {
@@ -1102,6 +1110,7 @@ export const ManagedVideoPlayer = ({
     suspend = false,
     uiLang = 'zh',
     onClick,
+    hideBusyOverlay = false,
 }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [loadState, setLoadState] = useState(() => (src && !suspend ? 'loading' : 'idle'));
@@ -1186,7 +1195,7 @@ export const ManagedVideoPlayer = ({
                 </div>
             )}
 
-            {isBusy && !suspend && (
+            {isBusy && !suspend && !hideBusyOverlay && (
                 <div className="absolute inset-0 z-10 bg-black/55 flex items-center justify-center flex-col gap-2 pointer-events-none">
                     <Loader2 className="w-6 h-6 animate-spin text-primary" />
                     <span className="text-xs text-white/80">{busyText}</span>

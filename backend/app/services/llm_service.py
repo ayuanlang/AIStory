@@ -1499,7 +1499,7 @@ class LLMService:
         base_url = config.get("base_url")
         model = config.get("model")
 
-        if not api_key:
+        if not api_key and config.get("provider") != "apiyi2":
              raise ValueError("API Key missing in config")
 
         extra_config = dict(config.get("config", {}) or {})
@@ -1896,8 +1896,13 @@ class LLMService:
         resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
         
-        if not original_base_url and provider == "apiyi":
-            base_url = "https://api.apiyi.com"
+        if provider == "apiyi" or provider == "apiyi2":
+            if not original_base_url or original_base_url == "https://api.apiyi.com":
+                base_url = "https://api.apiyi.com/v1"
+            else:
+                base_url = original_base_url.rstrip("/")
+                if not base_url.endswith("/v1"):
+                     base_url = f"{base_url}/v1"
             
         if provider == "kie" and resolved_category == "LLM":
             return await self._raw_kie_llm_request_full(base_url, api_key, model, messages, extra_config)

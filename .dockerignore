@@ -1,0 +1,29 @@
+# 忽略前端依赖与缓存
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# 忽略后端依赖与缓存
+backend/__pycache__
+backend/*.pyc
+backend/*.pyo
+backend/*.pyd
+backend/.Python
+backend/env
+backend/venv
+backend/.venv
+backend/env.bak
+backend/venv.bak
+backend/.env
+backend/.pytest_cache
+backend/logs/*.log
+backend/*.sqlite3
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+
+# 源代码通用忽略
+.git
+.github
+.vscode
+.idea

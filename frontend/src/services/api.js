@@ -3132,6 +3132,11 @@ export const fetchMe = async () => {
     });
 };
 
+export const fetchProjectBillingStats = async (projectId) => {
+    const response = await api.get(`/billing/project/${projectId}/stats`);
+    return response.data;
+};
+
 export const updateMyProfile = async (payload) => {
     const response = await api.put('/users/me/profile', payload || {});
     return response.data;
@@ -3290,4 +3295,25 @@ export const exportFunctionApiConfigs = async () => {
 export const importFunctionApiConfigs = async (payload) => {
     const res = await api.post('/settings/system/function_api_configs/import', payload);
     return res.data;
+};
+
+
+export const fetchGroups = async () => {
+    const response = await api.get('/groups/me');
+    return response.data;
+};
+
+export const createGroup = async (data) => {
+    const response = await api.post('/groups/', data);
+    return response.data;
+};
+
+export const addGroupMember = async (groupId, data) => {
+    const response = await api.post('/groups/' + groupId + '/members', data);
+    return response.data;
+};
+
+export const setProjectGroupAllocation = async (projectId, data) => {
+    const response = await api.post('/groups/projects/' + projectId + '/allocations', data);
+    return response.data;
 };

@@ -1468,6 +1468,10 @@ Output ONLY the JSON object now."""
 
         endpoint_hint_lower = endpoint_hint.lower()
         runtime_activation = None
+        logger.info(
+            "[promote_runtime_endpoint] attempting to resolve activation | category=%s provider=%s endpoint_hint=%s",
+            resolved_category, provider, endpoint_hint
+        )
         if resolved_category == "Image" and "generatecontent" in endpoint_hint_lower:
             runtime_activation = "image_gemini_native"
         elif resolved_category == "Image" and "/v1/images/generations" in endpoint_hint_lower:
@@ -1482,6 +1486,9 @@ Output ONLY the JSON object now."""
             normalized_voice_provider = self._normalize_provider_name(provider, "Voice")
             runtime_activation = "audio_kie_compatible" if normalized_voice_provider == "kie" else "audio_runninghub_compatible"
         elif resolved_category == "LLM" and "/v1/chat/completions" in endpoint_hint_lower:
+            runtime_activation = "llm_openai_compatible"
+
+        if not runtime_activation and "/v1/chat/completions" in endpoint_hint_lower:
             runtime_activation = "llm_openai_compatible"
 
         if not runtime_activation:
@@ -1800,7 +1807,6 @@ Output ONLY the JSON object now."""
             if (
                 str(unified.get("provider") or "").strip()
                 and str(unified.get("model") or "").strip()
-                and str(unified.get("api_key") or "").strip()
             ):
                 merged_config = dict(unified.get("config") or {})
                 merged_config.setdefault("__selection_source", "unified_media_api_config")

@@ -1,0 +1,79 @@
+name: Dual Deploy CI/CD (Render + Alibaba Cloud Native ECS)
+
+on:
+  push:
+    branches:
+      - main  # 当推送到 main 分支时自动触发
+
+jobs:
+  deploy-to-aliyun-ecs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout Code
+        uses: actions/checkout@v3
+
+      - name: 2. Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: 3. Build Frontend & Prepare Archive
+        run: |
+          echo "--- Building Frontend ---"
+          cd frontend
+          npm config set registry https://registry.npmmirror.com/
+          npm install
+          npm run build
+          cd ..
+          
+          echo "--- Zipping deployment files ---"
+          # 排除不需要的本地环境和源码控制文件，将前后端全量打包
+          tar --exclude='./frontend/node_modules' \
+              --exclude='./.git' \
+              --exclude='./backend/venv' \
+              --exclude='./backend/.venv' \
+              --exclude='./backend/__pycache__' \
+              -czf deploy.tar.gz .
+
+      - name: 4. Upload to Alibaba Cloud ECS
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.ALIYUN_ECS_IP }}
+          username: root
+          password: ${{ secrets.ALIYUN_ECS_PASSWORD }}
+          source: "deploy.tar.gz"
+          target: "/opt/AIStory"
+
+      - name: 5. Execute Native Deployment Script on ECS
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.ALIYUN_ECS_IP }}
+          username: root
+          password: ${{ secrets.ALIYUN_ECS_PASSWORD }}
+          script: |
+            echo "--- Extracting files ---"
+            cd /opt/AIStory
+            tar -xzf deploy.tar.gz
+            rm deploy.tar.gz
+            
+            echo "--- Setting up Python virtual environment ---"
+            # 请确保服务器已经安装 Python 3 或 Python 3.13
+            python3 -m venv .venv
+            source .venv/bin/activate
+            
+            echo "--- Installing backend dependencies ---"
+            pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/
+            pip install -r backend/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+            
+            echo "--- Restarting Service ---"
+            # 查找并强杀旧的 Uvicorn 进程
+            pkill -f "uvicorn app.main:app" || true
+            
+            cd backend
+            export PORT=8000
+            
+            # 使用 nohup 在后台启动服务。
+            # (强烈建议您后续在服务器配置 systemd/pm2 来守护此进程)
+            nohup uvicorn app.main:app --host 0.0.0.0 --port $PORT > ../server.log 2>&1 &
+            
+            echo "--- Deployment successful! Service is running on port $PORT ---"

@@ -116,7 +116,7 @@
   - **安全去重**：全局合规已生效，角色 Prompt 内部严禁复读 `NSFW`, `explicit`, `色情` 等词。
 - **锚点提取与只读 (Anchor Rules)**：`anchor_description` 优先使用“身份 + 相貌/轮廓 + 核心服饰识别点”的短语组合（2-3个坚实特征）。该字段为不可变锚点（immutable），下游必须逐字符继承，发生冲突时宁降风格化也不改锚点。禁用瞬时表情或暂态光影作锚点。
 
-## 三、 环境与场景专项规范 (Environment Design & Prompts)
+## 三、 环境专项规范 (Environment Design & Prompts)
 
 ### 3.1 Environment Prompt Template
 #### 3.1.1 基础原则与信息架构 (Base Structure & Fields)
@@ -130,11 +130,12 @@
 - 必须显式说明空间可达与调度可行性。
 - 极简与平整：环境应当服务动作，默认呈现平整结构；除非剧情刚需增加复杂地形。
 
-#### 3.1.3 极简主义与视野控制 (Minimalism & Style)
-- 极简主义硬规则：Environment 提示词必须优先采用“叙事必要最小集”（Narrative Minimal Set）原则，确保剧情推进所急需的关键内容处于中心视野。对于非关键物件，按规定执行隐藏或弱化。
-- 故事区去冗余：`FG/MG` 仅保留剧情刚需锚点与可调度结构（如通道、门框、桌面工作区、关键道具落位面）；非必要装饰物（摆件、杂物、重复陈设）应移至 `BG` 弱化呈现或直接调度到 `Excluded Set` 中移除。
-- 风格后置表达：环境风格（如奢华、复古、工业）应优先通过 `BG` 的材质、光照、色温、体块与纹理节奏来表达，保留动作通道区域为空旷清晰状态。
-- 风格映射必须动态，真人剧需符合真实光学与材质逻辑。
+#### 3.1.3 光学语境与美学强化 (Optical Context & Aesthetic Reinforcement)
+- **色调与情绪锚定 (Tone & Mood Anchoring)**：环境提示词必须主动运用色调（如冷色、暖色、单色、高饱和度、低饱和度）来建立和强化场景的核心情绪。色调选择必须服务于剧情，例如，紧张场景可使用高对比度冷色调，而温馨场景则适合柔和的暖色调。
+- **光线叙事与视觉引导 (Lighting Narrative & Visual Guidance)**：光线设计不仅要考虑真实性（如窗外的自然光、室内的灯具光），更要服务于叙事。必须明确主光源、辅助光和轮廓光，利用光影的分布和强度来引导观众视线，突出关键区域或物体，并塑造空间的纵深感和氛围。例如，可以使用伦勃朗光或逆光来增强人物的戏剧性。
+- **焦距与空间感塑造 (Focal Length & Spatial Shaping)**：提示词应包含对镜头焦距的描述，以控制画面的空间感和透视关系。广角镜头（如 16-35mm）可用于展现环境的宏大与开阔，或在近距离拍摄时产生戏剧性的畸变；标准镜头（如 50mm）提供自然的视角；长焦镜头（如 85-200mm）则可以压缩空间，创造出一种疏离或窥视感，并将背景与主体紧密地结合在一起。
+- **风格后置表达**：环境风格（如奢华、复古、工业）应优先通过 `BG` 的材质、光照、色温、体块与纹理节奏来表达，保留动作通道区域为空旷清晰状态。
+- **风格映射必须动态**，真人剧需符合真实光学与材质逻辑。
 
 #### 3.1.4 变体与正反环境逻辑 (Variations & OTS Logic)
 - **环境组裂变传承规则**：如果上游传递的是基于同一“环境组”的衍生环境（如带有正反、内外差异），你必须：
@@ -256,8 +257,8 @@
       "atmosphere": "Rainy tense night with restrained noir contrast and highly structured staging",
       "visual_params": "Mid/Interior/Night",
       "description_cn": "港口办公区夜景，呈现纯粹的物理实景结构。从门外走廊向内看去的一条深邃视线。老旧木桌与后方百叶窗拉伸出空间透视，一盏金属色桌灯照亮桌面。窗体玻璃倒映街角路灯夜雨斑驳。静谧的环境空镜状态，此时还有零星的深夜值班办事员（带有九十年代特定风貌）。",
-      "generation_prompt_cn": "电影级写实剧情环境，港口办公室正向中景夜景版本。静物空镜环境展现。从半开的实木门框内侧(Viewpoint Anchor)正向径直看入室内办公区(Viewing Direction)。前景(FG)：左侧厚重的门框木纹。中景(MG)：一张边缘起皮的实木办公桌和两把空置的转椅，作为主要主体(Primary Subject)。后景(BG)：紧闭的金属百叶窗墙和透出夜雨反光的大扇玻璃，作为次级主体(Secondary Subject)。室内依靠办公桌上一盏老式黄铜长臂台灯发出暖黄灯光维持基底亮度，与窗外散射进来的冷蓝色街灯形成冷暖反差。纯净写实的物理空间呈现，桌边通道区域开阔明朗。环境背景人群：后景深处零星分布着2到3名深夜值班的北美白人与拉美裔办事人群(sparse North American Caucasian and Hispanic background clerks)，他们身穿九十年代北美常见的阔版西装夹克与褪色工装衬衫(90s oversized suit jackets and faded work shirts)，正在低着头翻阅文件或揉捏眉心(rubbing brows in fatigue)，面部特征模糊统一，动作状态各有差异，极好地烘托了九十年代北美港口深夜的压抑办公氛围与真实地域感。",
-      "generation_prompt_en": "Cinematic photoreal drama environment for Harbor Office Front Mid Night. Clean plate composition. From the inner edge of the open solid wooden door frame (Viewpoint Anchor), facing directly inward toward the office depth (Viewing Direction). FG: solid wooden texture of the door edge on the left. MG: a worn solid wood desk and two empty rolling office chairs acting as the Primary Subject. BG: wall obscured by metal blinds and rain-streaked glass pushing cold blue streetlights inside, acting as Secondary Subject. A vintage brass desk lamp emits warm yellow motivated practical lighting in the lower region, giving high cool-warm noir contrast. Static environment focus, clear walkable lanes past the desk. Background Crowd: In the deep background, there are 2 to 3 sparse North American Caucasian and Hispanic clerks working late, wearing 90s North American oversized suit jackets and faded work shirts, looking down at files or rubbing their brows in fatigue. These faceless, anonymous extras feature varied low-key motions that perfectly establish the 90s North American era and specific regional harbor atmosphere.",
+      "generation_prompt_cn": "电影级写实剧情环境，港口办公室正向中景夜景版本。采用35mm广角镜头拍摄，营造轻微的透视畸变以增强空间感。静物空镜环境展现。从半开的实木门框内侧(Viewpoint Anchor)正向径直看入室内办公区(Viewing Direction)。前景(FG)：左侧厚重的门框木纹。中景(MG)：一张边缘起皮的实木办公桌和两把空置的转椅，作为主要主体(Primary Subject)。后景(BG)：紧闭的金属百叶窗墙和透出夜雨反光的大扇玻璃，作为次级主体(Secondary Subject)。室内依靠办公桌上一盏老式黄铜长臂台灯发出暖黄灯光作为主光源，与窗外散射进来的冷蓝色街灯形成强烈的冷暖色调对比，塑造出紧张的黑色电影氛围。桌子侧面有微弱的辅助光补足暗部细节，同时窗框边缘有锐利的轮廓光勾勒。纯净写实的物理空间呈现，桌边通道区域开阔明朗。环境背景人群：后景深处零星分布着2到3名深夜值班的北美白人与拉美裔办事人群(sparse North American Caucasian and Hispanic background clerks)，他们身穿九十年代北美常见的阔版西装夹克与褪色工装衬衫(90s oversized suit jackets and faded work shirts)，正在低着头翻阅文件或揉捏眉心(rubbing brows in fatigue)，面部特征模糊统一，动作状态各有差异，极好地烘托了九十年代北美港口深夜的压抑办公氛围与真实地域感。",
+      "generation_prompt_en": "Cinematic photoreal drama environment for Harbor Office Front Mid Night, shot on a 35mm wide-angle lens to create a slight perspective distortion that enhances spatial depth. Clean plate composition. From the inner edge of the open solid wooden door frame (Viewpoint Anchor), facing directly inward toward the office depth (Viewing Direction). FG: solid wooden texture of the door edge on the left. MG: a worn solid wood desk and two empty rolling office chairs acting as the Primary Subject. BG: wall obscured by metal blinds and rain-streaked glass pushing cold blue streetlights inside, acting as Secondary Subject. A vintage brass desk lamp emits warm yellow light as the key source, creating a strong cool-warm color contrast with the cold blue streetlights from outside, shaping a tense noir atmosphere. Soft fill light on the side of the desk reveals details in the shadows, while sharp rim light outlines the window frame. Static environment focus, clear walkable lanes past the desk. Background Crowd: In the deep background, there are 2 to 3 sparse North American Caucasian and Hispanic clerks working late, wearing 90s North American oversized suit jackets and faded work shirts, looking down at files or rubbing their brows in fatigue. These faceless, anonymous extras feature varied low-key motions that perfectly establish the 90s North American era and specific regional harbor atmosphere.",
       "negative_prompt_en": "specific characters, main character outfits, detailed faces, messy clutter blocking paths, bright flat lighting, CG rendering.",
       "anchor_description": "solid wood desk, vintage brass desk lamp, wall with metal blinds, rain-streaked glass window",
       "visual_dependencies": [],

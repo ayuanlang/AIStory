@@ -1,19 +1,4 @@
 
-import json
-import os
-
-QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
-def _load_queue_config():
-    if os.path.exists(QUEUE_CONFIG_FILE):
-        try:
-            with open(QUEUE_CONFIG_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"queue_threads": 20, "callback_threads": 20}
-
-_q_conf = _load_queue_config()
-
 from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query, Response
 from fastapi.responses import StreamingResponse
 import logging
@@ -375,7 +360,7 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
             "Detail",
             "Background: white",
         ],
-        "cn_required": ["六视图", "正面", "背面", "侧面", "四分之三", "特写", "细节", "背景", "纯白"],
+        "cn_required": ["六视�?, "正面", "背面", "侧面", "四分之三", "特写", "细节", "背景", "纯白"],
     },
     "props": {
         "en_required": [
@@ -391,11 +376,11 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
             "Background: white",
             "Strictly Object Only",
         ],
-        "cn_required": ["道具", "六视图", "正面", "背面", "侧面", "四分之三", "特写", "细节", "仅物体", "背景", "纯白"],
+        "cn_required": ["道具", "六视�?, "正面", "背面", "侧面", "四分之三", "特写", "细节", "仅物�?, "背景", "纯白"],
     },
     "environments": {
         "en_required": ["[Global Style] Viewpoint at", "No people or characters in scene"],
-        "cn_required": ["环境", "无人物", "背景"],
+        "cn_required": ["环境", "无人�?, "背景"],
     },
 }
 
@@ -533,7 +518,7 @@ GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS = max(5, int(os.getenv("GENERA
 GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS", "2000")))
 GENERATION_CALLBACK_NO_MATCH_LOG_CACHE: Dict[str, float] = {}
 GENERATION_CALLBACK_NO_MATCH_LOG_LOCK = threading.Lock()
-GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, int(_q_conf.get("callback_threads", 20)))
+GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, int(os.getenv("GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY", "4") or 4))
 GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
 GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
@@ -557,7 +542,7 @@ SHOT_MEDIA_BATCH_THREADS_LOCK = threading.Lock()
 
 _GENERATION_JOB_POOL_CACHE_TTL_SECONDS = max(1.0, float(os.getenv("GENERATION_JOB_POOL_CACHE_TTL_SECONDS", "3") or 3.0))
 _GENERATION_JOB_POOL_CACHE_MAX_ITEMS = max(32, int(os.getenv("GENERATION_JOB_POOL_CACHE_MAX_ITEMS", "256") or 256))
-_GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_STALE_DELETE_SECONDS", "172800") or 172800))
+_GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_STALE_DELETE_SECONDS", "3600") or 3600))
 _GENERATION_JOB_POOL_CACHE_LOCK = threading.Lock()
 _GENERATION_JOB_POOL_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -615,12 +600,7 @@ def _submit_generation_background_task(
     return enqueue_generation_task(job_id=job_id, kind=kind, user_id=user_id, payload=payload)
 
 
-async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, payload: Dict[str, Any]) -> None:
-    """Async processor - does NOT block while awaiting API responses.
-    
-    KEY CHANGE: Now uses await instead of asyncio.run()
-    This allows the event loop to handle other tasks while waiting for generation.
-    """
+def _process_generation_queue_task(kind: str, job_id: str, user_id: int, payload: Dict[str, Any]) -> None:
     safe_kind = str(kind or "").strip().lower()
     req_payload = dict(payload or {})
     if safe_kind == "montage":
@@ -645,12 +625,14 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        await _run_generate_image_job(
-            job_id,
-            int(user_id),
-            req_payload,
-            provider_callback_ticket=provider_callback_ticket,
-            provider_callback_url=provider_callback_url,
+        asyncio.run(
+            _run_generate_image_job(
+                job_id,
+                int(user_id),
+                req_payload,
+                provider_callback_ticket=provider_callback_ticket,
+                provider_callback_url=provider_callback_url,
+            )
         )
         return
     if safe_kind == "video":
@@ -660,12 +642,14 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        await _run_generate_video_job(
-            job_id,
-            int(user_id),
-            req_payload,
-            provider_callback_ticket=provider_callback_ticket,
-            provider_callback_url=provider_callback_url,
+        asyncio.run(
+            _run_generate_video_job(
+                job_id,
+                int(user_id),
+                req_payload,
+                provider_callback_ticket=provider_callback_ticket,
+                provider_callback_url=provider_callback_url,
+            )
         )
         return
     raise ValueError(f"Unsupported generation queue task kind: {kind}")
@@ -2330,18 +2314,7 @@ def _get_generation_callback_payload(ticket: str) -> Dict[str, Any]:
                 GENERATION_CALLBACK_STORE[stable_ticket] = dict(file_payload)
 
     raw_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
-    normalized = dict(raw_payload or {})
-    
-    event_data = normalized.get("eventData")
-    if isinstance(event_data, dict):
-        if "status" not in normalized and "status" in event_data:
-            normalized["status"] = event_data["status"]
-        if "error" not in normalized:
-            error_val = event_data.get("errorMessage") or event_data.get("failedReason") or event_data.get("errorCode")
-            if error_val:
-                normalized["error"] = str(error_val)
-                
-    return normalized
+    return dict(raw_payload or {})
 
 
 def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
@@ -3120,9 +3093,9 @@ def _snapshot_image_job_stats() -> Dict[str, Any]:
 def _vendor_failed_message(provider: Optional[str], reason: Any) -> str:
     vendor = str(provider or "").strip() or "unknown"
     detail = str(reason or "unknown error").strip()
-    if "供应商调用失败" in detail:
+    if "供应商调用失�? in detail:
         return detail
-    return f"{vendor}供应商调用失败: {detail}"
+    return f"{vendor}供应商调用失�? {detail}"
 
 
 def _build_scene_analysis_blocking_failure_detail(
@@ -3134,13 +3107,13 @@ def _build_scene_analysis_blocking_failure_detail(
     reasons_cn: List[str] = []
 
     if "ANALYSIS_STRUCTURE_INCOMPLETE" in codes:
-        reasons_cn.append("结果缺少必要结构段，无法形成完整的场景分析")
+        reasons_cn.append("结果缺少必要结构段，无法形成完整的场景分�?)
     if "ANALYSIS_SUBJECTS_UNVERIFIED" in codes:
         reasons_cn.append("角色/环境/道具的一致性校验未完成，当前结果不可靠")
     if "ANALYSIS_SUBJECTS_INCOMPLETE" in codes:
         reasons_cn.append("角色/环境/道具覆盖不完整，当前结果不能继续使用")
     if "ANALYSIS_OUTPUT_TRUNCATED" in codes:
-        reasons_cn.append("返回内容疑似被截断，结果不完整")
+        reasons_cn.append("返回内容疑似被截断，结果不完�?)
     if "ANALYSIS_JSON_INVALID" in codes:
         reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
 
@@ -3151,15 +3124,15 @@ def _build_scene_analysis_blocking_failure_detail(
 
     detail_parts: List[str] = []
     if reasons_cn:
-        detail_parts.append("；".join(reasons_cn[:3]))
+        detail_parts.append("�?.join(reasons_cn[:3]))
 
     if raw_reasons:
-        detail_parts.append("技术明细：" + "；".join(raw_reasons[:3]))
+        detail_parts.append("技术明细：" + "�?.join(raw_reasons[:3]))
 
-    body = "；".join([part for part in detail_parts if part])
+    body = "�?.join([part for part in detail_parts if part])
     if body:
-        return "场景分析结果不可用：" + body + "。请直接重新执行剧本分析。"
-    return "场景分析结果不可用：返回内容结构不完整或校验未通过。请直接重新执行剧本分析。"
+        return "场景分析结果不可用：" + body + "。请直接重新执行剧本分析�?
+    return "场景分析结果不可用：返回内容结构不完整或校验未通过。请直接重新执行剧本分析�?
 
 
 @router.post("/fix-db-schema")
@@ -3429,7 +3402,7 @@ def _map_project_creativity_to_temperature(creativity_value: Any) -> Optional[fl
 
     if "遵守剧本优先" in raw or "strict to script" in normalized:
         return 0.35
-    if "增加想象力" in raw or "increase imagination" in normalized:
+    if "增加想象�? in raw or "increase imagination" in normalized:
         return 0.95
     if "正常" in raw or "normal" in normalized:
         return 0.7
@@ -4440,7 +4413,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             text = str(value or "").strip()
             if not text:
                 return ""
-            text = re.sub(r"^(?:CHAR|PROP|ENV|VEFX|SFX)\s*:\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"^(?:CHAR|PROP|ENV)\s*:\s*", "", text, flags=re.IGNORECASE)
             text = text.strip()
             if text.startswith("[") and text.endswith("]"):
                 text = text[1:-1].strip()
@@ -4474,8 +4447,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 re.compile(r"CHAR\s*:\s*\[@([^\]]+)\]", re.IGNORECASE),
                 re.compile(r"PROP\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
                 re.compile(r"ENV\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
-                re.compile(r"VEFX\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
-                re.compile(r"SFX\s*:\s*\[([^\]]+)\]", re.IGNORECASE),
             ]
             found: List[str] = []
             seen = set()
@@ -4986,15 +4957,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             system_api_id=getattr(request, "system_api_id", None),
             function_name=getattr(request, "function_name", None),
         )
-        if not config or not config.get("provider"):
-            raise HTTPException(status_code=400, detail="未找到对应的AI模型配置，请检查是否选择了正确的API。")
-        
-        provider_name = config.get('provider')
-        if provider_name == 'apiyi2' and not config.get("api_key"):
-             logger.warning(f"Bypassing api_key check for {provider_name}")
-        elif not config.get("api_key") and "local" not in (config.get("base_url") or ""):
-             raise HTTPException(status_code=400, detail=f"您选择的API {config.get('provider')} / {config.get('model')} 缺少必需的 API密钥，请前往后台管理界面补充该模型的API_KEY。")
-             
+        if not config or not config.get("api_key"):
+             raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
         config = _inject_user_advanced_llm_preferences(config, current_user)
         config = _inject_project_creativity_temperature(
             config,
@@ -5038,12 +5002,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
             }
-            _scene_episode_id = getattr(request, "episode_id", None)
-            if _scene_episode_id:
-                reserve_details["episode_id"] = int(_scene_episode_id)
-                _scene_ep = db.query(Episode).filter(Episode.id == int(_scene_episode_id)).first()
-                if _scene_ep and _scene_ep.project_id:
-                    reserve_details["project_id"] = int(_scene_ep.project_id)
             reservation_tx = billing_service.reserve_credits(db, current_user_id, "analysis", provider, model, reserve_details)
         else:
             billing_service.check_balance(db, current_user_id, "analysis", provider, model)
@@ -6114,14 +6072,6 @@ async def process_agent_command(
             "output_tokens": est.get("output_tokens", 0),
             "total_tokens": est.get("total_tokens", 0),
         }
-        if request.project_id:
-            reserve_details["project_id"] = int(request.project_id)
-        _agent_episode_id = request.context.get("episode_id") or request.context.get("episodeId")
-        if _agent_episode_id:
-            try:
-                reserve_details["episode_id"] = int(_agent_episode_id)
-            except Exception:
-                pass
         reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
     else:
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
@@ -6142,8 +6092,6 @@ async def process_agent_command(
             extra_details={
                 "query": (request.query or "")[:50],
                 "request_scope": "agent_command",
-                **({"project_id": int(request.project_id)} if request.project_id else {}),
-                **({"episode_id": int(reserve_details.get("episode_id"))} if reserve_details.get("episode_id") else {}),
             },
             routing_payload=result.dict() if hasattr(result, "dict") else None,
             cancel_if_missing_usage=True,
@@ -6210,8 +6158,6 @@ async def process_system_management_agent_command(
             "output_tokens": est.get("output_tokens", 0),
             "total_tokens": est.get("total_tokens", 0),
         }
-        if request.project_id:
-            reserve_details["project_id"] = int(request.project_id)
         reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
     else:
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
@@ -6232,7 +6178,6 @@ async def process_system_management_agent_command(
             extra_details={
                 "query": (request.query or "")[:80],
                 "request_scope": "system_management_agent_command",
-                **({"project_id": int(request.project_id)} if request.project_id else {}),
             },
             routing_payload=result.dict() if hasattr(result, "dict") else None,
             cancel_if_missing_usage=True,
@@ -6939,13 +6884,13 @@ def _resolve_project_share_users(
         canonical_usernames.append(str(user.username or identifier).strip())
 
     if missing and not allow_missing:
-        joined = "、".join([str(item).strip() for item in missing if str(item).strip()])
+        joined = "�?.join([str(item).strip() for item in missing if str(item).strip()])
         if field_name == "share_users":
             message = f"以下分享人不存在: {joined}"
         elif field_name == "reviewer_users":
             message = f"以下审核人不存在: {joined}"
         else:
-            message = f"以下用户不存在: {joined}"
+            message = f"以下用户不存�? {joined}"
         raise HTTPException(status_code=404, detail=message)
 
     return resolved_users, canonical_usernames
@@ -7441,11 +7386,11 @@ def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
             result["project_overview"][normalized_key] = val
         elif current_block == "global_constraints":
             key_map = {
-                "叙事口吻与节奏": "narration_pacing",
+                "叙事口吻与节�?: "narration_pacing",
                 "现实度与尺度边界": "realism_and_rating",
                 "对白风格": "dialogue_style",
-                "场景与道具约束": "scene_and_props",
-                "人物数量与制作可行性": "production_scope",
+                "场景与道具约�?: "scene_and_props",
+                "人物数量与制作可行�?: "production_scope",
                 "连贯性硬规则": "continuity_rules",
             }
             normalized_key = key_map.get(key, key)
@@ -7500,7 +7445,7 @@ def sanitize_llm_markdown_output(text: str) -> str:
             break
     if first_md_index is not None and first_md_index > 0:
         preface = "\n".join(lines[:first_md_index]).lower()
-        if any(token in preface for token in ["analysis", "reasoning", "推理", "思路", "我将", "我认为"]):
+        if any(token in preface for token in ["analysis", "reasoning", "推理", "思路", "我将", "我认�?]):
             lines = lines[first_md_index:]
 
     return "\n".join(lines).strip()
@@ -8166,7 +8111,7 @@ def create_project(
         )
         raise HTTPException(
             status_code=503,
-            detail="数据库连接繁忙，请稍后重试",
+            detail="数据库连接繁忙，请稍后重�?,
         )
     db.refresh(db_project)
     # New project has no images
@@ -9005,7 +8950,7 @@ def export_project_story_generator_global_package(
         point_of_no_return = ""
         for line in (setup_block or "").splitlines():
             s = line.strip()
-            if (not hook) and ("开场钩子" in s):
+            if (not hook) and ("开场钩�? in s):
                 hook = s
             elif (not inciting) and ("触发事件" in s):
                 inciting = s
@@ -12155,11 +12100,11 @@ def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, 
             
             name = str(item.get("name") or "").strip()
             if name:
-                bits.append(f"实体中文名={name}")
+                bits.append(f"实体中文�?{name}")
                 
             name_en = str(item.get("name_en") or "").strip()
             if name_en:
-                bits.append(f"实体英文名={name_en}")
+                bits.append(f"实体英文�?{name_en}")
                 
             archetype = str(item.get("archetype") or "").strip()
             if archetype:
@@ -12228,7 +12173,7 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
         if len(headers) < 4:
             continue
 
-        scene_no_idx = _find_idx(headers, ["Scene No", "场次", "场次号"])
+        scene_no_idx = _find_idx(headers, ["Scene No", "场次", "场次�?])
         core_idx = _find_idx(headers, ["Core Scene Info", "核心场景信息", "Core Goal"])
         original_idx = _find_idx(headers, ["Original Script Text", "原始剧本文本", "Description"])
 
@@ -12243,7 +12188,7 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
 
         parsed_rows: List[Dict[str, str]] = []
 
-        scene_name_idx = _find_idx(headers, ["Scene Name", "场景名称", "场景名", "Title"])
+        scene_name_idx = _find_idx(headers, ["Scene Name", "场景名称", "场景�?, "Title"])
         duration_idx = _find_idx(headers, ["Equivalent Duration", "Duration", "时长"])
         env_name_idx = _find_idx(headers, ["Environment Name", "环境名称", "环境锚点", "Environment"])
         linked_chars_idx = _find_idx(headers, ["Linked Characters", "关联角色", "角色"])
@@ -12433,7 +12378,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                 item.get("appearance_cn"),
             )
             if not description_cn:
-                description_cn = "；".join(
+                description_cn = "�?.join(
                     value for value in [
                         _pick_text(item.get("appearance_cn")),
                         _pick_text(item.get("clothing")),
@@ -13381,7 +13326,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         if isinstance(value, list):
             return [str(v or "").strip() for v in value if str(v or "").strip()]
         if isinstance(value, str):
-            return [p.strip() for p in re.split(r"[,，;；\n]", value) if p and p.strip()]
+            return [p.strip() for p in re.split(r"[,�?；\n]", value) if p and p.strip()]
         return []
 
     tech_params = get_context_val(["tech_params"], allow_structured=True)
@@ -14761,8 +14706,8 @@ async def ai_generate_shots(
             "思路",
             "推理",
             "我将",
-            "我认为",
-            "我認為",
+            "我认�?,
+            "我認�?,
         ]
         try:
             escaped_terms = [re.escape(term) for term in reasoning_prefix_terms if str(term or "").strip()]
@@ -15336,19 +15281,19 @@ def apply_scene_ai_result(
                 lower_ln.startswith("start frame:")
                 or lower_ln.startswith("start frame cn:")
                 or lower_ln.startswith("start:")
-                or ln.startswith("起始帧:")
+                or ln.startswith("起始�?")
                 or ln.startswith("起始帧：")
             ):
                 start_cn = re.sub(r"^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
                 continue
-            if lower_ln.startswith("video:") or lower_ln.startswith("video cn:") or ln.startswith("视频:") or ln.startswith("视频提示词:"):
+            if lower_ln.startswith("video:") or lower_ln.startswith("video cn:") or ln.startswith("视频:") or ln.startswith("视频提示�?"):
                 video_cn = re.sub(r"^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
                 continue
             if (
                 lower_ln.startswith("keyframes:")
                 or lower_ln.startswith("keyframes cn:")
                 or lower_ln.startswith("keyframe:")
-                or ln.startswith("关键帧:")
+                or ln.startswith("关键�?")
                 or ln.startswith("关键帧：")
             ):
                 keyframes_cn = re.sub(r"^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
@@ -15357,9 +15302,9 @@ def apply_scene_ai_result(
                 lower_ln.startswith("end frame:")
                 or lower_ln.startswith("end frame cn:")
                 or lower_ln.startswith("end:")
-                or ln.startswith("收尾帧:")
+                or ln.startswith("收尾�?")
                 or ln.startswith("收尾帧：")
-                or ln.startswith("结束帧:")
+                or ln.startswith("结束�?")
                 or ln.startswith("结束帧：")
             ):
                 end_cn = re.sub(r"^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
@@ -15376,19 +15321,19 @@ def apply_scene_ai_result(
     known_col_aliases = [
         "Shot ID", "shot_id", "镜头ID",
         "Shot Name", "shot_name", "镜头名称",
-        "Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号",
-        "Start Frame", "start_frame", "起始帧",
-        "End Frame", "end_frame", "结束帧",
+        "Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次�?,
+        "Start Frame", "start_frame", "起始�?,
+        "End Frame", "end_frame", "结束�?,
         "Video Content", "video_content", "视频内容",
         "Duration (s)", "Duration", "duration", "时长", "时长(s)",
         "Associated Entities", "associated_entities", "关联实体",
         "Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）",
-        "Keyframes", "keyframes", "关键帧",
-        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
-        "Start Frame (CN)", "start_frame_cn", "起始帧（中文）",
+        "Keyframes", "keyframes", "关键�?,
+        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文�?, "中文提示�?,
+        "Start Frame (CN)", "start_frame_cn", "起始帧（中文�?,
         "Video Content (CN)", "video_prompt_cn", "视频内容（中文）",
-        "Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文",
-        "End Frame (CN)", "end_frame_cn", "结束帧（中文）",
+        "Keyframes (CN)", "keyframes_cn", "关键帧（中文�?, "关键帧中�?,
+        "End Frame (CN)", "end_frame_cn", "结束帧（中文�?,
     ]
     known_col_norm_set = {_normalize_shot_markdown_col_key(k) for k in known_col_aliases}
 
@@ -15406,25 +15351,25 @@ def apply_scene_ai_result(
         # Mapping Keys from LLM Table Headers to DB Columns
         # Headers: Shot ID, Shot Name, Start Frame, End Frame, Video Content, Duration (s), Keyframes, Associated Entities, Shot Logic (CN)
         
-        start_frame_text = _pick_shot_cell(s_data, ["Start Frame", "start_frame", "起始帧"], "")
-        end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "结束帧"], "")
+        start_frame_text = _pick_shot_cell(s_data, ["Start Frame", "start_frame", "起始�?], "")
+        end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "结束�?], "")
         video_content_text = _pick_shot_cell(s_data, ["Video Content", "video_content", "视频内容"], "")
         associated_entities_text = _pick_shot_cell(s_data, ["Associated Entities", "associated_entities", "关联实体"], "")
         shot_logic_cn_text = _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
-        keyframes_text = _pick_shot_cell(s_data, ["Keyframes", "keyframes", "关键帧"], "NO")
-        scene_code_text = _pick_shot_cell(s_data, ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号"], scene.scene_no or "")
+        keyframes_text = _pick_shot_cell(s_data, ["Keyframes", "keyframes", "关键�?], "NO")
+        scene_code_text = _pick_shot_cell(s_data, ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次�?], scene.scene_no or "")
         shot_id_text = _pick_shot_cell(s_data, ["Shot ID", "shot_id", "镜头ID"], str(idx + 1))
         shot_name_text = _pick_shot_cell(s_data, ["Shot Name", "shot_name", "镜头名称"], "Shot")
 
         prompt_cn_combined = _pick_shot_cell(
             s_data,
-            ["Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词"],
+            ["Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文�?, "中文提示�?],
             "",
         )
-        start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"], "")
+        start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "起始帧（中文�?], "")
         video_prompt_cn_text = _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"], "")
-        keyframes_cn_text = _pick_shot_cell(s_data, ["Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文"], "")
-        end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"], "")
+        keyframes_cn_text = _pick_shot_cell(s_data, ["Keyframes (CN)", "keyframes_cn", "关键帧（中文�?, "关键帧中�?], "")
+        end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "结束帧（中文�?], "")
 
         if prompt_cn_combined:
             start_cn_fallback, video_cn_fallback, keyframes_cn_fallback, end_cn_fallback = _split_combined_cn_prompt(prompt_cn_combined)
@@ -15772,7 +15717,7 @@ def _coerce_visual_dependencies(value: Any) -> List[str]:
             except Exception:
                 candidates = []
         if not candidates:
-            candidates = re.split(r"[\n,，;；|]", raw)
+            candidates = re.split(r"[\n,�?；|]", raw)
     elif value is not None:
         candidates = [value]
 
@@ -15862,17 +15807,10 @@ def create_entity(
 
     _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
 
-    name_conditions = [Entity.name == entity.name]
-    if entity.name:
-        name_conditions.append(Entity.name_en == entity.name)
-    if entity.name_en:
-        name_conditions.append(Entity.name == entity.name_en)
-        name_conditions.append(Entity.name_en == entity.name_en)
-
-    from sqlalchemy import or_
     existing_entity = db.query(Entity).filter(
         Entity.project_id == project_id,
-        or_(*name_conditions)
+        Entity.name == entity.name,
+        Entity.type == entity.type
     ).first()
     
     if existing_entity:
@@ -15959,14 +15897,14 @@ def _split_prompt_clauses(text: str) -> List[str]:
     stable = str(text or "").strip()
     if not stable:
         return []
-    parts = re.split(r"[\n\r]+|(?<=[。！？.!?；;])", stable)
+    parts = re.split(r"[\n\r]+|(?<=[。！�?!?�?])", stable)
     return [p.strip() for p in parts if str(p or "").strip()]
 
 
 def _extract_prompt_labels(text: str) -> List[str]:
     stable = str(text or "")
     labels: List[str] = []
-    for match in re.finditer(r"([A-Za-z][A-Za-z0-9 _/\-]{1,50})\s*:|([\u4e00-\u9fff]{1,24})\s*[：:]", stable):
+    for match in re.finditer(r"([A-Za-z][A-Za-z0-9 _/\-]{1,50})\s*:|([\u4e00-\u9fff]{1,24})\s*[�?]", stable):
         token = (match.group(1) or match.group(2) or "").strip().lower()
         token = re.sub(r"\s+", " ", token)
         if token:
@@ -15981,8 +15919,8 @@ def _prompt_structure_profile(text: str) -> Dict[str, Any]:
     return {
         "clause_count": len(clauses),
         "labels": labels,
-        "colon_count": stable.count(":") + stable.count("："),
-        "semicolon_count": stable.count(";") + stable.count("；"),
+        "colon_count": stable.count(":") + stable.count("�?),
+        "semicolon_count": stable.count(";") + stable.count("�?),
         "brace_count": stable.count("{") + stable.count("}"),
         "bracket_count": stable.count("[") + stable.count("]"),
         "paren_count": stable.count("(") + stable.count(")"),
@@ -16984,9 +16922,10 @@ def confirm_user_verification_code(
             user_id=user.id,
             amount=granted_credits,
             balance_after=int(user.credits or 0),
-            description="signup_bonus", 
+            task_type="signup_bonus",
+            provider="system",
+            model="email_verification",
             details={
-                "task_type": "signup_bonus", "provider": "system", "model": "email_verification",
                 "reason": "email_verification_trial_bonus",
                 "target_credits": target_credits,
                 "old_credits": old_credits,
@@ -19444,8 +19383,8 @@ def test_smtp_config(
 
     subject = "AI Story SMTP 测试邮件"
     content = (
-        "这是一封来自 AI Story 的 SMTP 测试邮件。\n\n"
-        "如果你收到了这封邮件，说明 SMTP 配置可用。"
+        "这是一封来�?AI Story �?SMTP 测试邮件。\n\n"
+        "如果你收到了这封邮件，说�?SMTP 配置可用�?
     )
 
     try:
@@ -19499,7 +19438,7 @@ def broadcast_email_to_all_users(
             invalid_count += 1
 
     if not recipients:
-        raise HTTPException(status_code=400, detail="没有可用的收件邮箱")
+        raise HTTPException(status_code=400, detail="没有可用的收件邮�?)
 
     sent = 0
     failed = 0
@@ -19900,15 +19839,10 @@ def check_order_status(
                 user_id=order.user_id,
                 amount=order.credits,
                 balance_after=user.credits if user else 0,
-                description="recharge",
-                details={
-                    "task_type": "recharge",
-                    "provider": "wechat",
-                    "model": "cny",
-                    "order_no": order_no, 
-                    "amount_cny": order.amount, 
-                    "method": "active_query"
-                }
+                task_type="recharge",
+                provider="wechat",
+                model="cny",
+                details={"order_no": order_no, "amount_cny": order.amount, "method": "active_query"}
             )
             db.add(trans)
             db.commit()
@@ -19965,9 +19899,10 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
                         user_id=order.user_id,
                         amount=order.credits,
                         balance_after=user.credits if user else 0,
-                        description="recharge", 
+                        task_type="recharge",
+                        provider="wechat",
+                        model="cny",
                         details={
-                            "task_type": "recharge", "provider": "wechat", "model": "cny",
                             "order_no": out_trade_no, 
                             "method": "notify", 
                             "wx_transaction_id": wx_transaction_id,
@@ -20021,14 +19956,10 @@ def mock_pay_order(
         user_id=user.id,
         amount=order.credits,
         balance_after=user.credits,
-        description="recharge",
-        details={
-            "task_type": "recharge", 
-            "provider": "wechat", 
-            "model": "cny", 
-            "order_no": order_no, 
-            "amount_cny": order.amount
-        }
+        task_type="recharge",
+        provider="wechat",
+        model="cny",
+        details={"order_no": order_no, "amount_cny": order.amount}
     )
     db.add(trans)
     
@@ -20195,94 +20126,21 @@ def get_billing_taxonomy_preview(
         "taskTypesBySourceCategory": task_types_by_source_category,
     }
 
-
-@router.get("/billing/project/{project_id}/stats")
-def get_project_billing_stats(
-    project_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Return credit consumption stats for a project.
-
-    Returns:
-        user_cost  – credits consumed by the current user in this project (negative amount = cost)
-        total_cost – credits consumed by all users in this project
-    """
-    # Verify the requesting user has access to the project
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if not current_user.is_superuser and project.owner_id != current_user.id:
-        # Check shares
-        share = db.query(ProjectShare).filter(
-            ProjectShare.project_id == project_id,
-            ProjectShare.user_id == current_user.id,
-        ).first()
-        if not share:
-            raise HTTPException(status_code=403, detail="Not authorized")
-
-    from sqlalchemy import func as sa_func
-
-    # Total cost (all users): sum of negative amounts on transaction_history for this project
-    total_row = (
-        db.query(sa_func.coalesce(sa_func.sum(TransactionHistory.amount), 0))
-        .filter(
-            TransactionHistory.project_id == project_id,
-            TransactionHistory.amount < 0,
-        )
-        .scalar()
-    )
-    total_cost = abs(int(total_row or 0))
-
-    # Current user's cost in this project
-    user_row = (
-        db.query(sa_func.coalesce(sa_func.sum(TransactionHistory.amount), 0))
-        .filter(
-            TransactionHistory.project_id == project_id,
-            TransactionHistory.user_id == current_user.id,
-            TransactionHistory.amount < 0,
-        )
-        .scalar()
-    )
-    user_cost = abs(int(user_row or 0))
-
-    return {
-        "project_id": project_id,
-        "user_cost": user_cost,
-        "total_cost": total_cost,
-    }
-
-
 @router.get("/billing/transactions", response_model=List[TransactionOut])
 def get_transactions(
     user_id: Optional[int] = None,
-    task_type: Optional[str] = None,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
     limit: int = 100,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser and (user_id and user_id != current_user.id):
         raise HTTPException(status_code=403, detail="Not authorized")
-
+    
     query = db.query(TransactionHistory)
-
-    if task_type or provider or model:
-        query = query.outerjoin(TransactionAction, TransactionAction.transaction_id == TransactionHistory.id).distinct()
-        if task_type:
-            query = query.filter(TransactionAction.task_type == task_type)
-        if provider:
-            query = query.filter(TransactionAction.provider == provider)
-        if model:
-            query = query.filter(TransactionAction.model == model)
-
-    from sqlalchemy.orm import joinedload
-    query = query.options(joinedload(TransactionHistory.action_audit))
-
+    
     # Non-superusers can only see their own
     target_id = user_id if user_id else (None if current_user.is_superuser else current_user.id)
-
+    
     if target_id:
         query = query.filter(TransactionHistory.user_id == target_id)
 
@@ -20290,34 +20148,18 @@ def get_transactions(
     alias_map = _build_provider_alias_lookup(db)
     results: List[Dict[str, Any]] = []
     for row in rows:
-        # Action audit holds provider, model, task_type, etc.
-        action = row.action_audit
-        provider_text = str(getattr(action, "provider", "") or "").strip() or None if action else None
-        model_text = action.model if action else None
-        task_text = action.task_type if action else None
-        project_id = (action.project_id if action else None) or getattr(row, "project_id", None)
-        episode_id = (action.episode_id if action else None) or getattr(row, "episode_id", None)
-        
+        provider_text = str(getattr(row, "provider", "") or "").strip() or None
         provider_alias = _resolve_provider_alias(alias_map, provider_text)
         details_payload = _attach_provider_alias_deep(getattr(row, "details", None), alias_map)
-        
-        # Support fallback description
-        display_description = row.description
-        if not display_description and task_text:
-            display_description = task_text
-            
         payload = {
             "id": row.id,
             "user_id": row.user_id,
             "amount": row.amount,
             "balance_after": row.balance_after,
-            "description": display_description,
-            "task_type": task_text,
-            "provider": provider_text,
-            "model": model_text,
+            "task_type": row.task_type,
+            "provider": row.provider,
+            "model": row.model,
             "details": details_payload,
-            "project_id": project_id,
-            "episode_id": episode_id,
             "created_at": row.created_at,
         }
         if provider_alias:
@@ -20355,12 +20197,8 @@ def update_user_credits(
         user_id=user_id,
         amount=user.credits - old_credits,
         balance_after=user.credits,
-        description="admin_adjustment",
-        details={
-            "task_type": "admin_adjustment",
-            "admin_id": current_user.id, 
-            "reason": "Manual Update"
-        }
+        task_type="admin_adjustment",
+        details={"admin_id": current_user.id, "reason": "Manual Update"}
     )
     db.add(trans)
     
@@ -20450,7 +20288,6 @@ class VideoGenerationRequest(BaseModel):
     episode_id: Optional[int] = None
     scene_id: Optional[int] = None
     shot_id: Optional[int] = None
-    draft_mode: Optional[bool] = False
     shot_number: Optional[str] = None
     shot_name: Optional[str] = None
     entity_name: Optional[str] = None
@@ -20784,9 +20621,6 @@ def _build_video_provider_options(req: VideoGenerationRequest, quality: Optional
 
     if req.multi_shots is not None:
         options["multi_shots"] = bool(req.multi_shots)
-
-    if req.draft_mode is not None:
-        options["draft"] = bool(req.draft_mode)
 
     # Kling 3.0 API requires input.sound=true when multi_shots=true.
     if bool(options.get("multi_shots")):
@@ -21144,7 +20978,7 @@ def _build_voice_tts_planner_prompts(video_prompt: str) -> Tuple[str, str, Dict[
         "Supported voice names include:\n"
         f"{supported_voices_hint}\n"
         "Examples:\n"
-        "- Input: 伊莎贝拉向后跌倒，老板冲进大楼。 -> text: \"\"\n"
+        "- Input: 伊莎贝拉向后跌倒，老板冲进大楼�?-> text: \"\"\n"
         "- Input: 老板：\"滚出去！\" -> text: \"滚出去！\"\n"
         "- Input includes [Character Context] only -> text must still be \"\" unless explicit dialogue exists.\n"
         "Return JSON schema exactly:\\n"
@@ -21309,7 +21143,7 @@ def _normalize_kie_voice_name(value: Any) -> str:
         raw,
         raw.split(" - ")[0].strip(),
         raw.split("|")[0].strip(),
-        raw.split("（")[0].strip(),
+        raw.split("�?)[0].strip(),
         raw.split("(")[0].strip(),
     ]
     for candidate in candidates:
@@ -21389,8 +21223,8 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
             "character context",
             "角色设定",
             "角色信息",
-            "角色提示词",
-            "人物提示词",
+            "角色提示�?,
+            "人物提示�?,
         ]
         if any(token in low for token in metadata_tokens):
             return True
@@ -21420,10 +21254,10 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
 
     quote_patterns = [
         r'"([^"\n]{1,400})"',
-        r'“([^”\n]{1,400})”',
-        r'‘([^’\n]{1,400})’',
-        r'「([^」\n]{1,400})」',
-        r'『([^』\n]{1,400})』',
+        r'�?[^”\n]{1,400})�?,
+        r'�?[^’\n]{1,400})�?,
+        r'�?[^」\n]{1,400})�?,
+        r'�?[^』\n]{1,400})�?,
     ]
     for pattern in quote_patterns:
         for m in re.finditer(pattern, raw):
@@ -21451,7 +21285,7 @@ def _extract_dialogue_text_for_tts(value: Any) -> str:
                 continue
             if "|" in candidate:
                 continue
-            if not re.search(r"[。！？!?]", candidate):
+            if not re.search(r"[。！�??]", candidate):
                 continue
             if len(candidate) > 120:
                 continue
@@ -21490,8 +21324,8 @@ def _strip_subject_prompt_context_for_voice(value: Any) -> str:
         "entity context",
         "角色设定",
         "角色信息",
-        "角色提示词",
-        "人物提示词",
+        "角色提示�?,
+        "人物提示�?,
         "prompt en:",
         "prompt cn:",
     ]
@@ -21554,7 +21388,6 @@ class ShotMediaBatchStartRequest(BaseModel):
     shot_ids: Optional[List[int]] = None
     overwrite_existing: bool = False
     system_api_id: Optional[int] = None
-    draft_mode: Optional[bool] = False
 
 
 def _sanitize_filename_part(value: Optional[str], max_len: int = 48) -> str:
@@ -22696,10 +22529,6 @@ async def _run_generate_image(
     if reserve_system_api_id is not None:
         reserve_details["system_api_id"] = reserve_system_api_id
         reserve_details["resolved_system_api_id"] = reserve_system_api_id
-    if req.project_id:
-        reserve_details["project_id"] = int(req.project_id)
-    if req.episode_id:
-        reserve_details["episode_id"] = int(req.episode_id)
 
     reservation_tx = billing_service.reserve_credits(
         db,
@@ -23417,10 +23246,6 @@ async def _run_generate_image(
                 settle_details["model"] = billing_model
             if billing_system_api_id is not None:
                 settle_details["system_api_id"] = billing_system_api_id
-            if req.project_id:
-                settle_details["project_id"] = int(req.project_id)
-            if req.episode_id:
-                settle_details["episode_id"] = int(req.episode_id)
 
             billing_service.settle_reservation(
                 db,
@@ -24535,20 +24360,7 @@ async def generate_video_endpoint(
         existing_task = _VIDEO_INFLIGHT_BY_KEY.get(dedup_key)
         if existing_task is None:
             _release_db_connection(db, "generate_video_sync_wait")
-            try:
-                callback_ticket_val = f"video-shot-{req.shot_id}" if getattr(req, "shot_id", None) else None
-                callback_url_val = str(media_service._resolve_provider_callback_url({}, callback_ticket_val) or "").strip() if callback_ticket_val else ""
-            except Exception:
-                callback_ticket_val = f"video-shot-{req.shot_id}" if getattr(req, "shot_id", None) else None
-                callback_url_val = ""
-            
-            existing_task = asyncio.create_task(_run_generate_video(
-                req,
-                current_user,
-                db,
-                provider_callback_ticket=callback_ticket_val,
-                provider_callback_url=callback_url_val
-            ))
+            existing_task = asyncio.create_task(_run_generate_video(req, current_user, db))
             _VIDEO_INFLIGHT_BY_KEY[dedup_key] = existing_task
             created_task = True
         else:
@@ -24611,21 +24423,6 @@ async def generate_voice_endpoint(
         if not stable_prompt:
             raise HTTPException(status_code=400, detail="Voice prompt is empty")
 
-        # Early resolution of project/episode for billing
-        voice_project_id = _normalize_seed_value(getattr(req, "project_id", None))
-        voice_episode_id = None
-        _voice_shot_id = _normalize_seed_value(getattr(req, "shot_id", None))
-        if _voice_shot_id:
-            _voice_shot = db.query(Shot).filter(Shot.id == _voice_shot_id).first()
-            if _voice_shot and getattr(_voice_shot, "scene_id", None):
-                _voice_scene = db.query(Scene).filter(Scene.id == _voice_shot.scene_id).first()
-                if _voice_scene and _voice_scene.episode_id:
-                    voice_episode_id = int(_voice_scene.episode_id)
-                    if not voice_project_id:
-                        _voice_ep = db.query(Episode).filter(Episode.id == voice_episode_id).first()
-                        if _voice_ep and _voice_ep.project_id:
-                            voice_project_id = int(_voice_ep.project_id)
-
         if is_token_billing:
             est_messages = [{"role": "user", "content": stable_prompt}]
             est_usage = billing_service.estimate_input_output_tokens_from_messages(est_messages, output_ratio=1.2)
@@ -24652,10 +24449,6 @@ async def generate_voice_endpoint(
         if reserve_system_api_id is not None:
             reserve_details["system_api_id"] = reserve_system_api_id
             reserve_details["resolved_system_api_id"] = reserve_system_api_id
-        if voice_project_id:
-            reserve_details["project_id"] = voice_project_id
-        if voice_episode_id:
-            reserve_details["episode_id"] = voice_episode_id
 
         reservation_tx = billing_service.reserve_credits(
             db,
@@ -25007,10 +24800,6 @@ async def generate_voice_endpoint(
                 settle_details["model"] = final_model
             if final_system_api_id is not None:
                 settle_details["system_api_id"] = final_system_api_id
-            if voice_project_id:
-                settle_details["project_id"] = voice_project_id
-            if voice_episode_id:
-                settle_details["episode_id"] = voice_episode_id
 
             billing_service.settle_reservation(
                 db,
@@ -25485,20 +25274,6 @@ async def _run_generate_video(
 
         # If project only provides logical size tier (e.g. 1K) plus aspect ratio,
         # infer concrete dimensions so billing-rule range matching can use width/height.
-        if req.draft_mode:
-            resolved_video_image_size = "0.5K"
-            resolved_video_resolution = "480p"
-            ratio_pair = _parse_aspect_ratio_pair(aspect_ratio)
-            if ratio_pair:
-                rw, rh = ratio_pair
-                if rw > 0 and rh > 0:
-                    if rw >= rh:
-                        resolved_video_height = 480
-                        resolved_video_width = max(1, int(round(480 * rw / rh)))
-                    else:
-                        resolved_video_width = 480
-                        resolved_video_height = max(1, int(round(480 * rh / rw)))
-
         if (not resolved_video_width or not resolved_video_height) and resolved_video_image_size and aspect_ratio:
             inferred_dims = _infer_project_resolution(aspect_ratio, resolved_video_image_size)
             if inferred_dims:
@@ -25832,9 +25607,6 @@ async def _run_generate_video(
             len(flat_refs),
             ref_names,
         )
-        prompt_text_before_mapping = prompt_text
-        entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else {}
-
         prompt_text = _append_video_api_ref_mapping(
             prompt_text,
             flat_refs,
@@ -25842,22 +25614,6 @@ async def _run_generate_video(
             req.last_frame_url,
             req.keyframes,
             req.ref_video_urls,
-            entity_lookup=entity_lookup,
-        )
-        logger.warning(
-            "[GenerateVideo][PromptMap] shot_id=%s project_id=%s req_project_id=%s ref_mode=%s refs=%s keyframes=%s ref_videos=%s entity_lookup=%s changed=%s inline_tags_before=%s inline_tags_after=%s prefixed_after=%s",
-            req.shot_id,
-            resolved_project_id,
-            getattr(req, "project_id", None),
-            normalized_ref_mode or "<empty>",
-            len(flat_refs),
-            len(req.keyframes or []) if isinstance(req.keyframes, list) else 0,
-            len(req.ref_video_urls or []) if isinstance(req.ref_video_urls, list) else 0,
-            len(entity_lookup or {}),
-            prompt_text != prompt_text_before_mapping,
-            len(re.findall(r"ref_image_url\s*:\s*#\d+", prompt_text_before_mapping, flags=re.IGNORECASE)),
-            len(re.findall(r"ref_image_url\s*:\s*#\d+", prompt_text, flags=re.IGNORECASE)),
-            len(re.findall(r"参考图\d+的", prompt_text)),
         )
 
         try:
@@ -26414,7 +26170,6 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error=str(e),
         )
-        return JSONResponse(status_code=500, content={"detail": str(e), "job_id": job_id})
     finally:
         with VIDEO_JOB_LOCK:
             snapshot = dict(VIDEO_JOB_STORE.get(job_id) or {})
@@ -26444,21 +26199,6 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
             "raw": body_bytes.decode("utf-8", errors="ignore") if body_bytes else "",
             "content_type": str(request.headers.get("content-type") or "").strip(),
         }
-
-    import json
-    try:
-        dump_str = json.dumps(payload, ensure_ascii=False)
-        client_host = getattr(getattr(request, "client", None), "host", "Unknown")
-        
-        logger.info("=" * 60)
-        logger.info(f"🔔 [WEBHOOK CALLBACK RECEIVED] [{client_host}] Ticket: {stable_ticket}")
-        if len(dump_str) > 2000:
-            logger.info(f"🔔 [WEBHOOK PAYLOAD] {dump_str[:2000]}...(truncated)")
-        else:
-            logger.info(f"🔔 [WEBHOOK PAYLOAD] {dump_str}")
-        logger.info("=" * 60)
-    except Exception as e:
-        logger.error(f"Failed to log webhook payload: {e}")
 
     _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
 
@@ -26523,74 +26263,11 @@ def get_generation_callback_result(ticket: str, response: Response):
 async def submit_generate_video_endpoint(
     req: VideoGenerationRequest,
     request: Request,
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     callback_url = _resolve_callback_url_from_payload(req)
     explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
     req_payload = req.model_dump()
-
-    # Keep queue payload prompt aligned with runtime mapping logic so UI/debug payloads
-    # show the same entity-reference relationship as the actual provider submission.
-    try:
-        submit_prompt = str(req_payload.get("prompt") or "").strip()
-        if submit_prompt:
-            submit_prompt_before = submit_prompt
-            submit_ref_image_url = req_payload.get("ref_image_url")
-            submit_last_frame_url = req_payload.get("last_frame_url")
-            submit_keyframes = req_payload.get("keyframes") if isinstance(req_payload.get("keyframes"), list) else None
-            submit_ref_video_urls = req_payload.get("ref_video_urls") if isinstance(req_payload.get("ref_video_urls"), list) else None
-
-            submit_refs: List[str] = []
-            if isinstance(submit_ref_image_url, list):
-                submit_refs.extend([str(x).strip() for x in submit_ref_image_url if str(x).strip()])
-            elif isinstance(submit_ref_image_url, str) and submit_ref_image_url.strip():
-                submit_refs.append(submit_ref_image_url.strip())
-            if isinstance(submit_keyframes, list):
-                submit_refs.extend([str(x).strip() for x in submit_keyframes if str(x).strip()])
-            if isinstance(submit_last_frame_url, str) and submit_last_frame_url.strip():
-                submit_refs.append(submit_last_frame_url.strip())
-            submit_refs = [x for x in dict.fromkeys([str(x).strip() for x in submit_refs if str(x).strip()]) if x]
-
-            resolved_project_id = _to_positive_int_or_none(req_payload.get("project_id"))
-            if not resolved_project_id:
-                resolved_project_id = _to_positive_int_or_none(getattr(req, "project_id", None))
-            if not resolved_project_id and _to_positive_int_or_none(getattr(req, "shot_id", None)):
-                submit_shot = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
-                if submit_shot:
-                    resolved_project_id = _to_positive_int_or_none(getattr(submit_shot, "project_id", None))
-                    if not resolved_project_id and _to_positive_int_or_none(getattr(submit_shot, "episode_id", None)):
-                        submit_episode = db.query(Episode).filter(Episode.id == int(submit_shot.episode_id)).first()
-                        if submit_episode:
-                            resolved_project_id = _to_positive_int_or_none(getattr(submit_episode, "project_id", None))
-
-            submit_entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else None
-            req_payload["prompt"] = _append_video_api_ref_mapping(
-                submit_prompt,
-                submit_refs,
-                submit_ref_image_url,
-                submit_last_frame_url,
-                submit_keyframes,
-                submit_ref_video_urls,
-                entity_lookup=submit_entity_lookup,
-            )
-            submit_prompt_after = str(req_payload.get("prompt") or "")
-            logger.warning(
-                "[VideoSubmit][PromptMap] shot_id=%s project_id=%s req_project_id=%s refs=%s keyframes=%s ref_videos=%s entity_lookup=%s changed=%s inline_tags_before=%s inline_tags_after=%s prefixed_after=%s",
-                getattr(req, "shot_id", None),
-                resolved_project_id,
-                req_payload.get("project_id"),
-                len(submit_refs),
-                len(submit_keyframes or []),
-                len(submit_ref_video_urls or []),
-                len(submit_entity_lookup or {}),
-                submit_prompt_after != submit_prompt_before,
-                len(re.findall(r"ref_image_url\s*:\s*#\d+", submit_prompt_before, flags=re.IGNORECASE)),
-                len(re.findall(r"ref_image_url\s*:\s*#\d+", submit_prompt_after, flags=re.IGNORECASE)),
-                len(re.findall(r"参考图\d+的", submit_prompt_after)),
-            )
-    except Exception as e:
-        logger.warning("[VideoSubmit] prompt mapping pre-process skipped: %s", e)
     scope_key = _build_generation_task_scope("video", current_user.id, req_payload)
     fingerprint_token = _build_submit_idempotency_token("video", current_user.id, req_payload)
     idempotency_key = explicit_idempotency_key or fingerprint_token
@@ -26786,6 +26463,17 @@ def get_generate_video_job_status(
             result_url,
             owner_id,
         )
+
+    return {
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "error": job.get("error"),
+        "result": job.get("result"),
+    }
+
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -28073,7 +27761,6 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
     lookup: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         canonical_name = str(row.name or row.name_en or "").strip()
-        anchor_description = str(row.anchor_description or "").strip()
         anchor = str(
             row.anchor_description
             or row.narrative_description
@@ -28085,7 +27772,6 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
         entity_type = str(row.type or "").strip().lower()
         payload = {
             "name": canonical_name,
-            "anchor_description": anchor_description,
             "anchor": anchor,
             "description": str(row.description or row.narrative_description or anchor or "").strip(),
             "image_url": image_url,
@@ -28287,7 +27973,6 @@ def _inject_shot_prompt_anchors(
         token = str(match.group(1) or "").strip()
         normalized = _normalize_entity_anchor_token(token)
         tail = text[match.end():]
-        head = text[max(0, match.start() - 24):match.start()]
         if re.match(r"^\s*[\(（]", tail):
             return match.group(0)
 
@@ -28299,22 +27984,20 @@ def _inject_shot_prompt_anchors(
             anchor = str(row.get("anchor") or "").strip()
             entity_id = str(row.get("entity_id") or "").strip()
             ref_no = (subject_ref_index_map or {}).get(entity_id)
-            has_prefixed_head = bool(re.search(r"参考图\d+的\s*$", head))
-            prefix_text = f"参考图{ref_no}的" if ref_no and not has_prefixed_head else ""
 
             if normalized in injected_entities:
                 # Duplicate reference: skip anchor description to prevent
                 # image models from interpreting repeated descriptions as
-                # multiple subjects (二宫格 / split-panel issue).
+                # multiple subjects (二宫�?/ split-panel issue).
                 if ref_no:
-                    return f"{prefix_text}{match.group(0)}(ref_image_url: #{ref_no})"
+                    return f"{match.group(0)}(ref_image_url: #{ref_no})"
                 return match.group(0)
 
             injected_entities.add(normalized)
             anchor_with_ref = anchor
             if ref_no:
                 anchor_with_ref = f"{anchor} | ref_image_url: #{ref_no}"
-            return f"{prefix_text}{match.group(0)}({anchor_with_ref})"
+            return f"{match.group(0)}({anchor_with_ref})"
         return match.group(0)
 
     return regex.sub(_replace, text)
@@ -28346,7 +28029,7 @@ def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict
         return []
 
     refs: List[str] = []
-    regex = re.compile(r"(?:CHAR|ENV|PROP|VEFX|SFX)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
     for m in regex.finditer(text):
         raw_name = m.group(1) or m.group(2) or ""
         normalized = _normalize_entity_anchor_token(raw_name)
@@ -28365,7 +28048,6 @@ def _collect_prompt_entity_ref_images_relaxed(prompt: str, entity_lookup: Dict[s
         return []
 
     refs: List[str] = []
-
     allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
 
     refs.extend(_collect_prompt_entity_ref_images(text, entity_lookup))
@@ -28416,14 +28098,7 @@ def _normalize_video_ref_mode(value: Any) -> str:
 
 def _dedupe_media_ref_urls(values: Optional[List[str]]) -> List[str]:
     refs = [str(x).strip() for x in (values or []) if str(x).strip()]
-    unique_refs = []
-    seen = set()
-    for x in refs:
-        base = x.split("?")[0]
-        if base not in seen:
-            seen.add(base)
-            unique_refs.append(x)
-    return unique_refs
+    return [x for x in dict.fromkeys(refs) if x]
 
 
 def _system_api_supports_last_frame_flag(provider: Any, model: Any) -> Optional[bool]:
@@ -28581,9 +28256,8 @@ def _merge_entity_refs_for_video_mode(
     if not auto_entity_refs:
         return current_refs, []
 
-    # If entity_refs mode is selected, we ONLY return the entity refs and ignore the base_refs
-    # to avoid mixing first frame/last frame/keyframes into the entity reference list sent to the provider.
-    return _dedupe_media_ref_urls(auto_entity_refs), auto_entity_refs
+    return _dedupe_media_ref_urls(current_refs + auto_entity_refs), auto_entity_refs
+
 
 def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
     text = str(prompt or "")
@@ -28592,9 +28266,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
 
     refs: List[str] = []
     index_map: Dict[str, int] = {}
-    import re
-    # We use u3010 and u3011 for chinese brackets 【】
-    regex = re.compile(r"(?:CHAR|ENV|PROP|VEFX|SFX)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
 
     for m in regex.finditer(text):
         raw_name = m.group(1) or m.group(2) or ""
@@ -28607,7 +28279,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
             continue
 
         entity_type = str(row.get("entity_type") or "").strip().lower()
-        if entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
+        if entity_type not in {"subject", "character", "char"}:
             continue
 
         image_url = str(row.get("image_url") or "").strip()
@@ -28621,51 +28293,6 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
         if entity_id:
             index_map[entity_id] = refs.index(image_url) + 1
 
-    # Fallback relaxed matching for ENV/PROP names that may not be captured
-    # by strict token parsing but still appear in normalized prompt text.
-    normalized_text = _normalize_entity_anchor_token(text)
-    if normalized_text and entity_lookup:
-        matched_rows: List[Tuple[int, Dict[str, Any]]] = []
-        allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
-
-        for key, row in entity_lookup.items():
-            norm_key = str(key or "").strip()
-            if not norm_key:
-                continue
-
-            entity_type = str((row or {}).get("entity_type") or "").strip().lower()
-            if entity_type and entity_type not in allowed_types:
-                continue
-
-            image_url = str((row or {}).get("image_url") or "").strip()
-            entity_id = str((row or {}).get("entity_id") or "").strip()
-            if not image_url or not entity_id or entity_id in index_map:
-                continue
-
-            has_ascii = bool(re.search(r"[a-z0-9]", norm_key, flags=re.IGNORECASE))
-            if has_ascii:
-                pattern = rf"(?<![a-z0-9]){re.escape(norm_key)}(?![a-z0-9])"
-                m = re.search(pattern, normalized_text, flags=re.IGNORECASE)
-                if not m:
-                    continue
-                pos = m.start()
-            else:
-                pos = normalized_text.find(norm_key)
-                if pos < 0:
-                    continue
-
-            matched_rows.append((pos, row))
-
-        matched_rows.sort(key=lambda item: item[0])
-        for _, row in matched_rows:
-            image_url = str((row or {}).get("image_url") or "").strip()
-            entity_id = str((row or {}).get("entity_id") or "").strip()
-            if not image_url or not entity_id or entity_id in index_map:
-                continue
-            if image_url not in refs:
-                refs.append(image_url)
-            index_map[entity_id] = refs.index(image_url) + 1
-
     return index_map
 
 
@@ -28676,10 +28303,8 @@ def _append_video_api_ref_mapping(
     last_frame_url: Optional[str],
     keyframes: Optional[List[str]] = None,
     reference_video_urls: Optional[List[str]] = None,
-    entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
-    source_text = str(prompt or "").strip()
-    text = source_text
+    text = str(prompt or "").strip()
     if not text:
         return text
 
@@ -28702,18 +28327,6 @@ def _append_video_api_ref_mapping(
         text,
         flags=re.IGNORECASE | re.MULTILINE,
     )
-    text = re.sub(
-        r"^\s*实体参考映射\s*:\s*.*$",
-        "",
-        text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
-    text = re.sub(
-        r"^\s*实体参考图映射\s*:\s*.*$",
-        "",
-        text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
@@ -28724,9 +28337,6 @@ def _append_video_api_ref_mapping(
     for idx, url in enumerate(ordered_refs, start=1):
         if url not in index_map:
             index_map[url] = idx
-        base_url = url.split("?")[0]
-        if base_url not in index_map:
-            index_map[base_url] = idx
 
     image_slots: List[str] = []
     if isinstance(ref_image_url, list):
@@ -28753,135 +28363,49 @@ def _append_video_api_ref_mapping(
     image_slots = [x for x in dict.fromkeys(image_slots) if x]
     video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
     media_slots = image_slots + video_slots
-
-    pairs: List[Tuple[int, str, str]] = []
-
-    # First, always show explicit start/end images if they are mapped and if desired?
-    # Usually this is primarily for mapping entities to reference images for API consumption.
-
-    seen_urls: set[str] = set()
-
-    normalized_text = _normalize_entity_anchor_token(text)
-    if entity_lookup:
-        # Relaxed matching to map any entity in ordered_refs
-        for key, row in entity_lookup.items():
-            norm_key = str(key or "").strip()
-            if not norm_key: continue
-            
-            if norm_key.lower() in {"global style", "camera movement", "action beat chain", "dynamic atmosphere", "lighting style"}:
-                continue
-
-            allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
-            entity_type = str(row.get("entity_type") or "").strip().lower()
-            if entity_type and entity_type not in allowed_types:
-                continue
-
-            image_url = str(row.get("image_url") or "").strip()
-            image_base = image_url.split("?")[0]
-            mapped_idx = index_map.get(image_url) or index_map.get(image_base)
-            if not image_url or mapped_idx is None:
-                continue
-
-            has_ascii = bool(re.search(r"[a-z0-9]", norm_key, flags=re.IGNORECASE))
-            if has_ascii:
-                pattern = rf"(?<![a-z0-9]){re.escape(norm_key)}(?![a-z0-9])"
-                matched = re.search(pattern, normalized_text, flags=re.IGNORECASE) is not None
-            else:
-                matched = norm_key in normalized_text
-            
-            if matched and image_url not in seen_urls:
-                seen_urls.add(image_url)
-                raw_name = str(row.get('name') or '')
-                char_name = raw_name[1:] if raw_name.startswith('@') else raw_name
-                if not char_name:
-                    char_name = norm_key
-                # Anchor injection should follow the asset-level Anchor Description for the matched entity.
-                anchor_text = str(row.get("anchor_description") or "").strip()
-                # Use the actually matched normalized key for replacement so ENV/PROP
-                # using name_en can be replaced consistently with the same match path.
-                replace_name = norm_key or char_name
-                pairs.append((mapped_idx, replace_name, anchor_text))
-    pairs.sort(key=lambda x: x[0])
-
-    inline_tag_matches = re.findall(r"ref_image_url\s*:\s*#(\d+)", source_text, flags=re.IGNORECASE)
-    logger.warning(
-        "[_append_video_api_ref_mapping] refs=%s start_refs=%s keyframes=%s ref_videos=%s entity_lookup=%s inline_tags=%s pairs=%s",
-        len(ordered_refs),
-        len(start_urls),
-        len(keyframe_urls),
-        len(reference_video_urls or []),
-        len(entity_lookup or {}) if isinstance(entity_lookup, dict) else 0,
-        len(inline_tag_matches),
-        len(pairs),
-    )
-
-    if not pairs:
-        logger.warning(
-            "[_append_video_api_ref_mapping] no_pairs_return_original inline_tags=%s media_slots=%s text_has_entity=%s",
-            len(inline_tag_matches),
-            len(media_slots),
-            bool(re.search(r"(?:CHAR|ENV|PROP)\s*:", source_text, flags=re.IGNORECASE)),
-        )
+    if not media_slots:
         return text
 
-    updated_text = text
-    for mapped_idx, entity_name, anchor_text in pairs:
-        prefix = f"参考图{mapped_idx}的"
-        escaped_entity = re.escape(entity_name)
-        prefixed_anchor_patterns = [
-            rf"{re.escape(prefix)}(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"{re.escape(prefix)}[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"{re.escape(prefix)}(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])",
-        ]
-        already_prefixed = any(
-            re.search(pattern, updated_text, flags=re.IGNORECASE) is not None
-            for pattern in prefixed_anchor_patterns
-        )
-        if already_prefixed:
+    regex = re.compile(r"(?:CHAR|ENV|PROP)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
+    entity_tokens: List[str] = []
+    seen_entities: set[str] = set()
+    for m in regex.finditer(text):
+        raw_name = m.group(1) or m.group(2) or ""
+        normalized = _normalize_entity_anchor_token(raw_name)
+        if not normalized or normalized in seen_entities:
             continue
-
-        anchor_patterns = [
-            rf"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-        ]
-
-        replaced = False
-        for pattern in anchor_patterns:
-            def _prepend_prefix(match: re.Match[str]) -> str:
-                token = str(match.group(0) or "")
-                if token.startswith(prefix):
-                    return token
-                return f"{prefix}{token}"
-
-            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, count=1, flags=re.IGNORECASE)
-            if count > 0:
-                updated_text = replaced_text
-                replaced = True
-                break
-
-        if replaced:
+        seen_entities.add(normalized)
+        entity_name = str(raw_name or "").strip()
+        if not entity_name:
             continue
+        token_text = str(m.group(0) or "")
+        token_upper = token_text.upper()
+        if token_upper.startswith("CHAR"):
+            display = f"CHAR:[@{entity_name}]"
+        elif token_upper.startswith("PROP"):
+            display = f"PROP:[{entity_name}]"
+        elif token_upper.startswith("ENV"):
+            display = f"ENV:[{entity_name}]"
+        else:
+            display = f"[{entity_name}]"
+        entity_tokens.append(display)
 
-        # Fallback: prepend marker directly before the first plain entity mention.
-        plain_pattern = rf"(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])"
+    if not entity_tokens:
+        return text
 
-        def _prepend_marker(match: re.Match[str]) -> str:
-            token = str(match.group(0) or "")
-            if token.startswith(prefix):
-                return token
-            return f"{prefix}{token}"
+    pairs: List[str] = []
+    for idx, entity_token in enumerate(entity_tokens):
+        if idx >= len(media_slots):
+            break
+        pairs.append(f"{entity_token}->{media_slots[idx]}")
 
-        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, count=1, flags=re.IGNORECASE)
-        if count > 0:
-            updated_text = replaced_text
+    if not pairs:
+        return text
 
-    logger.warning(
-        "[_append_video_api_ref_mapping] mapped_complete pairs=%s prefixed=%s inline_tags_after=%s",
-        len(pairs),
-        len(re.findall(r"参考图\d+的", updated_text)),
-        len(re.findall(r"ref_image_url\s*:\s*#\d+", updated_text, flags=re.IGNORECASE)),
-    )
-    return updated_text
+    mapping_line = "实体参考映�? " + "; ".join(pairs)
+    if mapping_line in text:
+        return text
+    return f"{text}\n\n{mapping_line}"
 
 
 def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
@@ -28925,7 +28449,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
 
     async def _run_stage_with_retry(coro_factory: Any, max_attempts: int = 3) -> Any:
         last_error: Optional[Exception] = None
-        for attempt in range(1, max(2, max_attempts + 1)):
+        for attempt in range(1, max_attempts + 1):
             if cancel_event and cancel_event.is_set():
                 raise _BatchStopRequested("Stop requested")
             try:
@@ -29064,7 +28588,6 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             normalized_refs,
             normalized_last_frame_url,
             None,
-            entity_lookup=entity_lookup,
         )
 
         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
@@ -29078,7 +28601,6 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 normalized_refs,
                 normalized_last_frame_url,
                 None,
-                entity_lookup=entity_lookup,
             )
             tech["video_prompt_cn"] = video_prompt_cn
             item_db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
@@ -29108,7 +28630,6 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 {"prompt": video_prompt_cn, "type": "zh"}
             ]
         video_req = VideoGenerationRequest(
-            draft_mode=bool(latest.get("draft_mode")),
             prompt=video_prompt,
             multi_prompt=multi_prompt_payload,
             ref_image_url=normalized_refs,
@@ -29124,21 +28645,8 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             system_api_id=system_api_id,
         )
         _release_db_connection(item_db, "shot_media_batch_video")
-        try:
-            callback_ticket_val = f"video-shot-{shot.id}"
-            callback_url_val = str(media_service._resolve_provider_callback_url({}, callback_ticket_val) or "").strip()
-        except Exception:
-            callback_ticket_val = f"video-shot-{shot.id}"
-            callback_url_val = ""
-
         asyncio.run(_run_stage_with_retry(
-            lambda: _run_generate_video(
-                req=video_req,
-                current_user=user_principal,
-                db=item_db,
-                provider_callback_ticket=callback_ticket_val,
-                provider_callback_url=callback_url_val
-            ),
+            lambda: _run_generate_video(req=video_req, current_user=user_principal, db=item_db),
         ))
 
         return {
@@ -29270,7 +28778,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
 
         async def _run_stage_with_retry(coro_factory: Any, stage_label: str, shot_label: str, max_attempts: int = 3) -> Any:
             last_error: Optional[Exception] = None
-            for attempt in range(1, max(2, max_attempts + 1)):
+            for attempt in range(1, max_attempts + 1):
                 if _is_stop_requested():
                     raise _BatchStopRequested("Stop requested")
 
@@ -29558,6 +29066,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             )
                             start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
                             auto_matches = []
+                            if shot.associated_entities:
+                                auto_matches.extend(_collect_associated_entities_refs(shot.associated_entities, entity_lookup))
                             auto_matches.extend([x for x in _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup) if x not in auto_matches])
                             start_refs: List[str] = []
                             if isinstance(tech.get("ref_image_urls"), list):
@@ -29655,6 +29165,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             if isinstance(tech.get("end_ref_image_urls"), list):
                                 refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
                             else:
+                                if shot.associated_entities:
+                                    refs.extend(_collect_associated_entities_refs(shot.associated_entities, entity_lookup))
                                 refs.extend([x for x in _collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup) if x not in refs])
 
                             deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
@@ -29778,7 +29290,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             normalized_refs,
                             normalized_last_frame_url,
                             None,
-                            entity_lookup=entity_lookup,
                         )
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
@@ -29792,7 +29303,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 normalized_refs,
                                 normalized_last_frame_url,
                                 None,
-                                entity_lookup=entity_lookup,
                             )
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
@@ -29822,7 +29332,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 {"prompt": video_prompt_cn, "type": "zh"}
                             ]
                         video_req = VideoGenerationRequest(
-                            draft_mode=bool(latest.get("draft_mode")),
                             prompt=video_prompt,
                             multi_prompt=multi_prompt_payload,
                             ref_image_url=normalized_refs,
@@ -29838,21 +29347,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             system_api_id=system_api_id,
                         )
                         _release_db_connection(db, "shot_media_batch_video")
-                        try:
-                            callback_ticket_val = f"video-shot-{shot.id}"
-                            callback_url_val = str(media_service._resolve_provider_callback_url({}, callback_ticket_val) or "").strip()
-                        except Exception:
-                            callback_ticket_val = f"video-shot-{shot.id}"
-                            callback_url_val = ""
-
                         asyncio.run(_run_stage_with_retry(
-                            lambda: _run_generate_video(
-                                req=video_req,
-                                current_user=user_principal,
-                                db=db,
-                                provider_callback_ticket=callback_ticket_val,
-                                provider_callback_url=callback_url_val
-                            ),
+                            lambda: _run_generate_video(req=video_req, current_user=user_principal, db=db),
                             "video",
                             shot_label,
                         ))
@@ -30030,7 +29526,6 @@ def start_shot_media_batch_job(
         "shot_ids": shot_ids,
         "max_concurrency": batch_max_concurrency,
         "overwrite_existing": bool(req.overwrite_existing),
-        "draft_mode": bool(req.draft_mode),
         "total": len(shot_ids),
         "completed": 0,
         "success": 0,
@@ -31278,26 +30773,3 @@ def apply_entity_analysis(
 async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     _release_db_connection(db, "stream_analyze_scene_before_delegate")
     return await analyze_scene(request=request, current_user=current_user, db=db, async_mode="0", is_stream=True)
-
-class QueueConfigBase(BaseModel):
-    queue_threads: int
-    callback_threads: int
-
-@router.get("/admin/queue/config", response_model=QueueConfigBase)
-async def admin_get_queue_config(current_user: User = Depends(get_current_user)):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    return QueueConfigBase(**_load_queue_config())
-
-@router.put("/admin/queue/config", response_model=QueueConfigBase)
-async def admin_update_queue_config(config: QueueConfigBase, current_user: User = Depends(get_current_user)):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    
-    with open(QUEUE_CONFIG_FILE, "w") as f:
-        json.dump(config.dict(), f)
-    
-    # Reload locally and let user know it applies on restart
-    global _q_conf
-    _q_conf = config.dict()
-    

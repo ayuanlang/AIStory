@@ -25,6 +25,10 @@ class User(Base):
     
     credits = Column(Integer, default=0) # User points/credits
 
+    current_group_id = Column(Integer, ForeignKey("user_groups.id"), nullable=True)
+    current_group = relationship("UserGroup", foreign_keys=[current_group_id])
+    groups = relationship("UserGroupMembership", back_populates="user", cascade="all, delete-orphan")
+
     projects = relationship("Project", back_populates="owner")
     shared_projects = relationship("ProjectShare", back_populates="user", cascade="all, delete-orphan")
     requested_asset_review_threads = relationship(
@@ -44,11 +48,61 @@ class User(Base):
     transactions = relationship("TransactionHistory", back_populates="user")
 
 
+class UserGroup(Base):
+    __tablename__ = "user_groups"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, nullable=False)
+    description = Column(Text, nullable=True)
+    credits = Column(Integer, default=0)
+    
+    owner_id = Column(Integer, ForeignKey("users.id"))
+    owner = relationship("User", foreign_keys=[owner_id])
+    
+    members = relationship("UserGroupMembership", back_populates="group", cascade="all, delete-orphan")
+
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+class UserGroupMembership(Base):
+    __tablename__ = "user_group_memberships"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    group_id = Column(Integer, ForeignKey("user_groups.id"), index=True, nullable=False)
+    
+    permission_level = Column(Integer, default=1)
+    credit_share_limit = Column(Integer, default=0)
+    
+    user = relationship("User", back_populates="groups")
+    group = relationship("UserGroup", back_populates="members")
+
+    created_at = Column(String, default=now_bj_iso)
+
+
+class ProjectGroupCreditAllocation(Base):
+    __tablename__ = "project_group_credit_allocations"
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
+    group_id = Column(Integer, ForeignKey("user_groups.id"), index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    
+    credit_limit = Column(Integer, default=10000) # -1 implies unlimited
+    used_credits = Column(Integer, default=0)
+    granted_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+
+
+
 class TransactionHistory(Base):
     __tablename__ = "transaction_history"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
-    
+
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=True)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=True)
+
     amount = Column(Integer, nullable=False) # Negative for cost, positive for refill
     balance_after = Column(Integer, nullable=False) # Snapshot of balance
     
@@ -59,6 +113,8 @@ class TransactionHistory(Base):
     created_at = Column(String, default=now_bj_iso)
 
     user = relationship("User", back_populates="transactions")
+    project = relationship("Project", foreign_keys=[project_id])
+    episode = relationship("Episode", foreign_keys=[episode_id])
     action_audit = relationship("TransactionAction", foreign_keys="[TransactionAction.transaction_id]", back_populates="ledger_entry", uselist=False)
 
 class SystemLog(Base):
