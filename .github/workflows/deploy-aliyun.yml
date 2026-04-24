@@ -33,6 +33,7 @@ jobs:
               --exclude='./backend/venv' \
               --exclude='./backend/.venv' \
               --exclude='./backend/__pycache__' \
+              --exclude='./deploy.tar.gz' \
               -czf deploy.tar.gz .
 
       - name: 4. Upload to Alibaba Cloud ECS
