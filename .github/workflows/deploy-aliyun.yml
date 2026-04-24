@@ -75,22 +75,40 @@ jobs:
             conda config --set show_channel_urls yes || true
             
             conda create -y -n aistory python=3.13
-            conda activate aistory
             
             echo "--- Installing backend dependencies ---"
-            pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/
-            pip install -r backend/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+            # 使用环境绝对路径直接调用 pip，解决非交互式 bash 下 conda activate 失效的问题
+            /opt/miniconda3/envs/aistory/bin/pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/
+            /opt/miniconda3/envs/aistory/bin/pip install -r backend/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
             
             echo "--- Restarting Service ---"
             # 查找并强杀旧的 Uvicorn 进程
-            pkill -f "uvicorn app.main:app" || true
+            pkill -f "uvicorn" || true
             
             cd backend
             export PORT=8000
             export PUBLIC_BASE_URL=http://${{ secrets.ALIYUN_ECS_IP }}:$PORT
             
-            # 使用环境绝对路径直接启动，彻底摒弃 conda run 带来的会话驻留和信号捕获问题
-            nohup /opt/miniconda3/envs/aistory/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT < /dev/null > ../server.log 2>&1 &
+            # 使用 Systemd 托管后台服务，一劳永逸解决所有 SSH 会话挂起和后台进程被杀问题
+            cat <<EOF > /etc/systemd/system/aistory-backend.service
+            [Unit]
+            Description=AIStory Backend FastAPI Service
+            After=network.target
+
+            [Service]
+            User=root
+            WorkingDirectory=/opt/AIStory/backend
+            Environment="PORT=$PORT"
+            Environment="PUBLIC_BASE_URL=$PUBLIC_BASE_URL"
+            ExecStart=/opt/miniconda3/envs/aistory/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT
+            Restart=always
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
             
-            sleep 3
-            echo "--- Deployment successful! Service is running on port $PORT ---"
+            systemctl daemon-reload
+            systemctl enable aistory-backend
+            systemctl restart aistory-backend
+            
+            echo "--- Deployment successful! Service is running via systemd ---"
