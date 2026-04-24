@@ -93,22 +93,22 @@ jobs:
             export PUBLIC_BASE_URL=http://${{ secrets.ALIYUN_ECS_IP }}:$PORT
             
             # 使用 Systemd 托管后台服务，一劳永逸解决所有 SSH 会话挂起和后台进程被杀问题
-            cat <<EOF > /etc/systemd/system/aistory-backend.service
-            [Unit]
-            Description=AIStory Backend FastAPI Service
-            After=network.target
+            cat << EOF > /etc/systemd/system/aistory-backend.service
+[Unit]
+Description=AIStory Backend FastAPI Service
+After=network.target
 
-            [Service]
-            User=root
-            WorkingDirectory=/opt/AIStory/backend
-            Environment="PORT=$PORT"
-            Environment="PUBLIC_BASE_URL=$PUBLIC_BASE_URL"
-            ExecStart=/opt/miniconda3/envs/aistory/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT
-            Restart=always
+[Service]
+User=root
+WorkingDirectory=/opt/AIStory/backend
+Environment="PORT=$PORT"
+Environment="PUBLIC_BASE_URL=$PUBLIC_BASE_URL"
+ExecStart=/opt/miniconda3/envs/aistory/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT
+Restart=always
 
-            [Install]
-            WantedBy=multi-user.target
-            EOF
+[Install]
+WantedBy=multi-user.target
+EOF
             
             systemctl daemon-reload
             systemctl enable aistory-backend
