@@ -89,7 +89,8 @@ jobs:
             export PORT=8000
             export PUBLIC_BASE_URL=http://${{ secrets.ALIYUN_ECS_IP }}:$PORT
             
-            # 使用 conda 运行 uvicorn
-            nohup conda run --no-capture-output -n aistory env PORT=$PORT PUBLIC_BASE_URL=$PUBLIC_BASE_URL uvicorn app.main:app --host 0.0.0.0 --port $PORT > ../server.log 2>&1 &
+            # 完整重定向 stdin/stdout/stderr 避免 SSH 挂起导致 Github Actions 强行终止（143 错误）
+            nohup conda run --no-capture-output -n aistory env PORT=$PORT PUBLIC_BASE_URL=$PUBLIC_BASE_URL uvicorn app.main:app --host 0.0.0.0 --port $PORT < /dev/null > ../server.log 2>&1 &
             
+            sleep 3
             echo "--- Deployment successful! Service is running on port $PORT ---"
