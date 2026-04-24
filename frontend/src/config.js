@@ -14,6 +14,7 @@ if (isRenderFrontend) {
 export const BASE_URL = resolvedBaseUrl;
 export const FALLBACK_BASE_URL = RENDER_BACKEND_FALLBACK;
 // For media assets (e.g. /uploads/*), use the backend host heavily.
-export const ASSET_BASE_URL = BASE_URL || FALLBACK_BASE_URL;
+// When accessed from the unified FastAPI origin, empty strings ('') route to the current origin.
+export const ASSET_BASE_URL = BASE_URL;
 export const API_URL = `${BASE_URL}/api/v1`;
 export const FALLBACK_API_URL = `${FALLBACK_BASE_URL}/api/v1`;
