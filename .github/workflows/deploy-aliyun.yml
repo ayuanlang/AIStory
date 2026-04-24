@@ -113,6 +113,8 @@ jobs:
             
             systemctl daemon-reload
             systemctl enable aistory-backend
-            systemctl restart aistory-backend
+            
+            # 使用 no-block 模式重启 systemd 防止阻塞 SSH 会话，或者放到后台执行
+            systemctl restart aistory-backend --no-block
             
             echo "--- Deployment successful! Service is running via systemd ---"
