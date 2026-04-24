@@ -655,6 +655,19 @@ def check_and_migrate_tables(*, critical_only: bool = False):
         except Exception as e:
             logger.error(f"Failed to ensure critical system_api_settings columns: {e}")
 
+        try:
+            _ensure_missing_table_columns("users", User, is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure users columns: {e}")
+
+        try:
+            if hasattr(models, "UserGroup"):
+                _ensure_missing_table_columns("user_groups", models.UserGroup, is_postgres=is_postgres)
+            if hasattr(models, "UserGroupMembership"):
+                _ensure_missing_table_columns("user_group_memberships", models.UserGroupMembership, is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure user group columns: {e}")
+
         if critical_only:
             logger.info("Skipping non-critical legacy migrations during startup bootstrap")
             return
