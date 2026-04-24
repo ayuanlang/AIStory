@@ -73,6 +73,9 @@ jobs:
             conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/ || true
             conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/ || true
             conda config --set show_channel_urls yes || true
+            conda config --remove channels defaults || true
+            conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
+            conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
             
             conda create -y -n aistory python=3.13
             
