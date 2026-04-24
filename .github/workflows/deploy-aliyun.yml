@@ -3,7 +3,7 @@ name: Dual Deploy CI/CD (Render + Alibaba Cloud Native ECS)
 on:
   push:
     branches:
-      - main  # 当推送到 main 分支时自动触发
+      - master  # 已经为您改为 master 分支
 
 jobs:
   deploy-to-aliyun-ecs:
