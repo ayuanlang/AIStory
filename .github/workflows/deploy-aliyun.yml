@@ -57,10 +57,17 @@ jobs:
             tar -xzf deploy.tar.gz
             rm deploy.tar.gz
             
-            echo "--- Setting up Python virtual environment ---"
-            # 请确保服务器已经安装 Python 3 或 Python 3.13
-            python3 -m venv .venv
-            source .venv/bin/activate
+            echo "--- Setting up Miniconda ---"
+            if [ ! -d "/opt/miniconda3" ]; then
+              wget https://mirrors.aliyun.com/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
+              bash miniconda.sh -b -p /opt/miniconda3
+              rm miniconda.sh
+            fi
+            
+            # 初始化conda并创建/激活隔离的环境
+            source /opt/miniconda3/bin/activate
+            conda create -y -n aistory python=3.13
+            conda activate aistory
             
             echo "--- Installing backend dependencies ---"
             pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/
@@ -73,8 +80,7 @@ jobs:
             cd backend
             export PORT=8000
             
-            # 使用 nohup 在后台启动服务。
-            # (强烈建议您后续在服务器配置 systemd/pm2 来守护此进程)
-            nohup uvicorn app.main:app --host 0.0.0.0 --port $PORT > ../server.log 2>&1 &
+            # 使用 conda 运行 uvicorn
+            nohup conda run -n aistory uvicorn app.main:app --host 0.0.0.0 --port $PORT > ../server.log 2>&1 &
             
             echo "--- Deployment successful! Service is running on port $PORT ---"
