@@ -78,7 +78,7 @@ def _build_cached_principal_from_payload(payload: dict) -> dict:
     if avatar_value is not None:
         avatar_value = str(avatar_value).strip() or None
     return {
-        "id": int(payload.get("uid") or payload.get("id") or 0),
+        "id": int(payload.get("uid") or payload.get("user_id") or payload.get("id") or 0),
         "username": str(payload.get("sub") or payload.get("uname") or "").strip(),
         "email": email_value,
         "full_name": full_name_value,
@@ -252,7 +252,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-        uid_raw = payload.get("uid")
+        uid_raw = payload.get("uid") or payload.get("user_id") or payload.get("id")
         try:
             token_uid = int(uid_raw) if uid_raw is not None else 0
         except Exception:

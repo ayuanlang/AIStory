@@ -4621,7 +4621,9 @@ def get_user_preferences(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        user_row = db.query(User).filter(User.id == current_user.id).first()
+        user_row = db.query(User).filter(
+            or_(User.id == getattr(current_user, "id", 0), User.username == current_user.username)
+        ).first()
         if not user_row:
             raise HTTPException(status_code=404, detail="User not found")
         normalized = _normalize_user_preferences(getattr(user_row, "preferences", {}) or {})
@@ -4639,7 +4641,9 @@ def update_user_preferences(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    user_row = db.query(User).filter(User.id == current_user.id).first()
+    user_row = db.query(User).filter(
+        or_(User.id == getattr(current_user, "id", 0), User.username == current_user.username)
+    ).first()
     if not user_row:
         raise HTTPException(status_code=404, detail="User not found")
 
