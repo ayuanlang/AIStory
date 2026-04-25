@@ -3040,7 +3040,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [projectId, activeEpisode?.id, llmRawResultContent, normalizeLlmMarkdownTable]);
 
-    const waitForEpisodeAnalysisResultUpdate = useCallback(async ({ baselineText = '', timeoutMs = 600000, intervalMs = 3500 } = {}) => {
+    const waitForEpisodeAnalysisResultUpdate = useCallback(async ({ baselineText = '', timeoutMs = 600000, intervalMs = 3500, resultField = 'ai_scene_analysis_result' } = {}) => {
         if (!projectId || !activeEpisode?.id) return '';
         const base = String(baselineText || '').trim();
         const deadline = Date.now() + Math.max(30000, Number(timeoutMs || 600000));
@@ -3049,7 +3049,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 const eps = await fetchEpisodes(projectId);
                 const fresh = (eps || []).find(e => e.id === activeEpisode.id);
-                const dbText = String(fresh?.ai_scene_analysis_result || '').trim();
+                // Dynamically check the target field
+                const dbText = String((fresh && fresh[resultField]) || '').trim();
                 if (dbText && dbText !== base) {
                     return dbText;
                 }
@@ -3061,7 +3062,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return '';
     }, [projectId, activeEpisode?.id]);
 
-    const awaitAnalyzeSceneWithRecovery = useCallback(async (invokeAnalyze, { startedAt = Date.now(), baselineText = '' } = {}) => {
+    const awaitAnalyzeSceneWithRecovery = useCallback(async (invokeAnalyze, { startedAt = Date.now(), baselineText = '', resultField = 'ai_scene_analysis_result' } = {}) => {
         let settled = false;
         let resolvedValue = null;
         let resolvedError = null;
@@ -3083,6 +3084,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 baselineText,
                 timeoutMs: 8000,
                 intervalMs: 3000,
+                resultField,
             });
             if (recoveredText) {
                 if (onLog) {
@@ -3356,7 +3358,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     null,
                     "2_pass_generate_assets"
                 ),
-                { startedAt: Date.now(), baselineText: '' }
+                { startedAt: Date.now(), baselineText: activeEpisode?.ai_entity_design_result || '', resultField: 'ai_entity_design_result' }
             );
 
             const analyzedText = extractAnalysisTextFromResult(result);
@@ -3369,7 +3371,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
                     onLog?.(`[Asset Gen Tracking] Warning: AI did not return a valid Entities JSON block. Skipping import to prevent overwriting index.`, "warning");
-                    throw new Error("第二阶段未返回可导入的具体实体数据。AI并未输出正确的JSON资产格式，请查阅原文后重试。");
+                    throw new Error("AI 引擎在整理出场名单时开小差了，未能返回标准数据表。请点击查阅原文检查，是否可以手动重新生成。");
                 } else {
                     // Automatically import the generated subjects
                     const sceneImportReport = await doImportText(analyzedText, 'json', {
@@ -3436,7 +3438,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 const result = await awaitAnalyzeSceneWithRecovery(
                     () => waitForAsyncTask(marker.taskId, { interval: 2500, timeout: remainingTimeoutMs }),
-                    { startedAt, baselineText: '' }
+                    { startedAt, baselineText: activeEpisode?.ai_entity_design_result || '', resultField: 'ai_entity_design_result' }
                 );
                 const analyzedText = extractAnalysisTextFromResult(result);
                 setLlmAssetRawResultContent(analyzedText);
@@ -3483,7 +3485,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const skippedCount = sceneImportReport?.skippedSubjectItems?.length || 0;
                         setAnalysisFlowStatus({
                             phase: 'completed',
-                            message: t(`🎉 第二阶段(资产生成)恢复成功！自动补充了 ${createdCount} 个资产 (跳过 ${skippedCount} 个)。`, `Phase 2 recovered successfully! Created ${createdCount} assets (skipped ${skippedCount}).`)
+                            message: t(`🎉 恢复成功！系统回溯了进度，顺利为您生成了 ${createdCount} 个全新资产（有 ${skippedCount} 个已存在从而跳过）。`, `Recovery successful. Generated ${createdCount} new assets (skipped ${skippedCount}).`)
                         });
                     }
                 } else {
@@ -3660,10 +3662,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们成功搞定了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
-                            : t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们自动补充了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : t('✅ 工作圆满完成！未发现缺失的资产。', 'Analysis completed: no missing entities detected, workflow finished.'),
+                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
             });
 
             clearAnalysisTaskMarker(activeEpisode.id);
@@ -4843,6 +4845,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
             const bypassConfirmed = true;
             if (bypassConfirmed) {
+                // Phase 2 Check: if it already exists, do not initiate again
+                if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: "🎉 专属实体资产定制均已存在，无需重复生成！"
+                    });
+                    if (onLog) onLog("AI Analysis bypassed entirely; both phases are already completed.");
+                    return;
+                }
+                // Phase 2 Check: if it already exists, do not initiate again
+                if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: "🎉 专属实体资产定制均已存在，无需重复生成！"
+                    });
+                    if (onLog) onLog("AI Analysis bypassed entirely; both phases are already completed.");
+                    return;
+                }
                 const startedAt = Date.now();
                 setAnalysisUiReport({
                     status: 'running',
@@ -4878,7 +4898,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                     setAnalysisFlowStatus({
                         phase: 'completed',
-                        message: "🎉 补充实体资产生成完毕！",
+                        message: "🎉 专属实体资产定制完毕，可随时投产使用！",
                     });
 
                     setAnalysisUiReport({
@@ -5158,10 +5178,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们成功搞定了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
-                            : t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们自动补充了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : t('✅ 工作圆满完成！未发现缺失的资产。', 'Analysis completed: no missing entities detected, workflow finished.'),
+                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
             });
 
             if (onLog) onLog("AI Analysis applied and saved.");
@@ -5290,6 +5310,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
             const bypassConfirmed = true;
             if (bypassConfirmed) {
+                // Phase 2 Check: if it already exists, do not initiate again
+                if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: "🎉 专属实体资产定制均已存在，无需重复生成！"
+                    });
+                    if (onLog) onLog("AI Analysis bypassed entirely; both phases are already completed.");
+                    return;
+                }
+                // Phase 2 Check: if it already exists, do not initiate again
+                if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: "🎉 专属实体资产定制均已存在，无需重复生成！"
+                    });
+                    if (onLog) onLog("AI Analysis bypassed entirely; both phases are already completed.");
+                    return;
+                }
                 const startedAt = Date.now();
                 setAnalysisUiReport({
                     status: 'running',
@@ -5325,7 +5363,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                     setAnalysisFlowStatus({
                         phase: 'completed',
-                        message: "🎉 补充实体资产生成完毕！",
+                        message: "🎉 专属实体资产定制完毕，可随时投产使用！",
                     });
 
                     setAnalysisUiReport({
@@ -5595,10 +5633,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们成功搞定了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated}, failed ${postImportSupplementFailed}, skipped ${postImportSupplementSkipped}.`)
-                            : t(`🎉 报告！发现 ${postImportMissingItems} 个需要补充的资产，我们自动补充了 ${postImportSupplementCreated} 个（跳过 ${postImportSupplementSkipped} 个）。`, `Analysis completed: ${postImportMissingItems} missing entities were detected. Auto-supplement created ${postImportSupplementCreated} (skipped ${postImportSupplementSkipped}).`)
+                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : t('✅ 工作圆满完成！未发现缺失的资产。', 'Analysis completed: no missing entities detected, workflow finished.'),
+                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
             });
 
             setShowAnalysisModal(false);

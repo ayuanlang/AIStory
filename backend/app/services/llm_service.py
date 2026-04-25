@@ -154,7 +154,7 @@ You have access to the following tools:
          - `tasks`: (array of strings, optional)
 
 7. `recommend_model`
-     - Use this when the user describes requirements for a model (e.g. "I need a fast video model", "推荐一个高清图片模型", "哪个模型适合生成动漫风格").
+     - Use this when the user describes requirements for a model (e.g. "I need a fast video model", "推荐一个高清图片模�?, "哪个模型适合生成动漫风格").
      - Searches available system API models by category, modality, and tags, then uses LLM to rank and recommend.
      - Parameters:
          - `requirement`: (string, required) User's description of what they need.
@@ -170,9 +170,9 @@ You have access to the following tools:
      - This replaces the user's current active model in the same category.
 
 CONTEXT DATA:
-The `Current Project Context` system message contains a field `my_active_api_settings` — an array of the user's currently activated API settings across all categories (LLM, Image, Video, etc.).
+The `Current Project Context` system message contains a field `my_active_api_settings` �?an array of the user's currently activated API settings across all categories (LLM, Image, Video, etc.).
 Each item includes: category, provider, model, name, and api_pricing (unit_type, cost, cost_input, cost_output in platform credits where 1 credit = CNY 0.01).
-When the user asks about their current models, API settings, or pricing, answer directly from this context data — no tool call is needed.
+When the user asks about their current models, API settings, or pricing, answer directly from this context data �?no tool call is needed.
 When the user asks to recommend, switch, or change models, use `recommend_model` first, then `activate_model` after user confirmation.
 
 RESPONSE FORMAT:
@@ -215,9 +215,9 @@ class LLMService:
     def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
         vendor = self._vendor_label(provider)
         detail = str(reason or "unknown error").strip()
-        if "供应商调用失败" in detail:
+        if "供应商调用失�? in detail:
             return detail
-        return f"{vendor}供应商调用失败: {detail}"
+        return f"{vendor}供应商调用失�? {detail}"
 
     def _flatten_transport_error_text(self, error: Any) -> str:
         if error is None:
@@ -311,7 +311,7 @@ class LLMService:
         endpoint = str(url or "").strip()
         model_text = str(model or "").strip() or "unknown"
         message = (
-            f"{vendor} 上游连接在响应前中断，无法确认请求是否已被受理；系统已停止自动重试以避免重复生成或重复扣费。"
+            f"{vendor} 上游连接在响应前中断，无法确认请求是否已被受理；系统已停止自动重试以避免重复生成或重复扣费�?
             f" model={model_text} endpoint={endpoint} 原始错误: {detail}"
         )
         raise AmbiguousLLMTransportError(message)
@@ -368,7 +368,7 @@ class LLMService:
         cleaned = re.sub(r"<think\b[^>]*>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
         # Strip orphan </think> tags
         cleaned = re.sub(r"</think>", "", cleaned, flags=re.IGNORECASE)
-        # Strip unclosed <think> blocks — consume content up to JSON ({) or markdown (```) boundary, or end of string
+        # Strip unclosed <think> blocks �?consume content up to JSON ({) or markdown (```) boundary, or end of string
         cleaned = re.sub(r"<think\b[^>]*>(?:(?!\{|```)[\s\S])*", "", cleaned, flags=re.IGNORECASE)
 
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -519,7 +519,7 @@ class LLMService:
         return normalized
 
     async def _raw_kie_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
-        """KIE LLM — OpenAI-compatible chat/completions with model in URL path."""
+        """KIE LLM �?OpenAI-compatible chat/completions with model in URL path."""
         cfg = dict(extra_config or {})
 
         root, resolved_model, url = self._resolve_kie_llm_url(base_url, model)
@@ -653,7 +653,7 @@ class LLMService:
         except Exception:
             pass
 
-        # Standard OpenAI-compatible response — return as-is
+        # Standard OpenAI-compatible response �?return as-is
         _debug_log(f"[DEBUG][LLM][KIE] Done | model={resolved_model} usage={data.get('usage', {})}")
         return data
 
@@ -966,42 +966,42 @@ class LLMService:
 
         parts: List[str] = []
         parts.append(
-            f"LLM 返回摘要：供应商={self._vendor_label(provider)}，模型={str(model or full_response.get('model') or 'unknown')}，HTTP={status_code}。"
+            f"LLM 返回摘要：供应商={self._vendor_label(provider)}，模�?{str(model or full_response.get('model') or 'unknown')}，HTTP={status_code}�?
         )
 
         if status_code == 200:
-            parts.append("接口调用成功。")
+            parts.append("接口调用成功�?)
         else:
-            parts.append("接口返回异常状态。")
+            parts.append("接口返回异常状态�?)
 
         if self._is_blocked_response(full_response):
-            parts.append("本次返回被内容安全策略拦截。")
+            parts.append("本次返回被内容安全策略拦截�?)
         elif self._is_length_limited_finish_reason(finish_reason):
-            parts.append("本次响应因长度上限停止，当前分段可能不完整；是否形成最终缺失，需要结合后续续写或业务完整性校验判断。")
+            parts.append("本次响应因长度上限停止，当前分段可能不完整；是否形成最终缺失，需要结合后续续写或业务完整性校验判断�?)
         elif finish_reason_norm in {"stop", "completed", "complete", "end_turn"}:
-            parts.append("模型正常结束返回。")
+            parts.append("模型正常结束返回�?)
         elif finish_reason_norm:
-            parts.append(f"结束原因={finish_reason_norm}。")
+            parts.append(f"结束原因={finish_reason_norm}�?)
         else:
-            parts.append("未返回明确的结束原因。")
+            parts.append("未返回明确的结束原因�?)
 
         if output_chars > 0:
-            parts.append(f"已提取到正文，长度约 {output_chars} 个字符。")
+            parts.append(f"已提取到正文，长度约 {output_chars} 个字符�?)
         else:
-            parts.append("未提取到可用正文。")
+            parts.append("未提取到可用正文�?)
             if first_keys:
-                parts.append(f"首个 choice 字段={first_keys}。")
+                parts.append(f"首个 choice 字段={first_keys}�?)
 
         if total_tokens == 0 and prompt_tokens == 0 and completion_tokens == 0:
-            parts.append("token 统计全部为 0，这通常表示供应商没有正确回传 usage，不能据此判断真实消耗。")
+            parts.append("token 统计全部�?0，这通常表示供应商没有正确回�?usage，不能据此判断真实消耗�?)
         else:
             parts.append(
-                f"token 统计：输入={prompt_tokens}，输出={completion_tokens}，合计={total_tokens or (prompt_tokens + completion_tokens)}。"
+                f"token 统计：输�?{prompt_tokens}，输�?{completion_tokens}，合�?{total_tokens or (prompt_tokens + completion_tokens)}�?
             )
 
         if extraction.get("choices_count") and output_chars == 0:
             parts.append(
-                f"本次返回包含 {extraction.get('choices_count')} 个 choice，但正文抽取结果为空，建议检查供应商响应结构或日志截断。"
+                f"本次返回包含 {extraction.get('choices_count')} �?choice，但正文抽取结果为空，建议检查供应商响应结构或日志截断�?
             )
 
         return " ".join(parts)
@@ -1024,51 +1024,51 @@ class LLMService:
         except Exception:
             status = 0
 
-        reason = "上游接口返回异常。"
+        reason = "上游接口返回异常�?
         if status == 400:
-            reason = "请求参数不符合供应商要求，供应商拒绝处理。"
+            reason = "请求参数不符合供应商要求，供应商拒绝处理�?
         elif status == 401:
-            reason = "供应商鉴权失败，通常是 API Key 无效、缺失或已失效。"
+            reason = "供应商鉴权失败，通常�?API Key 无效、缺失或已失效�?
         elif status == 402:
-            reason = "供应商侧余额不足或当前账号无权调用该模型。"
+            reason = "供应商侧余额不足或当前账号无权调用该模型�?
         elif status == 403:
-            reason = "供应商拒绝访问，通常是权限、地域或模型白名单限制。"
+            reason = "供应商拒绝访问，通常是权限、地域或模型白名单限制�?
         elif status == 404:
-            reason = "供应商接口地址或模型路径不存在，可能是路由或模型名配置错误。"
+            reason = "供应商接口地址或模型路径不存在，可能是路由或模型名配置错误�?
         elif status == 408:
-            reason = "供应商处理超时，本次请求没有在时限内完成。"
+            reason = "供应商处理超时，本次请求没有在时限内完成�?
         elif status == 409:
-            reason = "供应商返回冲突状态，通常表示任务状态或参数组合不被接受。"
+            reason = "供应商返回冲突状态，通常表示任务状态或参数组合不被接受�?
         elif status == 413:
-            reason = "请求内容过大，超出了供应商允许的输入限制。"
+            reason = "请求内容过大，超出了供应商允许的输入限制�?
         elif status == 422:
-            reason = "请求结构可解析，但字段值不符合供应商要求。"
+            reason = "请求结构可解析，但字段值不符合供应商要求�?
         elif status == 429:
-            reason = "供应商限流或并发超限，需要稍后重试。"
+            reason = "供应商限流或并发超限，需要稍后重试�?
         elif status == 500:
-            reason = "供应商服务内部报错，不是当前业务参数可以直接修复的问题。"
+            reason = "供应商服务内部报错，不是当前业务参数可以直接修复的问题�?
         elif status == 502:
-            reason = "供应商网关或上游链路异常，本次调用未得到有效结果。"
+            reason = "供应商网关或上游链路异常，本次调用未得到有效结果�?
         elif status == 503:
-            reason = "供应商服务暂时不可用，通常是维护、过载或短时故障。"
+            reason = "供应商服务暂时不可用，通常是维护、过载或短时故障�?
         elif status == 504:
-            reason = "供应商网关等待上游超时，本次调用未在时限内完成。"
+            reason = "供应商网关等待上游超时，本次调用未在时限内完成�?
 
         body_hint = ""
         if body:
             if "insufficient" in body_lower or "余额" in body or "quota" in body_lower:
-                body_hint = "返回内容提示额度、余额或配额不足。"
+                body_hint = "返回内容提示额度、余额或配额不足�?
             elif "invalid api key" in body_lower or "unauthorized" in body_lower or "authentication" in body_lower:
-                body_hint = "返回内容提示鉴权失败。"
+                body_hint = "返回内容提示鉴权失败�?
             elif "rate limit" in body_lower or "too many requests" in body_lower:
-                body_hint = "返回内容提示触发了限流。"
+                body_hint = "返回内容提示触发了限流�?
             elif "model" in body_lower and ("not found" in body_lower or "does not exist" in body_lower):
-                body_hint = "返回内容提示模型不存在或当前账号不可用。"
+                body_hint = "返回内容提示模型不存在或当前账号不可用�?
 
-        summary = f"LLM 异常摘要：供应商={vendor}，模型={model_text}，HTTP={status or status_code}。{reason}"
+        summary = f"LLM 异常摘要：供应商={vendor}，模�?{model_text}，HTTP={status or status_code}。{reason}"
         if body_hint:
             summary += f" {body_hint}"
-        summary += " 建议先检查供应商配置、模型名、额度和限流状态。"
+        summary += " 建议先检查供应商配置、模型名、额度和限流状态�?
         return summary
 
     def _build_human_readable_transport_error_summary(
@@ -1085,18 +1085,18 @@ class LLMService:
         detail = str(error_text or "").strip()
 
         if kind == "timeout":
-            reason = "请求已经发出，但在等待供应商返回时超时，没有拿到有效响应。"
+            reason = "请求已经发出，但在等待供应商返回时超时，没有拿到有效响应�?
         elif kind == "proxy_retry_timeout":
-            reason = "代理链路失败后已切换直连重试，但直连仍然超时，没有拿到有效响应。"
+            reason = "代理链路失败后已切换直连重试，但直连仍然超时，没有拿到有效响应�?
         elif kind == "connection":
-            reason = "请求未能稳定连接到供应商，可能是网络、证书、代理或上游服务不稳定。"
+            reason = "请求未能稳定连接到供应商，可能是网络、证书、代理或上游服务不稳定�?
         else:
-            reason = "请求在拿到 HTTP 响应之前就失败了，未形成可解析的返回结果。"
+            reason = "请求在拿�?HTTP 响应之前就失败了，未形成可解析的返回结果�?
 
-        summary = f"LLM 异常摘要：供应商={vendor}，模型={model_text}。{reason}"
+        summary = f"LLM 异常摘要：供应商={vendor}，模�?{model_text}。{reason}"
         if detail:
-            summary += f" 原始异常={detail[:180]}。"
-        summary += " 建议检查网络连通性、代理配置、供应商服务状态与超时设置。"
+            summary += f" 原始异常={detail[:180]}�?
+        summary += " 建议检查网络连通性、代理配置、供应商服务状态与超时设置�?
         return summary
 
     async def analyze_multimodal(self, prompt: str, image_url: str, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -1214,7 +1214,7 @@ class LLMService:
                     model,
                     str(e)[:200],
                 )
-                return {"content": "Error: 服务正在关闭或重启，线程池暂不可用，请稍后重试。", "usage": {}}
+                return {"content": "Error: 服务正在关闭或重启，线程池暂不可用，请稍后重试�?, "usage": {}}
             error_kind = "exception"
             if isinstance(e, requests.exceptions.Timeout):
                 error_kind = "timeout"
@@ -2033,7 +2033,7 @@ class LLMService:
         })
 
         def _request(bypass_proxy=False, connect_timeout=None):
-            read_timeout = DEFAULT_LLM_TIMEOUT_SECONDS
+            read_timeout = int((extra_config or {}).get('timeout') or max(600, DEFAULT_LLM_TIMEOUT_SECONDS))
             c_timeout = connect_timeout or max(3, DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS)
             kwargs = {
                 "json": payload,
@@ -2057,7 +2057,7 @@ class LLMService:
                     url,
                     str(e)[:200],
                 )
-                raise Exception(self._vendor_failed_message(provider, "服务正在关闭或重启，线程池暂不可用，请稍后重试"))
+                raise Exception(self._vendor_failed_message(provider, "服务正在关闭或重启，线程池暂不可用，请稍后重�?))
             raise
         except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
             _debug_log(f"[DEBUG][LLM][{provider}] Connection failed ({str(e)[:120]}), retrying without proxy...", "warning")
@@ -2319,8 +2319,8 @@ class LLMService:
         """Async generator yielding streaming events from an OpenAI-compatible API.
 
         Yields dicts:
-            {"type": "token", "content": "..."}   – text delta
-            {"type": "done",  "usage": {...}}      – stream finished
+            {"type": "token", "content": "..."}   �?text delta
+            {"type": "done",  "usage": {...}}      �?stream finished
         """
         original_base_url = base_url
         if not base_url:
@@ -2406,7 +2406,7 @@ class LLMService:
         )
 
         usage: Dict[str, Any] = {}
-        timeout = httpx.Timeout(connect=30.0, read=float(DEFAULT_LLM_TIMEOUT_SECONDS), write=30.0, pool=30.0)
+        timeout = httpx.Timeout(connect=30.0, read=max(600.0, float(DEFAULT_LLM_TIMEOUT_SECONDS)), write=30.0, pool=30.0)
 
         try:
             print(f"[STREAM-DEBUG] _raw_llm_request_stream: opening httpx connection to {url}...")
@@ -2556,8 +2556,8 @@ class LLMService:
         """Streaming version of analyze_intent.
 
         Yields:
-            {"type": "token", "content": "..."}  – text deltas from the LLM
-            {"type": "result", "reply": "...", "plan": [...], "usage": {...}}  – final parsed result
+            {"type": "token", "content": "..."}  �?text deltas from the LLM
+            {"type": "result", "reply": "...", "plan": [...], "usage": {...}}  �?final parsed result
         """
         if not config:
             yield {"type": "result", "reply": "No LLM config provided.", "plan": [], "usage": {}}

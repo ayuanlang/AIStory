@@ -1,0 +1,450 @@
+                else:
+                    # Keep data URI as fallback when upload endpoint is unavailable.
+                    converted_image_urls.append(ref_text)
+
+            if converted_image_urls:
+                veo_image_urls = converted_image_urls
+
+            payload: Dict[str, Any] = {
+                "prompt": prompt,
+                "model": veo_model,
+                "generationType": generation_type,
+            }
+
+            if generation_type == "REFERENCE_2_VIDEO":
+                if normalized_ar not in {"16:9", "9:16"}:
+                    logger.warning(
+                        "KIE Veo aspect ratio adjusted | from=%s to=16:9 reason=reference_mode_requires_16_9_or_9_16",
+                        normalized_ar,
+                    )
+                    normalized_ar = "16:9"
+
+            if normalized_ar:
+                payload["aspect_ratio"] = normalized_ar
+            if duration:
+                try:
+                    payload["duration"] = int(duration)
+                except Exception:
+                    pass
+            if veo_image_urls:
+                payload["imageUrls"] = veo_image_urls
+
+            seeds_value = tool_conf.get("seeds")
+            try:
+                if seeds_value is not None and str(seeds_value).strip() != "":
+                    seeds_int = int(seeds_value)
+                    if 10000 <= seeds_int <= 99999:
+                        payload["seeds"] = seeds_int
+            except Exception:
+                pass
+
+            if "enableTranslation" in tool_conf:
+                payload["enableTranslation"] = bool(tool_conf.get("enableTranslation"))
+
+            payload["watermark"] = False
+
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            logger.info(
+                "KIE Veo submit payload | endpoint=%s model=%s generationType=%s aspect_ratio=%s duration=%s image_count=%s callback_enabled=%s seeds=%s enableTranslation=%s watermark=%s",
+                submit_url,
+                payload.get("model"),
+                payload.get("generationType"),
+                payload.get("aspect_ratio"),
+                payload.get("duration"),
+                len(payload.get("imageUrls") or []),
+                bool(payload.get("callBackUrl")),
+                payload.get("seeds"),
+                payload.get("enableTranslation"),
+                bool(payload.get("watermark")),
+            )
+            try:
+                image_sizes = [self._data_uri_image_size_bytes(item) or 0 for item in (payload.get("imageUrls") or [])]
+                hosted_count = sum(1 for item in (payload.get("imageUrls") or []) if str(item or "").startswith("http"))
+                logger.info(
+                    "KIE Veo image payload bytes | per_image=%s total=%s hosted_count=%s",
+                    image_sizes,
+                    sum(image_sizes),
+                    hosted_count,
+                )
+            except Exception:
+                pass
+        elif use_runway_api:
+            # Handle Runway payload (generate-ai-video or aleph)
+            payload = {
+                "prompt": prompt,
+                "duration": "10" if str(duration) in {"10"} else "5",
+                "quality": "480p" if tool_conf.get("draft") or tool_conf.get("draft_mode") else ("1080p" if "1080" in str(tool_conf.get("resolution") or "") else "720p"),
+                "aspectRatio": normalized_ar if normalized_ar in {"16:9", "4:3", "1:1", "3:4", "9:16"} else "16:9",
+                "waterMark": "",
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+            if resolved_refs:
+                payload["imageUrl"] = resolved_refs[0]
+            
+            logger.info("KIE Runway submit payload | endpoint=%s", submit_url)
+        elif use_4o_image_api:
+            # Handle 4o image payload
+            allowed_4o_sizes = {"1:1", "3:2", "2:3"}
+            size_candidate = str(tool_conf.get("size") or payload_input.get("aspect_ratio") or "").strip()
+            if size_candidate not in allowed_4o_sizes:
+                size_candidate = "1:1"
+
+            prompt_candidate = str(prompt or "").strip()
+            fallback_model_value = str(tool_conf.get("fallbackModel") or "FLUX_MAX").strip().upper()
+            if fallback_model_value not in {"GPT_IMAGE_1", "FLUX_MAX"}:
+                fallback_model_value = "FLUX_MAX"
+
+            payload = {
+                "size": size_candidate,
+                "isEnhance": bool(tool_conf.get("isEnhance")),
+                "uploadCn": bool(tool_conf.get("uploadCn")),
+                "enableFallback": bool(tool_conf.get("enableFallback")),
+                "fallbackModel": fallback_model_value,
+            }
+
+            if prompt_candidate:
+                payload["prompt"] = prompt_candidate
+
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            if resolved_refs:
+                payload["filesUrl"] = resolved_refs[:5]
+
+            file_url_candidate = str(tool_conf.get("fileUrl") or tool_conf.get("file_url") or "").strip()
+            if file_url_candidate and "filesUrl" not in payload:
+                payload["fileUrl"] = file_url_candidate
+
+            mask_url_candidate = str(tool_conf.get("maskUrl") or tool_conf.get("mask_url") or "").strip()
+            if mask_url_candidate and len(payload.get("filesUrl") or []) <= 1:
+                payload["maskUrl"] = mask_url_candidate
+
+            if not str(payload.get("prompt") or "").strip() and not (payload.get("filesUrl") or payload.get("fileUrl")):
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "gpt4o-image requires prompt or filesUrl/fileUrl",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+            
+            logger.info("KIE 4o Image submit payload | endpoint=%s", submit_url)
+        elif use_flux_kontext_api:
+            # Handle Flux Kontext payload
+            payload = {
+                "prompt": prompt,
+                "model": "flux-kontext-max" if "max" in model_lower else "flux-kontext-pro",
+                "aspectRatio": normalized_ar if normalized_ar in {"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"} else "16:9",
+                "outputFormat": tool_conf.get("outputFormat", "jpeg"),
+                "promptUpsampling": bool(tool_conf.get("promptUpsampling")),
+                "safetyTolerance": int(tool_conf.get("safetyTolerance", 2)),
+                "enableTranslation": bool(tool_conf.get("enableTranslation", True)),
+                "uploadCn": bool(tool_conf.get("uploadCn")),
+                "watermark": False,
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+            if resolved_refs:
+                payload["inputImage"] = resolved_refs[0]
+            
+            logger.info("KIE Flux Kontext submit payload | endpoint=%s model=%s", submit_url, payload["model"])
+        elif use_suno_api:
+            payload = {
+                "prompt": prompt,
+                "model": "V5" if "v5" in model_lower else ("V4_5" if "v4.5" in model_lower or "4.5" in model_lower else "V4"),
+                "customMode": bool(tool_conf.get("customMode", False)),
+                "instrumental": bool(tool_conf.get("instrumental", False)),
+            }
+            if payload["customMode"]:
+                payload["style"] = tool_conf.get("style", "Pop")
+                payload["title"] = tool_conf.get("title", "AI Generated Track")
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+        elif is_kling_3_video:
+            kling_model = "kling-3.0/video"
+
+            def _normalize_bool(raw: Any, default: bool) -> bool:
+                if raw is None:
+                    return default
+                if isinstance(raw, bool):
+                    return raw
+                text = str(raw).strip().lower()
+                if text in {"1", "true", "yes", "y", "on"}:
+                    return True
+                if text in {"0", "false", "no", "n", "off"}:
+                    return False
+                return default
+
+            kling_mode = str(tool_conf.get("mode") or tool_conf.get("kling_mode") or "pro").strip().lower()
+            if kling_mode not in {"std", "pro"}:
+                kling_mode = "pro"
+
+            multi_shots = _normalize_bool(tool_conf.get("multi_shots"), False)
+            # KIE Kling 3.0 requires input.sound and defaults to enabled.
+            sound_enabled = _normalize_bool(tool_conf.get("sound"), True)
+            if multi_shots and not sound_enabled:
+                logger.info(
+                    "KIE Kling3 sound overridden to true because multi_shots=true requires sound=true"
+                )
+                sound_enabled = True
+
+            duration_int = 5
+            try:
+                duration_int = int(float(duration if duration is not None else 5))
+            except Exception:
+                duration_int = 5
+            duration_int = max(3, min(15, duration_int))
+
+            kling_input: Dict[str, Any] = {
+                "prompt": prompt,
+                "sound": sound_enabled,
+                "duration": str(duration_int),
+                "mode": kling_mode,
+                "multi_shots": multi_shots,
+            }
+
+            if normalized_ar in {"16:9", "9:16", "1:1"}:
+                kling_input["aspect_ratio"] = normalized_ar
+
+            configured_image_urls = tool_conf.get("image_urls")
+            kling_image_urls: List[str] = []
+            if isinstance(configured_image_urls, list):
+                kling_image_urls = [str(item).strip() for item in configured_image_urls if str(item).strip()]
+            if not kling_image_urls:
+                kling_image_urls = list(resolved_refs)
+                last_frame_resolved = payload_input.get("last_frame_url") or payload_input.get("lastFrameUrl")
+                if last_frame_resolved:
+                    last_frame_text = str(last_frame_resolved).strip()
+                    if last_frame_text and last_frame_text not in kling_image_urls:
+                        kling_image_urls.append(last_frame_text)
+
+            if multi_shots and len(kling_image_urls) > 1:
+                logger.info(
+                    "KIE Kling3 image_urls truncated for multi-shot | provided=%s kept=1",
+                    len(kling_image_urls),
+                )
+                kling_image_urls = kling_image_urls[:1]
+
+            if kling_image_urls:
+                kling_input["image_urls"] = kling_image_urls
+
+            raw_multi_prompt = tool_conf.get("multi_prompt")
+            normalized_multi_prompt: List[Dict[str, Any]] = []
+            if isinstance(raw_multi_prompt, list):
+                for item in raw_multi_prompt:
+                    if not isinstance(item, dict):
+                        continue
+                    shot_prompt = str(item.get("prompt") or "").strip()
+                    if not shot_prompt:
+                        continue
+                    try:
+                        shot_duration = int(item.get("duration"))
+                    except Exception:
+                        shot_duration = 3
+                    shot_duration = max(1, min(12, shot_duration))
+                    normalized_multi_prompt.append({"prompt": shot_prompt, "duration": shot_duration})
+                    if len(normalized_multi_prompt) >= 5:
+                        break
+
+            if multi_shots:
+                if not normalized_multi_prompt:
+                    normalized_multi_prompt = [{"prompt": prompt, "duration": max(1, min(12, duration_int))}]
+                kling_input["multi_prompt"] = normalized_multi_prompt
+            elif normalized_multi_prompt:
+                kling_input["multi_prompt"] = normalized_multi_prompt
+
+            raw_kling_elements = tool_conf.get("kling_elements")
+            normalized_elements: List[Dict[str, Any]] = []
+            seen_element_names: set[str] = set()
+            max_kling_elements = 3
+            if isinstance(raw_kling_elements, list):
+                for element in raw_kling_elements:
+                    if len(normalized_elements) >= max_kling_elements:
+                        break
+                    if not isinstance(element, dict):
+                        continue
+                    name = str(element.get("name") or "").strip()
+                    description = str(element.get("description") or "").strip()
+                    if not name or not description:
+                        continue
+
+                    normalized_name = name.lower()
+                    if normalized_name in seen_element_names:
+                        continue
+
+                    normalized_element: Dict[str, Any] = {
+                        "name": name,
+                        "description": description,
+                    }
+
+                    image_inputs = element.get("element_input_urls")
+                    if isinstance(image_inputs, list):
+                        urls = [str(item).strip() for item in image_inputs if str(item).strip()]
+                        if urls:
+                            # KIE API requires between 2 and 4 images
+                            if len(urls) == 1:
+                                urls.append(urls[0])
+                            elif len(urls) > 4:
+                                urls = urls[:4]
+                            normalized_element["element_input_urls"] = urls
+
+                    video_inputs = element.get("element_input_video_urls")
+                    if isinstance(video_inputs, list):
+                        urls = [str(item).strip() for item in video_inputs if str(item).strip()]
+                        if urls:
+                            normalized_element["element_input_video_urls"] = urls
+
+                    normalized_elements.append(normalized_element)
+                    seen_element_names.add(normalized_name)
+
+            if isinstance(raw_kling_elements, list) and len(raw_kling_elements) > len(normalized_elements):
+                logger.info(
+                    "KIE Kling3 elements truncated/deduped before submit | raw=%s normalized=%s max=%s",
+                    len(raw_kling_elements),
+                    len(normalized_elements),
+                    max_kling_elements,
+                )
+
+            if normalized_elements:
+                kling_input["kling_elements"] = normalized_elements
+                logger.info(
+                    "KIE Kling3 final elements detail | elements=%s",
+                    [
+                        {
+                            "name": str(item.get("name") or "").strip(),
+                            "image_url_count": len(item.get("element_input_urls") or []) if isinstance(item.get("element_input_urls"), list) else 0,
+                            "video_url_count": len(item.get("element_input_video_urls") or []) if isinstance(item.get("element_input_video_urls"), list) else 0,
+                        }
+                        for item in normalized_elements
+                        if isinstance(item, dict)
+                    ],
+                )
+
+            payload = {
+                "model": kling_model,
+                "input": kling_input,
+            }
+
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            logger.info(
+                "KIE Kling3 submit payload | endpoint=%s model=%s mode=%s multi_shots=%s duration=%s aspect_ratio=%s image_count=%s multi_prompt_count=%s elements_count=%s sound=%s callback_enabled=%s",
+                submit_url,
+                payload.get("model"),
+                kling_input.get("mode"),
+                kling_input.get("multi_shots"),
+                kling_input.get("duration"),
+                kling_input.get("aspect_ratio"),
+                len(kling_input.get("image_urls") or []),
+                len(kling_input.get("multi_prompt") or []),
+                len(kling_input.get("kling_elements") or []),
+                kling_input.get("sound"),
+                bool(payload.get("callBackUrl")),
+            )
+        else:
+            payload = {
+                "model": model,
+                "input": payload_input,
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+        # Final enum guard: enforce payload input values against system_api dictionary catalog.
+        payload_input_obj = payload.get("input") if isinstance(payload, dict) else None
+        if isinstance(payload_input_obj, dict) and runtime_enum_catalog:
+            allowed_modes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("mode") or [] if str(item or "").strip()]
+            current_mode = str(payload_input_obj.get("mode") or "").strip().lower()
+            if current_mode and allowed_modes:
+                mapped_mode = self._map_mode_to_allowed(current_mode, runtime_enum_catalog.get("mode"))
+                if mapped_mode:
+                    payload_input_obj["mode"] = str(mapped_mode).strip().lower()
+
+            allowed_aspect_ratios = [str(item or "").strip() for item in runtime_enum_catalog.get("aspect_ratio") or [] if str(item or "").strip()]
+            current_ar = str(payload_input_obj.get("aspect_ratio") or "").strip()
+            if current_ar and allowed_aspect_ratios:
+                mapped_ar = self._map_aspect_ratio_to_allowed(current_ar, runtime_enum_catalog.get("aspect_ratio"))
+                if mapped_ar:
+                    payload_input_obj["aspect_ratio"] = str(mapped_ar).strip()
+
+            allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
+            current_image_size = str(payload_input_obj.get("image_size") or "").strip().lower()
+            if current_image_size and allowed_image_sizes:
+                mapped_image_size = self._map_image_size_to_allowed(current_image_size, runtime_enum_catalog.get("image_size"))
+                if mapped_image_size:
+                    payload_input_obj["image_size"] = str(mapped_image_size).strip().lower()
+
+            allowed_resolutions = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("resolution") or [] if str(item or "").strip()]
+            current_resolution = str(payload_input_obj.get("resolution") or "").strip()
+            if current_resolution and allowed_resolutions:
+                mapped_resolution = self._map_resolution_to_allowed(current_resolution, runtime_enum_catalog.get("resolution"))
+                if mapped_resolution:
+                    payload_input_obj["resolution"] = str(mapped_resolution).strip()
+
+            # Hailuo 2.3 i2v requires uppercase-P literals (768P / 1080P).
+            if str(model_lower or "") in {"hailuo/2-3-image-to-video-standard", "hailuo/2-3-image-to-video-pro"}:
+                normalized_resolution = str(payload_input_obj.get("resolution") or "").strip()
+                if normalized_resolution:
+                    digits = ''.join(ch for ch in normalized_resolution if ch.isdigit())
+                    if digits in {"768", "1080"}:
+                        payload_input_obj["resolution"] = f"{digits}P"
+
+            current_duration_text = str(payload_input_obj.get("duration") or "").strip()
+            if current_duration_text:
+                try:
+                    current_duration_int = int(float(current_duration_text))
+                    allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                    if isinstance(allowed_durations, list) and allowed_durations:
+                        mapped_duration = self._map_duration_nearest(
+                            current_duration_int,
+                            allowed_durations,
+                            prefer_higher_on_tie=is_seedance_video_model,
+                        )
+                        if mapped_duration is not None:
+                            current_duration_int = int(mapped_duration)
+                    max_duration = runtime_enum_catalog.get("max_duration")
+                    if max_duration is not None:
+                        current_duration_int = min(int(current_duration_int), int(max_duration))
+                    normalized_duration_int = int(max(1, int(current_duration_int)))
+                    payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
+                except Exception:
+                    pass
+
+            sound_supported = runtime_enum_catalog.get("sound_supported")
+            if sound_supported is False and "sound" in payload_input_obj:
+                payload_input_obj["sound"] = False
+
+            multi_shots_supported = runtime_enum_catalog.get("multi_shots_supported")
+            if multi_shots_supported is False and "multi_shots" in payload_input_obj:
+                payload_input_obj["multi_shots"] = False
+
+            if tool_conf.get("draft") or tool_conf.get("draft_mode"):
+                if "resolution" in payload_input_obj:
+                    payload_input_obj["resolution"] = "480p"
+
+            payload["input"] = payload_input_obj
+
+        if isinstance(payload, dict):
+            payload = self._enforce_no_watermark_payload(payload)
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        def _is_unsupported_model_message(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
+            return (
+                "model name you specified is not supported" in text
+                or "model is not supported" in text
+                or "unsupported model" in text
+            )
+
+        def _is_kie_image_size_error(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
