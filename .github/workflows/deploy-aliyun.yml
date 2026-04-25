@@ -101,6 +101,7 @@ jobs:
             WorkingDirectory=/opt/AIStory/backend
             Environment=\"PORT=$PORT\"
             Environment=\"PUBLIC_BASE_URL=$PUBLIC_BASE_URL\"
+            Environment=\"DATABASE_URL=postgresql://aistory:yl.415213@127.0.0.1:5432/aistory\"
             ExecStart=/opt/miniconda3/envs/aistory/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT
             Restart=always
 
