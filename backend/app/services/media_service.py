@@ -11271,8 +11271,7 @@ Negative prompt constraints: {neg_prompt}"""
                 payload_input_obj["multi_shots"] = False
 
             if tool_conf.get("draft") or tool_conf.get("draft_mode"):
-                if "resolution" in payload_input_obj:
-                    payload_input_obj["resolution"] = "480p"
+                payload_input_obj["resolution"] = "480p"
 
             payload["input"] = payload_input_obj
 
