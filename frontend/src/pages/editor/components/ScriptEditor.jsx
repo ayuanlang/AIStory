@@ -3162,6 +3162,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
           onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
 
+          if (authoritativeSubjectText.includes("PROHIBITED_CONTENT")) {
+              throw new Error("剧本内容涉嫌违规，已被安全系统拦截，请修改剧本文本后重试。");
+          }
+
         // Try to match the block wrapped by at least 5 dashes: ---------
         const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
         if (dashMatch && dashMatch[1].trim()) {
@@ -4840,7 +4844,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
-    const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false) => {
+    const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false, retryCount = 0) => {
         // Bypass Phase 1 if subject index is already present!
         if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
             const bypassConfirmed = true;
@@ -5188,6 +5192,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
+            if (e?.message?.includes("第一阶段未解析到完整的 Subject Index 区块") && retryCount < 1) {
+                if (onLog) onLog("未检测到 Subject Index，自动清理数据并准备重新发起(1/1)", "warning");
+                setAnalysisFlowStatus({ phase: 'warning', message: '未检测到完整实体区块，将在3秒后重置场景并重启分析...' });
+                try {
+                    const scenes = await fetchScenes(activeEpisode.id);
+                    if (scenes && scenes.length > 0) {
+                        await Promise.all(scenes.map(s => deleteScene(s.id)));
+                    }
+                    await updateEpisode(activeEpisode.id, {
+                        ai_scene_analysis_result: null,
+                        ai_scene_analysis_subject_index: null,
+                        ai_entity_design_result: null,
+                        ai_scene_analysis_adaptation: null,
+                    });
+                    setLlmRawResultContent("");
+                    setLlmResultContent("");
+                    setSubjectIndexText("");
+                    setAdaptationText("");
+                    analysisRunInFlightRef.current = false;
+                    setTimeout(() => {
+                          executeAnalysis(content, customSystemPrompt, skipMetadata, retryCount + 1).catch(console.error);
+                      }, 3000);
+                    return;
+                } catch(cleanupErr) {
+                    console.error('Failed cleanup during auto retry', cleanupErr);
+                }
+            }
+
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
             const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
             phaseMarks.completedAt = Date.now();
@@ -5300,7 +5332,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         await executeAnalysis(supplementInput, supplementPrompt, false);
     };
 
-    const executeAdvancedAnalysis = async (userInput, customSystemPrompt) => {
+    const executeAdvancedAnalysis = async (userInput, customSystemPrompt, retryCount = 0) => {
         if (!activeEpisode?.id) {
             alert("No active episode selected.");
             return;
@@ -5642,6 +5674,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
+            if (e?.message?.includes("第一阶段未解析到完整的 Subject Index 区块") && retryCount < 1) {
+                if (onLog) onLog("未检测到 Subject Index，自动清理数据并准备重新发起(1/1)", "warning");
+                setAnalysisFlowStatus({ phase: 'warning', message: '未检测到完整实体区块，将在3秒后重置场景并重启分析...' });
+                try {
+                    const scenes = await fetchScenes(activeEpisode.id);
+                    if (scenes && scenes.length > 0) {
+                        await Promise.all(scenes.map(s => deleteScene(s.id)));
+                    }
+                    await updateEpisode(activeEpisode.id, {
+                        ai_scene_analysis_result: null,
+                        ai_scene_analysis_subject_index: null,
+                        ai_entity_design_result: null,
+                        ai_scene_analysis_adaptation: null,
+                    });
+                    setLlmRawResultContent("");
+                    setLlmResultContent("");
+                    setSubjectIndexText("");
+                    setAdaptationText("");
+                    analysisRunInFlightRef.current = false;
+                    setTimeout(() => {
+                        executeAdvancedAnalysis(userInput, customSystemPrompt, retryCount + 1).catch(console.error);
+                    }, 3000);
+                    return;
+                } catch(cleanupErr) {
+                    console.error('Failed cleanup during auto retry', cleanupErr);
+                }
+            }
+
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
             const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
             phaseMarks.completedAt = Date.now();
