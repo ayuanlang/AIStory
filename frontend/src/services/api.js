@@ -2144,6 +2144,8 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         }
     }
 
+    try { window.dispatchEvent(new CustomEvent('aistory:generation-complete', { detail: { type: 'image' } })); } catch {}
+
     return result;
 }
 
@@ -2289,6 +2291,9 @@ const requestOptions = { ...(restOptions || {}) };
             console.warn('[generateVideo] auto local download failed:', downloadError);
         }
     }
+
+    try { window.dispatchEvent(new CustomEvent('aistory:generation-complete', { detail: { type: 'video' } })); } catch {}
+
     return result;
 }
 
@@ -2300,6 +2305,7 @@ export const generateVoice = async (prompt, provider = null, model = null, optio
         ...(model ? { model } : {}),
     };
     const response = await api.post('/generate/voice', payload);
+    try { window.dispatchEvent(new CustomEvent('aistory:generation-complete', { detail: { type: 'voice' } })); } catch {}
     return response.data;
 }
 
@@ -3070,6 +3076,8 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
             || 'Scene analysis failed';
         throw new Error(String(detail));
     }
+
+    try { window.dispatchEvent(new CustomEvent('aistory:generation-complete', { detail: { type: 'analysis' } })); } catch {}
 
     return data;
 };

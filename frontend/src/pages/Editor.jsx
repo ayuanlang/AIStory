@@ -104,6 +104,7 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
+    fetchProjectBillingStats,
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
@@ -224,6 +225,7 @@ const Editor = ({
     const [currentUserId, setCurrentUserId] = useState(null);
     const [currentUserCredits, setCurrentUserCredits] = useState(0);
     const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
+    const [projectBillingStats, setProjectBillingStats] = useState({ user_cost: 0, total_cost: 0 });
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
@@ -255,9 +257,25 @@ const Editor = ({
         } catch (e) {
             console.error("Failed to load project data", e);
         }
+        fetchProjectBillingStats(id).then(stats => {
+            if (stats) setProjectBillingStats({ user_cost: stats.user_cost || 0, total_cost: stats.total_cost || 0 });
+        }).catch(() => {});
     };
 
     const evalWorkflowStageTimerRef = useRef(null);
+
+    const refreshProjectBillingStats = useCallback(() => {
+        if (!id) return;
+        fetchProjectBillingStats(id).then(stats => {
+            if (stats) setProjectBillingStats({ user_cost: stats.user_cost || 0, total_cost: stats.total_cost || 0 });
+        }).catch(() => {});
+    }, [id]);
+
+    useEffect(() => {
+        const handler = () => refreshProjectBillingStats();
+        window.addEventListener('aistory:generation-complete', handler);
+        return () => window.removeEventListener('aistory:generation-complete', handler);
+    }, [refreshProjectBillingStats]);
 
     const checkWorkflowStageDebounced = useCallback((force = false) => {
         if (evalWorkflowStageTimerRef.current) {
@@ -374,6 +392,11 @@ const Editor = ({
                     setCurrentUserCredits(0);
                     setUserBatchParallelLimit(3);
                 }
+
+                // Fire-and-forget billing stats load
+                fetchProjectBillingStats(id).then(stats => {
+                    if (stats) setProjectBillingStats({ user_cost: stats.user_cost || 0, total_cost: stats.total_cost || 0 });
+                }).catch(() => {});
 
                 let eps = await fetchEpisodes(id).catch(() => []);
                 if (isStale) return;
@@ -3272,8 +3295,8 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
             <ProjectStatusBar 
                 activeTab={activeTab} 
                 workflowStage={project?.global_info?.workflow_stage}
-                totalProjectCost={project?.total_tokens || 0}
-                userCost={project?.user_tokens || 0}
+                totalProjectCost={projectBillingStats.total_cost}
+                userCost={projectBillingStats.user_cost}
                 userBalance={currentUserCredits}
                 t={t}
                 hasAssets={project?.global_info?.has_existing_assets === true}
