@@ -463,6 +463,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [viewMedia, setViewMedia] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
+    const [videoStatuses, setVideoStatuses] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
     const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
@@ -4131,6 +4132,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         try {
                             const status = await getVideoGenerationJobStatus(jobId);
                             const phase = normalizeGenerationPhase(status?.status);
+                            setVideoStatuses(prev => ({ ...prev, [stableShotId]: String(status?.status || phase).toLowerCase() }));
                             const resultUrl = String(
                                 status?.result?.url
                                 || status?.result?.video_url
@@ -4164,6 +4166,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 delete pausedResumeVideoJobsRef.current[jobId];
                                 clearPendingVideoJobsByJobId(jobId);
                                 setShotGeneratingState(stableShotId, 'video', false);
+                                setVideoStatuses(prev => { const n = {...prev}; delete n[stableShotId]; return n; });
                                 refreshShotAssetsMeta();
                                 await refreshShots();
                                 break;
@@ -4183,6 +4186,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     delete pausedResumeVideoJobsRef.current[jobId];
                                     clearPendingVideoJobsByJobId(jobId);
                                     setShotGeneratingState(stableShotId, 'video', false);
+                                    setVideoStatuses(prev => { const n = {...prev}; delete n[stableShotId]; return n; });
                                     refreshShotAssetsMeta();
                                     await refreshShots();
                                     break;
@@ -4190,6 +4194,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                 clearPendingVideoJobsByJobId(jobId);
                                 setShotGeneratingState(stableShotId, 'video', false);
+                                setVideoStatuses(prev => { const n = {...prev}; delete n[stableShotId]; return n; });
                                 const errMsg = String(status?.error || 'unknown error');
                                 const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
                                 onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${errMsg}`, tone);
@@ -4201,6 +4206,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             if (detailLower.includes('job not found')) {
                                 clearPendingVideoJobsByJobId(jobId);
                                 setShotGeneratingState(stableShotId, 'video', false);
+                                setVideoStatuses(prev => { const n = {...prev}; delete n[stableShotId]; return n; });
                                 onLog?.(`Recovered video job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
                                 break;
                             }
@@ -6295,6 +6301,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         setPendingVideoJob(targetShotId, jobId);
                         setShotGeneratingState(targetShotId, 'video', true);
                     },
+                    on_job_status: (status, data) => {
+                        setVideoStatuses(prev => ({ ...prev, [targetShotId]: String(data?.status || status).toLowerCase() }));
+                    },
                 }, apiKeyframes);
                 onLog?.(t('视频请求已发起', 'Video request dispatched'), 'info');
             } catch (videoDispatchError) {
@@ -6347,11 +6356,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     await onUpdateShot(targetShotId, newData);
                 } catch (updateErr) {
                     console.error("Failed to save shot update to backend:", updateErr);
-                    // We don't block the UI - the video is here.
                 }
 
-                // 3. Refresh asset metadata so resolution/aspect_ratio show immediately
                 refreshShotAssetsMeta();
+                setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
             }
 
             if (videoSettled[0].status === 'rejected') {
@@ -6403,6 +6411,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         } finally {
             if (!keepRunningUi) {
                 setShotGeneratingState(targetShotId, 'video', false);
+                setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
             }
         }
     };
@@ -8209,7 +8218,16 @@ const isCroppingThisShot = !!(shotState.cropping);
                                             {currentGeneratingState.video && (
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
-                                                    <span className="text-[10px] text-white/70 animate-pulse">{t('正在生成视频...', 'Generating Video...')}</span>
+                                                    <span className="text-[10px] text-white/70 animate-pulse">{t(
+                                                        (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? '保存视频中...' :
+                                                        (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
+                                                        (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
+                                                        '正在生成视频...',
+                                                        (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? 'Saving Video...' :
+                                                        (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? 'Loading Video...' :
+                                                        (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? 'Fetching Video...' :
+                                                        'Generating Video...'
+                                                    )}</span>
                                                 </div>
                                             )}
                                             {(editingShot.video_url) ? (
@@ -9252,7 +9270,16 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     {currentGeneratingState.video && (
                                                                         <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
                                                                             <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                                                                            <span className="text-xs text-white/80">{t('正在生成视频...', 'Generating Video...')}</span>
+                                                                            <span className="text-xs text-white/80">{t(
+                                                                                (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? '保存视频中...' :
+                                                                                (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
+                                                                                (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
+                                                                                '正在生成视频...',
+                                                                                (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? 'Saving Video...' :
+                                                                                (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? 'Loading Video...' :
+                                                                                (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? 'Fetching Video...' :
+                                                                                'Generating Video...'
+                                                                            )}</span>
                                                                         </div>
                                                                     )}
                                                                     {editingShot.video_url ? (
@@ -9338,7 +9365,16 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                     )}
                                                                     {renderDetailActionButton({
                                                                         label: t('生成视频', 'Generate Video'),
-                                                                        busyLabel: t('视频生成中...', 'Generating Video...'),
+                                                                        busyLabel: t(
+                                                                            (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? '保存视频中...' :
+                                                                            (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
+                                                                            (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
+                                                                            '视频生成中...',
+                                                                            (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? 'Saving Video...' :
+                                                                            (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? 'Loading Video...' :
+                                                                            (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? 'Fetching Video...' :
+                                                                            'Generating Video...'
+                                                                        ),
                                                                         onClick: () => generateAssetWithLang('video'),
                                                                         disabled: currentShotGenerating,
                                                                         busy: currentShotGenerating,

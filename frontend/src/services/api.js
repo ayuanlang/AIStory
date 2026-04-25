@@ -1935,7 +1935,7 @@ const pollImageJobUntilDone = async (
 
 const pollVideoJobUntilDone = async (
     jobId,
-    { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2500, cancelledRef, baseURL } = {}
+    { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2500, cancelledRef, baseURL, on_status } = {}
 ) => {
     const start = Date.now();
     const intervalMs = Math.max(2000, Number(pollIntervalMs || 2500));
@@ -1944,6 +1944,7 @@ const pollVideoJobUntilDone = async (
         try {
             const data = await fetchVideoJobStatusLimited(jobId, { baseURL });
             const status = String(data.status || '').toLowerCase();
+            if (typeof on_status === 'function') { try { on_status(status, data); } catch (e) {} }
             const result = normalizeGenerationResult(data);
 
             if (result?.url) {
@@ -2270,6 +2271,7 @@ const requestOptions = { ...(restOptions || {}) };
                     pollIntervalMs: effectivePollMs,
                     cancelledRef,
                     baseURL: submitBaseURL,
+                    on_status: typeof options?.on_job_status === 'function' ? options.on_job_status : undefined,
                 })),
             ]);
         } catch (anyErr) {
@@ -2281,6 +2283,7 @@ const requestOptions = { ...(restOptions || {}) };
             timeoutMs: normalizeVideoJobTimeoutMs(job_timeout_ms),
             pollIntervalMs: Number(job_poll_interval_ms || 2500),
             baseURL: submitBaseURL,
+            on_status: typeof options?.on_job_status === 'function' ? options.on_job_status : undefined,
         });
     }
 

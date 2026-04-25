@@ -63,7 +63,7 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
                 {apiList.map(api => (
                     <option key={api.system_api_id} value={api.system_api_id}>
 
-                        {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}{api.is_fallback ? " (备用)" : ""}
+                        {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}
 
                     </option>
                 ))}

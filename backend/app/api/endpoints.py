@@ -400,7 +400,7 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
 }
 
 _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "360")))
-_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(30, int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "600") or 600))
+_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(30, int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "300") or 300))
 _ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP = max(2, min(32, int(os.getenv("ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP", "12") or 12)))
 _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP = max(20000, int(os.getenv("ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP", "120000") or 120000))
 _ANALYZE_SCENE_RECENT_TASKS: Dict[str, Dict[str, Any]] = {}
@@ -20188,6 +20188,64 @@ def get_billing_taxonomy_preview(
         "taskTypesBySourceCategory": task_types_by_source_category,
     }
 
+
+@router.get("/billing/project/{project_id}/stats")
+def get_project_billing_stats(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return credit consumption stats for a project.
+
+    Returns:
+        user_cost  – credits consumed by the current user in this project (negative amount = cost)
+        total_cost – credits consumed by all users in this project
+    """
+    # Verify the requesting user has access to the project
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not current_user.is_superuser and project.owner_id != current_user.id:
+        # Check shares
+        share = db.query(ProjectShare).filter(
+            ProjectShare.project_id == project_id,
+            ProjectShare.user_id == current_user.id,
+        ).first()
+        if not share:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+    from sqlalchemy import func as sa_func
+
+    # Total cost (all users): sum of negative amounts on transaction_history for this project
+    total_row = (
+        db.query(sa_func.coalesce(sa_func.sum(TransactionHistory.amount), 0))
+        .filter(
+            TransactionHistory.project_id == project_id,
+            TransactionHistory.amount < 0,
+        )
+        .scalar()
+    )
+    total_cost = abs(int(total_row or 0))
+
+    # Current user's cost in this project
+    user_row = (
+        db.query(sa_func.coalesce(sa_func.sum(TransactionHistory.amount), 0))
+        .filter(
+            TransactionHistory.project_id == project_id,
+            TransactionHistory.user_id == current_user.id,
+            TransactionHistory.amount < 0,
+        )
+        .scalar()
+    )
+    user_cost = abs(int(user_row or 0))
+
+    return {
+        "project_id": project_id,
+        "user_cost": user_cost,
+        "total_cost": total_cost,
+    }
+
+
 @router.get("/billing/transactions", response_model=List[TransactionOut])
 def get_transactions(
     user_id: Optional[int] = None,
@@ -23380,36 +23438,50 @@ async def _run_generate_image(
 
             request_mode = str(getattr(req, "mode", "") or "").strip().lower()
 
-            if request_mode != "joint_diptych":
-                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url, False)
-                await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url, False)
-                if not _is_ephemeral_provider_media_url(temp_url):
-                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
-
             # Trigger background task for OSS upload, if the URL is an external HTTP URL
             if temp_url.startswith("http"):
+                _set_image_job(job_id, status="storing_asset")
                 async def _bg_upload_and_update(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
                     try:
                         bg_user = bg_db.query(User).filter(User.id == user.id).first()
-                        if not bg_user: return
+                        if not bg_user:
+                            _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
+                            return
                         norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, bg_user, raw_url, meta)
 
+                        final_url = norm_url if (norm_url and norm_url != raw_url) else raw_url
+                        final_meta = norm_meta if norm_meta is not None else meta
+                        
+                        if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(final_url):
+                            await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, final_url, req_obj, final_meta)
+                            await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, final_url, True)
+                            await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, final_url, True)
+
                         if norm_url and norm_url != raw_url:
-                            if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(norm_url):
-                                await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, norm_url, req_obj, norm_meta)
-                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, norm_url, True)
-                                await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, norm_url, True)
+                            with IMAGE_JOB_LOCK:
+                                _job_to_update = dict(IMAGE_JOB_STORE.get(job_id) or {})
+                            if _job_to_update:
+                                updated_res = dict(_job_to_update.get("result") or result)
+                                updated_res["url"] = norm_url
+                                if norm_meta is not None:
+                                    updated_res["metadata"] = norm_meta
+                                _set_image_job(job_id, result=updated_res, status="succeeded", finished_at=now_bj_iso())
+                        else:
+                            _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update] failed for user={user.id} url={raw_url}: {e}")
+                        _set_image_job(job_id, status="failed", error=str(e), finished_at=now_bj_iso())
                     finally:
                         bg_db.close()
 
                 asyncio.create_task(_bg_upload_and_update(current_user, req, temp_url, result.get("metadata")))
             else:
-                # If it's already OSS (e.g. data URI converted to OSS) or local path, register it directly
                 if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(temp_url):
                     await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
+                    await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url, False)
+                    await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url, False)
+                _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
 
         return result
     except asyncio.CancelledError:
@@ -23707,10 +23779,14 @@ async def _run_generate_image_job(
             ),
             timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
         )
+        with IMAGE_JOB_LOCK:
+            _current_image_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
+        _status_to_set = "storing_asset" if _current_image_job.get("status") == "storing_asset" else "succeeded"
+        _finished_at_val = None if _status_to_set == "storing_asset" else now_bj_iso()
         _set_image_job(
             job_id,
-            status="succeeded",
-            finished_at=now_bj_iso(),
+            status=_status_to_set,
+            finished_at=_finished_at_val,
             result=result,
             error=None,
         )
@@ -26185,7 +26261,118 @@ async def _run_generate_video_job(
     req_payload: Dict[str, Any],
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
-) -> None:
+):
+    _set_video_job(job_id, status="running", started_at=now_bj_iso())
+
+    def status_callback(phase: str, details: Optional[Dict[str, Any]] = None):
+        _set_video_job(job_id, status=phase, phase_details=details)
+
+    try:
+        result = await media_service.generate_video(
+            user_id=user_id,
+            provider=req_payload.get("provider"),
+            model=req_payload.get("model"),
+            prompt=req_payload.get("prompt"),
+            negative_prompt=req_payload.get("negative_prompt"),
+            ref_image_url=req_payload.get("ref_image_url"),
+            ref_video_urls=req_payload.get("ref_video_urls"),
+            image_urls=req_payload.get("image_urls"),
+            last_frame_url=req_payload.get("last_frame_url"),
+            duration=req_payload.get("duration"),
+            aspect_ratio=req_payload.get("aspect_ratio"),
+            mode=req_payload.get("mode"),
+            ref_mode=req_payload.get("ref_mode"),
+            sound=req_payload.get("sound"),
+            multi_shots=req_payload.get("multi_shots"),
+            multi_prompt=req_payload.get("multi_prompt"),
+            kling_elements=req_payload.get("kling_elements"),
+            project_id=req_payload.get("project_id"),
+            shot_id=req_payload.get("shot_id"),
+            shot_number=req_payload.get("shot_number"),
+            shot_name=req_payload.get("shot_name"),
+            entity_name=req_payload.get("entity_name"),
+            subject_name=req_payload.get("subject_name"),
+            asset_type=req_payload.get("asset_type"),
+            keyframes=req_payload.get("keyframes"),
+            seed=req_payload.get("seed"),
+            provider_callback_ticket=provider_callback_ticket,
+            provider_callback_url=provider_callback_url,
+            status_callback=status_callback,
+        )
+        final_status = "succeeded" if result and result.get("url") else "failed"
+        error_message = None if final_status == "succeeded" else str(result.get("error") or "Unknown error")
+        _set_video_job(job_id, status=final_status, finished_at=now_bj_iso(), result=result, error=error_message)
+    except Exception as e:
+        logger.exception(f"Video generation job {job_id} failed: {e}")
+        _set_video_job(job_id, status="failed", finished_at=now_bj_iso(), error=str(e))
+    """Background worker for a single video generation job."""
+    now_iso = now_bj_iso()
+    _set_video_job(job_id, status="running", started_at=now_iso)
+
+    def _update_status_callback(status: str, details: Optional[Dict[str, Any]] = None) -> None:
+        update_payload = {"status": status, "updated_at": now_bj_iso()}
+        if isinstance(details, dict):
+            update_payload["progress_details"] = details
+        _set_video_job(job_id, **update_payload)
+        logger.info(
+            "[VideoJob] status updated via callback | job_id=%s user_id=%s status=%s",
+            job_id,
+            user_id,
+            status,
+        )
+
+    db = SessionLocal()
+    try:
+        current_user = db.query(User).filter(User.id == user_id).first()
+        if not current_user:
+            raise ValueError(f"User not found for ID: {user_id}")
+
+        user_snapshot = _snapshot_user_principal(current_user)
+
+        req = VideoGenerationRequest(**payload)
+        _log_shot_submit_debug("video", req)
+
+        # Billing check
+        billing_service.check_balance(db, user_id, "video", req.provider, req.model)
+
+        result = await media_service.generate_video(
+            req,
+            user_snapshot,
+            provider_callback_ticket=provider_callback_ticket,
+            provider_callback_url=provider_callback_url,
+            status_callback=_update_status_callback,
+        )
+
+        # Finalize billing
+        tx_details = {"job_id": job_id, "provider": req.provider, "model": req.model}
+        billing_service.record_transaction(db, user_id, "video", req.provider, req.model, tx_details)
+
+        _set_video_job(job_id, status="succeeded", finished_at=now_bj_iso(), result=result)
+        logger.info(
+            "[VideoJob] succeeded | job_id=%s user_id=%s shot_id=%s provider=%s model=%s",
+            job_id,
+            user_id,
+            req.shot_id,
+            req.provider,
+            req.model,
+        )
+    except Exception as e:
+        error_message = f"Video generation failed: {e}"
+        logger.error(
+            "[VideoJob] failed | job_id=%s user_id=%s error=%s",
+            job_id,
+            user_id,
+            e,
+            exc_info=True,
+        )
+        _set_video_job(job_id, status="failed", finished_at=now_bj_iso(), error=error_message)
+    finally:
+        _release_db_connection(db, "run_video_job")
+        _clear_generation_job_pool_cache()
+        callback_url = _resolve_callback_url_from_payload(payload)
+        if callback_url:
+            final_job_state = get_generate_video_job_status(job_id, current_user)
+            await _dispatch_generation_callback("video", callback_url, final_job_state)
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
     req_provider = str(req_payload.get("provider") or "").strip() or None
@@ -26443,11 +26630,58 @@ def get_generation_callback_result(ticket: str, response: Response):
 async def submit_generate_video_endpoint(
     req: VideoGenerationRequest,
     request: Request,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     callback_url = _resolve_callback_url_from_payload(req)
     explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
     req_payload = req.model_dump()
+
+    # Keep queue payload prompt aligned with runtime mapping logic so UI/debug payloads
+    # show the same entity-reference relationship as the actual provider submission.
+    try:
+        submit_prompt = str(req_payload.get("prompt") or "").strip()
+        if submit_prompt:
+            submit_ref_image_url = req_payload.get("ref_image_url")
+            submit_last_frame_url = req_payload.get("last_frame_url")
+            submit_keyframes = req_payload.get("keyframes") if isinstance(req_payload.get("keyframes"), list) else None
+            submit_ref_video_urls = req_payload.get("ref_video_urls") if isinstance(req_payload.get("ref_video_urls"), list) else None
+
+            submit_refs: List[str] = []
+            if isinstance(submit_ref_image_url, list):
+                submit_refs.extend([str(x).strip() for x in submit_ref_image_url if str(x).strip()])
+            elif isinstance(submit_ref_image_url, str) and submit_ref_image_url.strip():
+                submit_refs.append(submit_ref_image_url.strip())
+            if isinstance(submit_keyframes, list):
+                submit_refs.extend([str(x).strip() for x in submit_keyframes if str(x).strip()])
+            if isinstance(submit_last_frame_url, str) and submit_last_frame_url.strip():
+                submit_refs.append(submit_last_frame_url.strip())
+            submit_refs = [x for x in dict.fromkeys([str(x).strip() for x in submit_refs if str(x).strip()]) if x]
+
+            resolved_project_id = _to_positive_int_or_none(req_payload.get("project_id"))
+            if not resolved_project_id:
+                resolved_project_id = _to_positive_int_or_none(getattr(req, "project_id", None))
+            if not resolved_project_id and _to_positive_int_or_none(getattr(req, "shot_id", None)):
+                submit_shot = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
+                if submit_shot:
+                    resolved_project_id = _to_positive_int_or_none(getattr(submit_shot, "project_id", None))
+                    if not resolved_project_id and _to_positive_int_or_none(getattr(submit_shot, "episode_id", None)):
+                        submit_episode = db.query(Episode).filter(Episode.id == int(submit_shot.episode_id)).first()
+                        if submit_episode:
+                            resolved_project_id = _to_positive_int_or_none(getattr(submit_episode, "project_id", None))
+
+            submit_entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else None
+            req_payload["prompt"] = _append_video_api_ref_mapping(
+                submit_prompt,
+                submit_refs,
+                submit_ref_image_url,
+                submit_last_frame_url,
+                submit_keyframes,
+                submit_ref_video_urls,
+                entity_lookup=submit_entity_lookup,
+            )
+    except Exception as e:
+        logger.warning("[VideoSubmit] prompt mapping pre-process skipped: %s", e)
     scope_key = _build_generation_task_scope("video", current_user.id, req_payload)
     fingerprint_token = _build_submit_idempotency_token("video", current_user.id, req_payload)
     idempotency_key = explicit_idempotency_key or fingerprint_token

@@ -2019,9 +2019,6 @@ const Settings = () => {
                                                 if (api.applicable_languages && api.applicable_languages.length > 0) {
                                                     label += ' (' + api.applicable_languages.join(', ') + ')';
                                                 }
-                                                if (api.is_fallback) {
-                                                    label += ' (备用)';
-                                                }
                                                 return (
                                                     <option key={idx} value={api.system_api_id}>
                                                         {label}

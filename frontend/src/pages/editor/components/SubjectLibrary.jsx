@@ -1837,7 +1837,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
 
         const confirmed = await confirmUiMessage(t(
-            `将批量提示词反推并反写 ${targets.length} 个“用户上传图片”主体信息${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
+            `将批量提示词反推并反写 ${targets.length} 个“用户上传图片”主体信息 ${skippedSystemCount > 0 ? `（自动跳过系统生图 ${skippedSystemCount} 个）` : ''}，是否继续？`,
             `Run batch prompt reverse and write back metadata for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
         ));
         if (!confirmed) return;

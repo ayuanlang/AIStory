@@ -1705,13 +1705,25 @@ class LLMService:
         }
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
-        full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
-        content = self._extract_text_from_response(full_response)
+        # Internally use streaming to bypass gateway 60s/300s idle timeouts
+        content_parts = []
+        usage = {}
+        finish_reason = "stop"
+        
+        async for event in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config):
+            if event.get("type") == "token":
+                content_parts.append(event.get("content", ""))
+            elif event.get("type") == "done":
+                if "usage" in event and event["usage"]:
+                    usage = event["usage"]
+                if "finish_reason" in event and event["finish_reason"]:
+                    finish_reason = event["finish_reason"]
+
+        content = "".join(content_parts)
+        
         logger.info("[_call_openai_compatible] extracted content length=%d snippet=%s", len(content or ""), (content or "")[:200])
         content = self._sanitize_response_content(content)
         logger.info("[_call_openai_compatible] sanitized content length=%d snippet=%s", len(content or ""), (content or "")[:200])
-        usage = full_response.get("usage", {})
-        finish_reason = self._extract_finish_reason_from_response(full_response)
         
         # Parse JSON from content
         # LLM might wrap in ```json ... ```
@@ -1913,6 +1925,10 @@ class LLMService:
         
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
+            # De-duplicate /v1/v1/ that can occur when base_url already ends with /v1
+            # and the endpoint_hint also starts with /v1/ (e.g. apiyi2 base_url normalization)
+            import re as _re
+            configured_endpoint = _re.sub(r'(/v1)/v1(?=/|$)', r'\1', configured_endpoint)
 
         if configured_endpoint and resolved_category == "LLM":
             endpoint_lower = configured_endpoint.lower()
@@ -2339,6 +2355,8 @@ class LLMService:
         configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
+            import re as _re
+            configured_endpoint = _re.sub(r'(/v1)/v1(?=/|$)', r'\1', configured_endpoint)
         
         if provider == "kie" and resolved_category == "LLM":
             _, resolved_model, url = self._resolve_kie_llm_url(base_url, model)
@@ -2406,6 +2424,8 @@ class LLMService:
         )
 
         usage: Dict[str, Any] = {}
+        finish_reason: Optional[str] = None
+
         timeout = httpx.Timeout(connect=30.0, read=float(DEFAULT_LLM_TIMEOUT_SECONDS), write=30.0, pool=30.0)
 
         try:
@@ -2472,6 +2492,10 @@ class LLMService:
                         choices = chunk.get("choices") or []
                         if not choices:
                             continue
+                            
+                        if choices[0].get("finish_reason"):
+                            finish_reason = choices[0]["finish_reason"]
+
                         delta = choices[0].get("delta") or {}
                         content = delta.get("content") or ""
                         if not content:
@@ -2544,7 +2568,7 @@ class LLMService:
             })
             raise
 
-        yield {"type": "done", "usage": usage}
+        yield {"type": "done", "usage": usage, "finish_reason": finish_reason}
 
     async def stream_analyze_intent(
         self,

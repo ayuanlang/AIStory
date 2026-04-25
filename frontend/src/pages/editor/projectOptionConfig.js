@@ -1,5 +1,7 @@
 export const PROJECT_EP_TYPE_OPTIONS = [
 
+    "真人 / Live Action",
+
     "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
 
     "二维动画 / 2D Animation",
@@ -70,6 +72,10 @@ export const PROJECT_EP_BASE_POSITIONING_OPTIONS = [
     "悬疑惊悚 / Mystery / Thriller",
 
     "古装武侠 / Period / Wuxia",
+
+    "仙侠修真 / Xianxia",
+
+    "穿越 / Transmigration",
 
     "奇幻史诗 / Fantasy Epic",
 
@@ -242,6 +248,16 @@ export const PROJECT_SCENE_ANALYSIS_ERA_OPTIONS = [
     "民国近代",
 
     "古代",
+
+    "唐 / Tang",
+
+    "宋 / Song",
+
+    "元 / Yuan",
+
+    "明 / Ming",
+
+    "清 / Qing",
 
     "架空时代",
 
