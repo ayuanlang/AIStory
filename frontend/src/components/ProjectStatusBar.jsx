@@ -47,12 +47,12 @@ export default function ProjectStatusBar({
   const currentStageIndex = stageIndexMap[workflowStage] !== undefined ? stageIndexMap[workflowStage] : Math.max(0, STAGES.findIndex(s => s.tabs.includes(activeTab)));
 
   return (
-    <div className="flex items-center justify-between px-4 py-1.5 bg-background border-b border-border/50 text-xs shrink-0 relative" style={{ minHeight: '32px' }}>
+    <div className="flex flex-col md:flex-row items-center justify-between px-2 md:px-4 py-1.5 bg-background border-b border-border/50 text-xs shrink-0 relative gap-2 md:gap-0" style={{ minHeight: '32px' }}>
       
-      <div className="flex-1"></div>
+      <div className="flex-1 hidden md:block"></div>
 
       {/* 中心：居中型进度流 */}
-      <div className="flex items-center space-x-2 absolute left-1/2 -translate-x-1/2">
+      <div className="flex items-center space-x-1 sm:space-x-2 w-full md:w-auto md:absolute md:left-1/2 md:-translate-x-1/2 overflow-x-auto no-scrollbar pb-0">
         {STAGES.map((stage, index) => {
           const isCompleted = index < currentStageIndex;
           const isCurrent = index === currentStageIndex;
@@ -107,7 +107,7 @@ export default function ProjectStatusBar({
       </div>
 
       {/* 右侧：成本微型仪表盘 */}
-      <div className="flex-1 flex justify-end items-center space-x-3 pl-3 font-mono opacity-80 hover:opacity-100 transition-opacity">        {/* 当前积分余额 */}
+      <div className="flex justify-center md:flex-1 md:justify-end items-center space-x-3 font-mono opacity-80 hover:opacity-100 transition-opacity w-full md:w-auto h-5">        {/* 当前积分余额 */}
         <div className="flex items-center space-x-1" title={t ? t('当前积分余额', 'Current Point Balance') : '当前积分余额'}>
           <Coins className="w-3.5 h-3.5 text-green-500" />
           <span className="text-green-500 font-medium">{userBalance ? userBalance.toLocaleString() : 0}</span>

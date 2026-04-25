@@ -3196,7 +3196,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                             ))}
                         </select>
                     </div>
-                    <div className="overflow-x-auto no-scrollbar">
+                    <div className="hidden md:block overflow-x-auto no-scrollbar">
                         <div className="flex justify-center items-center bg-transparent min-w-max w-full">
                             {MENU_ITEMS.map(item => {
                                 const Icon = item.icon;
