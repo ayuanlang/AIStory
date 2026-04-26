@@ -3,6 +3,7 @@ import logging
 import time
 import re
 import json
+import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from typing import Optional
@@ -42,12 +43,75 @@ class _SuppressUvicornAccessUploads(logging.Filter):
         return not (200 <= status_code < 300)
 
 
+class _ResilientStreamHandler(logging.StreamHandler):
+    """Best-effort console logging for debugger/Windows console environments.
+
+    Some runtimes attach stream handlers whose underlying stream can be closed or
+    use a code page that cannot encode log text. Logging should never crash a
+    background worker because of that transport issue.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = None
+        try:
+            message = self.format(record) + self.terminator
+            stream = self.stream
+            if stream is not None and not getattr(stream, "closed", False):
+                try:
+                    stream.write(message)
+                except UnicodeEncodeError:
+                    buffer = getattr(stream, "buffer", None)
+                    if buffer is None:
+                        raise
+                    buffer.write(message.encode("utf-8", errors="backslashreplace"))
+                stream.flush()
+                return
+
+            fallback = getattr(sys, "__stderr__", None) or getattr(sys, "stderr", None)
+            if fallback is None or getattr(fallback, "closed", False):
+                return
+            fallback_buffer = getattr(fallback, "buffer", None)
+            if fallback_buffer is not None:
+                fallback_buffer.write(message.encode("utf-8", errors="backslashreplace"))
+                fallback_buffer.flush()
+            else:
+                fallback.write(message.encode("ascii", errors="backslashreplace").decode("ascii"))
+                fallback.flush()
+        except Exception:
+            # Swallow logging transport failures entirely; background task health
+            # is more important than emitting this one line to console.
+            return
+
+
+def _patch_logger_stream_handlers(target_logger: logging.Logger) -> None:
+    for index, existing_handler in enumerate(list(target_logger.handlers)):
+        if not isinstance(existing_handler, logging.StreamHandler):
+            continue
+        if isinstance(existing_handler, _ResilientStreamHandler):
+            continue
+
+        replacement = _ResilientStreamHandler(getattr(existing_handler, "stream", None))
+        replacement.setLevel(existing_handler.level)
+        replacement.setFormatter(existing_handler.formatter)
+        for existing_filter in list(existing_handler.filters):
+            replacement.addFilter(existing_filter)
+        target_logger.handlers[index] = replacement
+
+
+def _ensure_resilient_console_logging() -> None:
+    for logger_name in (None, "uvicorn", "uvicorn.error", "uvicorn.access"):
+        current_logger = logging.getLogger(logger_name) if logger_name else logging.getLogger()
+        _patch_logger_stream_handlers(current_logger)
+
+
 def configure_uvicorn_logging_noise_reduction() -> None:
     """Reduce meaningless uvicorn access log noise.
 
     Uvicorn may override logger levels via its own log_config after module import,
     so call this at app startup to ensure it takes effect.
     """
+    _ensure_resilient_console_logging()
+
     access_logger = logging.getLogger("uvicorn.access")
     access_logger.setLevel(logging.WARNING)
 

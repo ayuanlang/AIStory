@@ -16,7 +16,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
 from app.core.config import settings
-from app.api import endpoints, settings as settings_api, groups as groups_api
+from app.api import endpoints, settings as settings_api, groups as groups_api, invoices as invoices_api, invoices as invoices_api
 from app.db.session import engine, SessionLocal
 from app.models.all_models import Base, User
 from sqlalchemy import inspect, text
@@ -1131,6 +1131,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 app.include_router(endpoints.router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)
 app.include_router(groups_api.router, prefix=settings.API_V1_STR)
+app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])
+app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])
 
 # --- 静态 SPA (React Vite) 前端挂载配置 ---
 # Vite 建立的 Dist 目录通常在这个路径（基于 Dockerfile 第阶段配置）

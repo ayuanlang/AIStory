@@ -22,8 +22,6 @@ import tempfile
 from PIL import Image
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union, Callable, Set
-from cryptography.hazmat.primitives import padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
@@ -965,61 +963,11 @@ Negative prompt constraints: {neg_prompt}"""
             return f"{normalized}/contents/generations/tasks"
         return normalized
 
-    def _normalize_zlhub_task_query_endpoint(self, endpoint: Optional[str]) -> str:
-        raw = (endpoint or "").strip()
-        if not raw:
-            return "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1/proxy/ark/contents/generations/tasks"
-
-        normalized = raw.rstrip("/")
-        if "{task_id}" in normalized:
-            return normalized
-        if normalized.endswith("/proxy/ark/contents/generations/tasks"):
-            return normalized
-        if normalized.endswith("/proxy/ark/contents/generations"):
-            return f"{normalized}/tasks"
-        if normalized.endswith("/api/v1"):
-            return f"{normalized}/proxy/ark/contents/generations/tasks"
-        return normalized
-
     def _normalize_zlhub_moderation_endpoint(self, endpoint: Optional[str]) -> str:
         raw = (endpoint or "").strip()
         if not raw:
-            return "http://118.196.112.236:3428/api/moderation/image"
+            return "https://asset.zlhub.cn/api/asset/upload/sync"
         return raw.rstrip("/")
-
-    def _normalize_zlhub_encryption_key(self, raw_key: Any) -> bytes:
-        text = str(raw_key or "").strip()
-        if not text:
-            raise ValueError("Missing zlhub moderation AES key")
-        if re.fullmatch(r"[0-9a-fA-F]{64}", text):
-            return bytes.fromhex(text)
-        encoded = text.encode("utf-8")
-        if len(encoded) != 32:
-            raise ValueError("zlhub moderation AES key must be a 64-char hex string or 32-byte text")
-        return encoded
-
-    def _encrypt_zlhub_payload(self, payload: Dict[str, Any], raw_key: Any) -> str:
-        key = self._normalize_zlhub_encryption_key(raw_key)
-        plaintext = json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        padder = padding.PKCS7(algorithms.AES.block_size).padder()
-        padded = padder.update(plaintext) + padder.finalize()
-        cipher = Cipher(algorithms.AES(key), modes.ECB())
-        encryptor = cipher.encryptor()
-        ciphertext = encryptor.update(padded) + encryptor.finalize()
-        return base64.b64encode(ciphertext).decode("ascii")
-
-    def _decrypt_zlhub_payload(self, encrypted_text: Any, raw_key: Any) -> Dict[str, Any]:
-        encoded = str(encrypted_text or "").strip()
-        if not encoded:
-            return {}
-        key = self._normalize_zlhub_encryption_key(raw_key)
-        cipher = Cipher(algorithms.AES(key), modes.ECB())
-        decryptor = cipher.decryptor()
-        decrypted = decryptor.update(base64.b64decode(encoded)) + decryptor.finalize()
-        unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
-        plain = unpadder.update(decrypted) + unpadder.finalize()
-        parsed = json.loads(plain.decode("utf-8"))
-        return parsed if isinstance(parsed, dict) else {"raw": parsed}
 
     def _normalize_aspect_ratio_value(self, aspect_ratio: Optional[str]) -> Optional[str]:
         raw = str(aspect_ratio or "").strip()
@@ -5114,6 +5062,7 @@ Negative prompt constraints: {neg_prompt}"""
             return {"error": f"Vidu Exception: {str(e)}"}
              
     async def _handle_grsai_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
+        trace_id = None
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
         api_key = config.get("api_key")
         model = config.get("model") or "unknown_model"
@@ -7556,19 +7505,21 @@ Negative prompt constraints: {neg_prompt}"""
         approved_ref = self._extract_zlhub_moderation_asset_ref({"items": [item]}) or str(fallback_ref or "").strip()
         result = {
             "checked": True,
-            "blocked": False,
-            "status": None,
+            "blocked": True,
+            "status": "unknown_or_in_progress",
             "reason": None,
             "approved_ref": approved_ref,
             "raw": item or {},
         }
 
         try:
-            submit_status = int(item.get("submit_review_status"))
-            result["blocked"] = submit_status != 1
-            result["status"] = "submitted" if submit_status == 1 else "submission_failed"
-            result["reason"] = "submit_review_status" if submit_status == 1 else "submit_review_status_not_1"
-            return result
+            if "submit_review_status" in item:
+                submit_status = int(item.get("submit_review_status"))
+                if submit_status != 1:
+                    result["blocked"] = True
+                    result["status"] = "submission_failed"
+                    result["reason"] = "submit_review_status_not_1"
+                    return result
         except Exception:
             pass
 
@@ -7588,13 +7539,18 @@ Negative prompt constraints: {neg_prompt}"""
             if status in {"block", "blocked", "reject", "rejected", "fail", "failed", "unsafe", "violation", "violated", "non_compliant"}:
                 result["blocked"] = True
                 return result
+        elif item.get("submit_review_status") == 1:
+            if item.get("asset_url") or item.get("image_url") or item.get("tos_url") or item.get("downstream_final_url"):
+                result["status"] = "passed"
+                result["blocked"] = False
+                return result
 
         return result
 
     def _parse_zlhub_moderation_decision(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         result = {
-            "blocked": False,
-            "status": None,
+            "blocked": True,
+            "status": "unknown_or_in_progress",
             "reason": None,
             "raw": payload or {},
             "approved_ref": self._extract_zlhub_moderation_asset_ref(payload),
@@ -7622,10 +7578,11 @@ Negative prompt constraints: {neg_prompt}"""
                     continue
             if statuses:
                 all_submitted = all(status == 1 for status in statuses)
-                result["blocked"] = not all_submitted
-                result["status"] = "submitted" if all_submitted else "submission_failed"
-                result["reason"] = "submit_review_status" if all_submitted else "submit_review_status_not_1"
-                return result
+                if not all_submitted:
+                    result["blocked"] = True
+                    result["status"] = "submission_failed"
+                    result["reason"] = "submit_review_status_not_1"
+                    return result
 
         containers: List[Any] = [payload]
         if isinstance(payload, dict):
@@ -7833,15 +7790,28 @@ Negative prompt constraints: {neg_prompt}"""
         moderation_endpoint = self._normalize_zlhub_moderation_endpoint(
             moderation_cfg.get("moderation_endpoint")
         )
-        business_payload: Dict[str, Any] = {"images": normalized_refs}
-
-        encrypted_data = self._encrypt_zlhub_payload(business_payload, moderation_key)
-        request_payload = {
-            "user_id": moderation_user_id,
-            "encrypted_data": encrypted_data,
+        
+        # Determine asset type, default to Image (can be Video/Audio but here we only handle images currently)
+        asset_type = "Image"
+        # X-Track-Id based on V2 docs
+        track_id = uuid.uuid4().hex
+        
+        business_payload: Dict[str, Any] = {
+            "images": normalized_refs,
+            "asset_type": asset_type
         }
+        
+        _key_str = str(moderation_key or "")
+        _key_preview = f"{_key_str[:4]}...{_key_str[-4:]}" if len(_key_str) > 8 else "***"
+        logger.info(f"[ZLHubModeration_Diag] Submit req: key_len={len(_key_str)} key_preview={_key_preview} assets={len(normalized_refs)} endpoint={moderation_endpoint}")
 
-        headers = {"Content-Type": "application/json"}
+        request_payload = business_payload
+
+        headers = {
+            "Content-Type": "application/json", 
+            "X-Access-Token": _key_str,
+            "X-Track-Id": track_id
+        }
 
         def _post_moderation(use_proxy: bool = True):
             kwargs = {
@@ -7868,7 +7838,7 @@ Negative prompt constraints: {neg_prompt}"""
                 "items": [],
             }
 
-        if resp.status_code != 200:
+        if resp.status_code not in (200, 202):
             return {
                 "checked": False,
                 "blocked": moderation_required,
@@ -7882,27 +7852,28 @@ Negative prompt constraints: {neg_prompt}"""
             response_payload = resp.json() if resp.content else {}
         except Exception:
             response_payload = {}
+        
+        payload_dict = response_payload if isinstance(response_payload, dict) else {}
 
-        encrypted_response = None
-        if isinstance(response_payload, dict):
-            encrypted_response = response_payload.get("encrypted_data") or response_payload.get("encryptedData")
-
-        try:
-            decrypted_payload = self._decrypt_zlhub_payload(encrypted_response, moderation_key) if encrypted_response else response_payload
-        except Exception as exc:
+        if payload_dict.get("code") == 400 and "解密失败" in str(payload_dict.get("message", "")):
             return {
-                "checked": False,
+                "checked": True,
                 "blocked": moderation_required,
-                "error": f"zlhub moderation decrypt failed: {exc}",
+                "status": "failed",
+                "reason": "decryption_failed",
+                "error": "zlhub moderation decrypt failed on server: " + str(payload_dict.get("message")),
                 "submit_failed": moderation_required,
+                "raw": payload_dict,
                 "items": [],
             }
 
-        payload_dict = decrypted_payload if isinstance(decrypted_payload, dict) else {}
+        overall = self._parse_zlhub_moderation_decision(payload_dict)
         raw_items = self._extract_zlhub_moderation_items(payload_dict)
         parsed_items: List[Dict[str, Any]] = []
         for idx, raw_ref in enumerate(normalized_refs):
             item_payload = raw_items[idx] if idx < len(raw_items) and isinstance(raw_items[idx], dict) else {}
+            if not item_payload and overall.get("status") not in (None, "unknown_or_in_progress"):
+                item_payload = {"status": overall.get("status"), "reason": overall.get("reason"), "blocked": overall.get("blocked")}
             item_result = self._parse_zlhub_moderation_item(item_payload, raw_ref)
             item_result.update({
                 "role": normalized_roles[idx] if idx < len(normalized_roles) else "",
@@ -7910,12 +7881,23 @@ Negative prompt constraints: {neg_prompt}"""
             })
             parsed_items.append(item_result)
 
-        overall = self._parse_zlhub_moderation_decision(payload_dict)
         blocked = any(bool(item.get("blocked")) for item in parsed_items) if parsed_items else bool(overall.get("blocked"))
+        pass_count = sum(1 for x in parsed_items if x.get("status") == "passed")
+        unknown_count = sum(1 for x in parsed_items if x.get("status") not in ("passed", "blocked", "failed", "submission_failed"))
+        block_count = sum(1 for x in parsed_items if x.get("blocked"))
+
+        final_status = overall.get("status")
+        if parsed_items and final_status in {None, "unknown_or_in_progress", "completed", "success", "done"}:
+            if blocked:
+                final_status = "blocked"
+            elif pass_count == len(parsed_items):
+                final_status = "passed"
+
+        logger.info(f"[ZLHubModeration_Diag] Moderation finished | assets={len(normalized_refs)} passed={pass_count} blocked={block_count} unknown={unknown_count} overall={final_status} provider_code={payload_dict.get('code')}")
         return {
             "checked": True,
             "blocked": blocked,
-            "status": overall.get("status"),
+            "status": final_status,
             "reason": overall.get("reason"),
             "raw": payload_dict,
             "items": parsed_items,
@@ -7954,12 +7936,20 @@ Negative prompt constraints: {neg_prompt}"""
         if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
         callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
         provider_name = self._vendor_label(config.get("provider") or tool_conf.get("provider") or "zlhub")
-        base_url = str(config.get("base_url") or "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1").strip().rstrip("/")
+        base_url = str(config.get("base_url") or "https://api.zlhub.cn/v1").strip().rstrip("/")
+        base_url = re.sub(r"https?://(?:[^/]*\.)?zlhub\.xiaowaiyou\.cn/zhonglian/api/v[0-9]+", "https://api.zlhub.cn/v1", base_url, flags=re.IGNORECASE)
+        
+        if "proxy/ark" in base_url.lower():
+            # Handle specialized proxy paths
+            base_url = re.sub(r"/proxy/ark/contents/generations(?:/tasks)?/?$", "", base_url, flags=re.IGNORECASE).rstrip("/")
+        
         raw_endpoint = str(tool_conf.get("endpoint") or "").strip()
-        endpoint = raw_endpoint or "/proxy/ark/contents/generations/tasks"
-        raw_query_endpoint = self._normalize_zlhub_task_query_endpoint(
-            tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint")
-        )
+        if "proxy/ark" in raw_endpoint.lower():
+            raw_endpoint = ""
+        # Make sure that path begins with /
+        if raw_endpoint and not raw_endpoint.startswith("/"):
+            raw_endpoint = "/" + raw_endpoint
+        endpoint = raw_endpoint or "/task/create"
         model = str(config.get("model") or "doubao-seedance-2-0").strip()
         model_lower = str(model or "").strip().lower()
         is_seedance2 = model_lower.startswith("doubao-seedance-2")
@@ -7971,7 +7961,7 @@ Negative prompt constraints: {neg_prompt}"""
                 submit_url = self._normalize_doubao_video_tasks_endpoint(endpoint)
             else:
                 submit_url = endpoint.rstrip("/")
-        elif raw_endpoint:
+        elif endpoint:
             normalized_relative_endpoint = endpoint
             if "/proxy/chat/completions" in normalized_relative_endpoint.lower():
                 normalized_relative_endpoint = re.sub(r"/proxy/chat/completions/?$", "/proxy/ark/contents/generations/tasks", normalized_relative_endpoint, flags=re.IGNORECASE)
@@ -7979,20 +7969,32 @@ Negative prompt constraints: {neg_prompt}"""
         elif "/api/v3" in base_url.lower() or base_url.lower().endswith("/contents/generations/tasks"):
             submit_url = self._normalize_doubao_video_tasks_endpoint(base_url)
         else:
-            submit_url = self._normalize_zlhub_task_query_endpoint(base_url)
+            submit_url = f"{base_url}/task/create"
 
         explicit_query_endpoint = str(tool_conf.get("query_endpoint") or tool_conf.get("queryEndpoint") or "").strip()
-        if re.match(r"^https?://", raw_query_endpoint, flags=re.IGNORECASE):
-            if "/api/v3" in raw_query_endpoint.lower() or raw_query_endpoint.lower().endswith("/contents/generations/tasks"):
-                query_endpoint = self._normalize_doubao_video_tasks_endpoint(raw_query_endpoint)
+        if "proxy/ark" in explicit_query_endpoint.lower():
+            explicit_query_endpoint = ""
+
+        if not explicit_query_endpoint:
+            if "/api/v3" in base_url.lower() or base_url.lower().endswith("/contents/generations/tasks"):
+                query_endpoint = self._normalize_doubao_video_tasks_endpoint(base_url)
             else:
-                query_endpoint = raw_query_endpoint.rstrip("/")
-        elif not explicit_query_endpoint:
-            query_endpoint = submit_url
+                query_endpoint = f"{base_url}/task/get/{{id}}"
+        elif re.match(r"^https?://", explicit_query_endpoint, flags=re.IGNORECASE):
+            if "/api/v3" in explicit_query_endpoint.lower() or explicit_query_endpoint.lower().endswith("/contents/generations/tasks"):
+                query_endpoint = self._normalize_doubao_video_tasks_endpoint(explicit_query_endpoint)
+            else:
+                query_endpoint = explicit_query_endpoint.rstrip("/")
         elif "/api/v3" in base_url.lower() or base_url.lower().endswith("/contents/generations/tasks"):
-            query_endpoint = self._normalize_doubao_video_tasks_endpoint(f"{base_url}/{raw_query_endpoint.lstrip('/')}" if not raw_query_endpoint.startswith("http") else raw_query_endpoint)
+            query_endpoint = self._normalize_doubao_video_tasks_endpoint(f"{base_url}/{explicit_query_endpoint.lstrip('/')}")
         else:
-            query_endpoint = f"{base_url}{raw_query_endpoint if raw_query_endpoint.startswith('/') else '/' + raw_query_endpoint}"
+            query_endpoint = f"{base_url}/{explicit_query_endpoint.lstrip('/')}"
+        
+        if "{id}" not in query_endpoint and "{task_id}" not in query_endpoint and not query_endpoint.endswith("/tasks"):
+            if query_endpoint.endswith("task/get"):
+                query_endpoint = f"{query_endpoint}/{{id}}"
+            elif not query_endpoint.endswith("/{id}"):
+                query_endpoint = f"{query_endpoint}/{{id}}"
 
         prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
 
@@ -8145,11 +8147,19 @@ Negative prompt constraints: {neg_prompt}"""
                     "details": batch_result.get("details") or batch_result,
                     "submit_failed": True,
                 }
+            
+            if batch_result.get("blocked") and not batch_result.get("items"):
+                return {
+                    "error": f"ZLHub moderation blocked the request",
+                    "details": batch_result.get("reason") or batch_result,
+                    "submit_failed": True,
+                }
 
             moderation_results = list(batch_result.get("items") or [])
             for idx, moderation_result in enumerate(moderation_results):
                 candidate_ref, role = moderation_candidates[idx] if idx < len(moderation_candidates) else ("", "")
                 if moderation_result.get("blocked"):
+                    logger.error(f"[ZLHubModeration] Blocked Details: {moderation_result} | batch_result: {batch_result}")
                     return {
                         "error": f"{provider_name} moderation blocked reference material",
                         "details": moderation_result,
@@ -8173,30 +8183,20 @@ Negative prompt constraints: {neg_prompt}"""
             content_payload.append({"type": "text", "text": prompt_text})
 
         if is_seedance2 and seedance2_payload_mode == "reference_media":
-            if len(resolved_image_refs) > 1:
-                # If multiple reference images are provided in this mode,
-                # treat the first as a `first_frame` and the rest as `reference_image`.
-                # This is a workaround for a suspected issue where multiple `reference_image`
-                # roles are not handled as expected by the upstream API.
+            for item in resolved_image_refs:
+                content_payload.append({
+                    "type": "image_url",
+                    "image_url": {"url": item},
+                    "role": "reference_image",
+                })
+        elif resolved_image_refs:
+            if is_seedance2 and seedance2_payload_mode == "frame_content":
                 content_payload.append({
                     "type": "image_url",
                     "image_url": {"url": resolved_image_refs[0]},
                     "role": "first_frame",
                 })
-                for item in resolved_image_refs[1:]:
-                    content_payload.append({
-                        "type": "image_url",
-                        "image_url": {"url": item},
-                        "role": "reference_image",
-                    })
-            elif resolved_image_refs:
-                content_payload.append({
-                    "type": "image_url",
-                    "image_url": {"url": resolved_image_refs[0]},
-                    "role": "reference_image",
-                })
-        elif resolved_image_refs:
-            if len(resolved_image_refs) == 1 and not resolved_last_frame:
+            elif len(resolved_image_refs) == 1 and not resolved_last_frame:
                 content_payload.append({
                     "type": "image_url",
                     "image_url": {"url": resolved_image_refs[0]},
@@ -8207,7 +8207,7 @@ Negative prompt constraints: {neg_prompt}"""
                     content_payload.append({
                         "type": "image_url",
                         "image_url": {"url": item},
-                        "role": "first_frame" if idx == 0 else "reference_image",
+                        "role": "reference_image",
                     })
         if resolved_last_frame:
             content_payload.append({
@@ -8317,6 +8317,9 @@ Negative prompt constraints: {neg_prompt}"""
                 len(payload.get("tools") or []) if isinstance(payload.get("tools"), list) else 0,
                 len(content_payload),
             )
+        with open('last_payload.txt', 'w') as fh:
+            import json
+            fh.write(json.dumps(payload, indent=2))
         return await self._submit_and_poll_zlhub_video(
             submit_url,
             query_endpoint,
@@ -9286,8 +9289,19 @@ Negative prompt constraints: {neg_prompt}"""
             return {"error": str(e), "submit_failed": True}
 
     async def _submit_and_poll_zlhub_video(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        trace_id = str((extra_metadata or {}).get("trace_id") or f"zlhub-{uuid.uuid4().hex[:10]}")
+        trace_id = None
+        media_url = None
+        # ZLHub V2 requires X-Track-Id and X-Trace-ID specifically to be 32-char hex string
+        track_id = uuid.uuid4().hex
+        raw_trace_id = str((extra_metadata or {}).get("trace_id") or "").replace("-", "")
+        trace_id = raw_trace_id if len(raw_trace_id) == 32 else track_id
+        headers = {
+            "Authorization": f"Bearer {api_key}", 
+            "Content-Type": "application/json", 
+            "X-Track-Id": track_id, 
+            "X-Access-Token": api_key,
+            "X-Trace-ID": trace_id
+        }
         payload_model = str(payload.get("model") or "").strip().lower()
         is_seedance2 = payload_model.startswith("doubao-seedance-2")
 
@@ -9318,7 +9332,7 @@ Negative prompt constraints: {neg_prompt}"""
 
         def _poll(task_id: str, use_proxy: bool = True):
             normalized_query = str(query_url or "").strip()
-            target_url = normalized_query.replace("{task_id}", urllib.parse.quote(task_id)) if "{task_id}" in normalized_query else f"{normalized_query.rstrip('/')}/{urllib.parse.quote(task_id)}"
+            target_url = normalized_query.replace("{id}", urllib.parse.quote(task_id)).replace("{task_id}", urllib.parse.quote(task_id)) if "{id}" in normalized_query or "{task_id}" in normalized_query else f"{normalized_query.rstrip('/')}/{urllib.parse.quote(task_id)}"
             kwargs = {"headers": headers, "timeout": 30, "verify": False}
             if not use_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}

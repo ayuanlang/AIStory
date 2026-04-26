@@ -3,7 +3,7 @@ import { api } from '../services/api';
 import { X, Check, Loader2, DollarSign, Wallet } from 'lucide-react';
 import { getUiLang, tUI } from '../lib/uiLang';
 
-const RechargeModal = ({ onClose, onSuccess }) => {
+const RechargeModal = ({ onClose, onSuccess, groupId, groupName }) => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
     const [step, setStep] = useState('select'); // select, pay, success
@@ -41,7 +41,9 @@ const RechargeModal = ({ onClose, onSuccess }) => {
 
         setLoading(true);
         try {
-            const res = await api.post('/billing/recharge/create', { amount: finalAmount });
+            const payload = { amount: finalAmount };
+            if (groupId) { payload.group_id = groupId; }
+            const res = await api.post('/billing/recharge/create', payload);
             setOrder(res.data);
             setStep('pay');
             startPolling(res.data.order_no);

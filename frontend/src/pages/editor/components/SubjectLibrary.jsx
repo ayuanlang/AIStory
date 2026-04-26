@@ -1669,7 +1669,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (onLog) onLog(`Analyzing image for subject ${entity.name}...`, "process");
         
         try {
-            const updated = await analyzeEntityImage(entity.id, 'subject_image_analysis');
+            const updated = await analyzeEntityImage(entity.id, 'script_analysis');
             setSelectedEntity(prev => (prev?.id === updated.id ? updated : prev));
             setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
             setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
@@ -1875,7 +1875,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     });
 
                     try {
-                        const updated = await analyzeEntityImage(entity.id, 'subject_image_analysis');
+                        const updated = await analyzeEntityImage(entity.id, 'script_analysis');
                         if (shouldStopBatchAnalyze()) {
                             continue;
                         }
@@ -1949,7 +1949,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         };
 
         setStep('analyzing', '正在分析当前图片...', 'Analyzing current image...', 20);
-        const analyzed = await analyzeEntityImage(entity.id, 'subject_image_analysis');
+        const analyzed = await analyzeEntityImage(entity.id, 'script_analysis');
         if (shouldStop()) {
             throw new Error('__subject_batch_stop__');
         }
@@ -3672,7 +3672,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     <ImageIcon size={16} />
                                 </button>
                                 <button 
-                                    onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'generate'); }}
+                                    onClick={(e) => { e.stopPropagation(); setViewingEntity(entity); setViewingEntityTab('generate'); handleGenerate(entity, null, getEntityPromptByLang(entity, effectivePromptSubmitLang)); }}
                                     disabled={imageActionLocked}
                                     className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={t('生成 AI 图片', 'Generate AI Image')}
@@ -3801,7 +3801,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 
                                 {viewingEntity.id !== 'new' && (
                                     <div className="absolute top-4 left-4 flex gap-2">
-                                         <FunctionApiSelector functionName="subject_image_analysis" configs={functionApiConfigs} />
+                                         
                                          <button
                                             onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'library'); }}
                                             disabled={viewingEntityImageLocked}

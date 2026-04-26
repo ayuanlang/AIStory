@@ -193,6 +193,51 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [userPrompt, setUserPrompt] = useState('');
     const [isSuperuser, setIsSuperuser] = useState(false);
     const isSuperuserRef = useRef(false);
+    const SUBJECT_INDEX_PARSE_ERROR = '第一阶段未解析到完整的 Subject Index 区块，请在原文补充横杠或小标题结构后重试。';
+
+    const extractAnalysisSections = useCallback((rawText) => {
+        const authoritativeSubjectText = String(rawText || '');
+        let extractedText = '';
+        let extractedAdaptationText = '';
+        let hasStructuredSubjectIndex = false;
+
+        if (!authoritativeSubjectText) {
+            return {
+                authoritativeSubjectText,
+                subjectIndexText: '',
+                adaptationText: '',
+                hasStructuredSubjectIndex: false,
+            };
+        }
+
+        const adaptMatch = authoritativeSubjectText.match(/\*\*\s*剧本改编(?:补充说明)?\s*\*\*[:：]?\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i)
+            || authoritativeSubjectText.match(/###?\s*剧本改编(?:补充说明)?\s*\n([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i)
+            || authoritativeSubjectText.match(/剧本改编(?:补充说明)?[:：\n]\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i);
+        if (adaptMatch) {
+            extractedAdaptationText = (adaptMatch[1] || adaptMatch[2] || adaptMatch[3] || '').trim();
+        }
+
+        const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
+        if (dashMatch && dashMatch[1].trim()) {
+            extractedText = dashMatch[1].trim();
+            hasStructuredSubjectIndex = true;
+        } else {
+            const match = authoritativeSubjectText.match(/(?:###?|##)\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
+            if (match) {
+                extractedText = match[0];
+                hasStructuredSubjectIndex = true;
+            } else {
+                extractedText = authoritativeSubjectText;
+            }
+        }
+
+        return {
+            authoritativeSubjectText,
+            subjectIndexText: extractedText,
+            adaptationText: extractedAdaptationText,
+            hasStructuredSubjectIndex,
+        };
+    }, []);
 
     useEffect(() => {
         isSuperuserRef.current = isSuperuser;
@@ -202,27 +247,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!activeEpisode) return;
         const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode.ai_scene_analysis_result || '';
         if (authoritativeSubjectText) {
-            let extractedText = "";
-            let extractedAdaptationText = "";
-
-            const adaptMatch = authoritativeSubjectText.match(/\*\*\s*剧本改编(?:补充说明)?\s*\*\*[:：]?\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i) || 
-                                authoritativeSubjectText.match(/###?\s*剧本改编(?:补充说明)?\s*\n([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i) ||
-                                authoritativeSubjectText.match(/剧本改编(?:补充说明)?[:：\n]\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i);
-            if (adaptMatch) {
-                extractedAdaptationText = (adaptMatch[1] || adaptMatch[2] || adaptMatch[3] || "").trim();
-            }
-
-            const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
-            if (dashMatch && dashMatch[1].trim()) {
-                extractedText = dashMatch[1].trim();
-            } else {
-                const match = authoritativeSubjectText.match(/(?:###?|##)\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
-                if (match) {
-                    extractedText = match[0];
-                } else {
-                    extractedText = authoritativeSubjectText;
-                }
-            }
+            const { subjectIndexText: extractedText, adaptationText: extractedAdaptationText } = extractAnalysisSections(authoritativeSubjectText);
 
             // 剧本分析界面的修改是持久化的，不再从llm直接回填与持久化：
             // 我们只进行UI展现刷新（用户自行通过编辑决定保存）
@@ -233,7 +258,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAdaptationText(extractedAdaptationText);
             }
         }
-    }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.id]);
+    }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.id, adaptationText, extractAnalysisSections, subjectIndexText]);
 
     const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
     const [subjectConsistencyResultText, setSubjectConsistencyResultText] = useState('');
@@ -468,6 +493,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const normalized = stable.toLowerCase();
+        if (stable.includes('第一阶段未解析到完整的 Subject Index 区块')) {
+            return t('大模型开小差了，请选择其他AI。', 'The model got distracted. Please choose another AI.');
+        }
         if (
             normalized.includes('剧本分析结果不可用')
             || normalized.includes('请直接重新执行 ai 剧本分析')
@@ -3147,18 +3175,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return emptyReport;
         }
 
-        const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
-        let subjectIndexText = "";
+                const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
+                const extractedSections = extractAnalysisSections(authoritativeSubjectText);
+                let subjectIndexText = extractedSections.subjectIndexText || "";
+                let adaptationText = extractedSections.adaptationText || "";
 
-        let adaptationText = "";
-
-          const adaptMatch = authoritativeSubjectText.match(/\*\*\s*剧本改编(?:补充说明)?\s*\*\*[:：]?\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i) || 
-                             authoritativeSubjectText.match(/###?\s*剧本改编(?:补充说明)?\s*\n([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i) ||
-                             authoritativeSubjectText.match(/剧本改编(?:补充说明)?[:：\n]\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i);
-          if (adaptMatch) {
-              adaptationText = adaptMatch[1] || adaptMatch[2] || adaptMatch[3] || "";
-              onLog?.(`[Asset Gen Tracking] Extracted Script Adaptation (length: ${adaptationText.length})`);
-          }
+                    if (adaptationText) {
+                            onLog?.(`[Asset Gen Tracking] Extracted Script Adaptation (length: ${adaptationText.length})`);
+                    }
 
           onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
 
@@ -3167,20 +3191,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
           }
 
         // Try to match the block wrapped by at least 5 dashes: ---------
-        const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
-        if (dashMatch && dashMatch[1].trim()) {
-            subjectIndexText = dashMatch[1].trim();
-            onLog?.(`[Asset Gen Tracking] Extracted Subject Index wrapped by dashes (length: ${subjectIndexText.length})`);
+        if (extractedSections.hasStructuredSubjectIndex) {
+            onLog?.(`[Asset Gen Tracking] Extracted Subject Index (length: ${subjectIndexText.length})`);
         } else {
-            // Fallback to header matching if dashes are not found
-            const match = authoritativeSubjectText.match(/(?:###?|##)\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
-            if (match) {
-                subjectIndexText = match[0];
-                onLog?.(`[Asset Gen Tracking] Extracted Subject Index via header (length: ${subjectIndexText.length})`);
-            } else {
-                onLog?.(`[Asset Gen Tracking] Error: Failed to find Subject Index header or dashes! Aborting asset generation.`, 'error');
-                throw new Error("第一阶段未解析到完整的 Subject Index 区块，请在原文补充横杠或小标题结构后重试。");
-            }
+            onLog?.(`[Asset Gen Tracking] Error: Failed to find Subject Index header or dashes! Aborting asset generation.`, 'error');
+            throw new Error(SUBJECT_INDEX_PARSE_ERROR);
         }
 
         // Phase 2 Preparation: Save extracted subjectIndexText to episode and set UI state
@@ -5055,6 +5070,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
+            const analysisSections = extractAnalysisSections(analyzedText || '');
+            if (!analysisSections.hasStructuredSubjectIndex) {
+                if (onLog) onLog('Missing Subject Index after phase 1 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
+                throw new Error(SUBJECT_INDEX_PARSE_ERROR);
+            }
+
             setLlmRawResultContent(analyzedText);
             setLlmResultContent(normalizeLlmMarkdownTable(analyzedText));
             lastLoadedAnalysisRef.current = analyzedText;
@@ -5536,6 +5557,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         showAnalysisWarningStatus(displayWarnings);
                     }
                 }
+            }
+
+            const analysisSections = extractAnalysisSections(analyzedText || '');
+            if (!analysisSections.hasStructuredSubjectIndex) {
+                if (onLog) onLog('Missing Subject Index after phase 1 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
+                throw new Error(SUBJECT_INDEX_PARSE_ERROR);
             }
 
             setLlmRawResultContent(analyzedText || "");

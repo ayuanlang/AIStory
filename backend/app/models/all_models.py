@@ -99,6 +99,7 @@ class TransactionHistory(Base):
     __tablename__ = "transaction_history"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    target_group_id = Column(Integer, ForeignKey("user_groups.id"), nullable=True)
 
     project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=True)
     episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=True)
@@ -710,10 +711,12 @@ class PaymentOrder(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_no = Column(String, unique=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
+    target_group_id = Column(Integer, ForeignKey("user_groups.id"), nullable=True)
     
     amount = Column(Integer, nullable=False) # In CNY
     credits = Column(Integer, nullable=False) # Total credits to add
     status = Column(String, default="PENDING") # PENDING, PAID, CANCELLED
+    invoice_status = Column(String, default="UNINVOICED") # UNINVOICED, REQUESTING, INVOICED
     pay_url = Column(String, nullable=True) # QR Code Content
     
     provider = Column(String, default="wechat")
@@ -728,3 +731,27 @@ class DeletedMedia(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, index=True)
     deleted_at = Column(DateTime(timezone=True), default=func.now())
+
+class InvoiceProfile(Base):
+    __tablename__ = "invoice_profiles"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    group_id = Column(Integer, ForeignKey("user_groups.id"), nullable=True)
+    type = Column(String, default="ENTERPRISE") # ENTERPRISE, PERSONAL
+    title = Column(String, nullable=False)
+    tax_number = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+
+class Invoice(Base):
+    __tablename__ = "invoices"
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("payment_orders.id"), nullable=False)
+    amount = Column(Integer, nullable=False)
+    title = Column(String, nullable=False)
+    tax_number = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    status = Column(String, default="PENDING") # PENDING, ISSUED, FAILED
+    wechat_invoice_id = Column(String, nullable=True)
+    pdf_url = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)

@@ -7,7 +7,7 @@ import { API_URL } from '@/config';
 import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getDraftModePreference, setDraftModePreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
-import { fetchGroups, createGroup } from '../services/api';
+import { fetchGroups, createGroup, addGroupMember } from '../services/api';
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
 
@@ -238,8 +238,12 @@ const Settings = () => {
     const [activeTab, setActiveTab] = useState('general');
 
     const [userGroups, setUserGroups] = useState([]);
+    const [rechargeTargetGroupId, setRechargeTargetGroupId] = useState(null);
+    const [rechargeTargetGroupName, setRechargeTargetGroupName] = useState('');
     const [groupName, setGroupName] = useState('');
     const [showCreateGroup, setShowCreateGroup] = useState(false);
+    const [addingMemberToGroupId, setAddingMemberToGroupId] = useState(null);
+    const [newMemberUsername, setNewMemberUsername] = useState('');
 
     useEffect(() => {
         if (activeTab === 'groups') {
@@ -262,6 +266,39 @@ const Settings = () => {
 
 
     // Account Management
+    const handleAddMember = async (groupId) => {
+        if (!newMemberUsername) return;
+        
+        // Match separators: newlines, commas (half/full width), spaces, semicolons
+        const usernames = newMemberUsername.split(/[\s,，;；\n]+/).map(u => u.trim()).filter(Boolean);
+        if (usernames.length === 0) return;
+
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const username of usernames) {
+            try {
+                await addGroupMember(groupId, { username, permission_level: 1 });
+                successCount++;
+            } catch (e) {
+                console.error(e);
+                failCount++;
+            }
+        }
+        
+        setNewMemberUsername('');
+        setAddingMemberToGroupId(null);
+        
+        const data = await fetchGroups();
+        setUserGroups(data);
+        
+        if (failCount === 0) {
+            alert(t(`成功添加 ${successCount} 个成员！`, `Successfully added ${successCount} members!`));
+        } else {
+            alert(t(`添加完成。成功: ${successCount}，失败: ${failCount} (可能是非法用户、已存在或无权限)`, `Action completed. Success: ${successCount}, Failed: ${failCount} (invalid, existing, or no permission)`));
+        }
+    };
+
     const [profileName, setProfileName] = useState('');
     const [profileEmail, setProfileEmail] = useState('');
     const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
@@ -1924,7 +1961,8 @@ const Settings = () => {
                                             <tr className="border-b border-white/10 text-muted-foreground">
                                                 <th className="p-3">{t('时间', 'Time')}</th>
                                                 <th className="p-3">{t('类型', 'Type')}</th>
-                                                <th className="p-3 text-right">{t('金额', 'Amount')}</th>
+                                                <th className="p-3 text-center w-24">{t('发票', 'Invoice')}</th>
+                                                  <th className="p-3 text-right">{t('金额', 'Amount')}</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-white/5">
@@ -1939,7 +1977,20 @@ const Settings = () => {
                                                         <span className="bg-white/5 px-2 py-0.5 rounded text-xs uppercase border border-white/10">{t.task_type}</span>
                                                         {renderTransactionProviderUsage(t)}
                                                     </td>
-                                                    <td className={`p-3 text-right font-mono font-bold ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                                    <td className="p-3 text-center align-middle whitespace-nowrap">
+                                                        {t.details?.task_type === 'recharge' && t.details?.payment_order_id && t.details?.invoice_status === 'UNINVOICED' && (
+                                                            <button onClick={() => { setSelectedInvoiceOrder({ id: tx.payment_order_id, amount: tx.amount }); setInvoiceModalOpen(true); }} className="px-3 py-1 rounded bg-[#2a6fd9] hover:bg-[#3b82f6] text-white text-xs font-medium cursor-pointer transition-colors border border-blue-400/30">
+                                                                {t('索要发票', 'Request Invoice') || 'Request Invoice'}
+                                                            </button>
+                                                        )}
+                                                        {t.details?.task_type === 'recharge' && t.details?.invoice_status === 'REQUESTING' && (
+                                                            <span className="text-cyan-400 text-xs px-2 py-1 rounded bg-cyan-400/10 border border-cyan-400/20">{t('开票中', 'Requesting') || 'Requesting'}</span>
+                                                        )}
+                                                        {t.details?.task_type === 'recharge' && t.details?.invoice_status === 'INVOICED' && (
+                                                            <span className="text-green-400 text-xs px-2 py-1 rounded bg-green-400/10 border border-green-400/20">{t('已开票', 'Invoiced') || 'Invoiced'}</span>
+                                                        )}
+                                                    </td>
+                                                      <td className={`p-3 text-right font-mono font-bold ${t.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
                                                         {t.amount > 0 ? '+' : ''}{t.amount}
                                                     </td>
                                                 </tr>
@@ -1950,16 +2001,6 @@ const Settings = () => {
                              )}
                         </div>
                     </div>
-
-                    {showRecharge && (
-                        <RechargeModal 
-                            onClose={() => setShowRecharge(false)} 
-                            onSuccess={() => {
-                                refreshBilling();
-                                showNotification(t('充值成功！', 'Recharge successful!'), "success");
-                            }}
-                        />                                
-                    )}
                 </div>
             ) : activeTab === 'api_settings' ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -2069,6 +2110,7 @@ const Settings = () => {
                                           <th className="p-3">{t('组名', 'Group Name')}</th>
                                           <th className="p-3">{t('身份权限', 'Role / Level')}</th>
                                           <th className="p-3 text-right">{t('当前组积分', 'Group Credits')}</th>
+                                          <th className="p-3 text-right">{t('操作', 'Actions')}</th>
                                       </tr>
                                   </thead>
                                   <tbody>
@@ -2082,11 +2124,33 @@ const Settings = () => {
                                                   {g.permission_level === 2 ? t('管理员', 'Admin') : t('成员', 'Member')}
                                               </td>
                                               <td className="p-3 text-right font-medium text-primary">{g.credits}</td>
+                                              <td className="p-3 text-right">
+                                                  {g.permission_level === 2 && (
+                                                        <div className="flex items-center justify-end gap-2">
+                                                            <button 
+                                                                onClick={() => setAddingMemberToGroupId(g.group_id)}
+                                                                className="text-xs px-3 py-1 bg-white/5 hover:bg-white/10 text-white rounded transition-colors"
+                                                            >
+                                                                {t('+ 添加成员', '+ Member')}
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => {
+                                                                    setRechargeTargetGroupId(g.group_id);
+                                                                    setRechargeTargetGroupName(g.name);
+                                                                    setShowRecharge(true);
+                                                                }}
+                                                                className="text-xs px-3 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded transition-colors flex items-center gap-1"
+                                                            >
+                                                                <Coins className="w-3 h-3" /> {t('充值', 'Top-up')}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                              </td>
                                           </tr>
                                       ))}
                                       {userGroups.length === 0 && (
                                           <tr>
-                                              <td colSpan={3} className="p-8 text-center text-muted-foreground">
+                                              <td colSpan={4} className="p-8 text-center text-muted-foreground">
                                                   {t('暂无群组', 'No Groups')}
                                               </td>
                                           </tr>
@@ -2097,6 +2161,67 @@ const Settings = () => {
                       </section>
                   </div>
             ) : null}
+
+            {addingMemberToGroupId && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+                    <div className="bg-[#1a1b26] border border-white/10 rounded-xl p-6 w-full max-w-md shadow-2xl relative w-full" style={{ zIndex: 101 }}>
+                        <h3 className="text-xl font-bold mb-4">{t('添加成员', 'Add Member')}</h3>
+                        <p className="text-sm text-muted-foreground mb-4">
+                            {t('请输入要在本组中添加的用户名或用户邮箱。', 'Please enter the username or email to add to this group.')}
+                        </p>
+                        <div className="mb-6">
+                            <label className="block text-xs font-medium mb-1 text-white/70">{t('批量添加用户名或邮箱（支持空格、逗号或回车换行分割）', 'Batch Add Usernames / Emails (comma, space, or newline separated)')}</label>
+                            <textarea
+                                rows={5}
+                                placeholder={t('输入多个用户可自动识别并批量添加...', 'Input multiple users logic recognize automatically...\nuser1\nuser2@example.com')}
+                                className="w-full px-3 py-3 bg-black/40 border border-white/10 rounded-md text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary focus:border-white/20 resize-y"
+                                value={newMemberUsername}
+                                onChange={e => setNewMemberUsername(e.target.value)}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                        handleAddMember(addingMemberToGroupId);
+                                    }
+                                }}
+                                autoFocus
+                            />
+                            <p className="text-[10px] text-white/40 mt-2">{t('快捷键: Ctrl + Enter 提交', 'Shortcut: Ctrl + Enter to submit')}</p>
+                        </div>
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={() => { setAddingMemberToGroupId(null); setNewMemberUsername(''); }}
+                                className="px-4 py-2 rounded-md bg-white/5 hover:bg-white/10 transition-colors text-sm"
+                            >
+                                {t('取消', 'Cancel')}
+                            </button>
+                            <button
+                                onClick={() => handleAddMember(addingMemberToGroupId)}
+                                className="px-4 py-2 rounded-md bg-primary text-black hover:bg-primary/90 transition-colors text-sm font-medium"
+                            >
+                                {t('确认添加', 'Add')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        
+
+
+                    {showRecharge && (
+                        <RechargeModal 
+                            onClose={() => {
+                                setShowRecharge(false);
+                                setRechargeTargetGroupId(null);
+                                setRechargeTargetGroupName('');
+                            }} 
+                            onSuccess={() => {
+                                refreshBilling();
+                                fetchGroups().then(data => setUserGroups(data)).catch(console.error);
+                                showNotification(t('充值成功！', 'Recharge successful!'), "success");
+                            }}
+                            groupId={rechargeTargetGroupId}
+                            groupName={rechargeTargetGroupName}
+                        />                                
+                    )}
         </div>
     );
 }

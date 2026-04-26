@@ -1,3 +1,4 @@
+import requests
 import os
 import uuid
 import logging
@@ -15,6 +16,7 @@ _MONTAGE_MAX_ITEMS = max(1, int(os.getenv("MONTAGE_MAX_ITEMS", "24") or 24))
 _MONTAGE_MAX_TOTAL_SECONDS = max(30.0, float(os.getenv("MONTAGE_MAX_TOTAL_SECONDS", "240") or 240.0))
 _MONTAGE_RENDER_SLOTS = threading.BoundedSemaphore(_MONTAGE_MAX_CONCURRENT)
 
+import requests
 def create_montage(project_id: int, items: list) -> str:
     """
     Stitches clips together.
@@ -56,7 +58,6 @@ def create_montage(project_id: int, items: list) -> str:
             if not os.path.exists(file_path):
                 if url.startswith("http://") or url.startswith("https://"):
                     try:
-                        import requests
                         os.makedirs(os.path.dirname(file_path), exist_ok=True)
                         logger.info(f"Downloading remote video: {url} to {file_path}")
                         with requests.get(url, stream=True, timeout=60) as r:

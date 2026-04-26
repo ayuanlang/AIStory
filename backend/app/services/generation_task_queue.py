@@ -44,9 +44,18 @@ _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS",
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "900") or 900.0))
 _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
 _DEFAULT_WORKER_THREADS = min(8, max(2, int(DB_POOL_SIZE_EFFECTIVE or 2)))
-_REQUESTED_WORKER_THREADS = max(1, int(_q_conf.get("queue_threads", 20)))
-# Leave headroom for API requests and auth flows by capping queue workers.
-_WORKER_THREAD_CAP = max(20, _POOL_CAPACITY // 2)
+_REQUESTED_WORKER_THREADS = max(
+    1,
+    int(
+        os.getenv(
+            "GENERATION_QUEUE_WORKER_THREADS",
+            str(_q_conf.get("queue_threads", _DEFAULT_WORKER_THREADS)),
+        ) or _DEFAULT_WORKER_THREADS
+    ),
+)
+# Keep the default queue target at 20 for dedicated worker processes, while
+# still degrading safely when the DB pool is smaller than that target.
+_WORKER_THREAD_CAP = max(1, min(20, _POOL_CAPACITY - 4))
 _QUEUE_WORKER_THREADS = max(1, min(_REQUESTED_WORKER_THREADS, _WORKER_THREAD_CAP))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None

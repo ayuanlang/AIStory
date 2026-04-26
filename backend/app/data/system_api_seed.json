@@ -1558,7 +1558,7 @@
       "name": "zlhub doubao-seedance-2-0",
       "category": "Video",
       "provider": "zlhub",
-      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "base_url": "https://api.zlhub.cn",
       "model": "doubao-seedance-2-0",
       "modality": {
         "generation_modes": [
@@ -1591,13 +1591,12 @@
         }
       },
       "config": {
-        "endpoint": "/proxy/chat/completions",
-        "query_endpoint": "/proxy/ark/contents/generations/tasks",
-        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "endpoint": "/v1/task/create",
+        "query_endpoint": "/v1/task/get/{task_id}",
+        "moderation_endpoint": "https://asset.zlhub.cn/api/asset/upload/sync",
         "moderation_enabled": true,
         "moderation_required": true,
-        "moderation_user_id": "",
-        "moderation_aes_key": "",
+        "moderation_access_token": "",
         "generate_audio": false,
         "provider_api_key_strategy": "random"
       },
@@ -1613,7 +1612,7 @@
       "name": "zlhub doubao-seedance-1-5-pro",
       "category": "Video",
       "provider": "zlhub",
-      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "base_url": "https://api.zlhub.cn",
       "model": "doubao-seedance-1-5-pro",
       "modality": {
         "generation_modes": [
@@ -1646,13 +1645,12 @@
         }
       },
       "config": {
-        "endpoint": "/proxy/chat/completions",
-        "query_endpoint": "/proxy/ark/contents/generations/tasks",
-        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "endpoint": "/v1/task/create",
+        "query_endpoint": "/v1/task/get/{task_id}",
+        "moderation_endpoint": "https://asset.zlhub.cn/api/asset/upload/sync",
         "moderation_enabled": true,
         "moderation_required": true,
-        "moderation_user_id": "",
-        "moderation_aes_key": "",
+        "moderation_access_token": "",
         "generate_audio": true,
         "provider_api_key_strategy": "random"
       },
@@ -1669,7 +1667,7 @@
       "name": "zlhub doubao-seedance-1-5-pro-silent",
       "category": "Video",
       "provider": "zlhub",
-      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "base_url": "https://api.zlhub.cn",
       "model": "doubao-seedance-1-5-pro-silent",
       "modality": {
         "generation_modes": [
@@ -1702,13 +1700,12 @@
         }
       },
       "config": {
-        "endpoint": "/proxy/chat/completions",
-        "query_endpoint": "/proxy/ark/contents/generations/tasks",
-        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "endpoint": "/v1/task/create",
+        "query_endpoint": "/v1/task/get/{task_id}",
+        "moderation_endpoint": "https://asset.zlhub.cn/api/asset/upload/sync",
         "moderation_enabled": true,
         "moderation_required": true,
-        "moderation_user_id": "",
-        "moderation_aes_key": "",
+        "moderation_access_token": "",
         "generate_audio": false,
         "provider_api_key_strategy": "random"
       },
@@ -1724,7 +1721,7 @@
       "name": "zlhub doubao-seedance-1-5-pro-draft",
       "category": "Video",
       "provider": "zlhub",
-      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "base_url": "https://api.zlhub.cn",
       "model": "doubao-seedance-1-5-pro-draft",
       "modality": {
         "generation_modes": [
@@ -1757,13 +1754,12 @@
         }
       },
       "config": {
-        "endpoint": "/proxy/chat/completions",
-        "query_endpoint": "/proxy/ark/contents/generations/tasks",
-        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "endpoint": "/v1/task/create",
+        "query_endpoint": "/v1/task/get/{task_id}",
+        "moderation_endpoint": "https://asset.zlhub.cn/api/asset/upload/sync",
         "moderation_enabled": true,
         "moderation_required": true,
-        "moderation_user_id": "",
-        "moderation_aes_key": "",
+        "moderation_access_token": "",
         "generate_audio": true,
         "draft": true,
         "provider_api_key_strategy": "random"
@@ -1782,7 +1778,7 @@
       "name": "zlhub doubao-seedance-1-5-pro-draft-silent",
       "category": "Video",
       "provider": "zlhub",
-      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "base_url": "https://api.zlhub.cn",
       "model": "doubao-seedance-1-5-pro-draft-silent",
       "modality": {
         "generation_modes": [
@@ -1815,13 +1811,12 @@
         }
       },
       "config": {
-        "endpoint": "/proxy/chat/completions",
-        "query_endpoint": "/proxy/ark/contents/generations/tasks",
-        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "endpoint": "/v1/task/create",
+        "query_endpoint": "/v1/task/get/{task_id}",
+        "moderation_endpoint": "https://asset.zlhub.cn/api/asset/upload/sync",
         "moderation_enabled": true,
         "moderation_required": true,
-        "moderation_user_id": "",
-        "moderation_aes_key": "",
+        "moderation_access_token": "",
         "generate_audio": false,
         "draft": true,
         "provider_api_key_strategy": "random"
@@ -1839,7 +1834,7 @@
       "name": "zlhub doubao-seedance-1-0-pro",
       "category": "Video",
       "provider": "zlhub",
-      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "base_url": "https://api.zlhub.cn",
       "model": "doubao-seedance-1-0-pro",
       "modality": {
         "generation_modes": [
@@ -1872,13 +1867,12 @@
         }
       },
       "config": {
-        "endpoint": "/proxy/chat/completions",
-        "query_endpoint": "/proxy/ark/contents/generations/tasks",
-        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "endpoint": "/v1/task/create",
+        "query_endpoint": "/v1/task/get/{task_id}",
+        "moderation_endpoint": "https://asset.zlhub.cn/api/asset/upload/sync",
         "moderation_enabled": true,
         "moderation_required": true,
-        "moderation_user_id": "",
-        "moderation_aes_key": "",
+        "moderation_access_token": "",
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
@@ -1893,7 +1887,7 @@
       "name": "zlhub doubao-seedance-1-0-pro-fast",
       "category": "Video",
       "provider": "zlhub",
-      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "base_url": "https://api.zlhub.cn",
       "model": "doubao-seedance-1-0-pro-fast",
       "modality": {
         "generation_modes": [
@@ -1926,13 +1920,12 @@
         }
       },
       "config": {
-        "endpoint": "/proxy/chat/completions",
-        "query_endpoint": "/proxy/ark/contents/generations/tasks",
-        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "endpoint": "/v1/task/create",
+        "query_endpoint": "/v1/task/get/{task_id}",
+        "moderation_endpoint": "https://asset.zlhub.cn/api/asset/upload/sync",
         "moderation_enabled": true,
         "moderation_required": true,
-        "moderation_user_id": "",
-        "moderation_aes_key": "",
+        "moderation_access_token": "",
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,
@@ -1947,7 +1940,7 @@
       "name": "zlhub doubao-seedance-1-0-lite",
       "category": "Video",
       "provider": "zlhub",
-      "base_url": "https://zlhub.xiaowaiyou.cn/zhonglian/api/v1",
+      "base_url": "https://api.zlhub.cn",
       "model": "doubao-seedance-1-0-lite",
       "modality": {
         "generation_modes": [
@@ -1980,13 +1973,12 @@
         }
       },
       "config": {
-        "endpoint": "/proxy/chat/completions",
-        "query_endpoint": "/proxy/ark/contents/generations/tasks",
-        "moderation_endpoint": "http://118.196.112.236:3428/api/moderation/image",
+        "endpoint": "/v1/task/create",
+        "query_endpoint": "/v1/task/get/{task_id}",
+        "moderation_endpoint": "https://asset.zlhub.cn/api/asset/upload/sync",
         "moderation_enabled": true,
         "moderation_required": true,
-        "moderation_user_id": "",
-        "moderation_aes_key": "",
+        "moderation_access_token": "",
         "provider_api_key_strategy": "random"
       },
       "deprecated": false,

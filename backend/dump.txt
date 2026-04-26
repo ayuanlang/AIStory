@@ -1,0 +1,214 @@
+async def _handle_zlhub_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str]=None, image_size: Optional[str]=None, ref_mode: Optional[str]=None):
+    if gen_type != 'video':
+        return {'error': 'zlhub generation type not supported yet', 'submit_failed': True}
+    api_key = str(config.get('api_key') or '').strip()
+    if not api_key:
+        return {'error': 'No zlhub API Key', 'submit_failed': True}
+    tool_conf = config.get('config', {}) or {}
+    raw_callback_url = str(tool_conf.get('_provider_callback_url') or tool_conf.get('webhookUrl') or tool_conf.get('webHook') or tool_conf.get('webhook') or tool_conf.get('callBackUrl') or tool_conf.get('callback_url') or tool_conf.get('callbackUrl') or '').strip()
+    callback_ticket = str(tool_conf.get('_provider_callback_ticket') or '').strip() or f'zlhub-{gen_type}'
+    callback_tool_conf = dict(tool_conf or {})
+    if raw_callback_url:
+        callback_tool_conf.setdefault('callback_url', raw_callback_url)
+    callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+    provider_name = self._vendor_label(config.get('provider') or tool_conf.get('provider') or 'zlhub')
+    base_url = str(config.get('base_url') or 'https://zlhub.xiaowaiyou.cn/zhonglian/api/v1').strip().rstrip('/')
+    raw_endpoint = str(tool_conf.get('endpoint') or '').strip()
+    endpoint = raw_endpoint or '/proxy/ark/contents/generations/tasks'
+    raw_query_endpoint = self._normalize_zlhub_task_query_endpoint(tool_conf.get('query_endpoint') or tool_conf.get('queryEndpoint'))
+    model = str(config.get('model') or 'doubao-seedance-2-0').strip()
+    model_lower = str(model or '').strip().lower()
+    is_seedance2 = model_lower.startswith('doubao-seedance-2')
+    zlhub_trace_id = f'zlhub-{uuid.uuid4().hex[:10]}'
+    if re.match('^https?://', endpoint, flags=re.IGNORECASE):
+        if '/proxy/chat/completions' in endpoint.lower():
+            submit_url = re.sub('/proxy/chat/completions/?$', '/proxy/ark/contents/generations/tasks', endpoint, flags=re.IGNORECASE)
+        elif '/api/v3' in endpoint.lower() or endpoint.lower().endswith('/contents/generations/tasks'):
+            submit_url = self._normalize_doubao_video_tasks_endpoint(endpoint)
+        else:
+            submit_url = endpoint.rstrip('/')
+    elif raw_endpoint:
+        normalized_relative_endpoint = endpoint
+        if '/proxy/chat/completions' in normalized_relative_endpoint.lower():
+            normalized_relative_endpoint = re.sub('/proxy/chat/completions/?$', '/proxy/ark/contents/generations/tasks', normalized_relative_endpoint, flags=re.IGNORECASE)
+        submit_url = f"{base_url}{(normalized_relative_endpoint if normalized_relative_endpoint.startswith('/') else '/' + normalized_relative_endpoint)}"
+    elif '/api/v3' in base_url.lower() or base_url.lower().endswith('/contents/generations/tasks'):
+        submit_url = self._normalize_doubao_video_tasks_endpoint(base_url)
+    else:
+        submit_url = self._normalize_zlhub_task_query_endpoint(base_url)
+    explicit_query_endpoint = str(tool_conf.get('query_endpoint') or tool_conf.get('queryEndpoint') or '').strip()
+    if re.match('^https?://', raw_query_endpoint, flags=re.IGNORECASE):
+        if '/api/v3' in raw_query_endpoint.lower() or raw_query_endpoint.lower().endswith('/contents/generations/tasks'):
+            query_endpoint = self._normalize_doubao_video_tasks_endpoint(raw_query_endpoint)
+        else:
+            query_endpoint = raw_query_endpoint.rstrip('/')
+    elif not explicit_query_endpoint:
+        query_endpoint = submit_url
+    elif '/api/v3' in base_url.lower() or base_url.lower().endswith('/contents/generations/tasks'):
+        query_endpoint = self._normalize_doubao_video_tasks_endpoint(f"{base_url}/{raw_query_endpoint.lstrip('/')}" if not raw_query_endpoint.startswith('http') else raw_query_endpoint)
+    else:
+        query_endpoint = f"{base_url}{(raw_query_endpoint if raw_query_endpoint.startswith('/') else '/' + raw_query_endpoint)}"
+    prompt_text = self._merge_negative_prompt(prompt, negative_prompt)
+    if is_seedance2:
+        logger.info('[ZLHubSeedance2] request_init | trace_id=%s gen_type=%s provider=%s model=%s submit_url=%s query_endpoint=%s duration_in=%s aspect_ratio_in=%s', zlhub_trace_id, gen_type, provider_name, model, submit_url, query_endpoint, duration, aspect_ratio)
+    raw_image_refs = ref_image if isinstance(ref_image, list) else [ref_image]
+    resolved_image_refs: List[str] = []
+    for item in raw_image_refs:
+        text = str(item or '').strip()
+        if not text:
+            continue
+        resolved = await self._resolve_ref_for_api_async(text, force_data_uri_for_local=True, prefer_public_upload_url=True)
+        if resolved:
+            resolved_image_refs.append(str(resolved).strip())
+    resolved_image_refs = [item for item in dict.fromkeys(resolved_image_refs) if item]
+    resolved_last_frame = None
+    if str(last_frame_url or '').strip():
+        resolved_last_frame = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True, prefer_public_upload_url=True)
+        resolved_last_frame = str(resolved_last_frame or '').strip() or None
+    reference_video_urls = self._resolve_public_media_urls(tool_conf.get('reference_video_urls') or tool_conf.get('ref_video_urls') or [])
+    reference_audio_urls = self._resolve_public_media_urls(tool_conf.get('reference_audio_urls') or tool_conf.get('ref_audio_urls') or [])
+    dropped_mixed_reference_counts = {'image': 0, 'video': 0, 'audio': 0}
+    seedance2_ref_mode = ''
+    seedance2_payload_mode = ''
+    if is_seedance2:
+        raw_ref_mode = str(tool_conf.get('ref_mode') or tool_conf.get('video_ref_mode') or tool_conf.get('video_mode') or tool_conf.get('video_mode_unified') or '').strip().lower()
+        if raw_ref_mode in {'refs_video', 'entity_refs', 'reference', 'reference_images', 'reference_image'}:
+            seedance2_ref_mode = 'entity_refs'
+        elif raw_ref_mode in {'start_end', 'start-end', 'start+end', 'first_last', 'first_last_frame', 'first_and_last'}:
+            seedance2_ref_mode = 'start_end'
+        elif raw_ref_mode in {'end', 'last', 'last_frame'}:
+            seedance2_ref_mode = 'end'
+        elif raw_ref_mode in {'start', 'first', 'first_frame', 'auto'}:
+            seedance2_ref_mode = 'start'
+        if not seedance2_ref_mode:
+            if resolved_last_frame:
+                seedance2_ref_mode = 'start_end'
+            elif len(resolved_image_refs) > 1 or reference_video_urls or reference_audio_urls:
+                seedance2_ref_mode = 'entity_refs'
+            elif resolved_image_refs:
+                seedance2_ref_mode = 'start'
+            else:
+                seedance2_ref_mode = 'start'
+        seedance2_payload_mode = 'reference_media' if seedance2_ref_mode == 'entity_refs' else 'frame_content'
+    if is_seedance2 and (resolved_image_refs or resolved_last_frame or reference_video_urls or reference_audio_urls):
+        if seedance2_payload_mode == 'frame_content':
+            keep_first_ref = str(resolved_image_refs[0] or '').strip() if resolved_image_refs else ''
+            dropped_mixed_reference_counts['image'] = max(0, len(resolved_image_refs) - (1 if keep_first_ref else 0))
+            dropped_mixed_reference_counts['video'] = len(reference_video_urls)
+            dropped_mixed_reference_counts['audio'] = len(reference_audio_urls)
+            resolved_image_refs = [keep_first_ref] if keep_first_ref else []
+            reference_video_urls = []
+            reference_audio_urls = []
+        else:
+            dropped_last_frame = 1 if bool(resolved_last_frame) else 0
+            resolved_last_frame = None
+            if dropped_last_frame:
+                logger.info('[ZLHubSeedance2] dropped last_frame in reference_media mode | trace_id=%s', zlhub_trace_id)
+        if any(dropped_mixed_reference_counts.values()):
+            logger.info('[ZLHubSeedance2] dropped mixed reference media | trace_id=%s ref_mode=%s payload_mode=%s dropped_image_refs=%s dropped_video_refs=%s dropped_audio_refs=%s', zlhub_trace_id, seedance2_ref_mode or 'start', seedance2_payload_mode or 'frame_content', dropped_mixed_reference_counts['image'], dropped_mixed_reference_counts['video'], dropped_mixed_reference_counts['audio'])
+    if is_seedance2:
+        logger.info('[ZLHubSeedance2] refs_resolved | trace_id=%s ref_mode=%s payload_mode=%s image_refs=%s has_last_frame=%s ref_videos=%s ref_audios=%s', zlhub_trace_id, seedance2_ref_mode or 'start', seedance2_payload_mode or 'frame_content', len(resolved_image_refs), bool(resolved_last_frame), len(reference_video_urls), len(reference_audio_urls))
+    moderation_results: List[Dict[str, Any]] = []
+    moderation_candidates: List[tuple[str, str]] = []
+    if resolved_image_refs:
+        if len(resolved_image_refs) == 1 and (not resolved_last_frame):
+            moderation_candidates.append((resolved_image_refs[0], 'first_frame'))
+        else:
+            for idx, item in enumerate(resolved_image_refs):
+                moderation_candidates.append((item, 'first_frame' if idx == 0 else 'reference_image'))
+    if resolved_last_frame:
+        moderation_candidates.append((resolved_last_frame, 'last_frame'))
+    moderated_first_and_refs: List[str] = []
+    moderated_last_frame = resolved_last_frame
+    if moderation_candidates:
+        candidate_refs = [item[0] for item in moderation_candidates]
+        candidate_roles = [item[1] for item in moderation_candidates]
+        batch_result = await self._maybe_moderate_zlhub_images(candidate_refs, config, candidate_roles)
+        if batch_result.get('error') and batch_result.get('submit_failed'):
+            return {'error': batch_result.get('error'), 'details': batch_result.get('details') or batch_result, 'submit_failed': True}
+        moderation_results = list(batch_result.get('items') or [])
+        for idx, moderation_result in enumerate(moderation_results):
+            candidate_ref, role = moderation_candidates[idx] if idx < len(moderation_candidates) else ('', '')
+            if moderation_result.get('blocked'):
+                return {'error': f'{provider_name} moderation blocked reference material', 'details': moderation_result, 'submit_failed': True}
+            approved_ref = str(moderation_result.get('approved_ref') or candidate_ref or '').strip()
+            if role == 'last_frame':
+                moderated_last_frame = approved_ref or moderated_last_frame
+            elif approved_ref:
+                moderated_first_and_refs.append(approved_ref)
+    if moderated_first_and_refs:
+        resolved_image_refs = [item for item in dict.fromkeys(moderated_first_and_refs) if item]
+    if moderated_last_frame:
+        resolved_last_frame = moderated_last_frame
+    is_i2v_request = bool(resolved_image_refs or resolved_last_frame)
+    content_payload: List[Dict[str, Any]] = []
+    if prompt_text:
+        content_payload.append({'type': 'text', 'text': prompt_text})
+    if is_seedance2 and seedance2_payload_mode == 'reference_media':
+        for item in resolved_image_refs:
+            content_payload.append({'type': 'image_url', 'image_url': {'url': item}, 'role': 'reference_image'})
+    elif resolved_image_refs:
+        if is_seedance2 and seedance2_payload_mode == 'frame_content':
+            content_payload.append({'type': 'image_url', 'image_url': {'url': resolved_image_refs[0]}, 'role': 'first_frame'})
+        elif len(resolved_image_refs) == 1 and (not resolved_last_frame):
+            content_payload.append({'type': 'image_url', 'image_url': {'url': resolved_image_refs[0]}, 'role': 'first_frame'})
+        else:
+            for idx, item in enumerate(resolved_image_refs):
+                content_payload.append({'type': 'image_url', 'image_url': {'url': item}, 'role': 'reference_image'})
+    if resolved_last_frame:
+        content_payload.append({'type': 'image_url', 'image_url': {'url': resolved_last_frame}, 'role': 'last_frame'})
+    for item in reference_video_urls:
+        content_payload.append({'type': 'video_url', 'video_url': {'url': item}, 'role': 'reference_video'})
+    for item in reference_audio_urls:
+        content_payload.append({'type': 'audio_url', 'audio_url': {'url': item}, 'role': 'reference_audio'})
+    payload: Dict[str, Any] = {'model': model, 'content': content_payload}
+    is_draft = bool(self._normalize_bool_value(tool_conf.get('draft_mode')) or self._normalize_bool_value(tool_conf.get('draft')))
+    if is_draft:
+        if is_seedance2 and is_i2v_request:
+            pass
+        else:
+            payload['draft'] = True
+    if callback_url and callback_url != '-1':
+        payload['webhook_url'] = callback_url
+        payload['webhookUrl'] = callback_url
+        payload['callback_url'] = callback_url
+        payload['notify_url'] = callback_url
+    normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
+    if normalized_ratio:
+        payload['ratio'] = normalized_ratio
+    try:
+        payload['duration'] = int(duration or tool_conf.get('duration') or 5)
+    except Exception:
+        payload['duration'] = 5
+    for source_key, target_key in (('resolution', 'resolution'), ('generate_audio', 'generate_audio')):
+        value = tool_conf.get(source_key)
+        if source_key == 'resolution' and (not value):
+            value = image_size or tool_conf.get('image_size') or tool_conf.get('size')
+        if source_key == 'resolution' and is_draft:
+            value = '480p'
+        if value is None:
+            continue
+        if source_key == 'resolution' and is_seedance2 and is_i2v_request and (not is_draft):
+            logger.info('[ZLHubSeedance2] dropping unsupported i2v resolution | trace_id=%s model=%s resolution=%s', zlhub_trace_id, model, value)
+            continue
+        payload[target_key] = value
+    raw_tools = tool_conf.get('tools')
+    if raw_tools is None and tool_conf.get('web_search'):
+        raw_tools = ['web_search']
+    if isinstance(raw_tools, str):
+        raw_tools = [raw_tools]
+    if isinstance(raw_tools, list):
+        normalized_tools: List[Dict[str, Any]] = []
+        for item in raw_tools:
+            if isinstance(item, dict) and item.get('type'):
+                normalized_tools.append(item)
+                continue
+            name = str(item or '').strip().lower()
+            if name == 'web_search':
+                normalized_tools.append({'type': 'web_search'})
+        if normalized_tools:
+            payload['tools'] = normalized_tools
+    base_metadata = {'provider': 'zlhub', 'provider_label': provider_name, 'model': model, 'prompt': prompt, 'trace_id': zlhub_trace_id, 'submit_url': submit_url, 'query_endpoint': query_endpoint, 'requested_duration': payload.get('duration'), 'requested_aspect_ratio': payload.get('ratio'), 'resolved_reference_count': len(resolved_image_refs), 'resolved_reference_video_count': len(reference_video_urls), 'resolved_reference_audio_count': len(reference_audio_urls), 'resolved_ref_mode': seedance2_ref_mode or None, 'seedance2_payload_mode': seedance2_payload_mode or None, 'dropped_mixed_reference_counts': dropped_mixed_reference_counts, 'moderation': moderation_results}
+    if is_seedance2:
+        logger.info('[ZLHubSeedance2] submit_ready | trace_id=%s payload_duration=%s payload_ratio=%s tools=%s content_items=%s', zlhub_trace_id, payload.get('duration'), payload.get('ratio'), len(payload.get('tools') or []) if isinstance(payload.get('tools'), list) else 0, len(content_payload))
+    return await self._submit_and_poll_zlhub_video(submit_url, query_endpoint, payload, api_key, 'zlhub_video', extra_metadata=base_metadata)

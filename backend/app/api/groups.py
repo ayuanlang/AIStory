@@ -13,7 +13,9 @@ class GroupCreate(BaseModel):
     description: Optional[str] = None
     
 class GroupMemberAdd(BaseModel):
-    user_id: int
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+    email: Optional[str] = None
     permission_level: int = 1
 
 class GroupAllocation(BaseModel):
@@ -41,6 +43,11 @@ def create_group(
     )
     db.add(membership)
     current_user.current_group_id = new_group.id
+    
+    # Actually update DB user
+    real_user = db.query(User).filter(User.id == current_user.id).first()
+    if real_user:
+        real_user.current_group_id = new_group.id
     db.commit()
     db.refresh(new_group)
     
@@ -59,7 +66,7 @@ def get_my_groups(
                 "group_id": m.group.id,
                 "name": m.group.name,
                 "permission_level": m.permission_level,
-                "is_current": (current_user.current_group_id == m.group.id),
+                "is_current": (getattr(current_user, "current_group_id", None) == m.group.id),
                 "credits": m.group.credits or 0
             })
     return results
@@ -80,7 +87,14 @@ def add_member(
     if not membership:
         raise HTTPException(status_code=403, detail="Not authorized to add members to this group.")
         
-    target_user = db.query(User).filter(User.id == member_in.user_id).first()
+    target_user = None
+    if member_in.user_id:
+        target_user = db.query(User).filter(User.id == member_in.user_id).first()
+    elif member_in.username:
+        target_user = db.query(User).filter(User.username == member_in.username).first()
+    elif member_in.email:
+        target_user = db.query(User).filter(User.email == member_in.email).first()
+        
     if not target_user:
         raise HTTPException(status_code=404, detail="Target user not found.")
         

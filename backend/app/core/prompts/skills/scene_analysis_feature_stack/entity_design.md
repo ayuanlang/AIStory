@@ -41,7 +41,7 @@
 
 ### 1.1 核心底线与实体输出规范
 - 资产标准化：Environment / Character / Prop 独立且可关联。所有实体必须原样继承上游传递的 `subject_no` 字段。
-- **角色与道具四宫格与画幅强制基线**：所有角色（character）与所有道具（prop）的 `generation_prompt_cn/en` 必须严格采用**四宫格/四视图设定图**格式（所有视角横排展现，纯白背景），默认对齐 `16:9` 横向画布。**必须在提示词中强烈强调四个面板共同生长在一整块连续、统一的纯白画板上，各视角之间呈现为开阔自然的留白呼吸感，保持绝对的平面整体性。**务必保留完整的四格排版标准。
+- **角色与道具四宫格与画幅强制基线**：所有角色（character）与所有道具（prop）的 `generation_prompt_cn/en` 必须严格采用**四宫格/四视图设定图**格式（所有视角横排展现，纯白背景），默认对齐 `16:9` 横向画布。**必须在提示词中强烈强调四个面板共同生长在一整块连续、统一的纯白画板上，各视角之间呈现为开阔自然的留白呼吸感，保持绝对的平面整体性；第一宫特写必须明确落在该宫格的纵向居中位置，不得上飘或下沉。**务必保留完整的四格排版标准。
 - **实体命名一致性最高原则**：实体的命名（包含中英文名称）必须与上游 subjects index 保持绝对一致，作为最高原则！请直接原样保留上游传递的名称格式（包括空格、大小写、下划线拼接等）。
 
 - 创新式设计要求：示例、模板、规则中的职业、人种、年龄、服装、道具、环境名、空间结构、镜头话术都只能作为**格式参考**。每次生成必须基于当前剧本重新设计独有的实体形象、材质、空间与细节，确保输出的是当前项目专属的视觉组合。
@@ -220,7 +220,7 @@
       "appearance_cn": "28岁，东亚女性，身高178cm，头身比1:9.3，腰线明显上提，下半身视觉占比约63%，上半身约37%，呈现出修长且接近黄金分割的比例。面部核心特征：1) 略带单眼皮质感的内双眼型，瞳孔呈深琥珀色且睫毛自然；2) 鼻梁挺直、鼻翼偏窄且线条紧致；3) 额骨到下巴的轮廓线利落。皮肤真实，带有皮肤微瑕细纹、微弱斑点与肤质高光质感。黑色齐肩短发，右侧习惯性挽在耳后。",
       "clothing": "当前服装：深海军蓝修身截短款机能风夹克，内搭浅灰色垂坠感真丝衬衫，下身穿高腰黑色修身阔腿短裤与及膝平底皮靴。时尚对标：角色定位=都市调查记者；当代风格参考=实用机能风（Techwear）与高级极简主义；版型/材质/配色关键词=高腰修身、利落实用、深蓝与冷灰渐变、防水冲锋衣哑光材质。其他剧本衣着描述：无。",
       "action_characteristics": "动作极度克制，重心下沉且稳定，观察事物前习惯有0.5秒的停滞停顿。",
-      "generation_prompt_cn": "电影级写实真人设定四视图，16:9横向资产画布。项目类型为实拍写实，由于强调真实质感，展示真实肤色微斑点、细小毛孔与自然光泽。28岁东亚女性，林月。身高178cm，头身比1:9.3，高腰线，长腿比例下半身占63%。深琥珀色内双眼睛，挺直鼻梁，清晰下颌线。黑色齐肩短发。四个面板严格同一身份/服装/比例：第一宫是35%面部特写(Close-up)，第二宫是正面全身(Front)，第三宫是侧面全身(Side)，第四宫是背面全身(Back)，全部在同一横排展开，鞋子完全可见。穿着深海军蓝截短机能夹克，浅灰内衬，高腰黑短裤，及膝黑皮靴。呈现重心下沉且稳定的静态站姿。电影棚拍柔和贝壳光加极细边缘轮廓光。四个人像置于一整块单独、连续且统一的纯白布景画板中，各自分配充分且自然的呼吸留白，视觉上呈现出完整的平面整体。",
+      "generation_prompt_cn": "电影级写实真人设定四视图，16:9横向资产画布。项目类型为实拍写实，由于强调真实质感，展示真实肤色微斑点、细小毛孔与自然光泽。28岁东亚女性，林月。身高178cm，头身比1:9.3，高腰线，长腿比例下半身占63%。深琥珀色内双眼睛，挺直鼻梁，清晰下颌线。黑色齐肩短发。四个面板严格同一身份/服装/比例：第一宫是35%面部特写(Close-up)，且特写主体必须放在第一宫的纵向居中位置；第二宫是正面全身(Front)，第三宫是侧面全身(Side)，第四宫是背面全身(Back)，全部在同一横排展开，鞋子完全可见。穿着深海军蓝截短机能夹克，浅灰内衬，高腰黑短裤，及膝黑皮靴。呈现重心下沉且稳定的静态站姿。电影棚拍柔和贝壳光加极细边缘轮廓光。四个人像置于一整块单独、连续且统一的纯白布景画板中，各自分配充分且自然的呼吸留白，视觉上呈现出完整的平面整体。",
       "generation_prompt_en": "Photoreal character sheet for Lin Yue on a 16:9 horizontal canvas. Live Action project type highlighting skin pores, fine texture, and realistic features. 28yo East Asian woman, 178cm, 1:9.3 head-to-body proportion, elevated waistline, lower body ~63% with long legs. Deep amber inner-double monolid eyes, straight nose bridge, sharp jawline, shoulder-length black bob tucked behind her right ear. Strict four panels in a single row: Panel 1 is a 35% facial Close-up, Panel 2 is full-body Front, Panel 3 is Side, and Panel 4 is Back. Continuous sequence, shoes completely visible in full body shots. Wardrobe: fitted cropped navy techwear jacket, draped light grey inner top, high-waist black shorts, knee-high flat leather boots. Stable static standing pose with a lowered center of gravity. Soft clamshell key light with sharp rim light. All four figures are presented together within a single, continuous, and unified pure white backdrop canvas, with natural breathing space blending them horizontally.",
       "negative_prompt_en": "beauty-filter skin, plastic face, CGI look, waxy skin, anime illustration, oversized clothing, 1:1 body split, incorrect panel order, fewer than 4 panels, cropped shoes, split-screen comic.",
       "anchor_description": "female investigative reporter, shoulder-length black bob, sharp jawline, cropped navy techwear jacket, knee-high boots",
@@ -238,7 +238,7 @@
       "name_en": "Police ID Badge Lanyard",
       "type": "held/static",
       "description_cn": "英文项目警探日常使用的身份挂绳。其组成包含：顶部深蓝色编制尼龙长绳、带有使用痕迹的硬质全透明亚克力卡套、前端带有老旧黄铜拉丝质感的五角星警徽以及英文排版的文字ID卡面。",
-      "generation_prompt_cn": "写实英文项目道具四视图：警徽挂绳证件卡。固定于16:9横向单画布。居中转台相机视角。该道具呈现深蓝尼龙织带、边缘磨损的硬体宽卡套、划痕做旧的铜表面警徽及英文证件图文。视图呈现为四个视角面格并排：第一宫微距特写(Close-up展现金属划痕与纤维细节)，第二宫正面视图(Front)，第三宫侧面视图(Side)，第四宫背面视图(Back)，采用规整的4视图铺列表现形式。侧重打光材质厚度，顶部柔和关键光源分离轮廓深度。静物单体展示，四个视角的静物共同生长在同一块纯净连续的单一全白背景画布中，自然留白并呈现完美的平面整体性。",
+      "generation_prompt_cn": "写实英文项目道具四视图：警徽挂绳证件卡。固定于16:9横向单画布。居中转台相机视角。该道具呈现深蓝尼龙织带、边缘磨损的硬体宽卡套、划痕做旧的铜表面警徽及英文证件图文。视图呈现为四个视角面格并排：第一宫微距特写(Close-up展现金属划痕与纤维细节)，且特写主体必须放在第一宫的纵向居中位置；第二宫正面视图(Front)，第三宫侧面视图(Side)，第四宫背面视图(Back)，采用规整的4视图铺列表现形式。侧重打光材质厚度，顶部柔和关键光源分离轮廓深度。静物单体展示，四个视角的静物共同生长在同一块纯净连续的单一全白背景画布中，自然留白并呈现完美的平面整体性。",
       "generation_prompt_en": "Photoreal prop sheet for a Police ID Badge Lanyard on a 16:9 horizontal canvas. Centered turntable view. Exactly four views laid out side-by-side: Close-up (highlighting brass badge scratches, acrylic texture, and nylon fibers), Front, Side, and Back. Display navy woven strap, worn brass clip and badge, rigid clear acrylic holder, and English layout ID card. Soft top-angle key light with clean rim separation to emphasize material depth and wear. All four angles naturally share a single continuous, pure white background canvas, forming a cohesive and unified image plane.",
       "negative_prompt_en": "human hands, fingers, holding, Chinese text, toy-like plastic, 3D render, fewer than 4 panels, more than 4 panels, comic lines.",
       "anchor_description": "navy woven lanyard, rigid clear badge holder, worn brass police badge, English ID",

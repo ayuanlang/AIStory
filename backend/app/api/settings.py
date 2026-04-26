@@ -9987,7 +9987,7 @@ def get_all_function_api_configs(
     result = []
     supported_functions = [
         "generate_subjects", "generate_subjects_t2i", "generate_subjects_i2i", "generate_cover", "generate_shot_images",
-        "generate_videos", "script_analysis", "subject_image_analysis"
+        "generate_videos", "script_analysis"
     ]
     
     config_dict = {c.function_name: c for c in configs}
@@ -10027,7 +10027,7 @@ def update_function_api_config(
 ):
     supported_functions = [
         "generate_subjects", "generate_subjects_t2i", "generate_subjects_i2i", "generate_cover", "generate_shot_images",
-        "generate_videos", "script_analysis", "subject_image_analysis"
+        "generate_videos", "script_analysis"
     ]
     if function_name not in supported_functions:
         raise HTTPException(status_code=400, detail="Unsupported function_name")

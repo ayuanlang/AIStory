@@ -1,0 +1,42 @@
+        try:
+            response_payload = resp.json() if resp.content else {}
+        except Exception:
+            response_payload = {}
+        
+        if resp.status_code == 202 or "task_id" in response_payload:
+            task_id = response_payload.get("task_id")
+            if task_id:
+                # Poll for completion
+                for _ in range(60):
+                    await asyncio.sleep(3)
+                    try:
+                        poll_url = moderation_endpoint.replace("upload/async", f"task/{task_id}")
+                        if "api/asset" in poll_url:
+                            poll_url = poll_url.split("api/asset")[0] + f"api/task/{task_id}"
+                        
+                        poll_resp = await asyncio.to_thread(requests.get, poll_url, headers=headers)
+                        if poll_resp.status_code == 200:
+                            poll_data = poll_resp.json()
+                            if poll_data.get("status") in ("completed", "failed"):
+                                response_payload = poll_data
+                                break
+                    except Exception:
+                        pass
+        
+
+        encrypted_response = None
+        if isinstance(response_payload, dict):
+            encrypted_response = response_payload.get("encrypted_data") or response_payload.get("encryptedData")
+
+        try:
+            decrypted_payload = self._decrypt_zlhub_payload(encrypted_response, moderation_key) if encrypted_response else response_payload
+        except Exception as exc:
+            return {
+                "checked": False,
+                "blocked": moderation_required,
+                "error": f"zlhub moderation decrypt failed: {exc}",
+                "submit_failed": moderation_required,
+                "items": [],
+            }
+
+        payload_dict = decrypted_payload if isinstance(decrypted_payload, dict) else {}

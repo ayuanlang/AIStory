@@ -102,19 +102,39 @@ jobs:
             Environment=\"PORT=$PORT\"
             Environment=\"PUBLIC_BASE_URL=$PUBLIC_BASE_URL\"
             Environment=\"DATABASE_URL=postgresql://aistory:yl.415213@127.0.0.1:5432/aistory\"
+            Environment=\"RUN_GENERATION_QUEUE_WORKER_ON_START=0\"
             ExecStart=/opt/miniconda3/envs/aistory/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT
             Restart=always
 
             [Install]
             WantedBy=multi-user.target" > /tmp/aistory-backend.service.tmp
+
+            echo "[Unit]
+            Description=AIStory Generation Queue Worker Service
+            After=network.target postgresql.service aistory-backend.service
+
+            [Service]
+            User=root
+            WorkingDirectory=/opt/AIStory/backend
+            Environment=\"PUBLIC_BASE_URL=$PUBLIC_BASE_URL\"
+            Environment=\"DATABASE_URL=postgresql://aistory:yl.415213@127.0.0.1:5432/aistory\"
+            Environment=\"GENERATION_QUEUE_WORKER_THREADS=20\"
+            ExecStart=/opt/miniconda3/envs/aistory/bin/python -m app.generation_worker
+            Restart=always
+
+            [Install]
+            WantedBy=multi-user.target" > /tmp/aistory-generation-worker.service.tmp
             
             # 移除前面的多余空格后写入最终服务文件
             sed 's/^[ \t]*//' /tmp/aistory-backend.service.tmp > /etc/systemd/system/aistory-backend.service
+            sed 's/^[ \t]*//' /tmp/aistory-generation-worker.service.tmp > /etc/systemd/system/aistory-generation-worker.service
             
             systemctl daemon-reload
             systemctl enable aistory-backend
+            systemctl enable aistory-generation-worker
             
             # 使用 no-block 模式重启 systemd 防止阻塞 SSH 会话，或者放到后台执行
             systemctl restart aistory-backend --no-block
+            systemctl restart aistory-generation-worker --no-block
             
-            echo "--- Deployment successful! Service is running via systemd ---"
+            echo "--- Deployment successful! Backend and generation worker are running via systemd ---"

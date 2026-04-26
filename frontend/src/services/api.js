@@ -3310,7 +3310,7 @@ export const importFunctionApiConfigs = async (payload) => {
 
 
 export const fetchGroups = async () => {
-    const response = await api.get('/groups/me');
+    const response = await api.get('/groups/me?t=' + Date.now() + '');
     return response.data;
 };
 
@@ -3327,4 +3327,25 @@ export const addGroupMember = async (groupId, data) => {
 export const setProjectGroupAllocation = async (projectId, data) => {
     const response = await api.post('/groups/projects/' + projectId + '/allocations', data);
     return response.data;
+};
+
+// Invoices
+export const apiGetInvoiceProfiles = async () => {
+    return handleResponse(await fetchWithAuth(`${API_URL}/api/v1/invoices/profiles`));
+};
+
+export const apiCreateInvoiceProfile = async (profile) => {
+    return handleResponse(await fetchWithAuth(`${API_URL}/api/v1/invoices/profiles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile)
+    }));
+};
+
+export const apiRequestInvoice = async (request) => {
+    return handleResponse(await fetchWithAuth(`${API_URL}/api/v1/invoices/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+    }));
 };

@@ -1,0 +1,149 @@
+    async def _maybe_moderate_zlhub_images(self, image_refs: List[Any], config: Dict[str, Any], roles: Optional[List[str]] = None) -> Dict[str, Any]:
+        moderation_cfg = self._resolve_zlhub_moderation_settings(config)
+        moderation_enabled = bool(moderation_cfg.get("moderation_enabled", True))
+        if not moderation_enabled:
+            return {"checked": False, "blocked": False, "reason": "disabled", "items": []}
+
+        normalized_refs = [str(item or "").strip() for item in (image_refs or []) if str(item or "").strip()]
+        if not normalized_refs:
+            return {"checked": False, "blocked": False, "reason": "empty_ref", "items": []}
+
+        normalized_roles = [str(item or "").strip() for item in (roles or [])]
+        if len(normalized_roles) < len(normalized_refs):
+            normalized_roles.extend([""] * (len(normalized_refs) - len(normalized_roles)))
+
+        moderation_user_id = str(moderation_cfg.get("moderation_user_id") or "").strip()
+        moderation_key = str(moderation_cfg.get("moderation_aes_key") or "").strip()
+        moderation_required = bool(moderation_cfg.get("moderation_required", True))
+        if not moderation_user_id or not moderation_key:
+            if moderation_required:
+                logger.warning(
+                    "zlhub moderation credentials missing | provider=%s model=%s source=%s has_user_id=%s has_aes_key=%s",
+                    config.get("provider"),
+                    config.get("model"),
+                    moderation_cfg.get("source"),
+                    bool(moderation_user_id),
+                    bool(moderation_key),
+                )
+                return {
+                    "checked": False,
+                    "blocked": True,
+                    "error": "zlhub moderation credentials missing",
+                    "submit_failed": True,
+                    "items": [],
+                }
+            return {"checked": False, "blocked": False, "reason": "credentials_missing", "items": []}
+
+        moderation_endpoint = self._normalize_zlhub_moderation_endpoint(
+            moderation_cfg.get("moderation_endpoint")
+        )
+        business_payload: Dict[str, Any] = {"images": normalized_refs}
+
+        encrypted_data = self._encrypt_zlhub_payload(business_payload, moderation_key)
+        request_payload = {
+            "user_id": moderation_user_id,
+            "encrypted_data": encrypted_data,
+        }
+
+        headers = {"Content-Type": "application/json"}
+
+        def _post_moderation(use_proxy: bool = True):
+            kwargs = {
+                "json": request_payload,
+                "headers": headers,
+                "timeout": (15, 60),
+                "verify": False,
+            }
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.post(moderation_endpoint, **kwargs)
+
+        try:
+            try:
+                resp = await asyncio.to_thread(_post_moderation, True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                resp = await asyncio.to_thread(_post_moderation, False)
+        except requests.exceptions.RequestException as exc:
+            return {
+                "checked": False,
+                "blocked": moderation_required,
+                "error": f"zlhub moderation request failed: {exc}",
+                "submit_failed": moderation_required,
+                "items": [],
+            }
+
+        if resp.status_code not in (200, 202):
+            return {
+                "checked": False,
+                "blocked": moderation_required,
+                "error": f"zlhub moderation failed {resp.status_code}",
+                "details": (resp.text or "")[:1000],
+                "submit_failed": moderation_required,
+                "items": [],
+            }
+
+        try:
+            response_payload = resp.json() if resp.content else {}
+        except Exception:
+            response_payload = {}
+        
+        if resp.status_code == 202 or "task_id" in response_payload:
+            task_id = response_payload.get("task_id")
+            if task_id:
+                # Poll for completion
+                for _ in range(60):
+                    await asyncio.sleep(3)
+                    try:
+                        poll_url = moderation_endpoint.replace("upload/async", f"task/{task_id}")
+                        if "api/asset" in poll_url:
+                            poll_url = poll_url.split("api/asset")[0] + f"api/task/{task_id}"
+                        
+                        poll_resp = await asyncio.to_thread(requests.get, poll_url, headers=headers)
+                        if poll_resp.status_code == 200:
+                            poll_data = poll_resp.json()
+                            if poll_data.get("status") in ("completed", "failed"):
+                                response_payload = poll_data
+                                break
+                    except Exception:
+                        pass
+        
+
+        encrypted_response = None
+        if isinstance(response_payload, dict):
+            encrypted_response = response_payload.get("encrypted_data") or response_payload.get("encryptedData")
+
+        try:
+            decrypted_payload = self._decrypt_zlhub_payload(encrypted_response, moderation_key) if encrypted_response else response_payload
+        except Exception as exc:
+            return {
+                "checked": False,
+                "blocked": moderation_required,
+                "error": f"zlhub moderation decrypt failed: {exc}",
+                "submit_failed": moderation_required,
+                "items": [],
+            }
+
+        payload_dict = decrypted_payload if isinstance(decrypted_payload, dict) else {}
+        raw_items = self._extract_zlhub_moderation_items(payload_dict)
+        parsed_items: List[Dict[str, Any]] = []
+        for idx, raw_ref in enumerate(normalized_refs):
+            item_payload = raw_items[idx] if idx < len(raw_items) and isinstance(raw_items[idx], dict) else {}
+            item_result = self._parse_zlhub_moderation_item(item_payload, raw_ref)
+            item_result.update({
+                "role": normalized_roles[idx] if idx < len(normalized_roles) else "",
+                "input_ref": _strip_query_from_log_url(raw_ref),
+            })
+            parsed_items.append(item_result)
+
+        overall = self._parse_zlhub_moderation_decision(payload_dict)
+        blocked = any(bool(item.get("blocked")) for item in parsed_items) if parsed_items else bool(overall.get("blocked"))
+        return {
+            "checked": True,
+            "blocked": blocked,
+            "status": overall.get("status"),
+            "reason": overall.get("reason"),
+            "raw": payload_dict,
+            "items": parsed_items,
+        }
+
+    async def 

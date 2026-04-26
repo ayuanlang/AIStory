@@ -2419,6 +2419,14 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             normalized_url,
             bool((normalized_meta or {}).get("oss")) if isinstance(normalized_meta, dict) else False,
         )
+        if normalized_meta is None:
+            normalized_meta = {}
+        normalized_meta["idempotency_key"] = job_id
+
+
+        if normalized_meta is None:
+            normalized_meta = {}
+        normalized_meta["idempotency_key"] = job_id
 
         finalized_result = dict(result)
         if normalized_url:
@@ -2695,6 +2703,10 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         
         normalized_url, normalized_meta = _persist_remote_image_result(current_user, raw_url, metadata)
         
+        if normalized_meta is None:
+            normalized_meta = {}
+        normalized_meta["idempotency_key"] = job_id
+
         finalized_result = dict(result)
         if normalized_url:
             finalized_result["url"] = normalized_url
@@ -14657,6 +14669,10 @@ async def ai_generate_shots(
             db.commit()
         except Exception:
             pass
+        try:
+            db.commit()
+        except Exception:
+            pass
         llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)
         if not llm_config:
             logger.error(f"[ai_generate_shots] missing_llm_config scene_id={scene_id} user_id={current_user_id}")
@@ -14965,6 +14981,10 @@ async def ai_regenerate_shots(
         function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
         system_api_id = getattr(req, "system_api_id", None) if req else None
 
+        try:
+            db.commit()
+        except Exception:
+            pass
         try:
             db.commit()
         except Exception:
@@ -19787,6 +19807,7 @@ def admin_diagnose_grsai_connectivity(
 
 class RechargeRequest(BaseModel):
     amount: int
+    group_id: Optional[int] = None
 
 @router.get("/billing/recharge/plans", response_model=List[RechargePlanOut])
 def get_recharge_plans(db: Session = Depends(get_db)):
@@ -19853,7 +19874,8 @@ def create_recharge_order(
         status="PENDING",
         pay_url=pay_url,
         provider="wechat",
-        created_at=now_bj_iso()
+        created_at=now_bj_iso(),
+        target_group_id=req.group_id
     )
     db.add(order)
     db.commit()
@@ -19883,27 +19905,50 @@ def check_order_status(
             order.status = "PAID"
             order.paid_at = now_bj_iso()
             
-            # Add Credits
-            user = db.query(User).filter(User.id == order.user_id).first()
-            if user:
-                user.credits = (user.credits or 0) + order.credits
-                
-            # Transaction History
-            trans = TransactionHistory(
-                user_id=order.user_id,
-                amount=order.credits,
-                balance_after=user.credits if user else 0,
-                description="recharge",
-                details={
-                    "task_type": "recharge",
-                    "provider": "wechat",
-                    "model": "cny",
-                    "order_no": order_no, 
-                    "amount_cny": order.amount, 
-                    "method": "active_query"
-                }
-            )
-            db.add(trans)
+            # Add Credits & Transaction
+            from app.models.all_models import Group
+            if order.target_group_id:
+                target_group = db.query(Group).filter(Group.id == order.target_group_id).first()
+                if target_group:
+                    old_credits = target_group.credits or 0
+                    target_group.credits = old_credits + order.credits
+                    trans = TransactionHistory(
+                        user_id=order.user_id,
+                        target_group_id=order.target_group_id,
+                        amount=order.credits,
+                        balance_after=target_group.credits,
+                        type="group_recharge",
+                        description="Group Recharge (Active Query)",
+                        details={
+                            "task_type": "group_recharge",
+                            "provider": "wechat",
+                            "model": "cny",
+                            "order_no": order_no, 
+                            "amount_cny": order.amount, 
+                            "method": "active_query"
+                        }
+                    )
+                    db.add(trans)
+            else:
+                user = db.query(User).filter(User.id == order.user_id).first()
+                if user:
+                    user.credits = (user.credits or 0) + order.credits
+                    
+                trans = TransactionHistory(
+                    user_id=order.user_id,
+                    amount=order.credits,
+                    balance_after=user.credits if user else 0,
+                    description="recharge",
+                    details={
+                        "task_type": "recharge",
+                        "provider": "wechat",
+                        "model": "cny",
+                        "order_no": order_no, 
+                        "amount_cny": order.amount, 
+                        "method": "active_query"
+                    }
+                )
+                db.add(trans)
             db.commit()
             db.refresh(order)
 
@@ -19950,25 +19995,47 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
                     # Store transaction_id from WeChat
                     wx_transaction_id = result.get('transaction_id')
                     
-                    user = db.query(User).filter(User.id == order.user_id).first()
-                    if user:
-                        user.credits = (user.credits or 0) + order.credits
-                        
-                    trans = TransactionHistory(
-                        user_id=order.user_id,
-                        amount=order.credits,
-                        balance_after=user.credits if user else 0,
-                        description="recharge", 
-                        details={
-                            "task_type": "recharge", "provider": "wechat", "model": "cny",
-                            "order_no": out_trade_no, 
-                            "method": "notify", 
-                            "wx_transaction_id": wx_transaction_id,
-                            "payer_openid": result.get("payer", {}).get("openid"),
-                            # "raw": result # Store raw data if needed (careful with size)
-                        }
-                    )
-                    db.add(trans)
+                    from app.models.all_models import Group
+                    if order.target_group_id:
+                        target_group = db.query(Group).filter(Group.id == order.target_group_id).first()
+                        if target_group:
+                            old_credits = target_group.credits or 0
+                            target_group.credits = old_credits + order.credits
+                            trans = TransactionHistory(
+                                user_id=order.user_id,
+                                target_group_id=order.target_group_id,
+                                amount=order.credits,
+                                balance_after=target_group.credits,
+                                type="group_recharge",
+                                description="Group Recharge (WeChat)",
+                                details={
+                                    "task_type": "group_recharge", "provider": "wechat", "model": "cny",
+                                    "order_no": out_trade_no, 
+                                    "method": "notify", 
+                                    "wx_transaction_id": wx_transaction_id,
+                                    "payer_openid": result.get("payer", {}).get("openid")
+                                }
+                            )
+                            db.add(trans)
+                    else:
+                        user = db.query(User).filter(User.id == order.user_id).first()
+                        if user:
+                            user.credits = (user.credits or 0) + order.credits
+                            
+                        trans = TransactionHistory(
+                            user_id=order.user_id,
+                            amount=order.credits,
+                            balance_after=user.credits if user else 0,
+                            description="recharge", 
+                            details={
+                                "task_type": "recharge", "provider": "wechat", "model": "cny",
+                                "order_no": out_trade_no, 
+                                "method": "notify", 
+                                "wx_transaction_id": wx_transaction_id,
+                                "payer_openid": result.get("payer", {}).get("openid"),
+                            }
+                        )
+                        db.add(trans)
                     db.commit()
                     logger.info(f"Order {out_trade_no} confirmed via Notify")
             else:
@@ -20005,6 +20072,31 @@ def mock_pay_order(
     order.paid_at = now_bj_iso()
     
     # Add Credits
+    from app.models.all_models import Group
+    if order.target_group_id:
+        target_group = db.query(Group).filter(Group.id == order.target_group_id).first()
+        if target_group:
+            old_credits = target_group.credits or 0
+            target_group.credits = old_credits + order.credits
+            trans = TransactionHistory(
+                user_id=order.user_id,
+                target_group_id=order.target_group_id,
+                amount=order.credits,
+                balance_after=target_group.credits,
+                type="group_recharge",
+                description="Group Recharge (Mock)",
+                details={
+                    "task_type": "group_recharge", 
+                    "provider": "wechat", 
+                    "model": "cny", 
+                    "order_no": order_no, 
+                    "amount_cny": order.amount
+                }
+            )
+            db.add(trans)
+            db.commit()
+            return {"status": "success", "new_balance": target_group.credits}
+    
     user = db.query(User).filter(User.id == order.user_id).first()
     old_credits = user.credits or 0
     user.credits = old_credits + order.credits
@@ -21739,7 +21831,7 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
 
         # Merge Source Metadata (Provider, Model, Dimensions, etc.)
         if source_metadata:
-            for k in ["provider", "model", "duration", "width", "height", "aspect_ratio", "submit_aspect_ratio", "prompt", "seed"]:
+            for k in ["provider", "model", "duration", "width", "height", "aspect_ratio", "submit_aspect_ratio", "prompt", "seed", "idempotency_key"]:
                 if k in source_metadata:
                     meta[k] = source_metadata[k]
             provider_usage = _extract_provider_usage_from_metadata(source_metadata)
@@ -22636,6 +22728,7 @@ async def _run_generate_image(
     current_user: User,
     db: Session,
     job_progress_callback: Any = None,
+    job_id: Optional[str] = None,
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
 ):
@@ -23292,6 +23385,16 @@ async def _run_generate_image(
         result_meta = result.get("metadata") if isinstance(result, dict) else {}
         if not isinstance(result_meta, dict):
             result_meta = {}
+        if job_id:
+            result_meta["idempotency_key"] = job_id
+            if isinstance(result, dict):
+                result["metadata"] = result_meta
+
+
+        if job_id:
+            result_meta["idempotency_key"] = job_id
+            if isinstance(result, dict):
+                result["metadata"] = result_meta
 
         smart_meta = result_meta.get("smart_routing") if isinstance(result_meta.get("smart_routing"), dict) else {}
         billing_provider = str(
@@ -23440,25 +23543,29 @@ async def _run_generate_image(
 
             # Trigger background task for OSS upload, if the URL is an external HTTP URL
             if temp_url.startswith("http"):
-                _set_image_job(job_id, status="storing_asset")
+                if job_id:
+                    _set_image_job(job_id, status="storing_asset")
                 async def _bg_upload_and_update(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
                     try:
                         bg_user = bg_db.query(User).filter(User.id == user.id).first()
                         if not bg_user:
-                            _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
+                            if job_id:
+                                _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
                             return
                         norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, bg_user, raw_url, meta)
 
                         final_url = norm_url if (norm_url and norm_url != raw_url) else raw_url
-                        final_meta = norm_meta if norm_meta is not None else meta
+                        final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
+                        if job_id:
+                            final_meta["idempotency_key"] = job_id
                         
                         if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(final_url):
                             await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, final_url, req_obj, final_meta)
                             await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, final_url, True)
                             await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, final_url, True)
 
-                        if norm_url and norm_url != raw_url:
+                        if job_id and norm_url and norm_url != raw_url:
                             with IMAGE_JOB_LOCK:
                                 _job_to_update = dict(IMAGE_JOB_STORE.get(job_id) or {})
                             if _job_to_update:
@@ -23467,21 +23574,26 @@ async def _run_generate_image(
                                 if norm_meta is not None:
                                     updated_res["metadata"] = norm_meta
                                 _set_image_job(job_id, result=updated_res, status="succeeded", finished_at=now_bj_iso())
-                        else:
+                        elif job_id:
                             _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update] failed for user={user.id} url={raw_url}: {e}")
-                        _set_image_job(job_id, status="failed", error=str(e), finished_at=now_bj_iso())
+                        if job_id:
+                            _set_image_job(job_id, status="failed", error=str(e), finished_at=now_bj_iso())
                     finally:
                         bg_db.close()
 
                 asyncio.create_task(_bg_upload_and_update(current_user, req, temp_url, result.get("metadata")))
             else:
                 if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(temp_url):
-                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
+                    final_meta_sync = dict(result.get("metadata") or {})
+                    if job_id:
+                        final_meta_sync["idempotency_key"] = job_id
+                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, final_meta_sync)
                     await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url, False)
                     await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url, False)
-                _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
+                if job_id:
+                    _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
 
         return result
     except asyncio.CancelledError:
@@ -23774,6 +23886,7 @@ async def _run_generate_image_job(
                 user_principal,
                 db,
                 job_progress_callback=_on_provider_task_id,
+                job_id=job_id,
                 provider_callback_ticket=provider_callback_ticket,
                 provider_callback_url=provider_callback_url,
             ),
@@ -25055,19 +25168,6 @@ async def generate_voice_endpoint(
 
         # Register voice asset so frontend can resolve metadata panels by URL.
         if voice_url:
-            if not _is_ephemeral_provider_media_url(voice_url):
-                try:
-                    await asyncio.to_thread(
-                        _register_asset_helper,
-                        db,
-                        current_user.id,
-                        voice_url,
-                        req,
-                        (result.get("metadata") if isinstance(result, dict) else None),
-                    )
-                except Exception as asset_err:
-                    logger.warning("[GenerateVoice] asset registration failed: %s", asset_err)
-
             if voice_url.startswith("http"):
                 async def _bg_upload_and_update_voice(user: User, req_obj: Any, raw_url: str, prompt_text: str, meta: Optional[dict] = None):
                     bg_db = SessionLocal()
@@ -25091,8 +25191,12 @@ async def generate_voice_endpoint(
                                         bg_db.add(bg_shot)
                                         bg_db.commit()
                             
-                            # Register asset
-                            await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, norm_url, req_obj, norm_meta)
+                        # Register correctly whether OSS'd or not
+                        final_url = norm_url if (norm_url and norm_url != raw_url) else raw_url
+                        final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
+                        if job_id:
+                            final_meta["idempotency_key"] = job_id
+                        await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, final_url, req_obj, final_meta)
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update_voice] failed for user={user.id} url={raw_url}: {e}")
                     finally:
@@ -26048,17 +26152,7 @@ async def _run_generate_video(
             media_type="video",
         )
 
-        # Register Asset
-        if result.get("url"):
-            temp_url = result.get("url")
-
-            # For videos, wait until provider URLs are fetched internally by media_service.
-            if temp_url.startswith("http") and not _is_ephemeral_provider_media_url(temp_url):
-                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
-                await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
-            else:
-                await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, result.get("metadata"))
-                await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url)
+        # Register Asset - For videos, wait until finalize persistence OR callback
 
         if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}
@@ -26262,117 +26356,6 @@ async def _run_generate_video_job(
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
 ):
-    _set_video_job(job_id, status="running", started_at=now_bj_iso())
-
-    def status_callback(phase: str, details: Optional[Dict[str, Any]] = None):
-        _set_video_job(job_id, status=phase, phase_details=details)
-
-    try:
-        result = await media_service.generate_video(
-            user_id=user_id,
-            provider=req_payload.get("provider"),
-            model=req_payload.get("model"),
-            prompt=req_payload.get("prompt"),
-            negative_prompt=req_payload.get("negative_prompt"),
-            ref_image_url=req_payload.get("ref_image_url"),
-            ref_video_urls=req_payload.get("ref_video_urls"),
-            image_urls=req_payload.get("image_urls"),
-            last_frame_url=req_payload.get("last_frame_url"),
-            duration=req_payload.get("duration"),
-            aspect_ratio=req_payload.get("aspect_ratio"),
-            mode=req_payload.get("mode"),
-            ref_mode=req_payload.get("ref_mode"),
-            sound=req_payload.get("sound"),
-            multi_shots=req_payload.get("multi_shots"),
-            multi_prompt=req_payload.get("multi_prompt"),
-            kling_elements=req_payload.get("kling_elements"),
-            project_id=req_payload.get("project_id"),
-            shot_id=req_payload.get("shot_id"),
-            shot_number=req_payload.get("shot_number"),
-            shot_name=req_payload.get("shot_name"),
-            entity_name=req_payload.get("entity_name"),
-            subject_name=req_payload.get("subject_name"),
-            asset_type=req_payload.get("asset_type"),
-            keyframes=req_payload.get("keyframes"),
-            seed=req_payload.get("seed"),
-            provider_callback_ticket=provider_callback_ticket,
-            provider_callback_url=provider_callback_url,
-            status_callback=status_callback,
-        )
-        final_status = "succeeded" if result and result.get("url") else "failed"
-        error_message = None if final_status == "succeeded" else str(result.get("error") or "Unknown error")
-        _set_video_job(job_id, status=final_status, finished_at=now_bj_iso(), result=result, error=error_message)
-    except Exception as e:
-        logger.exception(f"Video generation job {job_id} failed: {e}")
-        _set_video_job(job_id, status="failed", finished_at=now_bj_iso(), error=str(e))
-    """Background worker for a single video generation job."""
-    now_iso = now_bj_iso()
-    _set_video_job(job_id, status="running", started_at=now_iso)
-
-    def _update_status_callback(status: str, details: Optional[Dict[str, Any]] = None) -> None:
-        update_payload = {"status": status, "updated_at": now_bj_iso()}
-        if isinstance(details, dict):
-            update_payload["progress_details"] = details
-        _set_video_job(job_id, **update_payload)
-        logger.info(
-            "[VideoJob] status updated via callback | job_id=%s user_id=%s status=%s",
-            job_id,
-            user_id,
-            status,
-        )
-
-    db = SessionLocal()
-    try:
-        current_user = db.query(User).filter(User.id == user_id).first()
-        if not current_user:
-            raise ValueError(f"User not found for ID: {user_id}")
-
-        user_snapshot = _snapshot_user_principal(current_user)
-
-        req = VideoGenerationRequest(**payload)
-        _log_shot_submit_debug("video", req)
-
-        # Billing check
-        billing_service.check_balance(db, user_id, "video", req.provider, req.model)
-
-        result = await media_service.generate_video(
-            req,
-            user_snapshot,
-            provider_callback_ticket=provider_callback_ticket,
-            provider_callback_url=provider_callback_url,
-            status_callback=_update_status_callback,
-        )
-
-        # Finalize billing
-        tx_details = {"job_id": job_id, "provider": req.provider, "model": req.model}
-        billing_service.record_transaction(db, user_id, "video", req.provider, req.model, tx_details)
-
-        _set_video_job(job_id, status="succeeded", finished_at=now_bj_iso(), result=result)
-        logger.info(
-            "[VideoJob] succeeded | job_id=%s user_id=%s shot_id=%s provider=%s model=%s",
-            job_id,
-            user_id,
-            req.shot_id,
-            req.provider,
-            req.model,
-        )
-    except Exception as e:
-        error_message = f"Video generation failed: {e}"
-        logger.error(
-            "[VideoJob] failed | job_id=%s user_id=%s error=%s",
-            job_id,
-            user_id,
-            e,
-            exc_info=True,
-        )
-        _set_video_job(job_id, status="failed", finished_at=now_bj_iso(), error=error_message)
-    finally:
-        _release_db_connection(db, "run_video_job")
-        _clear_generation_job_pool_cache()
-        callback_url = _resolve_callback_url_from_payload(payload)
-        if callback_url:
-            final_job_state = get_generate_video_job_status(job_id, current_user)
-            await _dispatch_generation_callback("video", callback_url, final_job_state)
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
     req_provider = str(req_payload.get("provider") or "").strip() or None
@@ -26531,7 +26514,8 @@ async def _run_generate_video_job(
 
         with VIDEO_JOB_LOCK:
             VIDEO_JOB_TASKS.pop(job_id, None)
-        db.close()
+        _release_db_connection(db, "run_video_job")
+        _clear_generation_job_pool_cache()
 
 
 @router.post("/generate/callback/{ticket}")
