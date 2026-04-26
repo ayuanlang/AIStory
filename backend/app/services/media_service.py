@@ -6066,18 +6066,12 @@ Negative prompt constraints: {neg_prompt}"""
             )
 
         def _runninghub_video_primary_image_field() -> str:
-            first_image_field_endpoints = [
-                "/openapi/v2/kling-video-o1/image-to-video",
-                "/openapi/v2/kling-v2.5-turbo-pro/image-to-video",
-                "/openapi/v2/kling-v2.5-turbo-std/image-to-video",
-                "/openapi/v2/kling-video-o3-std/image-to-video",
-                "/openapi/v2/kling-video-o3-pro/image-to-video",
-                "/openapi/v2/kling-v3.0-std/image-to-video",
-                "/openapi/v2/kling-v3.0-pro/image-to-video",
-            ]
-            for endpoint_token in first_image_field_endpoints:
-                if endpoint_token in endpoint_lower:
-                    return "firstImageUrl"
+            if "kling" in endpoint_lower and "image-to-video" in endpoint_lower:
+                return "firstImageUrl"
+            if "luma" in endpoint_lower and "image-to-video" in endpoint_lower:
+                return "imageUrl"
+            if "runway" in endpoint_lower and "image-to-video" in endpoint_lower:
+                return "firstImageUrl"
             if "start-end-to-video" in endpoint_lower or "start-to-end" in endpoint_lower:
                 return "firstImageUrl"
             if "/openapi/v2/rhart-video" in endpoint_lower:
