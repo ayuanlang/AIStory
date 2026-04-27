@@ -611,6 +611,23 @@ def _ensure_transaction_schema(is_postgres: bool = False):
                     else:
                         conn.execute(text("ALTER TABLE transaction_history ADD COLUMN description VARCHAR"))
                     logger.info("Added description to transaction_history")
+                if "target_group_id" not in cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE transaction_history ADD COLUMN IF NOT EXISTS target_group_id INTEGER"))
+                    else:
+                        conn.execute(text("ALTER TABLE transaction_history ADD COLUMN target_group_id INTEGER"))
+                    logger.info("Added target_group_id to transaction_history")
+
+        # Ensure payment_orders columns
+        if inspector.has_table("payment_orders"):
+            cols = {c['name'] for c in inspector.get_columns("payment_orders")}
+            with engine.begin() as conn:
+                if "target_group_id" not in cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS target_group_id INTEGER"))
+                    else:
+                        conn.execute(text("ALTER TABLE payment_orders ADD COLUMN target_group_id INTEGER"))
+                    logger.info("Added target_group_id to payment_orders")
 
         # Ensure transaction_action columns
         if inspector.has_table("transaction_action"):
