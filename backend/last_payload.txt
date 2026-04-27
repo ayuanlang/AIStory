@@ -3,59 +3,24 @@
   "content": [
     {
       "type": "text",
-      "text": "[Global Style](\u7535\u5f71\u611f\u53e4\u88c5\u6b66\u4fa0\uff0c\u5f3a\u8c03\u60c5\u611f\u7684\u7ec6\u817b\u523b\u753b\u4e0e\u89c6\u89c9\u8c61\u5f81\u4e3b\u4e49\uff0c\u957f\u955c\u5934\u8c03\u5ea6\u5c55\u73b0\u4eba\u7269\u5173\u7cfb\u53d8\u5316) cinematic, period wuxia, 8K live action, tragic tone, desaturated, slightly sepia-toned, faded memory aesthetic for flashback.\n`[Chronological Camera & Action]` (P1) The camera executes a rapid push-in (`Crash Zoom`) into \u53c2\u8003\u56fe1\u7684CHAR:[@\u6c5f\u5a49\u6dd1]'s right eye. The reflection of \u53c2\u8003\u56fe2\u7684CHAR:[@\u8c22\u4e34\u8f9e](ancient Chinese male general, arrogant eyes, dark gold crown, black and dark gold metal armor, battle boots ) enlarges, then the entire image blurs into a swirl of light and color. (P2) A series of hard cuts form a rapid montage: [CUT 1] In ENV:[Capital City Street](wide bluestone paved road, traditional ancient wooden shops, distant majestic city gate tower, dense ancient Chinese civilian crowd), bright daylight, a low angle shot from the crowd shows CHAR:[@\u8c22\u4e34\u8f9e] and \u53c2\u8003\u56fe3\u7684CHAR:[@\u962e\u51cc\u7fbd](ancient Chinese female disguised as male, high ponytail, heroic straight eyebrows, lightweight leather armor, dark blue tunic ) riding a single horse, galloping away. [CUT 2] Extreme close-up on the PROP:[Heart-Protecting Mirror](ancient circular brass heart-protecting mirror, polished center, elaborate engraved edges, metal scratches) glinting coldly on CHAR:[@\u962e\u51cc\u7fbd]'s chest. [CUT 3] Extreme close-up on the PROP:[Peace Talisman](triangular yellow paper peace talisman, faded red cinnabar runes, thin red braided string) around her neck. [CUT 4] Extreme close-up on the PROP:[Sachet] at her waist. V.O. (CHAR:[@\u6c5f\u5a49\u6dd1](ancient Chinese noblewoman bride, elaborate updo with gold hairpins, red bridal Hanfu with gold embroidery, resolute eyes )) (voice_type: \u6e05\u51b7\u5973\u58f0, tone: \u60b2\u4f24, speed: \u6162\u901f, volume: \u4f4e\u58f0): \"\u90a3\u4e00\u523b\uff0c\u6211\u9690\u9690\u89c9\u5f97\uff0c\u7b49\u4e86\u4e94\u5e74\u7684\u672a\u5a5a\u592b\uff0c\u597d\u50cf\u53d8\u4e86\u3002\"\n\n[Dynamic Atmosphere] The flashback sequence has a slightly desaturated, dreamlike quality with increased film grain. The sound is muffled, dominated by the V.O. and a faint, high-pitched ringing sound."
+      "text": "[Global Style](\u5199\u5b9e\u539a\u91cd\u7684\u7535\u5f71\u8d28\u611f\uff0c\u5f3a\u8c03\u79e6\u671d\u5386\u53f2\u7684\u51b7\u5cfb\u3001\u89c4\u6574\u4e0e\u6b8b\u9177\uff0c\u4ee5\u53ca\u73b0\u4ee3\u90fd\u5e02\u7684\u758f\u79bb\u4e0e\u538b\u6291\u3002) cinematic, realistic, heavy texture, high-contrast lighting, 8K quality,\n`[Chronological Camera & Action]` (P1) The shot begins with a rapid POV descent as if from a swooping crow. As its wing blacks out the frame for a split second, the camera seamlessly transitions, emerging behind a Black Ice Terrace guard at ENV:[Kengrugu Valley Pit Edge](edge of a massive pit, barren wasteland, Qin soldiers in black armor, pushing people into pit, overcast sky). (P2) The guard violently kicks the back of CHAR:[@Meng Zhi Ragged]'s knees. He lets out a sharp cry, loses his balance, and topples forward. The camera, now a Crane Shot, dives down dramatically, following CHAR:[@Meng Zhi Ragged](Qin Dynasty scholar, ragged white robe, mud-stained face, terrified but resolute eyes, messy hair ) as he plummets into the darkness of the pit.\n\n[Dynamic Atmosphere] The air is filled with dust kicked up by the guards. The sound is a mix of wind, distant cries, and the final, sharp cry of CHAR:[@Meng Zhi Ragged]."
     },
     {
       "type": "image_url",
       "image_url": {
-        "url": "Asset://asset-20260426162524-48zk7"
+        "url": "Asset://asset-20260427194218-6pmfr"
       },
-      "role": "reference_image"
+      "role": "first_frame"
     },
     {
       "type": "image_url",
       "image_url": {
-        "url": "Asset://asset-20260426162531-k8c65"
+        "url": "Asset://asset-20260427194227-6252c"
       },
-      "role": "reference_image"
-    },
-    {
-      "type": "image_url",
-      "image_url": {
-        "url": "Asset://asset-20260426162538-28dpz"
-      },
-      "role": "reference_image"
-    },
-    {
-      "type": "image_url",
-      "image_url": {
-        "url": "Asset://asset-20260426162548-44s46"
-      },
-      "role": "reference_image"
-    },
-    {
-      "type": "image_url",
-      "image_url": {
-        "url": "Asset://asset-20260426162556-598np"
-      },
-      "role": "reference_image"
-    },
-    {
-      "type": "image_url",
-      "image_url": {
-        "url": "Asset://asset-20260426162603-7ldxb"
-      },
-      "role": "reference_image"
-    },
-    {
-      "type": "image_url",
-      "image_url": {
-        "url": "Asset://asset-20260426162624-h5djg"
-      },
-      "role": "reference_image"
+      "role": "last_frame"
     }
   ],
   "ratio": "9:16",
-  "duration": 6,
+  "duration": 7,
   "resolution": "480p"
 }

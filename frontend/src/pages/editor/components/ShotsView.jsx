@@ -11,7 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -650,6 +650,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     resultUrl,
                     displayLabel: buildGenerationHistoryLabel(item),
                     createdAtMs: Date.parse(String(item?.created_at || item?.started_at || item?.finished_at || '')) || 0,
+                    model: extractGenerationHistoryField(item, 'model') || extractGenerationHistoryField(item, 'source_model'),
+                    duration: extractGenerationHistoryField(item, 'duration'),
                 };
             })
             .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
@@ -713,6 +715,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 : (mediaKind === 'end' ? t('结束帧生成', 'End Frame Generation') : t('起始帧生成', 'Start Frame Generation')),
                             createdAtMs: Date.parse(String(row?.created_at || '')) || 0,
                             created_at: row?.created_at,
+                            model: meta?.model || meta?.source_model,
+                            duration: meta?.duration,
                         };
                     });
 
@@ -6250,9 +6254,45 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             let apiLastFrameUrl;
             const apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
             const { imageRefs, videoRefs } = splitReferenceMediaUrls(resolvedUniqueRefs);
-            apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
+            apiRefImageUrl = null;
             apiRefVideoUrls = videoRefs.length > 0 ? videoRefs : null;
-            apiLastFrameUrl = undefined;
+            apiLastFrameUrl = null;
+
+            const isManualVideoMode = Array.isArray(tech.video_ref_image_urls) && tech.video_ref_image_urls.length > 0;
+            if (isManualVideoMode) {
+                apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
+            } else {
+                const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
+                const endRefUrl = String(tech.end_frame_url || '').trim();
+                
+                // For 'start_end', strictly separate them as single refs
+                if (effectiveVideoMode === 'start_end' || effectiveVideoMode === 'end') {
+                    if (currentStartFrameUrl && effectiveVideoMode === 'start_end') {
+                        apiRefImageUrl = await resolveBlobUrlIfAny(currentStartFrameUrl);
+                    }
+                    if (endRefUrl) {
+                        apiLastFrameUrl = await resolveBlobUrlIfAny(endRefUrl);
+                    }
+                } 
+                // For 'entity_refs' or 'entity_refs_start_end', we either send them as refs or inject prompt.
+                else {
+                    // Since backend parses imageRefs[0] as first frame for image-to-video, 
+                    // we must ensure 'ref_image_url' (apiRefImageUrl) is strictly the start frame if it's 'entity_refs_start_end'.
+                    if (effectiveVideoMode === 'entity_refs_start_end' && currentStartFrameUrl) {
+                        apiRefImageUrl = await resolveBlobUrlIfAny(currentStartFrameUrl);
+                        if (endRefUrl) {
+                            apiLastFrameUrl = await resolveBlobUrlIfAny(endRefUrl);
+                        }
+                    } else if (effectiveVideoMode === 'entity_refs') {
+                        apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
+                    } else {
+                        apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
+                    }
+                }
+                
+                // Keep compatibility: if apiRefImageUrl is somehow null but we have imageRefs, we pass them down
+                // IF we don't accidentally override the first frame.
+            }
             
             // Duration Logic: Use Shot Duration (s) if valid, else default to 5
             const durParam = parseFloat(editingShot.duration) || 5;
@@ -6286,6 +6326,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             let videoTaskPromise = null;
             try {
+                const isEntityRefsRelated = effectiveVideoMode.includes('entity_refs');
+                const image_urls = isEntityRefsRelated && promptEntityRefs?.length ? promptEntityRefs : undefined;
+
                 videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiRefVideoUrls, apiLastFrameUrl, durParam, { function_name: 'generate_videos',
                     project_id: projectId,
                     shot_id: targetShotId,
@@ -6295,6 +6338,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     ref_mode: effectiveVideoMode,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'video',
+                    image_urls: image_urls, // Distinguish clearly here
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
                         createdVideoJobId = String(jobId || '').trim();
@@ -8986,7 +9030,21 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                                                             {status || 'unknown'}
                                                                                         </span>
                                                                                     </div>
-                                                                                    <div className="text-[11px] text-muted-foreground">{createdText}</div>
+                                                                                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
+                                                                                        <span>{createdText}</span>
+                                                                                        {item.model && (
+                                                                                            <span className="flex items-center gap-1">
+                                                                                                <Cpu size={10} className="opacity-50" />
+                                                                                                <span className="opacity-80 max-w-[100px] truncate" title={item.model}>{item.model}</span>
+                                                                                            </span>
+                                                                                        )}
+                                                                                        {item.duration && (
+                                                                                            <span className="flex items-center gap-1">
+                                                                                                <Timer size={10} className="opacity-50" />
+                                                                                                <span className="opacity-80">{Number(item.duration).toFixed(1)}s</span>
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </div>
                                                                                     <div className="flex flex-wrap items-center gap-2 pt-1">
                                                                                         <button
                                                                                             type="button"

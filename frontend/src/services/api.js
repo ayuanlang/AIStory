@@ -1762,11 +1762,15 @@ const extractGenerationFailureMessage = (payload, depth = 0) => {
     if (typeof payload === 'object') {
         for (const key of ['error', 'message', 'msg', 'failMsg', 'detail']) {
             const found = extractGenerationFailureMessage(payload?.[key], depth + 1);
-            if (found) return found;
+            if (found && !['success', 'ok', 'true', '0'].includes(found.toLowerCase())) {
+                return found;
+            }
         }
         for (const key of ['details', 'data', 'result', 'record', 'raw']) {
             const found = extractGenerationFailureMessage(payload?.[key], depth + 1);
-            if (found) return found;
+            if (found && !['success', 'ok', 'true', '0'].includes(found.toLowerCase())) {
+                return found;
+            }
         }
     }
     return '';

@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -412,6 +412,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     resultUrl,
                     displayLabel: jobKind === 'reconstruct' ? t('主体重构', 'Subject Reconstruction') : t('主体生图', 'Subject Image Generation'),
                     createdAtMs: Date.parse(String(item?.created_at || item?.started_at || item?.finished_at || '')) || 0,
+                    model: extractSubjectHistoryField(item, 'model') || extractSubjectHistoryField(item, 'source_model'),
+                    duration: extractSubjectHistoryField(item, 'duration'),
                 };
             })
             .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
@@ -480,7 +482,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     resultUrl: item.url,
                     displayLabel: item.remark || t('主体生图', 'Subject Image Generation'),
                     createdAtMs: Date.parse(item.created_at || '') || 0,
-                    kind: 'asset'
+                    created_at: item.created_at,
+                    kind: 'asset',
+                    model: meta?.model || meta?.source_model,
+                    duration: meta?.duration
                 };
             }).sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
             setSubjectGenerationHistory(filtered.slice(0, 12));
@@ -5283,7 +5288,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                                 {status || 'unknown'}
                                                                             </span>
                                                                         </div>
-                                                                        <div className="text-[11px] text-muted-foreground">{createdText}</div>
+                                                                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
+                                                                            <span>{createdText}</span>
+                                                                            {item.model && (
+                                                                                <span className="flex items-center gap-1">
+                                                                                    <Cpu size={10} className="opacity-50" />
+                                                                                    <span className="opacity-80 max-w-[100px] truncate" title={item.model}>{item.model}</span>
+                                                                                </span>
+                                                                            )}
+                                                                            {item.duration && (
+                                                                                <span className="flex items-center gap-1">
+                                                                                    <Timer size={10} className="opacity-50" />
+                                                                                    <span className="opacity-80">{Number(item.duration).toFixed(1)}s</span>
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
                                                                         <div className="flex flex-wrap items-center gap-2 pt-1">
                                                                             <button
                                                                                 type="button"

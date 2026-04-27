@@ -227,7 +227,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 extractedText = match[0];
                 hasStructuredSubjectIndex = true;
             } else {
-                extractedText = authoritativeSubjectText;
+                // Detect pipe-delimited subject_no= format (e.g. "subject_no=S001 | subject_type=...")
+                const pipeMatch = authoritativeSubjectText.match(/(?:^|\n)(subject_no=S\d+\s*\|[\s\S]*)/i);
+                if (pipeMatch) {
+                    extractedText = pipeMatch[1].trim();
+                    hasStructuredSubjectIndex = true;
+                } else {
+                    extractedText = authoritativeSubjectText;
+                }
             }
         }
 

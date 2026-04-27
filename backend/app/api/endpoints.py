@@ -561,6 +561,8 @@ _GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_ST
 _GENERATION_JOB_POOL_CACHE_LOCK = threading.Lock()
 _GENERATION_JOB_POOL_CACHE: Dict[str, Dict[str, Any]] = {}
 
+ASSET_REGISTRATION_LOCK = threading.Lock()
+
 
 def _generation_task_status(task_ref: Any, *, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     if isinstance(task_ref, str):
@@ -5336,7 +5338,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         _release_db_connection(db, "analyze_scene_llm_call")
 
         # 1. Execute required Phase based on mode natively
-        is_entity_design_phase = (effective_scene_analysis_mode == "entity_design")
+        is_entity_design_phase = (effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"])
         
         # Execute the LLM loop generically for all modes
         loop1_res = await _run_loop(messages)
@@ -5452,7 +5454,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 _require_project_access(db, episode.project_id, auth_user)
             if not episode:
                 raise HTTPException(status_code=404, detail="Episode not found")
-            if effective_scene_analysis_mode == "entity_design":
+            if effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"]:
                 episode.ai_entity_design_result = result_content
                 logger.info(
                     "[analyze_scene] Saved ai_entity_design_result to episode_id=%s chars=%s",
@@ -20757,11 +20759,11 @@ def _extract_generation_failure_message(value: Any, depth: int = 0) -> str:
     if isinstance(value, dict):
         for key in ("error", "message", "msg", "failMsg", "detail"):
             candidate = _extract_generation_failure_message(value.get(key), depth + 1)
-            if candidate:
+            if candidate and candidate.lower() not in {"success", "ok", "true", "0"}:
                 return candidate
         for key in ("details", "data", "result", "record", "raw"):
             candidate = _extract_generation_failure_message(value.get(key), depth + 1)
-            if candidate:
+            if candidate and candidate.lower() not in {"success", "ok", "true", "0"}:
                 return candidate
     elif isinstance(value, list):
         for item in value[:5]:
@@ -21778,11 +21780,9 @@ def _find_existing_asset_for_registration(
         .limit(50)
         .all()
     )
-    for candidate in url_candidates:
-        candidate_meta = candidate.meta_info if isinstance(candidate.meta_info, dict) else {}
-        if _asset_meta_matches_registration_context(candidate_meta, normalized_meta):
-            return candidate
-    return url_candidates[0] if url_candidates and not normalized_meta else None
+    if url_candidates:
+        return url_candidates[0]
+    return None
 
 def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source_metadata: Dict = None):
     # Handle dict or object
@@ -22016,42 +22016,43 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
             else:
                  remark = f"Generated {get_attr(req, 'asset_type')} for Shot {get_attr(req, 'shot_number')} by {provider}"
 
-        existing_asset = _find_existing_asset_for_registration(
-            db,
-            user_id,
-            url=url,
-            idempotency_key=meta.get("idempotency_key"),
-            meta_info=meta,
-        )
-        if existing_asset:
-            return existing_asset
+        with ASSET_REGISTRATION_LOCK:
+            existing_asset = _find_existing_asset_for_registration(
+                db,
+                user_id,
+                url=url,
+                idempotency_key=meta.get("idempotency_key"),
+                meta_info=meta,
+            )
+            if existing_asset:
+                return existing_asset
 
-        is_image_inferred = is_image
-        is_video_inferred = is_video
-        is_audio_inferred = is_audio
-        if not is_image and not is_video and not is_audio:
-            # Fallback based on metadata provider/model if possible
-            provider_str = str(meta.get("provider", "")).lower()
-            model_str = str(meta.get("model", "")).lower()
-            if "video" in model_str or "video" in provider_str or any(k in provider_str for k in ("luma", "runway", "kling", "minimax")):
-                is_video_inferred = True
-            elif "audio" in model_str or "tts" in model_str or "voice" in model_str:
-                is_audio_inferred = True
-            else:
-                # Default to image if the extension and metadata are unknown
-                is_image_inferred = True
+            is_image_inferred = is_image
+            is_video_inferred = is_video
+            is_audio_inferred = is_audio
+            if not is_image and not is_video and not is_audio:
+                # Fallback based on metadata provider/model if possible
+                provider_str = str(meta.get("provider", "")).lower()
+                model_str = str(meta.get("model", "")).lower()
+                if "video" in model_str or "video" in provider_str or any(k in provider_str for k in ("luma", "runway", "kling", "minimax")):
+                    is_video_inferred = True
+                elif "audio" in model_str or "tts" in model_str or "voice" in model_str:
+                    is_audio_inferred = True
+                else:
+                    # Default to image if the extension and metadata are unknown
+                    is_image_inferred = True
 
-        asset = Asset(
-            user_id=user_id,
-            type=("image" if is_image_inferred else ("audio" if is_audio_inferred else "video")),
-            url=url,
-            filename=fname,
-            meta_info=meta,
-            remark=remark
-        )
-        db.add(asset)
-        db.commit()
-        return asset
+            asset = Asset(
+                user_id=user_id,
+                type=("image" if is_image_inferred else ("audio" if is_audio_inferred else "video")),
+                url=url,
+                filename=fname,
+                meta_info=meta,
+                remark=remark
+            )
+            db.add(asset)
+            db.commit()
+            return asset
     except Exception as e:
         print(f"Asset reg failed: {e}")
 

@@ -1395,13 +1395,36 @@ export function getProjectPreferredAspectRatio(projectInfoLike, episodeInfoLike)
 }
 
 export function buildShotDiptychPlan(aspectRatio) {
-    // 根据用户要求：整个两宫格统一以1:1比例生成，只要匀称布满画面即可，统一以上下宫格方式裁切。
-    // 即：总比例 1:1，上下排列，每个格子比例为 2:1。
+    const targetAspect = normalizeAspectRatioOption(aspectRatio) || '16:9';
+    const parts = parseAspectRatioParts(targetAspect);
+    const { widthPart, heightPart } = parts || { widthPart: 16, heightPart: 9 };
+    
+    const ratioValue = widthPart / heightPart;
+    
+    // Choose layout that makes combined aspect ratio closest to 1:1
+    const horizRatio = (widthPart * 2) / heightPart;
+    const vertRatio = widthPart / (heightPart * 2);
+    
+    const distHoriz = Math.max(horizRatio, 1 / horizRatio);
+    const distVert = Math.max(vertRatio, 1 / vertRatio);
+    
+    let layout = 'vertical';
+    let combinedW = widthPart;
+    let combinedH = heightPart * 2;
+    
+    if (distHoriz < distVert) {
+        layout = 'horizontal';
+        combinedW = widthPart * 2;
+        combinedH = heightPart;
+    }
+    
+    const exactCombinedAspectRatio = buildAspectRatioString(combinedW, combinedH) || `${combinedW}:${combinedH}`;
+    
     return {
-        layout: 'vertical',
-        targetAspectRatio: '2:1',
-        exactCombinedAspectRatio: '1:1',
-        ratioValue: 2,
+        layout,
+        targetAspectRatio: targetAspect,
+        exactCombinedAspectRatio,
+        ratioValue,
     };
 }
 
