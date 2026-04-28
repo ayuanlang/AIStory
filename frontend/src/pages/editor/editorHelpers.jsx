@@ -1395,35 +1395,20 @@ export function getProjectPreferredAspectRatio(projectInfoLike, episodeInfoLike)
 }
 
 export function buildShotDiptychPlan(aspectRatio) {
-    const targetAspect = normalizeAspectRatioOption(aspectRatio) || '16:9';
-    const parts = parseAspectRatioParts(targetAspect);
-    const { widthPart, heightPart } = parts || { widthPart: 16, heightPart: 9 };
-    
-    const ratioValue = widthPart / heightPart;
-    
-    // Choose layout that makes combined aspect ratio closest to 1:1
-    const horizRatio = (widthPart * 2) / heightPart;
-    const vertRatio = widthPart / (heightPart * 2);
-    
-    const distHoriz = Math.max(horizRatio, 1 / horizRatio);
-    const distVert = Math.max(vertRatio, 1 / vertRatio);
-    
-    let layout = 'vertical';
-    let combinedW = widthPart;
-    let combinedH = heightPart * 2;
-    
-    if (distHoriz < distVert) {
-        layout = 'horizontal';
-        combinedW = widthPart * 2;
-        combinedH = heightPart;
-    }
-    
-    const exactCombinedAspectRatio = buildAspectRatioString(combinedW, combinedH) || `${combinedW}:${combinedH}`;
-    
+    const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
+    const ratioValue = parts.widthPart / parts.heightPart;
+
+    // Keep the two-panel canvas close to square after a single split:
+    // wide targets stack top-bottom, tall targets sit left-right.
+    const layout = ratioValue >= 1 ? 'vertical' : 'horizontal';
+    const exactCombinedAspectRatio = layout === 'horizontal'
+        ? buildAspectRatioString(parts.widthPart * 2, parts.heightPart)
+        : buildAspectRatioString(parts.widthPart, parts.heightPart * 2);
+
     return {
         layout,
-        targetAspectRatio: targetAspect,
-        exactCombinedAspectRatio,
+        targetAspectRatio: buildAspectRatioString(parts.widthPart, parts.heightPart) || '16:9',
+        exactCombinedAspectRatio: exactCombinedAspectRatio || (layout === 'horizontal' ? '32:9' : '9:32'),
         ratioValue,
     };
 }
@@ -1602,16 +1587,29 @@ export function selectBestShotDiptychRequestAspectRatio({ diptychPlan, allowedAs
         const derivedPanelRatio = preferHorizontalSplit
             ? (overallRatio / 2)
             : (overallRatio * 2);
+        
+        // Exact 1:1 score bypass, otherwise panel closeness starts driving the score wild
+        if (value === '1:1' && targetRatio != null && Math.abs(targetRatio - 1) > 0.1) {
+            // When combined canvas is 1:1, derived Panel Ratio is 2:1 or 1:2
+            // This is horrible if the user actually wanted 16:9 or 9:16 target...
+            // UNLESS the previous code explicitly allowed 1:1 to be the EXACT combined aspect ratio
+            // so we shouldn't artificially suppress it here if we want full canvas fallback.
+        }
+
         const panelCloseness = targetRatio != null
             ? Math.abs(derivedPanelRatio - targetRatio)
             : Number.POSITIVE_INFINITY;
         const combinedCloseness = exactRatio != null
             ? Math.abs(overallRatio - exactRatio)
             : Number.POSITIVE_INFINITY;
+        // Heavy penalty for wrong orientation
         const orientationPenalty = preferHorizontalSplit
-            ? (overallRatio < 1 ? 100 : 0)
-            : (overallRatio > 1 ? 100 : 0);
-        return orientationPenalty + (panelCloseness * 10) + combinedCloseness;
+            ? (overallRatio < 1 ? 1000 : 0)
+            : (overallRatio > 1 ? 1000 : 0);
+
+        // Make panel closeness the primary driver of selection, combined closeness secondary
+        // The goal is to get a generated panel that correctly fits the target shot cropping layout
+        return orientationPenalty + (panelCloseness * 100) + (combinedCloseness * 10);
     };
 
     return [...candidatePool].sort((left, right) => scoreAspect(left) - scoreAspect(right))[0] || fallback;

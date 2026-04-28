@@ -2437,12 +2437,14 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             finalized_result["metadata"] = normalized_meta
 
         request_mode = str(req_context.get("mode") or "").strip().lower()
-        if request_mode != "joint_diptych" and normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
+        if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
             _register_asset_helper(db, current_user.id, normalized_url, req_context, normalized_meta)
-            _bind_generated_media_to_shot(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
-            _bind_generated_media_to_entity(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
-        elif request_mode != "joint_diptych" and normalized_url:
-            logger.warning(
+            if request_mode != "joint_diptych":
+                _bind_generated_media_to_shot(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
+                _bind_generated_media_to_entity(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
+        elif normalized_url:
+            if request_mode != "joint_diptych":
+                logger.warning(
                 "[ImageJob] skipped asset registration/bind for temporary provider url | job_id=%s user_id=%s url=%s entity_id=%s shot_id=%s",
                 job_id,
                 getattr(current_user, "id", None),
@@ -23561,10 +23563,11 @@ async def _run_generate_image(
                         if job_id:
                             final_meta["idempotency_key"] = job_id
                         
-                        if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(final_url):
+                        if not _is_ephemeral_provider_media_url(final_url):
                             await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, final_url, req_obj, final_meta)
-                            await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, final_url, True)
-                            await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, final_url, True)
+                            if request_mode != "joint_diptych":
+                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, final_url, True)
+                                await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, final_url, True)
 
                         if job_id and norm_url and norm_url != raw_url:
                             with IMAGE_JOB_LOCK:
@@ -23586,13 +23589,14 @@ async def _run_generate_image(
 
                 asyncio.create_task(_bg_upload_and_update(current_user, req, temp_url, result.get("metadata")))
             else:
-                if request_mode != "joint_diptych" and not _is_ephemeral_provider_media_url(temp_url):
+                if not _is_ephemeral_provider_media_url(temp_url):
                     final_meta_sync = dict(result.get("metadata") or {})
                     if job_id:
                         final_meta_sync["idempotency_key"] = job_id
                     await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, final_meta_sync)
-                    await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url, False)
-                    await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url, False)
+                    if request_mode != "joint_diptych":
+                        await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url, False)
+                        await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url, False)
                 if job_id:
                     _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
 
