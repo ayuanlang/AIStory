@@ -193,7 +193,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [userPrompt, setUserPrompt] = useState('');
     const [isSuperuser, setIsSuperuser] = useState(false);
     const isSuperuserRef = useRef(false);
-    const SUBJECT_INDEX_PARSE_ERROR = '第一阶段未解析到完整的 Subject Index 区块，请在原文补充横杠或小标题结构后重试。';
+    const SUBJECT_INDEX_PARSE_ERROR = '第一阶段未解析到完整的 Subject Index 区块，请确认返回结果中包含完整的 Subject Index 内容（如标题区块或 subject_no=... 条目）后重试。';
 
     const extractAnalysisSections = useCallback((rawText) => {
         const authoritativeSubjectText = String(rawText || '');
@@ -227,10 +227,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 extractedText = match[0];
                 hasStructuredSubjectIndex = true;
             } else {
-                // Detect pipe-delimited subject_no= format (e.g. "subject_no=S001 | subject_type=...")
-                const pipeMatch = authoritativeSubjectText.match(/(?:^|\n)(subject_no=S\d+\s*\|[\s\S]*)/i);
-                if (pipeMatch) {
-                    extractedText = pipeMatch[1].trim();
+                const pipeMatch = authoritativeSubjectText.match(/(?:^|\n)\s*(subject_no\s*=\s*S\d+[\s\S]*)/i);
+                if (pipeMatch && String(pipeMatch[1] || '').trim()) {
+                    extractedText = String(pipeMatch[1] || '').trim();
                     hasStructuredSubjectIndex = true;
                 } else {
                     extractedText = authoritativeSubjectText;
@@ -3520,7 +3519,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 clearAnalysisTaskMarker(activeEpisode.id);
             } catch (e) {
                 console.error("Phase 2 recovery error:", e);
-                setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第二阶段分析任务失败：${e?.message || e}`, `Failed to resume Phase 2 analysis task: ${e?.message || e}`) });
+                const friendlyRecoveryError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
+                setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第二阶段分析任务失败：${friendlyRecoveryError}`, `Failed to resume Phase 2 analysis task: ${friendlyRecoveryError}`) });
                 clearAnalysisTaskMarker(activeEpisode.id);
             } finally {
                 analysisResumeInFlightRef.current = false;

@@ -1,8 +1,6 @@
 export const PROJECT_EP_TYPE_OPTIONS = [
 
-    "真人 / Live Action",
-
-    "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
+    "实拍真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
 
     "二维动画 / 2D Animation",
 
@@ -249,15 +247,17 @@ export const PROJECT_SCENE_ANALYSIS_ERA_OPTIONS = [
 
     "古代",
 
-    "唐 / Tang",
+    "秦朝 / Qin",
 
-    "宋 / Song",
+    "唐朝 / Tang",
+
+    "宋朝 / Song",
 
     "元 / Yuan",
 
-    "明 / Ming",
+    "明朝 / Ming",
 
-    "清 / Qing",
+    "清朝 / Qing",
 
     "架空时代",
 
