@@ -2924,12 +2924,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
-    const persistLlmResultContent = async (content) => {
+    const persistLlmResultContent = async (content, resultField = 'ai_scene_analysis_result') => {
         if (!activeEpisode?.id) return;
         if (!onUpdateEpisodeInfo) return;
 
         try {
-            await onUpdateEpisodeInfo(activeEpisode.id, { ai_scene_analysis_result: content || '' });
+            await onUpdateEpisodeInfo(activeEpisode.id, { [resultField]: content || '' });
         } catch (e) {
             console.error("Failed to persist LLM result", e);
             if (onLog) onLog(`Failed to save LLM result: ${e.message}`);
@@ -3049,30 +3049,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setIsAnalyzing(false);
         }
     }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, loadAnalysisTaskMarker, onLog, t]);
-    const refreshAnalysisFromDB = useCallback(async () => {
+    const refreshAnalysisFromDB = useCallback(async ({ resultField = 'ai_scene_analysis_result' } = {}) => {
         if (!projectId || !activeEpisode?.id) return;
         try {
             const eps = await fetchEpisodes(projectId);
             const fresh = (eps || []).find(e => e.id === activeEpisode.id);
-            const dbText = fresh?.ai_scene_analysis_result || '';
+            const dbText = String((fresh && fresh[resultField]) || '');
 
             // Only update if user hasn't diverged from last loaded content.
-            const current = llmRawResultContent || '';
-            const lastLoaded = lastLoadedAnalysisRef.current;
-            const userHasEdited = lastLoaded !== null && current !== lastLoaded;
-
-            if (!userHasEdited) {
+            if (resultField === 'ai_entity_design_result') {
+                const current = llmAssetRawResultContent || '';
                 if (dbText && dbText !== current) {
-                    setLlmRawResultContent(dbText);
-                    setLlmResultContent(normalizeLlmMarkdownTable(dbText));
+                    setLlmAssetRawResultContent(dbText);
                 }
-                lastLoadedAnalysisRef.current = dbText;
+            } else {
+                const current = llmRawResultContent || '';
+                const lastLoaded = lastLoadedAnalysisRef.current;
+                const userHasEdited = lastLoaded !== null && current !== lastLoaded;
+
+                if (!userHasEdited) {
+                    if (dbText && dbText !== current) {
+                        setLlmRawResultContent(dbText);
+                        setLlmResultContent(normalizeLlmMarkdownTable(dbText));
+                    }
+                    lastLoadedAnalysisRef.current = dbText;
+                }
             }
         } catch (e) {
             // non-fatal
             console.warn('[ScriptEditor] Failed to refresh analysis from DB', e);
         }
-    }, [projectId, activeEpisode?.id, llmRawResultContent, normalizeLlmMarkdownTable]);
+    }, [projectId, activeEpisode?.id, llmAssetRawResultContent, llmRawResultContent, normalizeLlmMarkdownTable]);
 
     const waitForEpisodeAnalysisResultUpdate = useCallback(async ({ baselineText = '', timeoutMs = 600000, intervalMs = 3500, resultField = 'ai_scene_analysis_result' } = {}) => {
         if (!projectId || !activeEpisode?.id) return '';
@@ -3389,6 +3396,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const analyzedText = extractAnalysisTextFromResult(result);
             setLlmAssetRawResultContent(analyzedText);
 
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            try {
+                if (!savedByBackend) {
+                    onLog?.('[Asset Gen Tracking] Persisting second-pass raw output to ai_entity_design_result...', 'process');
+                    await persistLlmResultContent(analyzedText || '', 'ai_entity_design_result');
+                } else {
+                    await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
+                }
+            } catch (persistErr) {
+                onLog?.(`[Asset Gen Tracking] Phase 2 raw output save warning: ${persistErr?.message || persistErr}`, 'warning');
+            }
+
             if (analyzedText) {
                 // Safeguard: make sure we are not importing plain text phase 1 by mistake
                 const hasValidSubjectJsonBlock = /"characters"\s*:\s*\[|"props"\s*:\s*\[|"environments"\s*:\s*\[|"posters"\s*:\s*\[/i.test(analyzedText);
@@ -3467,6 +3486,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
                 const analyzedText = extractAnalysisTextFromResult(result);
                 setLlmAssetRawResultContent(analyzedText);
+
+                const savedByBackend = !!(result?.meta?.saved_to_episode);
+                try {
+                    if (!savedByBackend) {
+                        await persistLlmResultContent(analyzedText || '', 'ai_entity_design_result');
+                    } else {
+                        await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
+                    }
+                } catch (persistErr) {
+                    onLog?.(`[Asset Gen Tracking] Phase 2 recovery save warning: ${persistErr?.message || persistErr}`, 'warning');
+                }
 
                 if (analyzedText) {
                     const hasValidSubjectJsonBlock = /"characters"s*:s*\[|"props"s*:s*\[|"environments"s*:s*\[|"posters"s*:s*\[/i.test(analyzedText);

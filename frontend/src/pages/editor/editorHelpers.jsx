@@ -1401,14 +1401,16 @@ export function buildShotDiptychPlan(aspectRatio) {
     // Keep the two-panel canvas close to square after a single split:
     // wide targets stack top-bottom, tall targets sit left-right.
     const layout = ratioValue >= 1 ? 'vertical' : 'horizontal';
-    const exactCombinedAspectRatio = layout === 'horizontal'
-        ? buildAspectRatioString(parts.widthPart * 2, parts.heightPart)
-        : buildAspectRatioString(parts.widthPart, parts.heightPart * 2);
+    
+    // Instead scale the exact ratio component and build precisely.
+    // If the premise of padding is forcing a 1:1 API generation parameter, then exact combined 
+    // aspect ratio that drives the request must be 1:1.
+    const exactCombinedAspectRatio = '1:1';
 
     return {
         layout,
         targetAspectRatio: buildAspectRatioString(parts.widthPart, parts.heightPart) || '16:9',
-        exactCombinedAspectRatio: exactCombinedAspectRatio || (layout === 'horizontal' ? '32:9' : '9:32'),
+        exactCombinedAspectRatio: exactCombinedAspectRatio,
         ratioValue,
     };
 }
@@ -1422,26 +1424,27 @@ export function getShotDiptychLayoutLabel(layout, language = 'en') {
 
 export function buildShotDiptychLayoutInstruction(diptychPlan, language = 'en') {
     const layoutLabel = getShotDiptychLayoutLabel(diptychPlan?.layout, language);
+    const paddingLabel = diptychPlan?.layout === 'horizontal' ? '边缘(上下)' : '边缘(左右)';
+    const paddingLabelEn = diptychPlan?.layout === 'horizontal' ? 'minimal top/bottom edges' : 'minimal left/right edges';
 
     if (language === 'cn') {
-        return `两宫格必须采用${layoutLabel}排布。`;
+        return `两宫格必须采用${layoutLabel}排布。请尽量让画面主体撑满格子，${paddingLabel}仅留出极窄的空白或直接画满，不要留出粗大的白边。`;
     }
 
-    return `The diptych must be arranged ${layoutLabel}.`;
+    return `The diptych must be arranged ${layoutLabel}. Draw the subjects fully scaled to fit their grid. Keep ${paddingLabelEn} as thin as possible or draw edge-to-edge; do not leave large blank spaces.`;
 }
 
 export function buildShotDiptychAspectContract(diptychPlan, language = 'en') {
     const panelAspectRatio = String(diptychPlan?.targetAspectRatio || '16:9').trim();
     const combinedAspectRatio = String(
-        diptychPlan?.exactCombinedAspectRatio
-        || (diptychPlan?.layout === 'horizontal' ? '32:9' : '9:32')
+        diptychPlan?.exactCombinedAspectRatio || '1:1'
     ).trim();
 
     if (language === 'cn') {
-        return `每一格成片画幅固定为 ${panelAspectRatio}，两格合并总画幅固定为 ${combinedAspectRatio}。两格必须严格等宽等高、50/50 均分，不允许任一格更大或更小。`;
+        return `生图时总画幅必须采用 1:1 正方形比例 (${combinedAspectRatio})，生图后将平分为两格，每一格截取为 ${panelAspectRatio}。重要要求：必须极其饱满地作画，画面需要贴边！两格必须严格满铺相等的空间 (50/50平分)。`;
     }
 
-    return `Each panel must keep the same aspect ratio ${panelAspectRatio}, and the combined two-panel canvas must follow ${combinedAspectRatio}. Both panels must be equal-size with an exact 50/50 split; neither panel can be larger.`;
+    return `The raw generated canvas must be exactly ${combinedAspectRatio} (1:1 square), which will be equally split into two ${panelAspectRatio} panels. IMPORTANT: Paint fully edge-to-edge. Do not leave heavy white boxes around the art. Both panels must be equal-size with a 50/50 split.`;
 }
 
 export function getShotDiptychSeamTrimPx(layout, sourceWidth, sourceHeight) {
@@ -1651,10 +1654,12 @@ export function resolveShotDiptychRequestResolution(diptychPlan, panelExportSize
     }
 
     if (diptychPlan?.layout === 'horizontal') {
-        return { width: panelWidth * 2, height: panelHeight };
+        const layoutSize = Math.max(panelWidth * 2, panelHeight);
+        return { width: layoutSize, height: layoutSize };
     }
 
-    return { width: panelWidth, height: panelHeight * 2 };
+    const layoutSize = Math.max(panelWidth, panelHeight * 2);
+    return { width: layoutSize, height: layoutSize };
 }
 
 export function getResolutionByAspectAndImageSize(aspectRatio, imageSize) {

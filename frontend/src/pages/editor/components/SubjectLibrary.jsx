@@ -2031,11 +2031,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             throw new Error('__subject_batch_stop__');
         }
 
-        if (!asset?.url) {
+        const generatedAssetUrl = extractImageJobResultUrl(asset);
+        if (!generatedAssetUrl) {
             throw new Error(t('生成结果缺少图片地址', 'Generated result missing image URL'));
         }
 
-        let resolvedAssetUrl = String(asset.url || '').trim();
+        let resolvedAssetUrl = String(generatedAssetUrl || '').trim();
         if (isEphemeralProviderMediaUrl(resolvedAssetUrl)) {
             if (onLog) {
                 onLog(
@@ -3174,11 +3175,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         return { entity, stopped: true };
                     }
 
-                    if (!res?.url) {
+                    const generatedImageUrl = extractImageJobResultUrl(res);
+                    if (!generatedImageUrl) {
                         throw new Error('Generated result missing image URL');
                     }
 
-                    let resolvedImageUrl = String(res.url || '').trim();
+                    let resolvedImageUrl = String(generatedImageUrl || '').trim();
                     if (isEphemeralProviderMediaUrl(resolvedImageUrl)) {
                         onLog?.(
                             t(
