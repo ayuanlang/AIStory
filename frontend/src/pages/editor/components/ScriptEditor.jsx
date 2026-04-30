@@ -3371,6 +3371,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             onLog?.(`[Asset Gen Tracking] Launching second LLM call for 'subject_generation'`);
 
+            const phase1SystemApiId = Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
+                || Number(localStorage.getItem('func_api_script_analysis') || 0)
+                || null;
+            if (phase1SystemApiId) {
+                onLog?.(`[Phase 2] Reusing Phase 1 system_api_id=${phase1SystemApiId} for subject_generation.`, 'info');
+            } else {
+                onLog?.('[Phase 2] Phase 1 system_api_id is missing; fallback routing may select a different API.', 'warning');
+            }
+
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => analyzeScene(
                     finalSubjectIndexText, 
@@ -3387,7 +3396,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }, 
                     projectId,
                     "subject_generation",
-                    null,
+                    phase1SystemApiId,
                     "2_pass_generate_assets"
                 ),
                 { startedAt: Date.now(), baselineText: activeEpisode?.ai_entity_design_result || '', resultField: 'ai_entity_design_result' }
@@ -3457,7 +3466,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         projectId, llmRawResultContent, llmResultContent, activeEpisode, t, onLog,
         fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery,
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
-        isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal,
+        isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
         project
     ]);
 
