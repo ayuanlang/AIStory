@@ -2176,36 +2176,7 @@ Negative prompt constraints: {neg_prompt}"""
         return result
 
     def _pick_runtime_api_key(self, config_value: Any, fallback_key: Any = None, session=None, provider_name: str = None) -> str:
-        # New path: read from provider_key_pool table
-        if session and provider_name:
-            prov = str(provider_name or "").strip().lower()
-            if prov:
-                record = session.query(ProviderKeyPool).filter(ProviderKeyPool.provider == prov).first()
-                if record and record.api_keys:
-                    pooled = self._normalize_api_keys(record.api_keys)
-                    if pooled:
-                        strategy = str(record.strategy or "random").strip().lower()
-                        if strategy == "round_robin":
-                            cursor = int(self._provider_key_cursors.get(prov, 0))
-                            selected = pooled[cursor % len(pooled)]
-                            self._provider_key_cursors[prov] = cursor + 1
-                            return selected
-                        if strategy == "weighted":
-                            raw_weights = record.weights
-                            if isinstance(raw_weights, list) and raw_weights:
-                                weights = []
-                                for i in range(len(pooled)):
-                                    try:
-                                        w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
-                                    except Exception:
-                                        w = 1.0
-                                    weights.append(w if w > 0 else 1.0)
-                                return random.choices(pooled, weights=weights, k=1)[0]
-                        return random.choice(pooled)
-
-        # Legacy fallback: read from config dict
         cfg = self._safe_json_dict(config_value)
-        pooled = self._normalize_api_keys(cfg.get("provider_api_keys"))
         strategy = str(cfg.get("provider_api_key_strategy") or "random").strip().lower()
 
         def _pick_from_pool(keys: List[str]) -> str:
@@ -2230,12 +2201,44 @@ Negative prompt constraints: {neg_prompt}"""
                     return random.choices(keys, weights=weights, k=1)[0]
             return random.choice(keys)
 
+        # 1. 优先使用系统配置自带的 API Key (system_api_settings.api_key)
+        explicit_pool = self._normalize_api_keys(fallback_key)
+        if explicit_pool:
+            return _pick_from_pool(explicit_pool)
+
+        # 2. 如果系统配置为空，尝试从 ProviderKeyPool (直接查询) 获取
+        if session and provider_name:
+            prov = str(provider_name or "").strip().lower()
+            if prov:
+                record = session.query(ProviderKeyPool).filter(ProviderKeyPool.provider == prov).first()
+                if record and record.api_keys:
+                    pooled = self._normalize_api_keys(record.api_keys)
+                    if pooled:
+                        # 对于 ProviderKeyPool 的情况，覆盖上面的 strategy 为表内的策略
+                        strategy = str(record.strategy or "random").strip().lower()
+                        if strategy == "round_robin":
+                            cursor = int(self._provider_key_cursors.get(prov, 0))
+                            selected = pooled[cursor % len(pooled)]
+                            self._provider_key_cursors[prov] = cursor + 1
+                            return selected
+                        if strategy == "weighted":
+                            raw_weights = record.weights
+                            if isinstance(raw_weights, list) and raw_weights:
+                                weights = []
+                                for i in range(len(pooled)):
+                                    try:
+                                        w = float(raw_weights[i]) if i < len(raw_weights) else 1.0
+                                    except Exception:
+                                        w = 1.0
+                                    weights.append(w if w > 0 else 1.0)
+                                return random.choices(pooled, weights=weights, k=1)[0]
+                        return random.choice(pooled)
+
+        # 3. 兼容配置字典中的 provider_api_keys
+        pooled = self._normalize_api_keys(cfg.get("provider_api_keys"))
         if pooled:
             return _pick_from_pool(pooled)
 
-        fallback_pool = self._normalize_api_keys(fallback_key)
-        if fallback_pool:
-            return _pick_from_pool(fallback_pool)
         return str(fallback_key or "").strip()
 
     def _collect_provider_key_pool_bundle(self, session, category: str, provider: str) -> Dict[str, Any]:

@@ -496,6 +496,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     name: name || nameEn,
                     name_en: nameEn || undefined,
                     type: entityType,
+                    episode_id: currentEpisode?.id || undefined,
                     description: String(row?.description_cn || row?.description || row?.entity_attributes || '').trim(),
                     role: String(row?.role || '').trim() || undefined,
                     archetype: String(row?.archetype || row?.action_characteristics || '').trim() || undefined,
@@ -520,7 +521,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
 
         return { importedSubjectCounts, createdSubjectItems, skippedSubjectItems };
-    }, [allEntities, projectId]);
+    }, [allEntities, currentEpisode?.id, projectId]);
 
     const formatAiEntityCreateReport = useCallback((importReport) => {
         const imported = importReport?.importedSubjectCounts || {};
@@ -936,7 +937,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             if (projectId) {
-                const latest = await fetchEntities(projectId);
+                const latest = await fetchEntities(projectId, { episode_id: currentEpisode?.id || undefined });
                 const processedLatest = Array.isArray(latest) ? latest.map(item => {
                     if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
                         return { ...item, type: 'poster' };
@@ -1450,7 +1451,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const stableEntityId = String(entityId || '').trim();
         if (!projectId || !stableEntityId) return '';
 
-        const latestEntities = await fetchEntities(projectId);
+        const latestEntities = await fetchEntities(projectId, { episode_id: currentEpisode?.id || undefined });
         const latestEntity = (Array.isArray(latestEntities) ? latestEntities : []).find((item) => String(item?.id || '') === stableEntityId);
         const recoveredUrl = String(latestEntity?.image_url || '').trim();
         if (!recoveredUrl || isEphemeralProviderMediaUrl(recoveredUrl)) {
@@ -1459,7 +1460,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         applySubjectEntityImageLocally(stableEntityId, recoveredUrl);
         return recoveredUrl;
-    }, [applySubjectEntityImageLocally, fetchEntities, isEphemeralProviderMediaUrl, projectId]);
+    }, [applySubjectEntityImageLocally, currentEpisode?.id, fetchEntities, isEphemeralProviderMediaUrl, projectId]);
 
     const awaitPersistedSubjectEntityImage = useCallback(async (entityId, options = {}) => {
         const stableEntityId = String(entityId || '').trim();
@@ -2068,7 +2069,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (!projectId) return [];
         setEntityListLoading(true);
         try {
-            const data = await fetchEntities(projectId); // Fetch ALL types
+            const data = await fetchEntities(projectId, { episode_id: currentEpisode?.id || undefined });
             const processedData = Array.isArray(data) ? data.map(item => {
                 if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
                     return { ...item, type: 'poster' };
@@ -2083,7 +2084,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         } finally {
             setEntityListLoading(false);
         }
-    }, [projectId]);
+    }, [currentEpisode?.id, projectId]);
 
     const awaitShotGenerationEntities = useCallback(async () => {
         if (!projectId) return Array.isArray(entities) ? entities : [];
@@ -2804,6 +2805,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             // Must clone and remove the 'new' ID
             const payload = { ...viewingEntity };
             delete payload.id; 
+            payload.episode_id = currentEpisode?.id || undefined;
             
             const newEnt = await createEntity(projectId, payload);
             

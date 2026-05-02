@@ -338,6 +338,7 @@ class Entity(Base):
     __tablename__ = "entities"
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"))
+    episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=True)
     name = Column(String)
     type = Column(String) # character, environment, prop
     description = Column(Text)
@@ -369,6 +370,7 @@ class Entity(Base):
     custom_attributes = Column(JSON, default={})
     
     project = relationship("Project", back_populates="entities")
+    episode = relationship("Episode", foreign_keys=[episode_id])
 
 class Asset(Base):
     __tablename__ = "assets"

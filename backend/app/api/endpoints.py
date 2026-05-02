@@ -363,40 +363,17 @@ def _cleanup_video_dedup_cache(now_ts: float) -> None:
 
 ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
     "characters": {
-        "en_required": [
-            "[Global Style]",
-            "6-view character sheet",
-            "Structure: 6-view layout",
-            "Front",
-            "Back",
-            "Side",
-            "3/4",
-            "Close-up",
-            "Detail",
-            "Background: white",
-        ],
-        "cn_required": ["六视图", "正面", "背面", "侧面", "四分之三", "特写", "细节", "背景", "纯白"],
+        "en_required": ["character sheet", "Front", "Back", "Side", "Close-up", "white"],
+        "cn_required": []
     },
     "props": {
-        "en_required": [
-            "[Global Style] Prop:",
-            "6-view prop sheet",
-            "Structure: 6-view layout",
-            "Front",
-            "Back",
-            "Side",
-            "3/4",
-            "Close-up",
-            "Detail",
-            "Background: white",
-            "Strictly Object Only",
-        ],
-        "cn_required": ["道具", "六视图", "正面", "背面", "侧面", "四分之三", "特写", "细节", "仅物体", "背景", "纯白"],
+        "en_required": ["prop sheet", "Front", "Back", "Side", "Close-up", "white"],
+        "cn_required": []
     },
     "environments": {
-        "en_required": ["[Global Style] Viewpoint at", "No people or characters in scene"],
-        "cn_required": ["环境", "无人物", "背景"],
-    },
+        "en_required": [],
+        "cn_required": []
+    }
 }
 
 _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "360")))
@@ -15782,6 +15759,7 @@ class EntityCreate(BaseModel):
     name: str
     type: str # character, environment, prop
     description: str
+    episode_id: Optional[int] = None
     image_url: Optional[str] = None
     generation_prompt_en: Optional[str] = None
     generation_prompt_cn: Optional[str] = None
@@ -15808,6 +15786,7 @@ class EntityCreate(BaseModel):
 import pydantic
 class EntityOut(BaseModel):
     id: int
+    episode_id: Optional[int] = None
     name: Optional[str] = None
     type: Optional[str] = None
     description: Optional[str] = None
@@ -15896,6 +15875,7 @@ def _coerce_visual_dependencies(value: Any) -> List[str]:
 def read_entities(
     project_id: int,
     type: Optional[str] = None,
+    episode_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -15904,6 +15884,8 @@ def read_entities(
     query = db.query(Entity).filter(Entity.project_id == project_id)
     if type:
         query = query.filter(Entity.type == type)
+    if episode_id is not None:
+        query = query.filter(Entity.episode_id == episode_id)
     entities = query.all()
     repaired_entities = _repair_entities_image_urls_from_assets(db, current_user, project, entities)
 
@@ -15986,6 +15968,8 @@ def create_entity(
         existing_entity.anchor_description = entity.anchor_description or existing_entity.anchor_description
         existing_entity.role = entity.role or existing_entity.role
         existing_entity.appearance_cn = entity.appearance_cn or existing_entity.appearance_cn
+        if entity.episode_id and not existing_entity.episode_id:
+            existing_entity.episode_id = entity.episode_id
         db.commit()
         db.refresh(existing_entity)
         return existing_entity
@@ -15993,6 +15977,7 @@ def create_entity(
     # Create a new subject row if no duplicate exists.
     db_entity = Entity(
         project_id=project_id,
+        episode_id=entity.episode_id,
         name=entity.name,
         type=entity.type,
         description=entity.description,
@@ -16327,6 +16312,7 @@ class EntityUpdate(BaseModel):
     name: Optional[str] = None
     type: Optional[str] = None
     description: Optional[str] = None
+    episode_id: Optional[int] = None
     image_url: Optional[str] = None
     generation_prompt_en: Optional[str] = None
     generation_prompt_cn: Optional[str] = None

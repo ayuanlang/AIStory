@@ -1642,6 +1642,7 @@ const Editor = ({
                                 const payload = {
                                     name: entityName,
                                     type: 'character',
+                                    episode_id: currentEpisode?.id || undefined,
                                     description: desc,
                                     generation_prompt_cn: char.generation_prompt_cn || '',
                                     generation_prompt_en: char.generation_prompt_en || '',
@@ -1717,6 +1718,7 @@ const Editor = ({
                                 const payload = {
                                     name: entityName,
                                     type: 'prop',
+                                    episode_id: currentEpisode?.id || undefined,
                                     description: desc,
                                     generation_prompt_cn: prop.generation_prompt_cn || '',
                                     generation_prompt_en: prop.generation_prompt_en || '',
@@ -1786,6 +1788,7 @@ const Editor = ({
                                 const payload = {
                                     name: entityName,
                                     type: 'environment',
+                                    episode_id: currentEpisode?.id || undefined,
                                     description: desc,
                                     generation_prompt_cn: env.generation_prompt_cn || '',
                                     generation_prompt_en: env.generation_prompt_en || '',
@@ -1860,6 +1863,7 @@ const Editor = ({
                                 const payload = {
                                     name: entityName,
                                     type: 'poster',
+                                    episode_id: currentEpisode?.id || undefined,
                                     description: desc,
                                     generation_prompt_cn: poster.generation_prompt_cn || '',
                                     generation_prompt_en: poster.generation_prompt_en || '',

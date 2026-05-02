@@ -683,6 +683,11 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             logger.error(f"Failed to ensure assets columns: {e}")
 
         try:
+            _ensure_missing_table_columns("entities", models.Entity, is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure entities columns: {e}")
+
+        try:
             if hasattr(models, "UserGroup"):
                 _ensure_missing_table_columns("user_groups", models.UserGroup, is_postgres=is_postgres)
             if hasattr(models, "UserGroupMembership"):

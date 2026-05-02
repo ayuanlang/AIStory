@@ -1372,8 +1372,21 @@ export const stopShotMediaBatch = async (episodeId) => {
 }
 
 // Entities
-export const fetchEntities = async (projectId, type = null) => {
-    const params = type ? { type } : {};
+export const fetchEntities = async (projectId, typeOrOptions = null, options = {}) => {
+    let type = null;
+    let extraParams = {};
+
+    if (typeOrOptions && typeof typeOrOptions === 'object' && !Array.isArray(typeOrOptions)) {
+        extraParams = { ...typeOrOptions };
+    } else {
+        type = typeOrOptions;
+        extraParams = options && typeof options === 'object' ? { ...options } : {};
+    }
+
+    const params = {
+        ...extraParams,
+        ...(type ? { type } : {}),
+    };
     const response = await api.get(`/projects/${projectId}/entities`, { params });
     return response.data;
 }
