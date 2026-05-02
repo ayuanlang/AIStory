@@ -344,6 +344,7 @@ class Entity(Base):
     
     # Extended Fields for Character Import
     name_en = Column(String, nullable=True)
+    base_name_en = Column(String, nullable=True)
     gender = Column(String, nullable=True)
     role = Column(String, nullable=True)
     archetype = Column(String, nullable=True)
@@ -373,6 +374,9 @@ class Asset(Base):
     __tablename__ = "assets"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=True)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=True)
+    is_current_project_asset = Column(Boolean, default=False, index=True, nullable=False)
     
     type = Column(String) # image, video
     url = Column(String)
@@ -383,6 +387,8 @@ class Asset(Base):
     created_at = Column(String, default=now_bj_iso)
     
     owner = relationship("User", back_populates="assets")
+    project = relationship("Project", foreign_keys=[project_id])
+    episode = relationship("Episode", foreign_keys=[episode_id])
 
 
 class APISetting(Base):

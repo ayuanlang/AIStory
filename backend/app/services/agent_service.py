@@ -2573,10 +2573,15 @@ Output ONLY the JSON object now."""
         if not bool(getattr(user, "is_superuser", False)):
             raise PermissionError("Only superuser can use system management agent")
 
+        resolved_function_name = (
+            getattr(request, "function_name", None)
+            or (request.context or {}).get("function_name")
+            or "system_agent"
+        )
         llm_config = self.get_active_llm_config(
             user_id=user.id,
             category="LLM",
-            function_name=getattr(request, "function_name", "system_agent"),
+            function_name=resolved_function_name,
             system_api_id=getattr(request, "system_api_id", None)
         )
         if not llm_config or not llm_config.get("api_key"):
@@ -2895,13 +2900,18 @@ Output ONLY the JSON object now."""
         print(f"[STREAM-DEBUG] agent_service.stream_process_command entered, query={request.query[:80] if request.query else 'N/A'}")
         user_id = user.id
         project_id = request.project_id or request.context.get("project_id") or request.context.get("projectId")
+        resolved_function_name = (
+            getattr(request, "function_name", None)
+            or (request.context or {}).get("function_name")
+            or "ai_assistant"
+        )
 
         # Run synchronous DB work in a thread so it doesn't block the event loop
         llm_config = await _asyncio.to_thread(
             self.get_active_llm_config,
             user_id=user_id,
             category="LLM",
-            function_name=getattr(request, "function_name", "agent"),
+            function_name=resolved_function_name,
             system_api_id=getattr(request, "system_api_id", None)
         )
 
@@ -3035,11 +3045,16 @@ Output ONLY the JSON object now."""
             yield {"type": "error", "message": "Only superuser can use system management agent"}
             return
 
+        resolved_function_name = (
+            getattr(request, "function_name", None)
+            or (request.context or {}).get("function_name")
+            or "system_agent"
+        )
         llm_config = await _asyncio.to_thread(
             self.get_active_llm_config,
             user_id=user.id,
             category="LLM",
-            function_name=getattr(request, "function_name", "system_agent"),
+            function_name=resolved_function_name,
             system_api_id=getattr(request, "system_api_id", None)
         )
         if not llm_config or not llm_config.get("api_key"):
@@ -3375,12 +3390,17 @@ Output ONLY the JSON object now."""
     async def process_command(self, request: AgentRequest, db: Session, user: User) -> AgentResponse:
         user_id = user.id
         project_id = request.project_id or request.context.get("project_id") or request.context.get("projectId")
+        resolved_function_name = (
+            getattr(request, "function_name", None)
+            or (request.context or {}).get("function_name")
+            or "ai_assistant"
+        )
         
         # Resolve LLM Config from user's active setting (falls back to system default).
         llm_config = self.get_active_llm_config(
             user_id=user_id,
             category="LLM",
-            function_name=getattr(request, "function_name", "agent"),
+            function_name=resolved_function_name,
             system_api_id=getattr(request, "system_api_id", None)
         )
 

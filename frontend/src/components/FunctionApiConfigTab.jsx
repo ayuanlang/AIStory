@@ -12,6 +12,7 @@ generate_subjects_i2i: '图生图 (角色/道具/环境)',
     generate_shot_images: '生成分镜图片',
     generate_videos: '生成视频',
     script_analysis: '剧本分析',
+    ai_assistant: 'AI Assistant',
     ai_shot: 'AI生成分镜(脚本)'
 };
 

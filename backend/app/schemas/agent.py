@@ -5,6 +5,8 @@ from typing import List, Dict, Any, Optional
 class AgentRequest(BaseModel):
     query: str
     project_id: Optional[int] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
     context: Dict[str, Any] = {}
     history: List[Dict[str, Any]] = []
     llm_config: Optional[Dict[str, Any]] = None

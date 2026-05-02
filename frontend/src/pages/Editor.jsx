@@ -868,7 +868,7 @@ const Editor = ({
             const lightingRaw = pickValue(base, ['lighting', '灯光', 'light']);
             const payloadRaw = {
                 script_title: toText(pickValue(base, ['script_title', 'title', '项目标题'])),
-                expected_duration: toText(pickValue(base, ['expected_duration', '预期时长(秒)', '预期时长'])) || "60",
+                expected_duration: toText(pickValue(base, ['expected_duration', '预期时长(秒)', '预期时长'])) || "",
                 type: toText(pickValue(base, ['type', 'project_type', '类型'])),
                 language: toText(pickValue(base, ['language', 'lang', '语言'])),
                 base_positioning: toText(pickValue(base, ['base_positioning', 'positioning', '定位'])),
@@ -1648,6 +1648,7 @@ const Editor = ({
                                     anchor_description: char.anchor_description || '',
 
                                     name_en: entityNameEn,
+                                    base_name_en: char.base_name_en || '',
                                     gender: char.gender,
                                     role: char.role,
                                     archetype: char.archetype,
@@ -1722,6 +1723,7 @@ const Editor = ({
                                     anchor_description: prop.anchor_description || '',
 
                                     name_en: entityNameEn,
+                                    base_name_en: prop.base_name_en || '',
                                     visual_dependencies: parseVisualDependencies(prop.visual_dependencies),
                                     dependency_strategy: prop.dependency_strategy || {},
                                     custom_attributes: {
@@ -1790,6 +1792,7 @@ const Editor = ({
                                     anchor_description: env.anchor_description || '',
 
                                     name_en: entityNameEn,
+                                    base_name_en: env.base_name_en || '',
                                     atmosphere: env.atmosphere,
                                     visual_params: env.visual_params,
                                     narrative_description: env.description_cn,
@@ -1863,6 +1866,7 @@ const Editor = ({
                                     anchor_description: poster.anchor_description || '',
 
                                     name_en: entityNameEn,
+                                    base_name_en: poster.base_name_en || '',
                                     atmosphere: poster.atmosphere,
                                     visual_params: poster.visual_params,
                                     narrative_description: poster.description_cn,
@@ -3348,7 +3352,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                 />
                             )}
                             {activeTab === 'script' && <ScriptEditor key={`script-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
-                            {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${tabResetKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} />}
+                            {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${tabResetKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />}
                             {activeTab === 'scenes' && <SceneManager key={`scenes-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                                 if (sceneId) {
                                     setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });

@@ -104,7 +104,8 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
-    fetchUnreferencedAssetIds
+    fetchUnreferencedAssetIds,
+    markAssetAsCurrentProjectAsset
 } from '../../../services/api';
 
 import RefineControl from '../../../components/RefineControl.jsx';
@@ -310,6 +311,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [uploading, setUploading] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
     const [selectedMulti, setSelectedMulti] = useState(new Set()); // Multi-selection state
+    const [showHistoricalProjectAssets, setShowHistoricalProjectAssets] = useState(false);
     
     // Filters
     const [filterScope, setFilterScope] = useState('characters'); // 'characters', 'props', 'environments', 'shots', 'all'
@@ -362,6 +364,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     useEffect(() => {
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
+             setShowHistoricalProjectAssets(false);
              
              // Setup initial filters based on context
              if (context && context.entityId) {
@@ -387,12 +390,12 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     useEffect(() => {
         if (isOpen && tab === 'assets') {
-            if (!allCleanData) loadAssets();
+            loadAssets();
         } else if (!isOpen) {
             setAllCleanData(null);
             setAssets([]);
         }
-    }, [isOpen, tab]); // Removed filter scopes from here so it only fetches broadly
+    }, [isOpen, tab, showHistoricalProjectAssets, projectId, episodeId]);
 
     useEffect(() => {
         if (!allCleanData) return;
@@ -491,23 +494,31 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         setLoading(true);
         try {
             const params = {};
-            if (projectId) params.project_id = projectId;
-            
+            if (projectId) {
+                params.project_id = projectId;
+                params.current_project_asset = showHistoricalProjectAssets ? 'all' : '1';
+            }
+            if (episodeId) {
+                params.episode_id = episodeId;
+            }
+
+            const shouldFilterReferencedOnly = Boolean(projectId) && !showHistoricalProjectAssets;
             const [data, refsPayload] = await Promise.all([
                 fetchAssets(params),
-                fetchUnreferencedAssetIds({ project_id: projectId }) // scope optimization
+                shouldFilterReferencedOnly ? fetchUnreferencedAssetIds({ project_id: projectId, episode_id: episodeId || undefined }) : Promise.resolve(null)
             ]);
 
             const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
-            
-            // Step 1: Clean list to EXCLUDE historical/unreferenced generated assets
-            const cleanData = ((data || []) ).filter(a => {
+
+            // Step 1: By default only keep active/current generated assets. History mode keeps all rows.
+            const cleanData = ((data || [])).filter(a => {
+                if (!shouldFilterReferencedOnly) return true;
                 const meta = a.meta_info || {};
                 const isGenerated = meta.provider || meta.prompt || meta.source === 'ai_generation';
                 if (isGenerated) {
-                    return referencedSet.has(String(a.id)); // Must be active
+                    return referencedSet.has(String(a.id));
                 }
-                return true; // Keep manual standalone uploads 
+                return true;
             });
 
             setAllCleanData(cleanData); // Save clean version to memory
@@ -518,6 +529,27 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         }
     };
 
+    const handleMarkAssetCurrent = useCallback(async (asset) => {
+        const assetId = Number(asset?.id || 0);
+        if (!projectId || assetId <= 0) return null;
+        const updated = await markAssetAsCurrentProjectAsset(assetId);
+        await loadAssets();
+        setSelectedAsset((prev) => (Number(prev?.id || 0) === assetId ? { ...(prev || {}), ...(updated || {}) } : prev));
+        return updated;
+    }, [loadAssets, projectId]);
+
+    const handleSelectAsset = useCallback(async (asset, selectedItems = null) => {
+        const assetId = Number(asset?.id || 0);
+        if (projectId && assetId > 0) {
+            try {
+                await handleMarkAssetCurrent(asset);
+            } catch (e) {
+                console.error('Failed to mark current project asset', e);
+            }
+        }
+        onSelect(asset?.url, asset?.type, selectedItems || undefined);
+    }, [handleMarkAssetCurrent, onSelect, projectId]);
+
     const handleUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -526,6 +558,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             // Attach context to upload
             const meta = {};
             if (projectId) meta.project_id = projectId;
+            if (episodeId) meta.episode_id = episodeId;
             if (context.entityId) meta.entity_id = context.entityId;
             if (context.shotId) meta.shot_id = context.shotId;
 
@@ -595,6 +628,16 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             <option value="image">{t('仅图片', 'Images Only')}</option>
                             <option value="video">{t('仅视频', 'Videos Only')}</option>
                         </select>
+
+                        {projectId && (
+                            <button
+                                type="button"
+                                onClick={() => setShowHistoricalProjectAssets((prev) => !prev)}
+                                className={`text-xs px-2.5 py-1 rounded border transition-colors ${showHistoricalProjectAssets ? 'border-amber-400/40 bg-amber-500/10 text-amber-100' : 'border-white/10 bg-[#151515] text-white/75 hover:bg-white/5'}`}
+                            >
+                                {showHistoricalProjectAssets ? t('显示历史分集', 'Showing History Episodes') : t('仅当前项目资产', 'Current Project Assets Only')}
+                            </button>
+                        )}
                         
                         <div className="ml-auto text-[10px] text-muted-foreground">
                             {assets.length} {t('条结果', 'results')}
@@ -637,8 +680,18 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                             <SafeImage src={asset.url} alt="asset" className="w-full h-full object-cover" />
                                         )}
                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
+                                        {projectId && Number(asset?.id || 0) > 0 && (
+                                            <div className="absolute left-1 top-1 z-10 flex gap-1">
+                                                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold ${asset.is_current_project_asset ? 'bg-emerald-500/90 text-black' : 'bg-black/70 text-white/85 border border-white/10'}`}>
+                                                    {asset.is_current_project_asset ? t('当前', 'Current') : t('历史', 'History')}
+                                                </span>
+                                            </div>
+                                        )}
                                         <div className="absolute bottom-0 inset-x-0 p-1 bg-black/60 text-[9px] truncate text-white/70">
-                                            {asset.name}
+                                            <div className="truncate">{asset.name}</div>
+                                            {(asset?.meta_info?.episode_title || asset?.meta_info?.episode_id || asset?.episode_id) && (
+                                                <div className="truncate text-white/50">{asset?.meta_info?.episode_title || `${t('分集', 'Episode')} ${asset?.meta_info?.episode_id || asset?.episode_id}`}</div>
+                                            )}
                                         </div>
                                         {/* Floating Button for Detail/Preview */}
                                         <button
@@ -653,6 +706,22 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                             <div className="absolute top-1 left-1 bg-primary text-black p-0.5 rounded-full shadow-lg z-10">
                                                 <Check size={14} strokeWidth={3} />
                                             </div>
+                                        )}
+                                        {projectId && showHistoricalProjectAssets && Number(asset?.id || 0) > 0 && !asset.is_current_project_asset && (
+                                            <button
+                                                type="button"
+                                                onClick={async (e) => {
+                                                    e.stopPropagation();
+                                                    try {
+                                                        await handleMarkAssetCurrent(asset);
+                                                    } catch (err) {
+                                                        console.error('Failed to switch current asset', err);
+                                                    }
+                                                }}
+                                                className="absolute right-1 bottom-8 z-10 rounded bg-amber-500/90 px-1.5 py-0.5 text-[9px] font-semibold text-black opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
+                                            >
+                                                {t('设当前', 'Set Current')}
+                                            </button>
                                         )}
                                     </div>
                                     <AssetHoverMetaOverlay asset={asset} t={t} entities={entities} position={isFirstRow ? 'bottom' : 'top'} />
@@ -674,8 +743,22 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                     {t('素材详情', 'Asset Details')}
                                 </h4>
                                 <div className="flex gap-2">
+                                     {projectId && Number(selectedAsset?.id || 0) > 0 && !selectedAsset?.is_current_project_asset && (
+                                        <button 
+                                            onClick={async () => {
+                                                try {
+                                                    await handleMarkAssetCurrent(selectedAsset);
+                                                } catch (e) {
+                                                    console.error('Failed to mark current asset', e);
+                                                }
+                                            }}
+                                            className="bg-amber-500 text-black text-xs font-bold px-3 py-1.5 rounded hover:opacity-90 flex items-center gap-1"
+                                        >
+                                            <Sparkles size={14}/> {t('设为当前项目资产', 'Set As Current Project Asset')}
+                                        </button>
+                                     )}
                                      <button 
-                                        onClick={() => { onSelect(selectedAsset.url, selectedAsset.type); }}
+                                        onClick={() => { handleSelectAsset(selectedAsset); }}
                                         className="bg-primary text-black text-xs font-bold px-3 py-1.5 rounded hover:opacity-90 flex items-center gap-1"
                                      >
                                         <Check size={14}/> {t('选择该素材', 'Select This Asset')}
@@ -701,6 +784,18 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                         <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('名称', 'Name')}</label>
                                         <div className="text-sm font-medium">{selectedAsset.name || t('未命名', 'Untitled')}</div>
                                     </div>
+
+                                    {projectId && Number(selectedAsset?.id || 0) > 0 && (
+                                        <div>
+                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('当前项目资产状态', 'Current Project Asset Status')}</label>
+                                            <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1 flex items-center justify-between gap-2">
+                                                <span>{selectedAsset?.is_current_project_asset ? t('当前选中素材', 'Currently selected asset') : t('历史分集素材', 'Historical episode asset')}</span>
+                                                {(selectedAsset?.meta_info?.episode_title || selectedAsset?.meta_info?.episode_id || selectedAsset?.episode_id) && (
+                                                    <span className="text-white/55">{selectedAsset?.meta_info?.episode_title || `${t('分集', 'Episode')} ${selectedAsset?.meta_info?.episode_id || selectedAsset?.episode_id}`}</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
                                     
                                     {selectedAsset.meta_info?.entity_id && (
                                         <div>
@@ -823,12 +918,12 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         </div>
                         <button
                             disabled={selectedMulti.size === 0}
-                            onClick={() => {
-                                const selectedItems = Array.from(selectedMulti).map(id => assets.find(a => a.id === id)).filter(Boolean);
-                                if (selectedItems.length > 0) {
-                                    onSelect(selectedItems[0].url, selectedItems[0].type, selectedItems);
-                                }
-                            }}
+                                        onClick={async () => {
+                                            const selectedItems = Array.from(selectedMulti).map(id => assets.find(a => a.id === id)).filter(Boolean);
+                                            if (selectedItems.length > 0) {
+                                                await handleSelectAsset(selectedItems[0], selectedItems);
+                                            }
+                                        }}
                             className="bg-primary text-black text-sm font-bold px-6 py-2 rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {t('确认', 'Confirm')}

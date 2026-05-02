@@ -2,13 +2,17 @@
 // Since the frontend proxy is bypassed, we always enforce the direct backend URL on render.
 const RAW_BASE_URL = String(import.meta?.env?.VITE_API_BASE_URL || '').trim();
 const isRenderFrontend = typeof window !== 'undefined' && /\.onrender\.com$/i.test(window.location.hostname || '');        
+const isLocalFrontend = typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname || '');
 const RENDER_BACKEND_FALLBACK = 'https://aistory-backend-xggg.onrender.com';
+const LOCAL_BACKEND_FALLBACK = 'http://localhost:8000';
 
 let resolvedBaseUrl = '';
 if (isRenderFrontend) {
         resolvedBaseUrl = RENDER_BACKEND_FALLBACK;
 } else if (RAW_BASE_URL) {
         resolvedBaseUrl = RAW_BASE_URL;
+} else if (isLocalFrontend) {
+        resolvedBaseUrl = LOCAL_BACKEND_FALLBACK;
 }
 
 export const BASE_URL = resolvedBaseUrl;

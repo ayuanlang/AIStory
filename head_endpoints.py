@@ -17834,7 +17834,7 @@ def get_admin_expired_files(
     user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
     expired_files = []
     total_size, total_count = 0, 0
-    threshold = datetime.now() - timedelta(days=30)
+    threshold = datetime.now() - timedelta(days=60)
     threshold_ts = threshold.timestamp()
 
     for child in upload_root.iterdir():
@@ -17881,7 +17881,7 @@ def remind_admin_expired_files(
 
     user_rows = db.query(User.id, User.username, User.email).all()
     user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
-    threshold = datetime.now() - timedelta(days=30)
+    threshold = datetime.now() - timedelta(days=60)
     threshold_ts = threshold.timestamp()
     
     users_to_remind = {}
@@ -17912,9 +17912,9 @@ def remind_admin_expired_files(
     reminded_count = 0
     for u_id, stats in users_to_remind.items():
         mb_size = stats["size"] / (1024*1024)
-        msg_content = f"<h1>Storage Lifecycle Exceeded</h1><p>Dear user,</p><p>You have {stats['count']} file(s) occupying {mb_size:.2f} MB that have exceeded the 30-day storage limit.</p><p>Please back them up. They will be removed within 3 working days.</p>"
+        msg_content = f"<h1>Storage Lifecycle Exceeded</h1><p>Dear user,</p><p>You have {stats['count']} file(s) occupying {mb_size:.2f} MB that have exceeded the 60-day storage limit.</p><p>Please back them up. They will be removed within 3 working days.</p>"
         try:
-            _send_email_via_runtime_smtp(stats["email"], "Action Required: Expired Files Deletion", msg_content, is_html=True)
+            _send_email_via_runtime_smtp(stats["email"], "Action Required: Expired Files Deletion", content="You have files exceeding the 60-day limit. Please back them up.", html_content=msg_content)
             reminded_count += 1
         except Exception as e:
             logger.error(f"Failed to send reminder email to {stats['email']}: {e}")
@@ -17936,7 +17936,7 @@ def delete_admin_expired_files(
     if not upload_root.exists() or not upload_root.is_dir():
         return GenericMessageOut(message="No files found.")
 
-    threshold = datetime.now() - timedelta(days=30)
+    threshold = datetime.now() - timedelta(days=60)
     threshold_ts = threshold.timestamp()
     deleted_count = 0
     deleted_size = 0

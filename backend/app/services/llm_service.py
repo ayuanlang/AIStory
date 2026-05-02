@@ -347,10 +347,12 @@ class LLMService:
             return "kie"
         if "ark.cn-" in url or "doubao" in model_lower:
             return "doubao"
+        if "claude" in model_lower:
+            return "claude"
         if "openai" in url:
             return "openai"
         if "anthropic" in url:
-            return "anthropic"
+            return "claude"
         if "grsai" in url:
             return "grsai"
         if "volces" in url:
@@ -358,6 +360,163 @@ class LLMService:
         if "localhost" in url or "127.0.0.1" in url:
             return "local"
         return "unknown"
+
+    def _is_claude_provider(self, provider: Any) -> bool:
+        normalized = str(provider or "").strip().lower()
+        return normalized in {"claude", "anthropic"}
+
+    def _should_use_claude_api(self, provider: Any, model: Any) -> bool:
+        normalized_provider = str(provider or "").strip().lower()
+        model_lower = str(model or "").strip().lower()
+        return self._is_claude_provider(provider) or ("claude" in model_lower)
+
+    def _resolve_claude_llm_url(self, base_url: str, endpoint_hint: str = "") -> str:
+        hinted = str(endpoint_hint or "").strip()
+        if hinted:
+            if hinted.startswith("http"):
+                return hinted.rstrip("/")
+            return f"{str(base_url or '').rstrip('/')}/{hinted.lstrip('/')}".rstrip("/")
+
+        root = (base_url or "").strip().rstrip("/")
+        lower_root = root.lower()
+
+        if lower_root.endswith("/v1/messages") or lower_root.endswith("/openapi/v1/messages"):
+            return root
+        if "anthropic.com" in lower_root:
+            if lower_root.endswith("/v1"):
+                return f"{root}/messages"
+            return f"{root}/v1/messages"
+        
+        if "kie.ai" in lower_root:
+            # Drop trailing /v1 or /claude if accidentally provided, enforce canonical
+            clean_root = re.sub(r"(/v1|/claude)+/?$", "", lower_root, flags=re.IGNORECASE)
+            return f"{root[:len(clean_root)]}/claude/v1/messages"
+
+        if lower_root.endswith("/v1"):
+            return f"{root}/messages"
+        if lower_root.endswith("/model") or "zimaocloud" in lower_root:
+            return f"{root}/openApi/v1/messages"
+        return f"{root}/messages"
+
+    def _build_claude_payload_from_messages(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        stream: bool,
+        extra_config: Optional[Dict[str, Any]] = None,
+        provider: Any = None,
+    ) -> Dict[str, Any]:
+        cfg = dict(extra_config or {})
+        system_chunks: List[str] = []
+        converted_messages: List[Dict[str, Any]] = []
+
+        for msg in messages or []:
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role") or "user").strip().lower() or "user"
+            content_text = self._extract_text_from_content(msg.get("content"))
+
+            if role == "system":
+                if content_text:
+                    system_chunks.append(content_text)
+                continue
+
+            if role not in {"user", "assistant"}:
+                role = "user"
+
+            converted_messages.append({
+                "role": role,
+                "content": content_text or "",
+            })
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": converted_messages,
+            "stream": bool(stream),
+        }
+
+        if system_chunks:
+            payload["system"] = "\n\n".join(chunk for chunk in system_chunks if chunk).strip()
+
+        allowed_keys = {
+            "temperature",
+            "top_p",
+            "top_k",
+            "max_tokens",
+            "stop_sequences",
+            "tools",
+            "tool_choice",
+            "system",
+        }
+        for key, value in cfg.items():
+            if str(key).startswith("__"):
+                continue
+            if key in {"model", "messages", "stream"}:
+                continue
+            if key in allowed_keys:
+                payload[key] = value
+
+        def _to_positive_int(value: Any) -> Optional[int]:
+            try:
+                parsed = int(value)
+                return parsed if parsed > 0 else None
+            except Exception:
+                return None
+
+        resolved_cap = (
+            _to_positive_int(payload.get("max_tokens"))
+            or _to_positive_int(cfg.get("max_completion_tokens"))
+            or _to_positive_int(cfg.get("max_output_tokens"))
+        )
+        if resolved_cap:
+            payload["max_tokens"] = resolved_cap
+        elif str(provider or "").strip().lower() == "aiclub":
+            # aiclub Claude endpoint rejects empty max_tokens; keep this provider-local.
+            fallback_cap = _to_positive_int(os.getenv("AICLUB_CLAUDE_DEFAULT_MAX_TOKENS", "81920")) or 81920
+            payload["max_tokens"] = fallback_cap
+
+        return payload
+
+    def _extract_stream_chunk_text_and_finish(self, chunk: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+        choices = chunk.get("choices") or []
+        if isinstance(choices, list) and choices:
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            finish_reason = first.get("finish_reason")
+            delta = first.get("delta") if isinstance(first.get("delta"), dict) else {}
+            content = ""
+            if isinstance(delta, dict):
+                content = str(delta.get("content") or "")
+                if not content:
+                    content = str(delta.get("reasoning_content") or "")
+            if content or finish_reason:
+                return content, finish_reason
+
+        event_type = str(chunk.get("type") or "").strip().lower()
+        if event_type == "content_block_start":
+            cb = chunk.get("content_block") if isinstance(chunk.get("content_block"), dict) else {}
+            if cb.get("type") == "tool_use":
+                return f"[TOOL_USE_START: {cb.get('name')}]", None
+            return str(cb.get("text") or cb.get("content") or ""), None
+        if event_type == "content_block_delta":
+            delta = chunk.get("delta") if isinstance(chunk.get("delta"), dict) else {}
+            content = str(delta.get("text") or "")
+            if not content:
+                content = str(delta.get("content") or "")
+            if not content:
+                content = str(delta.get("partial_json") or "")
+            return content, None
+        if event_type == "message_delta":
+            delta = chunk.get("delta") if isinstance(chunk.get("delta"), dict) else {}
+            finish_reason = delta.get("stop_reason") or chunk.get("stop_reason")
+            return "", finish_reason
+        if event_type in {"message_stop", "content_block_stop"}:
+            return "", chunk.get("stop_reason")
+
+        text = self._extract_text_from_content(chunk.get("content"))
+        if text:
+            return text, chunk.get("stop_reason")
+
+        return "", None
 
     def sanitize_text_output(self, text: str) -> str:
         if not isinstance(text, str) or not text:
@@ -403,6 +562,10 @@ class LLMService:
             return "\n".join(chunks).strip()
 
         if isinstance(content, dict):
+            if content.get("type") == "tool_use":
+                import json as _json
+                return f"[TOOL_USE: {content.get('name')}] {_json.dumps(content.get('input', {}), ensure_ascii=False)}"
+
             direct_text_candidates: List[str] = []
             for key in ["text", "output_text", "value", "content", "parts", "delta"]:
                 value = content.get(key)
@@ -720,6 +883,9 @@ class LLMService:
     def _extract_finish_reason_from_response(self, full_response: Dict[str, Any]) -> Any:
         choices = full_response.get("choices") or []
         if not isinstance(choices, list):
+            stop_reason = full_response.get("stop_reason")
+            if stop_reason is not None and str(stop_reason).strip() != "":
+                return stop_reason
             return None
 
         for choice in choices:
@@ -728,6 +894,9 @@ class LLMService:
             reason = choice.get("finish_reason")
             if reason is not None and str(reason).strip() != "":
                 return reason
+        stop_reason = full_response.get("stop_reason")
+        if stop_reason is not None and str(stop_reason).strip() != "":
+            return stop_reason
         return None
 
     def _build_extraction_diagnostics(self, full_response: Dict[str, Any]) -> Dict[str, Any]:
@@ -1907,6 +2076,26 @@ class LLMService:
 
         resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
+
+        if provider == "kie":
+            model = {
+                "claude-opus-4.5": "claude-opus-4-5",
+                "claude-sonnet-4.5": "claude-sonnet-4-5",
+                "claude-opus-4.6": "claude-opus-4-6",
+                "claude-sonnet-4.6": "claude-sonnet-4-6",
+            }.get(model, model)
+
+        use_claude_api = self._should_use_claude_api(provider, model)
+        logger.info(
+            "LLM route decision (full): provider=%s model=%s use_claude_api=%s category=%s",
+            provider,
+            model,
+            use_claude_api,
+            resolved_category,
+        )
+
+        if not original_base_url and use_claude_api:
+            base_url = "https://api.anthropic.com"
         
         if provider == "apiyi" or provider == "apiyi2":
             if not original_base_url or original_base_url == "https://api.apiyi.com":
@@ -1916,7 +2105,7 @@ class LLMService:
                 if not base_url.endswith("/v1"):
                      base_url = f"{base_url}/v1"
             
-        if provider == "kie" and resolved_category == "LLM":
+        if provider == "kie" and resolved_category == "LLM" and not use_claude_api:
             return await self._raw_kie_llm_request_full(base_url, api_key, model, messages, extra_config)
         if provider == "grsai" and resolved_category == "LLM":
             base_url = self._normalize_grsai_llm_base_url(base_url)
@@ -1930,7 +2119,10 @@ class LLMService:
             import re as _re
             configured_endpoint = _re.sub(r'(/v1)/v1(?=/|$)', r'\1', configured_endpoint)
 
-        if configured_endpoint and resolved_category == "LLM":
+        if use_claude_api and resolved_category == "LLM":
+            url = self._resolve_claude_llm_url(base_url, configured_endpoint)
+            url_source = "claude.messages"
+        elif configured_endpoint and resolved_category == "LLM":
             endpoint_lower = configured_endpoint.lower()
             if "/chat/completions" in endpoint_lower:
                 url = configured_endpoint.rstrip("/")
@@ -1945,20 +2137,42 @@ class LLMService:
             if resolved_category == "LLM" and not url.endswith("/chat/completions"):
                 url = f"{url}/chat/completions"
             url_source = "base_url"
+
+        logger.info(
+            "LLM route target (full): provider=%s model=%s use_claude_api=%s category=%s url_source=%s url=%s",
+            provider,
+            model,
+            use_claude_api,
+            resolved_category,
+            url_source,
+            url,
+        )
         
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
+        if use_claude_api:
+            headers.setdefault("x-api-key", api_key)
+            headers.setdefault("anthropic-version", "2023-06-01")
         
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "temperature": 0.7
-        }
+        if use_claude_api and resolved_category == "LLM":
+            payload = self._build_claude_payload_from_messages(
+                model=model,
+                messages=messages,
+                stream=False,
+                extra_config=extra_config,
+                provider=provider,
+            )
+        else:
+            payload = {
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "temperature": 0.7
+            }
 
-        if extra_config:
+        if extra_config and not (use_claude_api and resolved_category == "LLM"):
             # Merge extra config, but don't overwrite critical fields if not intended
             # For now, just update, but maybe exclude 'model' or 'messages'
             for k, v in extra_config.items():
@@ -2317,7 +2531,7 @@ class LLMService:
             )
             raise RuntimeError(self._vendor_failed_message(provider, "LLM content blocked by provider (PROHIBITED_CONTENT)"))
         
-        if "choices" in data and len(data["choices"]) > 0:
+        if ("choices" in data and len(data["choices"]) > 0) or (use_claude_api and data.get("type") == "message"):
             return data
         else:
              raise Exception(self._vendor_failed_message(provider, f"Invalid API Response: {data}"))
@@ -2345,6 +2559,26 @@ class LLMService:
         resolved_category = str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper()
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
 
+        if provider == "kie":
+            model = {
+                "claude-opus-4.5": "claude-opus-4-5",
+                "claude-sonnet-4.5": "claude-sonnet-4-5",
+                "claude-opus-4.6": "claude-opus-4-6",
+                "claude-sonnet-4.6": "claude-sonnet-4-6",
+            }.get(model, model)
+
+        use_claude_api = self._should_use_claude_api(provider, model)
+        logger.info(
+            "LLM route decision (stream): provider=%s model=%s use_claude_api=%s category=%s",
+            provider,
+            model,
+            use_claude_api,
+            resolved_category,
+        )
+
+        if not original_base_url and use_claude_api:
+            base_url = "https://api.anthropic.com"
+
         if not original_base_url and provider == "apiyi":
             base_url = "https://api.apiyi.com"
 
@@ -2358,8 +2592,12 @@ class LLMService:
             import re as _re
             configured_endpoint = _re.sub(r'(/v1)/v1(?=/|$)', r'\1', configured_endpoint)
         
-        if provider == "kie" and resolved_category == "LLM":
+        if provider == "kie" and resolved_category == "LLM" and not use_claude_api:
             _, resolved_model, url = self._resolve_kie_llm_url(base_url, model)
+            url_source = "kie.model_path"
+        elif use_claude_api and resolved_category == "LLM":
+            url = self._resolve_claude_llm_url(base_url, configured_endpoint)
+            url_source = "claude.messages"
         elif configured_endpoint and resolved_category == "LLM":
             endpoint_lower = configured_endpoint.lower()
             if "/chat/completions" in endpoint_lower:
@@ -2382,26 +2620,47 @@ class LLMService:
             else:
                 url_source = "config.endpoint"
 
+        logger.info(
+            "LLM route target (stream): provider=%s model=%s use_claude_api=%s category=%s url_source=%s url=%s",
+            provider,
+            model,
+            use_claude_api,
+            resolved_category,
+            url_source,
+            url,
+        )
+
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        if use_claude_api:
+            headers.setdefault("x-api-key", api_key)
+            headers.setdefault("anthropic-version", "2023-06-01")
 
-        payload = {
-            "model": resolved_model if (provider == "kie" and resolved_category == "LLM") else model,
-            "messages": messages,
-            "stream": True,
-            "temperature": 0.7,
-        }
+        if use_claude_api and resolved_category == "LLM":
+            payload = self._build_claude_payload_from_messages(
+                model=model,
+                messages=messages,
+                stream=True,
+                extra_config=extra_config,
+                provider=provider,
+            )
+        else:
+            payload = {
+                "model": resolved_model if (provider == "kie" and resolved_category == "LLM") else model,
+                "messages": messages,
+                "stream": True,
+                "temperature": 0.7,
+            }
 
         if provider == "kie" and resolved_category == "LLM":
             payload.update(self._extract_kie_chat_options(extra_config or {}))
-        elif extra_config:
+        elif extra_config and not (use_claude_api and resolved_category == "LLM"):
             for k, v in extra_config.items():
                 if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
                     payload[k] = v
 
-        print(f"[STREAM-DEBUG] _raw_llm_request_stream: url={url}, model={model}, provider={provider}, payload_keys={list(payload.keys())}, stream={payload.get('stream')}")
         self._safe_log_json("LLM_REQUEST", {
             "provider": provider,
             "category": resolved_category,
@@ -2425,14 +2684,13 @@ class LLMService:
 
         usage: Dict[str, Any] = {}
         finish_reason: Optional[str] = None
+        token_batch_buf = ""
 
         timeout = httpx.Timeout(connect=30.0, read=float(DEFAULT_LLM_TIMEOUT_SECONDS), write=30.0, pool=30.0)
 
         try:
-            print(f"[STREAM-DEBUG] _raw_llm_request_stream: opening httpx connection to {url}...")
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("POST", url, json=payload, headers=headers) as response:
-                    print(f"[STREAM-DEBUG] _raw_llm_request_stream: got response status={response.status_code}")
                     if response.status_code != 200:
                         error_body = await response.aread()
                         error_text = error_body.decode("utf-8", errors="replace")[:500]
@@ -2462,6 +2720,24 @@ class LLMService:
                             )
                         )
 
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "application/json" in content_type and "event-stream" not in content_type:
+                        body_bytes = await response.aread()
+                        try:
+                            import json as _json
+                            full_json = _json.loads(body_bytes)
+                        except Exception:
+                            logger.error(f"Failed to parse JSON response on stream endpoint: {body_bytes[:200]}")
+                            full_json = {}
+                        text = self._extract_text_from_response(full_json)
+                        if text:
+                            yield {"type": "token", "content": text}
+                        usage_res = full_json.get("usage", {})
+                        if use_claude_api and not usage_res:
+                            usage_res = full_json.get("usage", {})
+                        yield {"type": "done", "usage": usage_res, "finish_reason": "stop"}
+                        return
+
                     import asyncio as _asyncio
                     _heartbeat_interval = 15  # seconds
                     _last_yield_time = _asyncio.get_event_loop().time()
@@ -2489,20 +2765,19 @@ class LLMService:
                         if chunk.get("usage"):
                             usage = chunk["usage"]
 
-                        choices = chunk.get("choices") or []
-                        if not choices:
-                            continue
-                            
-                        if choices[0].get("finish_reason"):
-                            finish_reason = choices[0]["finish_reason"]
-
-                        delta = choices[0].get("delta") or {}
-                        content = delta.get("content") or ""
-                        if not content:
-                            content = delta.get("reasoning_content") or ""
+                        content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
+                        if chunk_finish_reason:
+                            finish_reason = chunk_finish_reason
                         if content:
-                            yield {"type": "token", "content": content}
-                            _last_yield_time = _asyncio.get_event_loop().time()
+                            if use_claude_api:
+                                token_batch_buf += content
+                                if len(token_batch_buf) >= 32 or "\n" in token_batch_buf:
+                                    yield {"type": "token", "content": token_batch_buf}
+                                    token_batch_buf = ""
+                                    _last_yield_time = _asyncio.get_event_loop().time()
+                            else:
+                                yield {"type": "token", "content": content}
+                                _last_yield_time = _asyncio.get_event_loop().time()
 
         except httpx.ConnectError as exc:
             human_summary = self._build_human_readable_transport_error_summary(
@@ -2568,6 +2843,8 @@ class LLMService:
             })
             raise
 
+        if token_batch_buf:
+            yield {"type": "token", "content": token_batch_buf}
         yield {"type": "done", "usage": usage, "finish_reason": finish_reason}
 
     async def stream_analyze_intent(
@@ -2604,21 +2881,16 @@ class LLMService:
         extra_config = dict(config.get("config", {}) or {})
         extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
 
-        print(f"[STREAM-DEBUG] llm_service.stream_analyze_intent: calling _raw_llm_request_stream, base_url={base_url}, model={model}, messages_count={len(messages)}")
         accumulated = ""
         usage: Dict[str, Any] = {}
         try:
             async for event in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config):
                 if event["type"] == "token":
                     accumulated += event["content"]
-                    if len(accumulated) <= 100:
-                        print(f"[STREAM-DEBUG] llm_service.stream_analyze_intent: accumulated so far: {repr(accumulated[:100])}")
                     yield event
                 elif event["type"] == "done":
-                    print(f"[STREAM-DEBUG] llm_service.stream_analyze_intent: done event, usage={usage}, accumulated_len={len(accumulated)}")
                     usage = event.get("usage", {})
         except Exception as e:
-            print(f"[STREAM-DEBUG] llm_service.stream_analyze_intent ERROR: {e}")
             logger.error("stream_analyze_intent error: %s", e)
             provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
             yield {"type": "result", "reply": f"Error: {self._vendor_failed_message(provider, e)}", "plan": [], "usage": {}, "_llm_error": True}

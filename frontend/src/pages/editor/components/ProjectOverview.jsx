@@ -186,7 +186,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
     const { addLog } = useLog();
     const [info, setInfo] = useState({
         script_title: "",
-        expected_duration: "60",
+        expected_duration: "",
         series_episode: "",
         base_positioning: "现代职场 / Modern Workplace",
         type: "实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)",
@@ -1953,7 +1953,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                                 <div className="p-4 sm:p-6 space-y-6">
                                     <div className="grid grid-cols-1 gap-4">
                                         <InputGroup idPrefix={prefix} label={t('剧本标题', 'Script Title')} value={info.script_title} onChange={v => updateField('script_title', v)} placeholder={t('例如：我的科幻史诗', 'e.g. My Sci-Fi Epic')} />
-                                        <InputGroup idPrefix={prefix} label={t('预期时长(秒)', 'Expected Duration (s)')} type="number" min="1" value={info.expected_duration || '60'} onChange={v => updateField('expected_duration', v)} placeholder="60" />
+                                        <InputGroup idPrefix={prefix} label={t('预期时长(秒)', 'Expected Duration (s)')} type="number" min="1" value={info.expected_duration || ''} onChange={v => updateField('expected_duration', v)} placeholder="60" />
                                     </div>
 
 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

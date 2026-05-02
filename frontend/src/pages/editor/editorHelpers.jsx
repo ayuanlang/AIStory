@@ -4,23 +4,40 @@ import { BASE_URL, ASSET_BASE_URL } from '../../config';
 import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
 import { normalizeEntityToken, entityTokenMatchesName } from '../../lib/entityToken';
 
+const normalizeExternalMediaUrl = (rawUrl) => {
+    const stable = String(rawUrl || '').trim();
+    if (!stable) return '';
+
+    // Handle host-only URLs like: tcn2obdg8.hn-bkt.clouddn.com/aistory/...
+    if (/^[A-Za-z0-9.-]+\.(clouddn\.com|qiniucs\.com)\//i.test(stable)) {
+        return `https://${stable}`;
+    }
+
+    if (/^http:\/\//i.test(stable) && /(clouddn\.com|qiniucs\.com)/i.test(stable)) {
+        return stable.replace(/^http:\/\//i, 'https://');
+    }
+
+    return stable;
+};
+
 // Helper to handle relative URLs
 export const getFullUrl = (url) => {
     if (!url) return '';
-    if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
+    const normalizedExternal = normalizeExternalMediaUrl(url);
+    if (normalizedExternal.startsWith('http') || normalizedExternal.startsWith('blob:') || normalizedExternal.startsWith('data:')) return normalizedExternal;
     // If it's a relative path starting with /, append BASE_URL
-    if (url.startsWith('/')) {
+    if (normalizedExternal.startsWith('/')) {
         const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
         // Avoid double slash if base URL ends with /
         const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
-        return `${base}${url}`;
+        return `${base}${normalizedExternal}`;
     }
-    return url;
+    return normalizedExternal;
 };
 
 export const getThumbUrl = (url) => {
     if (!url) return '';
-    const raw = String(url).trim();
+    const raw = normalizeExternalMediaUrl(url);
     if (raw.startsWith('blob:') || raw.startsWith('data:')) return raw;
 
     if (raw.startsWith('http')) {

@@ -525,7 +525,7 @@ VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SE
 
 GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
 GENERATION_CALLBACK_LOCK = threading.Lock()
-GENERATION_CALLBACK_TTL_SECONDS = max(300, int(os.getenv("GENERATION_CALLBACK_TTL_SECONDS", "1800")))
+GENERATION_CALLBACK_TTL_SECONDS = max(300, int(os.getenv("GENERATION_CALLBACK_TTL_SECONDS", "3600")))
 GENERATION_CALLBACK_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_MAX_ITEMS", "1500")))
 GENERATION_CALLBACK_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_generation_callbacks")
 GENERATION_CALLBACK_MAX_BYTES = max(4096, int(os.getenv("GENERATION_CALLBACK_MAX_BYTES", "65536")))
@@ -3200,7 +3200,7 @@ def fix_db_schema_endpoint(current_user: User = Depends(get_current_user)):
 
 
 from app.services.system_log_service import log_action
-from app.schemas.system_log import SystemLogOut
+from app.schemas.system_log import SystemLogOut, SystemLogCreate
 
 def _can_use_system_settings(user: User) -> bool:
     return bool((user.credits or 0) > 0 or user.is_superuser or user.is_system)
@@ -3259,6 +3259,39 @@ def _log_batch_sys_event(
         )
     finally:
         log_db.close()
+
+
+@router.post("/system_logs/actions", response_model=SystemLogOut)
+def create_system_log_action(
+    payload: SystemLogCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    action = str(payload.action or "").strip().upper()
+    if not action:
+        raise HTTPException(status_code=400, detail="action is required")
+
+    details = str(payload.details or "").strip()
+    if len(details) > 16000:
+        details = details[:16000]
+
+    ip_address = str(payload.ip_address or request.client.host if request.client else "").strip() or None
+    user_name = str(current_user.username or payload.user_name or f"user_{current_user.id}").strip() or f"user_{current_user.id}"
+
+    now_iso = now_bj_iso()
+    row = SystemLog(
+        user_id=current_user.id,
+        user_name=user_name,
+        action=action,
+        details=details or None,
+        ip_address=ip_address,
+        timestamp=now_iso,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def get_system_api_setting(
@@ -4205,7 +4238,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if existing_task_id:
                 info = _get_task_status(existing_task_id, user_id=current_user.id) or {}
                 status = str(info.get("status") or "").strip().lower()
-                if status in {"pending", "running", "completed"}:
+                if status in {"pending", "running"}:
                     reused_task_id = existing_task_id
                     reused_status = status
                 else:
@@ -6064,7 +6097,19 @@ async def process_agent_command(
     if project_id:
         _require_project_access(db, int(project_id), current_user)
 
-    resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    agent_function_name = (
+        getattr(request, "function_name", None)
+        or (request.context or {}).get("function_name")
+        or "ai_assistant"
+    )
+    agent_system_api_id = getattr(request, "system_api_id", None) or (request.context or {}).get("system_api_id")
+
+    resolved_llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        category="LLM",
+        function_name=agent_function_name,
+        system_api_id=agent_system_api_id,
+    )
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
         raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
 
@@ -6181,7 +6226,19 @@ async def process_system_management_agent_command(
     if not bool(getattr(current_user, "is_superuser", False)):
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
 
-    resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    agent_function_name = (
+        getattr(request, "function_name", None)
+        or (request.context or {}).get("function_name")
+        or "ai_assistant"
+    )
+    agent_system_api_id = getattr(request, "system_api_id", None) or (request.context or {}).get("system_api_id")
+
+    resolved_llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        category="LLM",
+        function_name=agent_function_name,
+        system_api_id=agent_system_api_id,
+    )
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
         raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
 
@@ -6287,7 +6344,19 @@ async def stream_agent_command(
         with SessionLocal() as auth_db:
             _require_project_access(auth_db, int(project_id), current_user)
 
-    resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    agent_function_name = (
+        getattr(request, "function_name", None)
+        or (request.context or {}).get("function_name")
+        or "ai_assistant"
+    )
+    agent_system_api_id = getattr(request, "system_api_id", None) or (request.context or {}).get("system_api_id")
+
+    resolved_llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        category="LLM",
+        function_name=agent_function_name,
+        system_api_id=agent_system_api_id,
+    )
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
         raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
 
@@ -6356,7 +6425,19 @@ async def stream_system_management_agent_command(
     if not bool(getattr(current_user, "is_superuser", False)):
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
 
-    resolved_llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    agent_function_name = (
+        getattr(request, "function_name", None)
+        or (request.context or {}).get("function_name")
+        or "ai_assistant"
+    )
+    agent_system_api_id = getattr(request, "system_api_id", None) or (request.context or {}).get("system_api_id")
+
+    resolved_llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        category="LLM",
+        function_name=agent_function_name,
+        system_api_id=agent_system_api_id,
+    )
     if not resolved_llm_config or not resolved_llm_config.get("api_key"):
         raise HTTPException(status_code=400, detail="No active LLM API config found. Please check your LLM settings.")
 
@@ -12433,6 +12514,9 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
             item.get("english_name"),
             item.get("en_name"),
         )
+        normalized["base_name_en"] = _pick_text(
+            item.get("base_name_en"),
+        )
 
         if section == "characters":
             description_cn = _pick_text(
@@ -15705,6 +15789,7 @@ class EntityCreate(BaseModel):
     
     # New Fields
     name_en: Optional[str] = None
+    base_name_en: Optional[str] = None
     gender: Optional[str] = None
     role: Optional[str] = None
     archetype: Optional[str] = None
@@ -15733,6 +15818,7 @@ class EntityOut(BaseModel):
     
     # New Fields
     name_en: Optional[str] = None
+    base_name_en: Optional[str] = None
     gender: Optional[str] = None
     role: Optional[str] = None
     archetype: Optional[str] = None
@@ -15916,6 +16002,7 @@ def create_entity(
         anchor_description=entity.anchor_description,
         
         name_en=entity.name_en,
+        base_name_en=entity.base_name_en,
         gender=entity.gender,
         role=entity.role,
         archetype=entity.archetype,
@@ -16210,6 +16297,7 @@ async def clone_entity_with_llm(
         project_id=project_id,
         name=cloned_name,
         name_en=cloned_name_en,
+        base_name_en=source.base_name_en, # inherited from source
         type=source.type,
         description=_pick_text(generated.get("description"), source.description),
         image_url=source.image_url,
@@ -16246,6 +16334,7 @@ class EntityUpdate(BaseModel):
     
     # New Fields
     name_en: Optional[str] = None
+    base_name_en: Optional[str] = None
     gender: Optional[str] = None
     role: Optional[str] = None
     archetype: Optional[str] = None
@@ -17912,7 +18001,7 @@ def get_admin_expired_files(
     user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
     expired_files = []
     total_size, total_count = 0, 0
-    threshold = datetime.now() - timedelta(days=30)
+    threshold = datetime.now() - timedelta(days=60)
     threshold_ts = threshold.timestamp()
 
     for child in upload_root.iterdir():
@@ -17959,7 +18048,7 @@ def remind_admin_expired_files(
 
     user_rows = db.query(User.id, User.username, User.email).all()
     user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
-    threshold = datetime.now() - timedelta(days=30)
+    threshold = datetime.now() - timedelta(days=60)
     threshold_ts = threshold.timestamp()
     
     users_to_remind = {}
@@ -17990,9 +18079,9 @@ def remind_admin_expired_files(
     reminded_count = 0
     for u_id, stats in users_to_remind.items():
         mb_size = stats["size"] / (1024*1024)
-        msg_content = f"<h1>Storage Lifecycle Exceeded</h1><p>Dear user,</p><p>You have {stats['count']} file(s) occupying {mb_size:.2f} MB that have exceeded the 30-day storage limit.</p><p>Please back them up. They will be removed within 3 working days.</p>"
+        msg_content = f"<h1>Storage Lifecycle Exceeded</h1><p>Dear user,</p><p>You have {stats['count']} file(s) occupying {mb_size:.2f} MB that have exceeded the 60-day storage limit.</p><p>Please back them up. They will be removed within 3 working days.</p>"
         try:
-            _send_email_via_runtime_smtp(stats["email"], "Action Required: Expired Files Deletion", msg_content, is_html=True)
+            _send_email_via_runtime_smtp(stats["email"], "Action Required: Expired Files Deletion", content="You have files exceeding the 60-day limit. Please back them up.", html_content=msg_content)
             reminded_count += 1
         except Exception as e:
             logger.error(f"Failed to send reminder email to {stats['email']}: {e}")
@@ -18014,7 +18103,7 @@ def delete_admin_expired_files(
     if not upload_root.exists() or not upload_root.is_dir():
         return GenericMessageOut(message="No files found.")
 
-    threshold = datetime.now() - timedelta(days=30)
+    threshold = datetime.now() - timedelta(days=60)
     threshold_ts = threshold.timestamp()
     deleted_count = 0
     deleted_size = 0
@@ -18060,6 +18149,183 @@ class AssetRebindShotMediaRequest(BaseModel):
     shot_id: Optional[int] = None
     limit: int = 2000
     dry_run: bool = False
+
+
+def _asset_meta_dict(raw_meta: Any) -> Dict[str, Any]:
+    if isinstance(raw_meta, dict):
+        meta = dict(raw_meta)
+    elif isinstance(raw_meta, str):
+        try:
+            parsed = json.loads(raw_meta)
+            meta = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            meta = {}
+    else:
+        meta = {}
+
+    nested = meta.get("metadata")
+    if isinstance(nested, dict):
+        merged = dict(meta)
+        merged.update(nested)
+        return merged
+    return meta
+
+
+def _asset_optional_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        raw = str(value).strip()
+        if not raw:
+            return None
+        return int(raw)
+    except Exception:
+        return None
+
+
+def _normalize_current_project_asset_filter(value: Any, *, project_scoped: bool) -> Optional[bool]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return True if project_scoped else None
+    if raw in {"all", "any", "*"}:
+        return None
+    if raw in {"0", "false", "no", "off", "history", "historical"}:
+        return False
+    return True
+
+
+def _parse_episode_sort_rank(title: Any, episode_id: Any) -> int:
+    raw_title = str(title or "").strip()
+    for pattern in (
+        r"第\s*(\d+)\s*集",
+        r"episode\s*0*(\d+)",
+        r"ep\s*0*(\d+)",
+    ):
+        match = re.search(pattern, raw_title, re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except Exception:
+                break
+    return int(_asset_optional_int(episode_id) or 0)
+
+
+def _build_asset_current_group_key(asset: Asset, meta: Optional[Dict[str, Any]] = None) -> str:
+    stable_meta = _asset_meta_dict(meta if meta is not None else getattr(asset, "meta_info", None))
+    project_id = _asset_optional_int(getattr(asset, "project_id", None) or stable_meta.get("project_id"))
+    if not project_id:
+        return ""
+
+    media_type = str(getattr(asset, "type", "") or stable_meta.get("type") or "asset").strip().lower() or "asset"
+    frame_type = str(stable_meta.get("frame_type") or stable_meta.get("asset_type") or "").strip().lower()
+    entity_id = _asset_optional_int(stable_meta.get("entity_id"))
+    shot_id = _asset_optional_int(stable_meta.get("shot_id"))
+    scene_id = _asset_optional_int(stable_meta.get("scene_id"))
+    subject_name = str(stable_meta.get("subject_name") or stable_meta.get("entity_name") or "").strip().lower()
+    subject_type = str(stable_meta.get("subject_type") or stable_meta.get("entity_type") or "").strip().lower()
+
+    parts = [f"project:{project_id}", f"media:{media_type}"]
+    if frame_type:
+        parts.append(f"frame:{frame_type}")
+    if entity_id:
+        parts.append(f"entity:{entity_id}")
+    if shot_id:
+        parts.append(f"shot:{shot_id}")
+    if scene_id:
+        parts.append(f"scene:{scene_id}")
+    if not entity_id and not shot_id and not scene_id and subject_name:
+        if subject_type:
+            parts.append(f"subject_type:{subject_type}")
+        parts.append(f"subject:{subject_name}")
+    if len(parts) <= 2:
+        parts.append("scope:project")
+    return "|".join(parts)
+
+
+def _sync_asset_denormalized_fields(asset: Optional[Asset]) -> Optional[Asset]:
+    if asset is None:
+        return None
+    meta = _asset_meta_dict(getattr(asset, "meta_info", None))
+    if "project_id" in meta:
+        asset.project_id = _asset_optional_int(meta.get("project_id"))
+    elif getattr(asset, "project_id", None) is None:
+        asset.project_id = _asset_optional_int(meta.get("project_id"))
+
+    if "episode_id" in meta:
+        asset.episode_id = _asset_optional_int(meta.get("episode_id"))
+    elif getattr(asset, "episode_id", None) is None:
+        asset.episode_id = _asset_optional_int(meta.get("episode_id"))
+    return asset
+
+
+def _resolve_effective_current_project_asset_ids(db: Session, assets: List[Asset]) -> Set[int]:
+    if not assets:
+        return set()
+
+    episode_ids: Set[int] = set()
+    groups: Dict[str, List[Tuple[Asset, Dict[str, Any]]]] = {}
+    for asset in assets:
+        stable_meta = _asset_meta_dict(getattr(asset, "meta_info", None))
+        _sync_asset_denormalized_fields(asset)
+        group_key = _build_asset_current_group_key(asset, stable_meta)
+        if not group_key:
+            continue
+        groups.setdefault(group_key, []).append((asset, stable_meta))
+        if asset.episode_id:
+            episode_ids.add(int(asset.episode_id))
+
+    episode_title_map: Dict[int, str] = {}
+    if episode_ids:
+        episode_title_map = {
+            int(row_id): str(row_title or "")
+            for row_id, row_title in db.query(Episode.id, Episode.title).filter(Episode.id.in_(episode_ids)).all()
+        }
+
+    selected_ids: Set[int] = set()
+    for entries in groups.values():
+        explicit = [entry for entry in entries if bool(getattr(entry[0], "is_current_project_asset", False))]
+        pool = explicit or entries
+
+        def _sort_key(item: Tuple[Asset, Dict[str, Any]]) -> Tuple[int, str, int]:
+            asset_row, _meta = item
+            episode_rank = _parse_episode_sort_rank(episode_title_map.get(int(asset_row.episode_id or 0)), asset_row.episode_id)
+            created_at = str(getattr(asset_row, "created_at", "") or "")
+            return (episode_rank, created_at, int(getattr(asset_row, "id", 0) or 0))
+
+        chosen_asset, _ = max(pool, key=_sort_key)
+        selected_ids.add(int(chosen_asset.id))
+
+    return selected_ids
+
+
+def _mark_asset_as_current_project_asset(db: Session, asset: Optional[Asset]) -> Optional[Asset]:
+    if asset is None:
+        return None
+
+    _sync_asset_denormalized_fields(asset)
+    group_key = _build_asset_current_group_key(asset)
+    if not group_key:
+        asset.is_current_project_asset = False
+        db.add(asset)
+        return asset
+
+    candidates = (
+        db.query(Asset)
+        .filter(Asset.user_id == asset.user_id, Asset.type == asset.type)
+        .order_by(Asset.id.desc())
+        .limit(5000)
+        .all()
+    )
+    for candidate in candidates:
+        _sync_asset_denormalized_fields(candidate)
+        next_value = _build_asset_current_group_key(candidate) == group_key and int(candidate.id) == int(asset.id)
+        if bool(getattr(candidate, "is_current_project_asset", False)) != bool(next_value):
+            candidate.is_current_project_asset = bool(next_value)
+            db.add(candidate)
+
+    asset.is_current_project_asset = True
+    db.add(asset)
+    return asset
 
 
 def _url_reference_tokens(raw_url: Any) -> set[str]:
@@ -18336,6 +18602,8 @@ def get_asset_thumbnail(filename: str):
 def get_assets(
     type: Optional[str] = None,
     project_id: Optional[str] = None,
+    episode_id: Optional[str] = None,
+    current_project_asset: Optional[str] = None,
     entity_id: Optional[str] = None,
     shot_id: Optional[str] = None,
     scene_id: Optional[str] = None,
@@ -18364,26 +18632,24 @@ def get_assets(
     # SQLite supports json_extract but SQLAlchemy syntax depends on dialect.
     # For fail-safe prototype, we'll fetch then filter in Python if specific meta filters are requested.
     
-    def _meta_dict(raw_meta: Any) -> Dict[str, Any]:
-        if isinstance(raw_meta, dict):
-            return raw_meta
-        if isinstance(raw_meta, str):
-            try:
-                parsed = json.loads(raw_meta)
-                return parsed if isinstance(parsed, dict) else {}
-            except Exception:
-                return {}
-        return {}
-
     strict_meta_filter = str(os.getenv("ASSETS_META_FILTER_STRICT", "1")).strip().lower() not in {"0", "false", "no", "off"}
+    current_only_mode = _normalize_current_project_asset_filter(current_project_asset, project_scoped=bool(project_id))
 
-    def _matches_meta_filters(meta: Dict[str, Any]) -> bool:
+    def _matches_meta_filters(asset_row: Asset, meta: Dict[str, Any]) -> bool:
         if project_id:
-            p_id = meta.get('project_id')
+            p_id = meta.get('project_id') or getattr(asset_row, 'project_id', None)
             if strict_meta_filter:
                 if str(p_id or '').strip() != str(project_id):
                     return False
             elif p_id and str(p_id) != str(project_id):
+                return False
+
+        if episode_id:
+            ep_id = meta.get('episode_id') or getattr(asset_row, 'episode_id', None)
+            if strict_meta_filter:
+                if str(ep_id or '').strip() != str(episode_id):
+                    return False
+            elif ep_id and str(ep_id) != str(episode_id):
                 return False
 
         if entity_id:
@@ -18429,6 +18695,7 @@ def get_assets(
     ordered_query = query.order_by(Asset.created_at.desc())
 
     filtered_assets: List[Asset] = []
+    matched_assets: List[Asset] = []
     scan_offset = 0
     scanned_rows = 0
     matched_skipped = 0
@@ -18441,10 +18708,15 @@ def get_assets(
             break
 
         for asset_row in batch:
-            meta = _meta_dict(asset_row.meta_info)
+            meta = _asset_meta_dict(asset_row.meta_info)
+            _sync_asset_denormalized_fields(asset_row)
             if not _is_asset_accessible(asset_row, meta):
                 continue
-            if not _matches_meta_filters(meta):
+            if not _matches_meta_filters(asset_row, meta):
+                continue
+
+            if current_only_mode is not None:
+                matched_assets.append(asset_row)
                 continue
 
             if matched_skipped < safe_skip:
@@ -18458,19 +18730,39 @@ def get_assets(
         scan_offset += len(batch)
         scanned_rows += len(batch)
 
+    if current_only_mode is not None:
+        effective_current_ids = _resolve_effective_current_project_asset_ids(db, matched_assets)
+        scoped_assets = [
+            asset_row
+            for asset_row in matched_assets
+            if (int(asset_row.id) in effective_current_ids) == bool(current_only_mode)
+        ]
+        filtered_assets = scoped_assets[safe_skip:safe_skip + safe_limit]
+
+    effective_current_ids_for_results: Set[int] = set()
+    if project_id:
+        effective_source_assets = matched_assets if current_only_mode is not None else filtered_assets
+        effective_current_ids_for_results = _resolve_effective_current_project_asset_ids(db, effective_source_assets)
+
     # Enrichment Logic for Grouping
     project_ids = set()
+    episode_ids = set()
     entity_ids = set()
     shot_ids = set()
 
 
     for a in filtered_assets:
         # Ensure meta is a dict
-        meta = _meta_dict(a.meta_info)
+        meta = _asset_meta_dict(a.meta_info)
             
         p_id = meta.get('project_id')
         if p_id: 
             try: project_ids.add(int(p_id))
+            except: pass
+
+        ep_id = getattr(a, 'episode_id', None) or meta.get('episode_id')
+        if ep_id:
+            try: episode_ids.add(int(ep_id))
             except: pass
             
         e_id = meta.get('entity_id')
@@ -18490,6 +18782,11 @@ def get_assets(
     if project_ids:
         projects = db.query(Project.id, Project.title).filter(Project.id.in_(project_ids)).all()
         project_map = {p.id: p.title for p in projects}
+
+    episode_map = {}
+    if episode_ids:
+        episodes = db.query(Episode.id, Episode.title).filter(Episode.id.in_(episode_ids)).all()
+        episode_map = {e.id: e.title for e in episodes}
         
     entity_map = {}
     if entity_ids:
@@ -18504,7 +18801,7 @@ def get_assets(
     provider_alias_map = _build_provider_alias_lookup(db)
     results = []
     for a in filtered_assets:
-        meta = _meta_dict(a.meta_info)
+        meta = _asset_meta_dict(a.meta_info)
         
         # Make a copy to avoid mutating SQLAlchemy object if it was a dict
         meta = dict(meta)
@@ -18515,6 +18812,15 @@ def get_assets(
             try:
                 pid_int = int(p_id)
                 if pid_int in project_map: meta['project_title'] = project_map[pid_int]
+            except: pass
+
+        ep_id = getattr(a, 'episode_id', None) or meta.get('episode_id')
+        if ep_id:
+            try:
+                eid_int = int(ep_id)
+                meta['episode_id'] = eid_int
+                if eid_int in episode_map:
+                    meta['episode_title'] = episode_map[eid_int]
             except: pass
             
         e_id = meta.get('entity_id')
@@ -18538,6 +18844,9 @@ def get_assets(
             "type": a.type,
             "url": oss_storage_service.refresh_url(a.url) if oss_storage_service.is_enabled(db) else a.url,
             "filename": a.filename,
+            "project_id": getattr(a, 'project_id', None),
+            "episode_id": getattr(a, 'episode_id', None),
+            "is_current_project_asset": int(a.id) in effective_current_ids_for_results if effective_current_ids_for_results else bool(getattr(a, 'is_current_project_asset', False)),
             "meta_info": meta,
             "remark": a.remark,
             "created_at": a.created_at
@@ -18561,20 +18870,17 @@ def create_asset_url(
         user_id=current_user.id,
         type=asset_in.type,
         url=asset_in.url,
+        project_id=_asset_optional_int(meta.get('project_id')),
+        episode_id=_asset_optional_int(meta.get('episode_id')),
         meta_info=meta,
         remark=asset_in.remark
     )
     db.add(asset)
+    db.flush()
+    _mark_asset_as_current_project_asset(db, asset)
     db.commit()
     db.refresh(asset)
-    return {
-        "id": asset.id,
-        "type": asset.type,
-        "url": oss_storage_service.refresh_url(asset.url) if oss_storage_service.is_enabled(db) else asset.url,
-        "meta_info": asset.meta_info,
-        "remark": asset.remark,
-        "created_at": asset.created_at
-    }
+    return _serialize_asset_row(asset, db)
 
 @router.post("/assets/upload", response_model=dict)
 def upload_asset(
@@ -18727,10 +19033,14 @@ def upload_asset(
         type=type,
         url=url,
         filename=file.filename,
+        project_id=_asset_optional_int(meta_info.get('project_id')),
+        episode_id=_asset_optional_int(meta_info.get('episode_id')),
         meta_info=meta_info,
         remark=remark
     )
     db.add(asset)
+    db.flush()
+    _mark_asset_as_current_project_asset(db, asset)
     db.commit()
     db.refresh(asset)
 
@@ -18816,18 +19126,34 @@ def update_asset(
          # Merge or replace? Let's replace for now or merge if needed
          # asset.meta_info = {**asset.meta_info, **asset_update.meta_info} 
          asset.meta_info = asset_update.meta_info
+         _sync_asset_denormalized_fields(asset)
+         if asset.project_id:
+             _mark_asset_as_current_project_asset(db, asset)
          
     db.commit()
     db.refresh(asset)
 
-    return {
-        "id": asset.id,
-        "type": asset.type,
-        "url": oss_storage_service.refresh_url(asset.url) if oss_storage_service.is_enabled(db) else asset.url,
-        "meta_info": asset.meta_info,
-        "remark": asset.remark,
-        "created_at": asset.created_at
-    }
+    return _serialize_asset_row(asset, db)
+
+
+@router.post("/assets/{asset_id}/mark-current", response_model=dict)
+def mark_asset_current_project_asset(
+    asset_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    _sync_asset_denormalized_fields(asset)
+    if not asset.project_id:
+        raise HTTPException(status_code=400, detail="Asset is not scoped to a project")
+
+    _mark_asset_as_current_project_asset(db, asset)
+    db.commit()
+    db.refresh(asset)
+    return _serialize_asset_row(asset, db)
 
 @router.post("/assets/rebind-shot-media", response_model=dict)
 def rebind_shot_media_from_assets(
@@ -21707,11 +22033,15 @@ def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
 
 
 def _serialize_asset_row(asset: Asset, db: Session = None) -> Dict[str, Any]:
+    _sync_asset_denormalized_fields(asset)
     return {
         "id": asset.id,
         "type": asset.type,
         "url": oss_storage_service.refresh_url(asset.url) if oss_storage_service.is_enabled(db) else asset.url,
         "filename": asset.filename,
+        "project_id": getattr(asset, "project_id", None),
+        "episode_id": getattr(asset, "episode_id", None),
+        "is_current_project_asset": bool(getattr(asset, "is_current_project_asset", False)),
         "meta_info": asset.meta_info,
         "remark": asset.remark,
         "created_at": asset.created_at,
@@ -21723,10 +22053,8 @@ def _normalize_asset_idempotency_key(value: Any) -> str:
 
 
 def _asset_meta_matches_registration_context(asset_meta: Any, expected_meta: Any) -> bool:
-    if not isinstance(asset_meta, dict):
-        asset_meta = {}
-    if not isinstance(expected_meta, dict):
-        expected_meta = {}
+    asset_meta = _asset_meta_dict(asset_meta)
+    expected_meta = _asset_meta_dict(expected_meta)
 
     compare_keys = [
         "project_id",
@@ -21783,8 +22111,88 @@ def _find_existing_asset_for_registration(
         .all()
     )
     if url_candidates:
-        return url_candidates[0]
+        for candidate in url_candidates:
+            if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
+                return candidate
     return None
+
+
+def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta_info: Dict[str, Any]) -> Optional[str]:
+    meta = _asset_meta_dict(meta_info)
+    project_id = _asset_optional_int(meta.get("project_id"))
+    if not project_id:
+        return None
+
+    requested_subject_type = _normalize_entity_type(meta.get("subject_type") or meta.get("entity_type"))
+    requested_entity_id = _asset_optional_int(meta.get("entity_id"))
+    requested_name = str(meta.get("subject_name") or "").strip().lower()
+    requested_entity_name = str(meta.get("entity_name") or "").strip().lower()
+    requested_name_tokens = {token for token in (requested_name, requested_entity_name) if token}
+
+    if not requested_entity_id and not requested_name_tokens:
+        return None
+
+    candidates = (
+        db.query(Asset)
+        .filter(Asset.user_id == user_id, Asset.type == "image", Asset.project_id == project_id)
+        .order_by(Asset.id.desc())
+        .limit(5000)
+        .all()
+    )
+    if not candidates:
+        return None
+
+    matched: List[Asset] = []
+    for candidate in candidates:
+        _sync_asset_denormalized_fields(candidate)
+        candidate_meta = _asset_meta_dict(getattr(candidate, "meta_info", None))
+        if _asset_optional_int(candidate.project_id or candidate_meta.get("project_id")) != project_id:
+            continue
+
+        candidate_subject_type = _normalize_entity_type(candidate_meta.get("subject_type") or candidate_meta.get("entity_type"))
+        # Keep type-consistent dependency reuse except for poster assets.
+        if requested_subject_type and requested_subject_type != "poster" and candidate_subject_type and candidate_subject_type != requested_subject_type:
+            continue
+
+        candidate_entity_id = _asset_optional_int(candidate_meta.get("entity_id"))
+        candidate_subject_name = str(candidate_meta.get("subject_name") or "").strip().lower()
+        candidate_entity_name = str(candidate_meta.get("entity_name") or "").strip().lower()
+        candidate_name_tokens = {token for token in (candidate_subject_name, candidate_entity_name) if token}
+
+        id_matched = bool(requested_entity_id and candidate_entity_id and requested_entity_id == candidate_entity_id)
+        name_matched = bool(requested_name_tokens and candidate_name_tokens and requested_name_tokens.intersection(candidate_name_tokens))
+        if not id_matched and not name_matched:
+            continue
+
+        matched.append(candidate)
+
+    if not matched:
+        return None
+
+    episode_ids: Set[int] = set()
+    for row in matched:
+        episode_id = _asset_optional_int(getattr(row, "episode_id", None) or _asset_meta_dict(getattr(row, "meta_info", None)).get("episode_id"))
+        if episode_id:
+            episode_ids.add(int(episode_id))
+
+    episode_title_map: Dict[int, str] = {}
+    if episode_ids:
+        episode_title_map = {
+            int(row_id): str(row_title or "")
+            for row_id, row_title in db.query(Episode.id, Episode.title).filter(Episode.id.in_(episode_ids)).all()
+        }
+
+    def _candidate_rank(asset: Asset) -> Tuple[int, int, str, int]:
+        candidate_meta = _asset_meta_dict(getattr(asset, "meta_info", None))
+        episode_id = _asset_optional_int(getattr(asset, "episode_id", None) or candidate_meta.get("episode_id"))
+        episode_rank = _parse_episode_sort_rank(episode_title_map.get(int(episode_id or 0)), episode_id)
+        is_current = 1 if bool(getattr(asset, "is_current_project_asset", False)) else 0
+        created_at = str(getattr(asset, "created_at", "") or "")
+        return (is_current, episode_rank, created_at, int(getattr(asset, "id", 0) or 0))
+
+    chosen = max(matched, key=_candidate_rank)
+    chosen_url = str(getattr(chosen, "url", "") or "").strip()
+    return chosen_url or None
 
 def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source_metadata: Dict = None):
     # Handle dict or object
@@ -21958,6 +22366,12 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 elif resolved_type == "prop":
                     meta["subject_type_cn"] = "道具"
 
+        if is_subject_generation and not meta.get("source_asset_url"):
+            inferred_source_url = _resolve_subject_dependency_source_asset_url(db, user_id, meta)
+            if inferred_source_url and inferred_source_url != str(url or "").strip():
+                meta["source_asset_url"] = inferred_source_url
+                meta["source_asset_auto"] = "same_name_current_or_latest_episode"
+
         local_exists = os.path.exists(file_path)
         if local_exists:
             _set_size(os.path.getsize(file_path))
@@ -22027,6 +22441,10 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 meta_info=meta,
             )
             if existing_asset:
+                _sync_asset_denormalized_fields(existing_asset)
+                if existing_asset.project_id:
+                    _mark_asset_as_current_project_asset(db, existing_asset)
+                    db.commit()
                 return existing_asset
 
             is_image_inferred = is_image
@@ -22049,10 +22467,14 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 type=("image" if is_image_inferred else ("audio" if is_audio_inferred else "video")),
                 url=url,
                 filename=fname,
+                project_id=_asset_optional_int(meta.get("project_id")),
+                episode_id=_asset_optional_int(meta.get("episode_id")),
                 meta_info=meta,
                 remark=remark
             )
             db.add(asset)
+            db.flush()
+            _mark_asset_as_current_project_asset(db, asset)
             db.commit()
             return asset
     except Exception as e:
@@ -31043,6 +31465,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 
         # Update Entity Fields
         if "name_en" in updated_info: entity.name_en = updated_info["name_en"]
+        if "base_name_en" in updated_info: entity.base_name_en = updated_info["base_name_en"]
         if "description_cn" in updated_info: entity.description = updated_info["description_cn"] # Map description_cn to description
         if "appearance_cn" in updated_info: entity.appearance_cn = updated_info["appearance_cn"]
         if "clothing" in updated_info: entity.clothing = updated_info["clothing"]
@@ -31251,6 +31674,7 @@ def apply_entity_analysis(
 
     # 2. Apply Updates (Same logic as analyze_entity_image)
     if "name_en" in updated_info: entity.name_en = updated_info["name_en"]
+    if "base_name_en" in updated_info: entity.base_name_en = updated_info["base_name_en"]
     if "description_cn" in updated_info: entity.description = updated_info["description_cn"] 
     if "appearance_cn" in updated_info: entity.appearance_cn = updated_info["appearance_cn"]
     if "clothing" in updated_info: entity.clothing = updated_info["clothing"]

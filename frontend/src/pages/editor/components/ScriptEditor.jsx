@@ -2947,8 +2947,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisRunInFlightRef = useRef(false);
     const autoImportRunningRef = useRef(false);
     const lastSubjectsImportIncompleteAlertRef = useRef('');
-    const ANALYSIS_TASK_MAX_AGE_MS = 10 * 60 * 1000;
-    const ANALYSIS_TASK_MARKER_TTL_MS = 12 * 60 * 1000;
+    const ANALYSIS_TASK_MAX_AGE_MS = 15 * 60 * 1000;
+    const ANALYSIS_TASK_MARKER_TTL_MS = 62 * 60 * 1000;
     const AI_SHOTS_TASK_MARKER_TTL_MS = 12 * 60 * 1000;
 
     const isTaskCanceledError = useCallback((error) => {
@@ -3119,7 +3119,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 resolvedError = err;
             });
 
-        const deadline = Number(startedAt || Date.now()) + 10 * 60 * 1000;
+        const deadline = Number(startedAt || Date.now()) + 60 * 60 * 1000;
         while (!settled && Date.now() < deadline) {
             const recoveredText = await waitForEpisodeAnalysisResultUpdate({
                 baselineText,
@@ -3479,7 +3479,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (analysisResumeInFlightRef.current || analysisRunInFlightRef.current) return;
         analysisResumeInFlightRef.current = true;
 
-        const startedAt = Number(marker?.startedAt || Date.now());
+        const startedAt = Date.now(); // Clear previous time on resume/retry
+        const remainingTimeoutMs = ANALYSIS_TASK_MAX_AGE_MS;
         if (marker?.phase === 2) {
             setIsAnalyzing(false);
             setIsRetryingPhase2(true);
@@ -3569,8 +3570,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        const elapsedMs = Math.max(0, Date.now() - startedAt);
-        const remainingTimeoutMs = Math.max(0, ANALYSIS_TASK_MAX_AGE_MS - elapsedMs);
+        
         if (remainingTimeoutMs <= 0) {
             clearAnalysisTaskMarker(activeEpisode.id);
             setAnalysisFlowStatus({

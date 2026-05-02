@@ -62,6 +62,7 @@ import {
     translateText,
     refinePrompt,
     analyzeScene,
+    analyzeAssetImage,
     waitForAsyncTask,
     stopAsyncTask,
     fetchPrompt,
@@ -155,7 +156,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
-export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3 }) => {
+export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
     const IMAGE_JOB_CACHE_PURGE_MARKER_KEY = `aistory.imageJobCachePurge.${IMAGE_JOB_CACHE_PURGE_VERSION}`;
@@ -305,6 +306,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [assetKeyword, setAssetKeyword] = useState('');
     const [assetProjectFilter, setAssetProjectFilter] = useState('all');
     const [assetImageTypeFilter, setAssetImageTypeFilter] = useState('all');
+    const [includeHistoricalEpisodeAssets, setIncludeHistoricalEpisodeAssets] = useState(false);
     const [imageSelectAction, setImageSelectAction] = useState('direct_use');
     const [viewingEntity, setViewingEntity] = useState(null);
     const [viewingEntityTab, setViewingEntityTab] = useState('generate');
@@ -327,6 +329,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [subjectGenerationHistory, setSubjectGenerationHistory] = useState([]);
     const [subjectGenerationHistoryLoading, setSubjectGenerationHistoryLoading] = useState(false);
     const [subjectGenerationHistoryDeletingId, setSubjectGenerationHistoryDeletingId] = useState('');
+    const [showAiEntityCreateModal, setShowAiEntityCreateModal] = useState(false);
+    const [isAiEntityCreating, setIsAiEntityCreating] = useState(false);
+    const [aiEntityCreateReport, setAiEntityCreateReport] = useState(null);
+    const [aiReuseEntityTypeFilter, setAiReuseEntityTypeFilter] = useState('all');
+    const [isAiUploadAnalyzing, setIsAiUploadAnalyzing] = useState(false);
+    const [aiUploadedAsset, setAiUploadedAsset] = useState(null);
+    const [aiUploadedAssetAnalysis, setAiUploadedAssetAnalysis] = useState('');
+    const [aiEntityCreateForm, setAiEntityCreateForm] = useState({
+        type: 'character',
+        name: '',
+        nameEn: '',
+        attributes: '',
+        reuseEntityIds: [],
+    });
     const subjectImageJobsRef = useRef({});
     const subjectHistoryJobPresenceRef = useRef({});
     const subjectImageJobPollingRef = useRef(false);
@@ -340,6 +356,243 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const subjectBatchReconstructStopRequestedRef = useRef(false);
     const subjectBatchReconstructSessionRef = useRef('');
     const subjectBatchReconstructActiveJobsRef = useRef(new Map());
+
+    const normalizeAiEntityType = useCallback((rawType) => {
+        const stable = String(rawType || '').trim().toLowerCase();
+        if (stable.includes('char') || stable === '角色') return 'character';
+        if (stable.includes('env') || stable.includes('scene') || stable === '环境') return 'environment';
+        if (stable.includes('prop') || stable === '道具') return 'prop';
+        if (stable.includes('poster') || stable.includes('cover') || stable === '海报' || stable === '封面') return 'poster';
+        return 'character';
+    }, []);
+
+    const getAiEntityTypePromptHint = useCallback((entityType) => {
+        const stableType = normalizeAiEntityType(entityType);
+        if (stableType === 'character') {
+            return t(
+                '建议输入：角色定位、年龄区间、外形特征、服装元素、身份职业、情绪气质、动作特征、与其他角色关系。',
+                'Suggestions: role positioning, age range, visual traits, costume elements, identity/profession, mood/temperament, action characteristics, and relationship to other characters.'
+            );
+        }
+        if (stableType === 'prop') {
+            return t(
+                '建议输入：道具材质、尺寸、年代风格、磨损状态、关键用途、交互方式、危险等级或功能限制。',
+                'Suggestions: prop material, scale, period style, wear condition, key usage, interaction style, and risk/function constraints.'
+            );
+        }
+        if (stableType === 'environment') {
+            return t(
+                '建议输入：空间类型、场景时间、主色温、光照氛围、建筑/陈设风格、可拍摄机位特征、与剧情关系。',
+                'Suggestions: space type, scene time, color temperature, lighting mood, architecture/decor style, camera-friendly characteristics, and narrative relationship.'
+            );
+        }
+        return t(
+            '建议输入：海报构图重点、主体阵列、视觉风格关键词、文案语气、版式密度、品牌或作品辨识元素。',
+            'Suggestions: poster composition focus, subject arrangement, visual style keywords, copy tone, layout density, and branding/story identity elements.'
+        );
+    }, [normalizeAiEntityType, t]);
+
+    const buildEntityIndexToken = useCallback((entityType, entityName) => {
+        const stableType = normalizeAiEntityType(entityType);
+        const stableName = String(entityName || '').trim();
+        if (!stableName) return '';
+        if (stableType === 'character') return `CHAR:[@${stableName}]`;
+        if (stableType === 'environment') return `ENV:[${stableName}]`;
+        if (stableType === 'prop') return `PROP:[${stableName}]`;
+        return `COVER:[${stableName}]`;
+    }, [normalizeAiEntityType]);
+
+    const isAiReuseEntityAllowed = useCallback((targetType, candidateType) => {
+        const stableTarget = normalizeAiEntityType(targetType);
+        const stableCandidate = normalizeAiEntityType(candidateType);
+        if (stableTarget === 'poster') return true;
+        return stableTarget === stableCandidate;
+    }, [normalizeAiEntityType]);
+
+    const buildManualSubjectIndexInput = useCallback((formState) => {
+        const stableType = normalizeAiEntityType(formState?.type);
+        const stableName = String(formState?.name || '').trim();
+        const stableNameEn = String(formState?.nameEn || '').trim();
+        const stableAttributes = String(formState?.attributes || '').trim();
+        const subjectToken = buildEntityIndexToken(stableType, stableName || stableNameEn || 'Unnamed Subject');
+
+        const selectedRefs = (Array.isArray(formState?.reuseEntityIds) ? formState.reuseEntityIds : [])
+            .map((id) => (allEntities || []).find((entity) => String(entity?.id || '') === String(id || '')))
+            .filter((entity) => isAiReuseEntityAllowed(stableType, entity?.type))
+            .filter(Boolean)
+            .map((entity) => `${buildEntityIndexToken(entity.type, entity.name || entity.name_en || String(entity.id))} (${entity.name_en || entity.name || ''})`);
+
+        const lines = [
+            'Subject Index (Manual Asset Addition Request)',
+            '---',
+            `[Target Type] ${stableType}`,
+            `[Target Subject] ${subjectToken}`,
+            stableNameEn ? `[Target Subject EN] ${stableNameEn}` : '',
+            '[Entity Attributes]',
+            stableAttributes,
+            '[Action Characteristics]',
+            stableAttributes,
+            '[Existing Subjects For Reuse (Optional)]',
+            selectedRefs.length > 0 ? selectedRefs.map((line, idx) => `${idx + 1}. ${line}`).join('\n') : '(none)',
+            '---',
+            'Please return only import-ready SUBJECTS_JSON with keys: characters, props, environments, covers.',
+        ].filter(Boolean);
+
+        return lines.join('\n');
+    }, [allEntities, buildEntityIndexToken, isAiReuseEntityAllowed, normalizeAiEntityType]);
+
+    const importSubjectsJsonDirectly = useCallback(async (subjectsJson) => {
+        const payload = (subjectsJson && typeof subjectsJson === 'object') ? subjectsJson : {};
+        const sectionToType = {
+            characters: 'character',
+            props: 'prop',
+            environments: 'environment',
+            covers: 'poster',
+        };
+        const normalizeImportEntityKey = (type, rawName) => {
+            const stableType = String(type || '').trim().toLowerCase();
+            const stableName = String(rawName || '').trim().toLowerCase();
+            if (!stableType || !stableName) return '';
+            return `${stableType}::${stableName}`;
+        };
+        const existingEntityMap = new Map();
+        for (const entity of (allEntities || [])) {
+            const stableType = String(entity?.type || '').trim().toLowerCase();
+            if (!stableType) continue;
+            const keyA = normalizeImportEntityKey(stableType, entity?.name);
+            const keyB = normalizeImportEntityKey(stableType, entity?.name_en);
+            if (keyA) existingEntityMap.set(keyA, entity);
+            if (keyB) existingEntityMap.set(keyB, entity);
+        }
+        const existingNameKeySet = new Set(existingEntityMap.keys());
+
+        const importedSubjectCounts = { character: 0, prop: 0, environment: 0, poster: 0 };
+        const createdSubjectItems = [];
+        const skippedSubjectItems = [];
+
+        for (const [section, entityType] of Object.entries(sectionToType)) {
+            const rows = Array.isArray(payload?.[section]) ? payload[section] : [];
+            for (const row of rows) {
+                const name = String(row?.name || row?.name_cn || row?.label || '').trim();
+                const nameEn = String(row?.name_en || '').trim();
+                if (!name && !nameEn) continue;
+                const keyA = normalizeImportEntityKey(entityType, name);
+                const keyB = normalizeImportEntityKey(entityType, nameEn);
+                if ((keyA && existingNameKeySet.has(keyA)) || (keyB && existingNameKeySet.has(keyB))) {
+                    const reusedEntity = (keyA && existingEntityMap.get(keyA)) || (keyB && existingEntityMap.get(keyB)) || null;
+                    skippedSubjectItems.push({
+                        type: entityType,
+                        name: name || nameEn,
+                        reason: 'exists',
+                        reusedEntityId: reusedEntity?.id || null,
+                        reusedEntityName: reusedEntity?.name || reusedEntity?.name_en || null,
+                        reusedImageUrl: reusedEntity?.image_url || null,
+                        reusedDependencyPolicy: 'current_project_asset_or_latest_episode',
+                    });
+                    continue;
+                }
+
+                const payloadRow = {
+                    name: name || nameEn,
+                    name_en: nameEn || undefined,
+                    type: entityType,
+                    description: String(row?.description_cn || row?.description || row?.entity_attributes || '').trim(),
+                    role: String(row?.role || '').trim() || undefined,
+                    archetype: String(row?.archetype || row?.action_characteristics || '').trim() || undefined,
+                    gender: String(row?.gender || '').trim() || undefined,
+                    appearance_cn: String(row?.appearance_cn || '').trim() || undefined,
+                    clothing: String(row?.clothing || '').trim() || undefined,
+                    action_characteristics: String(row?.action_characteristics || row?.archetype || '').trim() || undefined,
+                    atmosphere: String(row?.atmosphere || '').trim() || undefined,
+                    visual_params: String(row?.visual_params || '').trim() || undefined,
+                    narrative_description: String(row?.narrative_description || '').trim() || undefined,
+                    custom_attributes: {
+                        source: 'subject_library_manual_entity_design',
+                    },
+                };
+
+                const created = await createEntity(projectId, payloadRow);
+                createdSubjectItems.push(created);
+                importedSubjectCounts[entityType] += 1;
+                if (keyA) existingNameKeySet.add(keyA);
+                if (keyB) existingNameKeySet.add(keyB);
+            }
+        }
+
+        return { importedSubjectCounts, createdSubjectItems, skippedSubjectItems };
+    }, [allEntities, projectId]);
+
+    const formatAiEntityCreateReport = useCallback((importReport) => {
+        const imported = importReport?.importedSubjectCounts || {};
+        const createdSubjectItems = Array.isArray(importReport?.createdSubjectItems) ? importReport.createdSubjectItems : [];
+        const skippedSubjectItems = Array.isArray(importReport?.skippedSubjectItems) ? importReport.skippedSubjectItems : [];
+
+        const byType = {
+            character: Number(imported.character || 0),
+            prop: Number(imported.prop || 0),
+            environment: Number(imported.environment || 0),
+            poster: Number(imported.poster || 0),
+        };
+        const importedTotal = byType.character + byType.prop + byType.environment + byType.poster;
+
+        const skippedReasonStats = skippedSubjectItems.reduce((acc, item) => {
+            const reason = String(item?.reason || 'unknown').trim().toLowerCase();
+            acc[reason] = (acc[reason] || 0) + 1;
+            return acc;
+        }, {});
+
+        const reasonLabel = (reason) => {
+            if (reason === 'exists') return t('已存在实体，复用跳过', 'Already exists, reused and skipped');
+            if (reason === 'unknown') return t('未知原因', 'Unknown reason');
+            return reason;
+        };
+
+        const skippedReasonLines = Object.entries(skippedReasonStats)
+            .map(([reason, count]) => `- ${reasonLabel(reason)}: ${count}`);
+
+        const skippedItemPreview = skippedSubjectItems
+            .slice(0, 12)
+            .map((item, idx) => {
+                const itemType = String(item?.type || '').trim() || 'unknown';
+                const itemName = String(item?.name || '').trim() || 'unnamed';
+                const itemReason = reasonLabel(String(item?.reason || 'unknown').trim().toLowerCase());
+                const reusedTarget = String(item?.reusedEntityName || '').trim() || (item?.reusedEntityId ? `#${item.reusedEntityId}` : '');
+                const reusedLine = reusedTarget
+                    ? t(` -> 复用依赖: ${reusedTarget}`, ` -> reused dependency: ${reusedTarget}`)
+                    : '';
+                return `${idx + 1}. [${itemType}] ${itemName} (${itemReason})${reusedLine}`;
+            });
+
+        const createdPreview = createdSubjectItems
+            .slice(0, 12)
+            .map((item, idx) => `${idx + 1}. [${String(item?.type || '').trim() || 'unknown'}] ${String(item?.name || item?.name_en || item?.id || '').trim()}`);
+
+        const summary = t(
+            `AI 新增实体完成：新增 ${importedTotal}，跳过 ${skippedSubjectItems.length}。`,
+            `AI entity creation completed: imported ${importedTotal}, skipped ${skippedSubjectItems.length}.`
+        );
+
+        const details = [
+            summary,
+            '',
+            t('导入统计：', 'Import counts:'),
+            `- ${t('角色', 'character')}: ${byType.character}`,
+            `- ${t('道具', 'prop')}: ${byType.prop}`,
+            `- ${t('环境', 'environment')}: ${byType.environment}`,
+            `- ${t('海报', 'poster')}: ${byType.poster}`,
+            '',
+            t('跳过原因统计：', 'Skipped reason counts:'),
+            ...(skippedReasonLines.length > 0 ? skippedReasonLines : [`- ${t('无', 'none')}`]),
+            '',
+            t('新增条目（最多12条）：', 'Created items (up to 12):'),
+            ...(createdPreview.length > 0 ? createdPreview : [`- ${t('无', 'none')}`]),
+            '',
+            t('跳过条目（最多12条）：', 'Skipped items (up to 12):'),
+            ...(skippedItemPreview.length > 0 ? skippedItemPreview : [`- ${t('无', 'none')}`]),
+        ].join('\n');
+
+        return { summary, details };
+    }, [t]);
     const subjectImageJobStorageKey = useMemo(() => {
         const pid = String(projectId || '').trim();
         return pid ? `aistory.subjectImageJobs.${pid}` : '';
@@ -438,6 +691,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     type: 'image',
                     entity_id: stableEntityId,
                     project_id: stableProjectId || undefined,
+                    episode_id: currentEpisode?.id || undefined,
+                    current_project_asset: 'all',
                     skip: page * pageSize,
                     limit: pageSize,
                 });
@@ -495,7 +750,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         } finally {
             setSubjectGenerationHistoryLoading(false);
         }
-    }, [onLog, t, projectId]);
+    }, [currentEpisode?.id, onLog, t, projectId]);
 
     useEffect(() => {
         if (!selectedEntity?.id) {
@@ -520,6 +775,240 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             setSubjectGenerationHistoryDeletingId('');
         }
     }, [fetchSubjectGenerationHistory, onLog, selectedEntity, t]);
+
+    const showSubjectNotification = useCallback((message, type = 'success') => {
+        setSubjectNotification({ message, type });
+        setTimeout(() => setSubjectNotification(null), 3000);
+    }, []);
+
+    const openAiEntityCreateModal = useCallback(() => {
+        setAiEntityCreateReport(null);
+        setAiReuseEntityTypeFilter('all');
+        setIsAiUploadAnalyzing(false);
+        setAiUploadedAsset(null);
+        setAiUploadedAssetAnalysis('');
+        setAiEntityCreateForm({
+            type: normalizeAiEntityType(subTab),
+            name: '',
+            nameEn: '',
+            attributes: '',
+            reuseEntityIds: [],
+        });
+        setShowAiEntityCreateModal(true);
+    }, [normalizeAiEntityType, subTab]);
+
+    useEffect(() => {
+        const targetType = normalizeAiEntityType(aiEntityCreateForm?.type);
+        if (targetType !== 'poster') {
+            setAiReuseEntityTypeFilter(targetType);
+        }
+
+        const allowedIds = new Set(
+            (allEntities || [])
+                .filter((entity) => isAiReuseEntityAllowed(targetType, entity?.type))
+                .map((entity) => String(entity?.id || '').trim())
+                .filter(Boolean)
+        );
+
+        setAiEntityCreateForm((prev) => {
+            const nextIds = (Array.isArray(prev?.reuseEntityIds) ? prev.reuseEntityIds : [])
+                .map((id) => String(id || '').trim())
+                .filter((id) => allowedIds.has(id));
+            const prevIds = Array.isArray(prev?.reuseEntityIds) ? prev.reuseEntityIds.map((id) => String(id || '').trim()) : [];
+            if (nextIds.length === prevIds.length && nextIds.every((id, idx) => id === prevIds[idx])) {
+                return prev;
+            }
+            return { ...prev, reuseEntityIds: nextIds };
+        });
+    }, [aiEntityCreateForm?.type, allEntities, isAiReuseEntityAllowed, normalizeAiEntityType]);
+
+    const aiReusableEntities = useMemo(() => {
+        const targetType = normalizeAiEntityType(aiEntityCreateForm?.type);
+        const effectiveFilter = targetType === 'poster' ? aiReuseEntityTypeFilter : targetType;
+        const filteredByType = (allEntities || []).filter((entity) => {
+            if (!isAiReuseEntityAllowed(targetType, entity?.type)) return false;
+            if (effectiveFilter === 'all') return true;
+            return normalizeAiEntityType(entity?.type) === effectiveFilter;
+        });
+        return filteredByType;
+    }, [aiEntityCreateForm?.type, aiReuseEntityTypeFilter, allEntities, isAiReuseEntityAllowed, normalizeAiEntityType]);
+
+    const handleAiEntityAssetUploadAndAnalyze = useCallback(async (file) => {
+        if (!file) return;
+        setIsAiUploadAnalyzing(true);
+        setAiUploadedAssetAnalysis('');
+        try {
+            const uploadedAsset = await uploadAsset(file, {
+                asset_type: 'subject',
+                remark: `ai_entity_modal_upload:${String(aiEntityCreateForm?.type || '').trim()}`,
+            });
+            setAiUploadedAsset(uploadedAsset);
+
+            const analysisResp = await analyzeAssetImage(uploadedAsset?.id);
+            const analysisText = String(analysisResp?.result || '').trim();
+            setAiUploadedAssetAnalysis(analysisText);
+
+            if (analysisText) {
+                setAiEntityCreateForm((prev) => {
+                    const prevAttrs = String(prev?.attributes || '').trim();
+                    const injected = `${t('参考资产反推结果', 'Reference asset reverse-analysis')}:\n${analysisText}`;
+                    const nextAttrs = prevAttrs
+                        ? `${prevAttrs}\n\n${injected}`
+                        : injected;
+                    return { ...prev, attributes: nextAttrs };
+                });
+                showSubjectNotification(t('资产反推完成，已回填到属性描述。', 'Asset reverse-analysis completed and appended to attributes.'), 'success');
+            } else {
+                showSubjectNotification(t('资产反推返回为空，请手动补充属性描述。', 'Asset reverse-analysis returned empty. Please add attributes manually.'), 'warning');
+            }
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || String(error);
+            setAiUploadedAssetAnalysis(`${t('资产反推失败：', 'Asset reverse-analysis failed: ')}${detail}`);
+            showSubjectNotification(`${t('上传或反推失败：', 'Upload or reverse-analysis failed: ')}${detail}`, 'error');
+        } finally {
+            setIsAiUploadAnalyzing(false);
+        }
+    }, [aiEntityCreateForm?.type, analyzeAssetImage, showSubjectNotification, t]);
+
+    const handleSubmitAiEntityCreate = useCallback(async () => {
+        const stableName = String(aiEntityCreateForm?.name || '').trim();
+        const stableAttrs = String(aiEntityCreateForm?.attributes || '').trim();
+        if (!stableName) {
+            alert(t('请先填写实体名称。', 'Please enter an entity name first.'));
+            return;
+        }
+        if (!stableAttrs) {
+            alert(t('请先填写属性描述。', 'Please enter the attribute description first.'));
+            return;
+        }
+
+        setIsAiEntityCreating(true);
+        setAiEntityCreateReport(null);
+        try {
+            const promptRes = await fetchPrompt('skills/scene_analysis_feature_stack/entity_design.md').catch(() => null);
+            const systemPrompt = String(promptRes?.content || '').trim();
+            if (!systemPrompt && onLog) {
+                onLog('entity_design.md is empty or unavailable, continuing with default routing.', 'warning');
+            }
+
+            const stableTargetType = normalizeAiEntityType(aiEntityCreateForm?.type);
+            const sanitizedReuseEntityIds = (Array.isArray(aiEntityCreateForm?.reuseEntityIds) ? aiEntityCreateForm.reuseEntityIds : [])
+                .map((id) => String(id || '').trim())
+                .filter(Boolean)
+                .filter((id) => {
+                    const entity = (allEntities || []).find((item) => String(item?.id || '').trim() === id);
+                    return isAiReuseEntityAllowed(stableTargetType, entity?.type);
+                });
+            const sanitizedForm = { ...aiEntityCreateForm, reuseEntityIds: sanitizedReuseEntityIds };
+            const inputText = buildManualSubjectIndexInput(sanitizedForm);
+            const scriptAnalysisApiId = Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
+
+            const result = await analyzeScene(
+                inputText,
+                systemPrompt || null,
+                null,
+                currentEpisode?.id || null,
+                null,
+                null,
+                null,
+                projectId,
+                'script_analysis',
+                scriptAnalysisApiId,
+                'entity_design'
+            );
+
+            const backendSubjectsJson = (result?.subjects_json && typeof result.subjects_json === 'object')
+                ? result.subjects_json
+                : null;
+            const analyzedText = String(result?.analysis || result?.text || result?.result || '').trim();
+
+            let importReport = null;
+            if (typeof onImportText === 'function') {
+                importReport = await onImportText(analyzedText || JSON.stringify(backendSubjectsJson || {}, null, 2), 'json', {
+                    onLog,
+                    projectId,
+                    episodeId: currentEpisode?.id || null,
+                    subjectsJson: backendSubjectsJson || null,
+                    suppressAlerts: true,
+                });
+            } else if (backendSubjectsJson) {
+                importReport = await importSubjectsJsonDirectly(backendSubjectsJson);
+            }
+
+            if (projectId) {
+                const latest = await fetchEntities(projectId);
+                const processedLatest = Array.isArray(latest) ? latest.map(item => {
+                    if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
+                        return { ...item, type: 'poster' };
+                    }
+                    return item;
+                }) : [];
+                setAllEntities(processedLatest);
+            }
+
+            const report = formatAiEntityCreateReport(importReport || {});
+            const imported = importReport?.importedSubjectCounts || {};
+            const importedTotal = Number(imported.character || 0) + Number(imported.prop || 0) + Number(imported.environment || 0) + Number(imported.poster || 0);
+            const skippedItems = Array.isArray(importReport?.skippedSubjectItems) ? importReport.skippedSubjectItems : [];
+
+            if (projectId) {
+                try {
+                    const auditPayload = {
+                        action: 'AI_ENTITY_IMPORT',
+                        details: JSON.stringify({
+                            source: 'subject_library_manual_entity_design',
+                            project_id: projectId,
+                            episode_id: currentEpisode?.id || null,
+                            imported_counts: imported,
+                            imported_total: importedTotal,
+                            skipped_total: skippedItems.length,
+                            skipped_reused: skippedItems
+                                .filter((item) => String(item?.reason || '').trim().toLowerCase() === 'exists')
+                                .slice(0, 100)
+                                .map((item) => ({
+                                    type: item?.type || null,
+                                    name: item?.name || null,
+                                    reason: item?.reason || null,
+                                    reused_entity_id: item?.reusedEntityId || null,
+                                    reused_entity_name: item?.reusedEntityName || null,
+                                    reused_image_url: item?.reusedImageUrl || null,
+                                    reused_dependency_policy: item?.reusedDependencyPolicy || null,
+                                })),
+                        }),
+                    };
+                    await recordSystemLogAction(auditPayload);
+                } catch (e) {
+                    onLog?.(t('导入审计日志写入失败（不影响导入结果）。', 'Import audit log write failed (import result unchanged).'), 'warning');
+                }
+            }
+
+            setAiEntityCreateReport(report.details);
+            showSubjectNotification(report.summary, importedTotal > 0 ? 'success' : 'warning');
+            onLog?.(report.details, importedTotal > 0 ? 'success' : 'warning');
+        } catch (error) {
+            const message = error?.response?.data?.detail || error?.message || String(error);
+            const reportText = t(`AI 新增实体失败：${message}`, `AI entity creation failed: ${message}`);
+            setAiEntityCreateReport(reportText);
+            showSubjectNotification(reportText, 'error');
+            onLog?.(reportText, 'error');
+        } finally {
+            setIsAiEntityCreating(false);
+        }
+    }, [
+        aiEntityCreateForm,
+        allEntities,
+        buildManualSubjectIndexInput,
+        currentEpisode?.id,
+        importSubjectsJsonDirectly,
+        isAiReuseEntityAllowed,
+        normalizeAiEntityType,
+        onImportText,
+        onLog,
+        projectId,
+        showSubjectNotification,
+        formatAiEntityCreateReport,
+        t,
+    ]);
 
     const forceClearSubjectImageJob = useCallback(async (entityId, payload, reason) => {
         const stableEntityId = String(entityId || payload?.ownerEntityId || '').trim();
@@ -589,11 +1078,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             delete next[stableEntityId];
             return next;
         });
-    }, []);
-
-    const showSubjectNotification = useCallback((message, type = 'success') => {
-        setSubjectNotification({ message, type });
-        setTimeout(() => setSubjectNotification(null), 3000);
     }, []);
 
     const shouldLogSubjectJobTerminal = useCallback((jobId, outcome) => {
@@ -2380,6 +2864,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setShowPromptLangMenu(false);
         setAssetKeyword('');
         setAssetImageTypeFilter('all');
+        setIncludeHistoricalEpisodeAssets(false);
         const currentProjectKey = String(projectId || '').trim();
         setAssetProjectFilter(currentProjectKey || 'all');
         
@@ -2393,7 +2878,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         setRefImage(null);
         setRefSelectionMode(null); 
-        loadAssets();
+        loadAssets({ includeHistoricalEpisodeAssets: false });
     };
 
     useEffect(() => {
@@ -2412,10 +2897,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [imageModalTab, isSubjectImageActionLocked, selectedEntity, showImageModal]);
 
     // Load Assets
-    const loadAssets = async () => {
+    const loadAssets = useCallback(async (options = {}) => {
+        const includeHistory = options.includeHistoricalEpisodeAssets ?? includeHistoricalEpisodeAssets;
         setAssetsLoading(true);
         try {
-            const data = await fetchAssets();
+            const data = await fetchAssets({
+                project_id: projectId || undefined,
+                episode_id: includeHistory ? undefined : (currentEpisode?.id || undefined),
+                current_project_asset: 'all',
+            });
             const imageAssets = data.filter(a => a.type === 'image');
             setAssets(imageAssets);
 
@@ -2434,7 +2924,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         } finally {
             setAssetsLoading(false);
         }
-    };
+    }, [currentEpisode?.id, includeHistoricalEpisodeAssets, projectId]);
+
+    useEffect(() => {
+        if (!showImageModal) return;
+        loadAssets();
+    }, [showImageModal, loadAssets]);
 
     const getAssetMeta = useCallback((asset) => {
         if (!asset || typeof asset !== 'object') return {};
@@ -3450,6 +3945,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     </div>
                 </div>
                 <div className="flex items-center gap-4 flex-wrap justify-end">
+                    <button
+                        onClick={openAiEntityCreateModal}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 flex items-center gap-2 transition-all border border-emerald-300/20"
+                        title={t('按 subjects index + entity_design 自动新增实体', 'Add entities via subjects index + entity_design')}
+                    >
+                        <Plus size={12} /> {t('AI新增实体', 'AI Add Entity')}
+                    </button>
                      <button 
                         onClick={handleDeleteAllEntities}
                         className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-md transition-colors"
@@ -3779,6 +4281,204 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     {t('主体加载中...', 'Loading subjects...')}
                 </div>
             )}
+
+            <AnimatePresence>
+                {showAiEntityCreateModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6" onClick={() => setShowAiEntityCreateModal(false)}>
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.96 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#171717] shadow-2xl overflow-hidden"
+                        >
+                            <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between">
+                                <div>
+                                    <div className="text-lg font-bold text-white">{t('AI 新增实体', 'AI Add Entity')}</div>
+                                    <div className="text-xs text-white/60 mt-1">{t('按 subjects index 格式构造输入，调用 entity_design.md 并自动导入。', 'Build subjects-index input, run entity_design.md, and auto-import entities.')}</div>
+                                </div>
+                                <button onClick={() => setShowAiEntityCreateModal(false)} className="p-2 rounded-full hover:bg-white/10 text-white/70 hover:text-white">
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div className="p-6 space-y-4 max-h-[72vh] overflow-y-auto">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <div className="text-xs text-white/70 mb-1">{t('实体类型', 'Entity Type')}</div>
+                                        <select
+                                            value={aiEntityCreateForm.type}
+                                            onChange={(e) => setAiEntityCreateForm((prev) => ({ ...prev, type: normalizeAiEntityType(e.target.value) }))}
+                                            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
+                                        >
+                                            <option value="character">{t('角色', 'Character')}</option>
+                                            <option value="prop">{t('道具', 'Prop')}</option>
+                                            <option value="environment">{t('环境', 'Environment')}</option>
+                                            <option value="poster">{t('海报', 'Poster')}</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex items-end">
+                                        <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} label={t('分析模型: ', 'Analysis Model: ')} />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <div className="text-xs text-white/70 mb-1">{t('实体名称', 'Entity Name')}</div>
+                                        <input
+                                            value={aiEntityCreateForm.name}
+                                            onChange={(e) => setAiEntityCreateForm((prev) => ({ ...prev, name: e.target.value }))}
+                                            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
+                                            placeholder={t('例如：林岚 / 旧式手枪 / 雨夜天台', 'e.g. Lin Lan / Vintage Pistol / Rainy Rooftop')}
+                                        />
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-white/70 mb-1">{t('英文名（可选）', 'English Name (optional)')}</div>
+                                        <input
+                                            value={aiEntityCreateForm.nameEn}
+                                            onChange={(e) => setAiEntityCreateForm((prev) => ({ ...prev, nameEn: e.target.value }))}
+                                            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
+                                            placeholder={t('例如：Lin Lan', 'e.g. Lin Lan')}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <div className="text-xs text-white/70 mb-1">{t('属性描述', 'Attribute Description')}</div>
+                                    <textarea
+                                        value={aiEntityCreateForm.attributes}
+                                        onChange={(e) => setAiEntityCreateForm((prev) => ({ ...prev, attributes: e.target.value }))}
+                                        rows={6}
+                                        className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white resize-y"
+                                        placeholder={getAiEntityTypePromptHint(aiEntityCreateForm.type)}
+                                    />
+                                    <div className="text-[11px] text-white/45 mt-1">{getAiEntityTypePromptHint(aiEntityCreateForm.type)}</div>
+                                </div>
+
+                                <div className="rounded-md border border-white/10 bg-black/20 p-3">
+                                    <div className="text-xs text-white/80 mb-2">{t('先上传参考资产图（可选）', 'Upload reference asset image first (optional)')}</div>
+                                    <label className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-md border border-sky-300/30 bg-sky-500/20 hover:bg-sky-500/30 text-sky-100 cursor-pointer">
+                                        {isAiUploadAnalyzing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                                        {isAiUploadAnalyzing ? t('上传并反推中...', 'Uploading and reverse-analyzing...') : t('上传并自动资产反推', 'Upload and auto reverse-analysis')}
+                                        <input
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0] || null;
+                                                void handleAiEntityAssetUploadAndAnalyze(file);
+                                                e.target.value = '';
+                                            }}
+                                        />
+                                    </label>
+                                    {(aiUploadedAsset?.url || aiUploadedAssetAnalysis) && (
+                                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <div className="rounded border border-white/10 bg-black/30 p-2">
+                                                <div className="text-[11px] text-white/55 mb-1">{t('上传资产预览', 'Uploaded Asset Preview')}</div>
+                                                {aiUploadedAsset?.url ? (
+                                                    <SafeImage src={aiUploadedAsset.url} alt="uploaded-asset" className="w-full h-32 object-cover rounded" />
+                                                ) : (
+                                                    <div className="w-full h-32 rounded bg-white/5" />
+                                                )}
+                                            </div>
+                                            <div className="rounded border border-white/10 bg-black/30 p-2">
+                                                <div className="text-[11px] text-white/55 mb-1">{t('资产反推结果', 'Asset Reverse-analysis')}</div>
+                                                <div className="text-[11px] text-white/75 whitespace-pre-wrap max-h-32 overflow-y-auto">{aiUploadedAssetAnalysis || t('暂无', 'Empty')}</div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <div className="text-xs text-white/70 mb-2">{t('可复用的现有实体（可多选，留空表示无）', 'Reusable existing entities (multi-select, optional)')}</div>
+                                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                        {normalizeAiEntityType(aiEntityCreateForm.type) !== 'poster' && (
+                                            <div className="text-[11px] text-amber-200/90 mr-2">{t('非海报仅可依赖同类型实体', 'Non-poster can only depend on same-type entities')}</div>
+                                        )}
+                                        {[
+                                            { key: 'all', label: t('全部', 'All') },
+                                            { key: 'character', label: t('角色', 'Character') },
+                                            { key: 'prop', label: t('道具', 'Prop') },
+                                            { key: 'environment', label: t('环境', 'Environment') },
+                                            { key: 'poster', label: t('海报', 'Poster') },
+                                        ].map((item) => (
+                                            (() => {
+                                                const targetType = normalizeAiEntityType(aiEntityCreateForm.type);
+                                                const disabled = targetType !== 'poster' && item.key !== targetType;
+                                                return (
+                                            <button
+                                                key={item.key}
+                                                type="button"
+                                                onClick={() => {
+                                                    if (disabled) return;
+                                                    setAiReuseEntityTypeFilter(item.key);
+                                                }}
+                                                disabled={disabled}
+                                                className={`px-2.5 py-1 text-[11px] rounded border ${aiReuseEntityTypeFilter === item.key ? 'bg-primary/20 border-primary/40 text-primary' : 'bg-white/5 border-white/15 text-white/75 hover:bg-white/10'} ${disabled ? 'opacity-40 cursor-not-allowed hover:bg-white/5' : ''}`}
+                                            >
+                                                {item.label}
+                                            </button>
+                                                );
+                                            })()
+                                        ))}
+                                    </div>
+                                    <div className="max-h-64 overflow-y-auto rounded-md border border-white/10 bg-black/20 p-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                        {(aiReusableEntities || []).map((entity) => {
+                                            const stableId = String(entity?.id || '');
+                                            const checked = aiEntityCreateForm.reuseEntityIds.includes(stableId);
+                                            return (
+                                                <label key={stableId} className="flex items-center gap-2 text-xs text-white/80 px-2 py-1 rounded hover:bg-white/5 cursor-pointer border border-white/10 bg-black/20">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onChange={(e) => {
+                                                            const nextIds = e.target.checked
+                                                                ? [...aiEntityCreateForm.reuseEntityIds, stableId]
+                                                                : aiEntityCreateForm.reuseEntityIds.filter((id) => id !== stableId);
+                                                            setAiEntityCreateForm((prev) => ({ ...prev, reuseEntityIds: nextIds }));
+                                                        }}
+                                                    />
+                                                    <div className="w-10 h-10 rounded overflow-hidden shrink-0 bg-white/5">
+                                                        {entity?.image_url ? (
+                                                            <SafeImage src={entity.image_url} alt={entity.name || stableId} className="w-full h-full object-cover" />
+                                                        ) : (
+                                                            <div className="w-full h-full flex items-center justify-center text-white/25"><Users size={14} /></div>
+                                                        )}
+                                                    </div>
+                                                    <span className="truncate">[{entity.type}] {entity.name || entity.name_en || stableId}</span>
+                                                </label>
+                                            );
+                                        })}
+                                        {(!aiReusableEntities || aiReusableEntities.length === 0) && (
+                                            <div className="text-xs text-white/45 p-2">{t('当前筛选下没有可复用实体。', 'No reusable entities under current type filter.')}</div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {aiEntityCreateReport && (
+                                    <div className="text-xs whitespace-pre-wrap rounded-md border border-white/10 bg-black/20 px-3 py-2 text-white/80">{aiEntityCreateReport}</div>
+                                )}
+                            </div>
+
+                            <div className="px-6 py-4 border-t border-white/10 flex items-center justify-end gap-2">
+                                <button
+                                    onClick={() => setShowAiEntityCreateModal(false)}
+                                    className="px-3 py-2 text-xs font-bold rounded-md border border-white/15 text-white/80 hover:bg-white/10"
+                                >
+                                    {t('取消', 'Cancel')}
+                                </button>
+                                <button
+                                    onClick={handleSubmitAiEntityCreate}
+                                    disabled={isAiEntityCreating}
+                                    className="px-3 py-2 text-xs font-bold rounded-md border border-emerald-300/30 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 disabled:opacity-60"
+                                >
+                                    {isAiEntityCreating ? t('提交中...', 'Submitting...') : t('提交并导入实体', 'Submit and Import Entities')}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
 
             {/* Entity Detail Modal */}
             <AnimatePresence>
@@ -4443,6 +5143,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                          <option key={item.value} value={item.value}>{item.label}</option>
                                                                      ))}
                                                                  </select>
+                                                                <label className="sm:col-span-3 inline-flex items-center gap-2 text-[11px] text-muted-foreground">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="rounded border-white/20 bg-black/40"
+                                                                        checked={includeHistoricalEpisodeAssets}
+                                                                        onChange={(e) => setIncludeHistoricalEpisodeAssets(e.target.checked)}
+                                                                    />
+                                                                    {t('包含历史分集素材（用于复用之前分集图片）', 'Include previous-episode assets for reuse')}
+                                                                </label>
                                                              </div>
                                                              <div
                                                                  ref={imageRefPickerViewportRef}
@@ -4839,11 +5548,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     setAssetKeyword('');
                                                     setAssetProjectFilter('all');
                                                     setAssetImageTypeFilter('all');
+                                                    setIncludeHistoricalEpisodeAssets(false);
                                                 }}
                                                 className="px-3 py-2 rounded-md text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
                                             >
                                                 {t('重置', 'Reset')}
                                             </button>
+                                            <label className="sm:col-span-4 inline-flex items-center gap-2 text-[11px] text-muted-foreground px-1 py-0.5">
+                                                <input
+                                                    type="checkbox"
+                                                    className="rounded border-white/20 bg-black/40"
+                                                    checked={includeHistoricalEpisodeAssets}
+                                                    onChange={(e) => setIncludeHistoricalEpisodeAssets(e.target.checked)}
+                                                />
+                                                {t('包含历史分集素材（用于复用之前分集图片）', 'Include previous-episode assets for reuse')}
+                                            </label>
                                         </div>
                                         {imageLibraryWindow.topSpacerHeight > 0 && <div style={{ height: `${imageLibraryWindow.topSpacerHeight}px` }} />}
                                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -5135,6 +5854,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                      <option key={item.value} value={item.value}>{item.label}</option>
                                                                  ))}
                                                              </select>
+                                                            <label className="sm:col-span-3 inline-flex items-center gap-2 text-[11px] text-muted-foreground">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    className="rounded border-white/20 bg-black/40"
+                                                                    checked={includeHistoricalEpisodeAssets}
+                                                                    onChange={(e) => setIncludeHistoricalEpisodeAssets(e.target.checked)}
+                                                                />
+                                                                {t('包含历史分集素材（用于复用之前分集图片）', 'Include previous-episode assets for reuse')}
+                                                            </label>
                                                          </div>
                                                          <div
                                                              ref={imageRefPickerViewportRef}

@@ -256,7 +256,7 @@ const ensureReviewRoutesAvailable = () => {
 // pollTask() polls GET /tasks/{task_id} until completed or failed.
 
 const LLM_POLL_INTERVAL = 2500;   // ms between polls
-const LLM_POLL_TIMEOUT  = 900000; // 15 min max wait
+const LLM_POLL_TIMEOUT  = 3600000; // 60 min max wait
 const LLM_TASK_NOT_FOUND_GRACE_MS = 25000; // tolerate short eventual-consistency lag
 
 const isTaskNotFoundPollingError = (error) => {
@@ -1000,7 +1000,15 @@ export const createReviewRoundMessage = async (roundId, payload) => {
 
 
 export const recordSystemLogAction = async (payload = {}) => {
-    return { ok: true };
+    try {
+        const response = await api.post('/system_logs/actions', payload || {});
+        return response.data;
+    } catch (error) {
+        return {
+            ok: false,
+            error: error?.response?.data?.detail || error?.message || String(error),
+        };
+    }
 }
 
 export const fetchProject = async (id) => {
@@ -1146,13 +1154,14 @@ export const fetchSceneShotsPrompt = async (sceneId) => {
 export const generateSceneShots = async (sceneId, promptData = null, runtimeHooks = {}) => {
 // Inject intelligent routing meta for AI shots
     const enrichedPromptData = promptData ? { ...promptData } : {};
-    enrichedPromptData.function_name = 'ai_shot';
+    enrichedPromptData.function_name = 'script_analysis';
+    enrichedPromptData.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
     const apiContextStr = localStorage.getItem('__function_api_context');
     if (apiContextStr) {
         try {
             const ctx = JSON.parse(apiContextStr);
-            if (ctx['ai_shot'] && ctx['ai_shot'].system_api_id) {
-                enrichedPromptData.system_api_id = ctx['ai_shot'].system_api_id;
+            if (ctx['script_analysis'] && ctx['script_analysis'].system_api_id) {
+                enrichedPromptData.system_api_id = ctx['script_analysis'].system_api_id;
             }
         } catch (e) {
             console.warn('[API] generateSceneShots: Failed to parse function API context', e);
@@ -1188,13 +1197,16 @@ export const regenerateSceneShots = async (sceneId, payload = null, runtimeHooks
     payload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
     try {
         const enrichedPayload = payload ? { ...payload } : {};
-        enrichedPayload.function_name = 'ai_shot';
+        enrichedPayload.function_name = 'script_analysis';
+        if (!enrichedPayload.system_api_id) {
+            enrichedPayload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
+        }
         const apiContextStr = localStorage.getItem('__function_api_context');
         if (apiContextStr) {
             try {
                 const ctx = JSON.parse(apiContextStr);
-                if (ctx['ai_shot'] && ctx['ai_shot'].system_api_id) {
-                    enrichedPayload.system_api_id = ctx['ai_shot'].system_api_id;
+                if (ctx['script_analysis'] && ctx['script_analysis'].system_api_id) {
+                    enrichedPayload.system_api_id = ctx['script_analysis'].system_api_id;
                 }
             } catch (e) {
                 console.warn('[API] regenerateSceneShots: Failed to parse function API context', e);
@@ -1299,13 +1311,16 @@ export const stopProjectEpisodeScripts = async (projectId) => {
 
 export const startSceneAiShotsBatch = async (episodeId, payload = {}) => {
 const enrichedPayload = { ...payload };
-    enrichedPayload.function_name = 'ai_shot';
+    enrichedPayload.function_name = 'script_analysis';
+    if (!enrichedPayload.system_api_id) {
+        enrichedPayload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
+    }
     const apiContextStr = localStorage.getItem('__function_api_context');
     if (apiContextStr) {
         try {
             const ctx = JSON.parse(apiContextStr);
-            if (ctx['ai_shot'] && ctx['ai_shot'].system_api_id) {
-                enrichedPayload.system_api_id = ctx['ai_shot'].system_api_id;
+            if (ctx['script_analysis'] && ctx['script_analysis'].system_api_id) {
+                enrichedPayload.system_api_id = ctx['script_analysis'].system_api_id;
             }
         } catch (e) {
             console.warn('[API] startSceneAiShotsBatch: Failed to parse function API context', e);
@@ -2989,6 +3004,11 @@ export const deleteAssetsBatch = async (ids) => {
 
 export const updateAsset = async (id, data) => {
     const response = await api.put(`/assets/${id}`, data);
+    return response.data;
+};
+
+export const markAssetAsCurrentProjectAsset = async (id) => {
+    const response = await api.post(`/assets/${id}/mark-current`);
     return response.data;
 };
 

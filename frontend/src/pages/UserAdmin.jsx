@@ -8834,7 +8834,7 @@ const UserAdmin = () => {
 
                             <div className="flex items-center justify-between gap-3">
                                 <div>
-                                    <h3 className="text-lg font-bold text-orange-400">{t('超期文件清理 (超过30天)', 'Expired Files Cleanup (>30 days)')}</h3>
+                                    <h3 className="text-lg font-bold text-orange-400">{t('超期文件清理 (超过60天)', 'Expired Files Cleanup (>60 days)')}</h3>
                                     <p className="text-xs text-gray-400 mt-1">
                                         {t(`总计: ${expiredFilesData?.total_count || 0} 个文件, 占用空间: ${formatBytes(expiredFilesData?.total_size || 0)}`, `Total: ${expiredFilesData?.total_count || 0} files, Size: ${formatBytes(expiredFilesData?.total_size || 0)}`)}
                                     </p>

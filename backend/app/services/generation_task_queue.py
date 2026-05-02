@@ -527,7 +527,7 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
 
         now = time.time()
         created_at = row.get("created_at") or now
-        is_expired = (now - created_at) > 1800.0
+        is_expired = (now - created_at) > 3600.0
 
         result = db.execute(
             text(
@@ -552,7 +552,7 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
                 "cutoff": cutoff,
                 "next_status": 'failed' if is_expired else 'running',
                 "finished_at": now if is_expired else None,
-                "error": 'Task queued for over 30 minutes. Timed out.' if is_expired else None,
+                "error": 'Task queued for over 60 minutes. Timed out.' if is_expired else None,
             },
         )
         db.commit()
@@ -627,7 +627,7 @@ def _cleanup_old_tasks() -> None:
         _QUEUE_LAST_CLEANUP_TIME = now
         do_full_cleanup = True
     cutoff = now - 86400.0  # 1 day cutoff
-    timeout_cutoff = now - 1800.0 # 30 min timeout for running tasks
+    timeout_cutoff = now - 3600.0 # 60 min timeout for running tasks
     db = SessionLocal()
     try:
         # Mark 30+ min long running tasks as failed
@@ -636,7 +636,7 @@ def _cleanup_old_tasks() -> None:
                 """
                 UPDATE generation_task_queue 
                 SET status = 'failed', 
-                    error = 'Task running for over 30 minutes. Timed out.',
+                    error = 'Task running for over 60 minutes. Timed out.',
                     finished_at = :now
                 WHERE status = 'running' 
                   AND COALESCE(started_at, created_at) < :timeout_cutoff
@@ -646,7 +646,7 @@ def _cleanup_old_tasks() -> None:
         )
         db.commit()
         if (r_timeout.rowcount or 0) > 0:
-            logger.warning("generation queue sweep timed out %s running tasks (>30m)", r_timeout.rowcount)
+            logger.warning("generation queue sweep timed out %s running tasks (>60m)", r_timeout.rowcount)
 
         if do_full_cleanup:
             result = db.execute(
@@ -679,13 +679,13 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
             result = processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
             try:
                 if asyncio.iscoroutine(result) or isinstance(result, asyncio.Task):
-                    await asyncio.wait_for(result, timeout=1800.0)
+                    await asyncio.wait_for(result, timeout=3600.0)
                 elif asyncio.isfuture(result):
-                    await asyncio.wait_for(result, timeout=1800.0)
+                    await asyncio.wait_for(result, timeout=3600.0)
             except (asyncio.TimeoutError, TimeoutError):
-                logger.warning("generation queue task timed out (exceeded 30 minutes) | job_id=%s", (task or {}).get("job_id"))
+                logger.warning("generation queue task timed out (exceeded 60 minutes) | job_id=%s", (task or {}).get("job_id"))
                 job_id = str(task.get("job_id") or "")
-                await asyncio.to_thread(_finish_task, job_id, status="failed", error="Task execution exceeded 30 minutes. Timed out.", only_if_running=True)
+                await asyncio.to_thread(_finish_task, job_id, status="failed", error="Task execution exceeded 60 minutes. Timed out.", only_if_running=True)
                 continue
             finalized = await asyncio.to_thread(_finish_task, task["job_id"], status="completed")
             if not finalized:

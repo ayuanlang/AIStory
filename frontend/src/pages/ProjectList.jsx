@@ -29,7 +29,7 @@ import {
     getKieStandardValueOptions,
     fetchMe as fetchMeApi,
 } from '../services/api';
-import { BASE_URL, ASSET_BASE_URL } from '../config';
+import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import Editor from './Editor';
 import SettingsPage from './Settings';
 import AssetsLibrary from '../components/AssetsLibrary';
@@ -107,14 +107,47 @@ const cinematicImages = [
     "https://images.unsplash.com/photo-1517602302552-471fe67acf66?w=500&q=80", // Vibes
 ];
 
-const getAvatarUrl = (url) => {
-    if (!url) return '';
-    if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
-    if (url.startsWith('/')) {
-        const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
-        return `${base}${url}`;
+const normalizeExternalMediaUrl = (url) => {
+    const stable = String(url || '').trim();
+    if (!stable) return '';
+
+    if (/^[A-Za-z0-9.-]+\.(clouddn\.com|qiniucs\.com)\//i.test(stable)) {
+        return `https://${stable}`;
     }
-    return url;
+    if (/^http:\/\//i.test(stable) && /(clouddn\.com|qiniucs\.com)/i.test(stable)) {
+        return stable.replace(/^http:\/\//i, 'https://');
+    }
+    return stable;
+};
+
+const resolveMediaUrl = (url) => {
+    const normalized = normalizeExternalMediaUrl(url);
+    if (!normalized) return '';
+    if (normalized.startsWith('http') || normalized.startsWith('blob:') || normalized.startsWith('data:')) {
+        return normalized;
+    }
+    if (normalized.startsWith('/')) {
+        const baseRaw = String(ASSET_BASE_URL || BASE_URL || '').trim();
+        const base = baseRaw.endsWith('/') ? baseRaw.slice(0, -1) : baseRaw;
+        return `${base}${normalized}`;
+    }
+    return normalized;
+};
+
+const resolveProjectListImageUrl = (url) => {
+    const directUrl = resolveMediaUrl(url);
+    if (!directUrl) return '';
+    if (directUrl.startsWith('blob:') || directUrl.startsWith('data:')) {
+        return directUrl;
+    }
+
+    const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+    const isSameOrigin = currentOrigin && directUrl.startsWith(currentOrigin);
+    if (isSameOrigin || !/^https?:\/\//i.test(directUrl)) {
+        return directUrl;
+    }
+
+    return `${API_URL}/assets/proxy?url=${encodeURIComponent(directUrl)}`;
 };
 
 const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
@@ -449,7 +482,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [projectCreateOptions, setProjectCreateOptions] = useState(PROJECT_CREATE_DEFAULT_OPTIONS);
     const [newType, setNewType] = useState('');
     const [newCountryRegion, setNewCountryRegion] = useState('');
-    const [newExpectedDuration, setNewExpectedDuration] = useState('60');
+    const [newExpectedDuration, setNewExpectedDuration] = useState('');
     const [newLanguage, setNewLanguage] = useState('');
     const [newBasePositioning, setNewBasePositioning] = useState('');
     const [newAspectRatio, setNewAspectRatio] = useState('');
@@ -763,7 +796,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         setNewReviewerUsers('');
         setNewType('');
         setNewCountryRegion('');
-        setNewExpectedDuration('60');
+        setNewExpectedDuration('');
         setNewLanguage('');
         setNewBasePositioning('');
         setNewAspectRatio('');
@@ -1550,16 +1583,16 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
                 <div className="mt-auto border-t pt-6">
                     <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'} px-2 mb-4`}>
-                        <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center">
+                        <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center relative overflow-hidden">
+                            <User className="w-5 h-5 text-muted-foreground" />
                             {currentUser?.avatar_url ? (
                                 <img
-                                    src={getAvatarUrl(currentUser.avatar_url)}
+                                    src={resolveProjectListImageUrl(currentUser.avatar_url)}
                                     alt={currentUser?.full_name || currentUser?.username || 'avatar'}
-                                    className="w-10 h-10 rounded-full object-cover"
+                                    className="absolute inset-0 w-10 h-10 rounded-full object-cover"
+                                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                 />
-                            ) : (
-                                <User className="w-5 h-5 text-muted-foreground" />
-                            )}
+                            ) : null}
                         </div>
                         {!isSidebarCollapsed && (
                             <div className="flex-1 overflow-hidden">
@@ -1624,16 +1657,16 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
                 <div className="mt-5 border-t border-white/10 pt-5">
                     <div className="flex items-center gap-3 px-1 mb-4">
-                        <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center overflow-hidden">
+                        <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center overflow-hidden relative">
+                            <User className="w-5 h-5 text-muted-foreground" />
                             {currentUser?.avatar_url ? (
                                 <img
-                                    src={getAvatarUrl(currentUser.avatar_url)}
+                                    src={resolveProjectListImageUrl(currentUser.avatar_url)}
                                     alt={currentUser?.full_name || currentUser?.username || 'avatar'}
-                                    className="w-10 h-10 object-cover"
+                                    className="absolute inset-0 w-10 h-10 object-cover"
+                                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                 />
-                            ) : (
-                                <User className="w-5 h-5 text-muted-foreground" />
-                            )}
+                            ) : null}
                         </div>
                         <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium truncate">{currentUser?.full_name || currentUser?.username || t('访客用户', 'Guest User')}</p>
@@ -2077,7 +2110,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                        {/* Cover Image or Fallback */}
                                                        {p.cover_image && (
                                                            <img 
-                                                               src={p.cover_image.startsWith('http') ? p.cover_image : `${ASSET_BASE_URL}${p.cover_image}`} 
+                                                               src={resolveProjectListImageUrl(p.cover_image)} 
                                                                alt={p.title} 
                                                                className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 z-10"
                                                                onError={(e) => { e.target.style.display = 'none'; }}

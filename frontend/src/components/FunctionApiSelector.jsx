@@ -60,8 +60,8 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
                 className="w-full bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none focus:border-primary/50 min-w-[120px]"
             >
                       <option value="" disabled>{tUI('选择 API...', 'Select API...')}</option>
-                {apiList.map(api => (
-                    <option key={api.system_api_id} value={api.system_api_id}>
+                {apiList.map((api, index) => (
+                    <option key={`${api.system_api_id}-${index}`} value={api.system_api_id}>
 
                         {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}
 

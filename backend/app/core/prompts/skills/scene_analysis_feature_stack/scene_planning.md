@@ -98,9 +98,8 @@
 #### 2. 必须处理的“特殊场景”
 > **【高优分析与输出要求】**：在分析阶段，必须全扫剧本**逐条明确研判**以下几类特殊剧情场景。**不管有无或是否需要修改，都必须在最终输出表格之前的【剧本改编补充说明】中逐条、统一、明确地交代研判的结果与原因**；若判定为“有”且需处理，则必须在该说明中详尽写出具体的视觉化转译与处理结果（对应的细微动态交互也需顺步融入到 `Adapted Script Text` 列中）。
 
-- **断裂衔接与不合理跳跃场景**：如有不合理的、断裂的情节衔接，或者缺乏逻辑铺垫的生硬转折，必须积极主动地补充情节桥段与视听细节，将剧情平滑、合理地衔接起来。
 - **多人同框与群像场景（极其重要）**：对于涵盖三人及以上的剧情角色同处于一个空间的多人场景，必须强制在剧本改编中明确补充这些核心角色的合理空间站位与相互位置关系（如：角色A坐在沙发中央，角色B在左侧靠窗，角色C站在右后方吧台边）。绝不能让角色在空间中呈现无序、漂浮或悬空的“隐形”状态，确保他们之间的相对位置符合现实物理空间逻辑和接下来的对话/动作交互需要。
-- **移动智能设备通讯场景（主要针对手机等可移动、且正反视角差异极大的设备）**：当涉及此类设备交互时，必须强制补充设备的正反面朝向与屏幕UI等视觉表现。在空间持握状态上：常规阅读或交互时，必须明确补充“角色将手机拿在手上观看/操作”的动作；若是直播、视频通话等固定位置场景，必须强制补充“手机支架”或“自拍杆”等起支撑作用的辅助道具。**注意：所有这些补充的支撑辅件，也必须严格遵守下游的“道具提取规范”进行独立的实体抽取与建档。**
+- **移动智能设备通讯与直播场景（主要针对手机等视听交互设备）**：当涉及此类设备交互时，必须强制补充设备的正反面朝向与屏幕UI等视觉表现。**特别强调“手机直播”场次：必须将手机直播当成“人与手机对话”的双向物理正反打来调度并建立完整的“互打互动环境”**（包括主播视角、手机镜头/观众视角的环境背景、面部补光灯、反射在脸上的屏幕微光、支架与人之间的空间距离构图）。在空间持握状态上：常规交互时，明确补充“角色拿手机观看/操作”的动作；若是直播、视频通话等固定机位，必须强制补充“手机支架”、“补光灯环”等支撑和照明辅助道具。**注意：所有这些补充的支撑配件，也必须严格遵守下游的“道具提取规范”进行独立的实体抽取与建档。**
 - **隐藏心理与暗示场景**：剧本中用心理描写或抽象语言表达的“隐藏信息”，必须强制补充可视化的转译（如人物的下意识肢体动作、特定道具属性的特写变化或环境互动的隐喻）。
 - **环境切换与视角跨越（含正反环境/环绕）场景**：只要情节中发生视角环绕、角色大跨度走位或对话正反打等导致【背景环境将要发生明显改变】（即后续必须拆分提取不同的衍生环境变体/正反环境），你就必须在剧本改编（Adapted Script Text）中明确添加视觉线索和环境描写。必须通过文字显式交代出背景的变化过程（例如“镜头转至角色背后，大楼和霓虹灯映入眼帘”），绝不能在纸面剧本里毫无交代，却在后续划分 Beat 时凭空切出新环境。
 - **方向性位移动作场景**：凡剧本出现“走过、跑过、进入、离开、冲出、拐入”等方向性动作，必须在改编文本中直接补写来去方向（起点、路径或边界、终点），并优先相对环境锚点实体表达（如门框、窗、主桌、吧台、楼梯口），确保在进入 Beat 之前就已经具备可拍摄的空间位移闭环。
@@ -225,12 +224,12 @@
 > **反例（禁止）**：将"角色A俯身抓起杯子并起身"拆为三个 Beat——三个动作主体不变、时空连续，属于无依据拆分，必须合并。
 > **正例（正确）**：A说完一段话（Beat-说话方）→ B皱眉做出反应（Beat-切换至B）→ A见状迈步靠近（Beat-切回A）——每次都伴随核心主体切换，拆分合理。
 
-- **单极视角法则（核心主体锁定）**：每个 Beat 必须锁定一个"核心表演主体"（单人或紧密互动小组，建议 1~2 人，最多不超过 4 人）。同一 Beat 的空间调度、动作交互、镜头观察方向必须围绕该主体建立，不得在一个 Beat 内并列多个无主次的表演中心。
+- **单极视角法则（核心主体绝对唯一锁定）**：每个 Beat 必须严格锁定一个"核心表演主体"（单一角色或单个核心对象）。**除了场景的最初建置（即该场景的首个交代大环境与全员关系的建置 Beat）允许包含“多人同框站位”描述外，在建置完毕后的所有剧情发展 Beat 中，必须严格按逐个独立的表演主体分拆描述，绝对不得再出现多人同框（不允许多极视角并存）！** 同一 Beat 的空间调度、动作交互、镜头观察方向必须完完全全围绕这唯一的单人主体建立。
 
 - **主体-环境三层关系强制描述**：每个 Beat 都必须明确写出核心主体与环境实体的三层关系，缺一即视为不合格：
   1. **容器层（主体处于哪个环境）**：主体当前落在 `ENV:[...]` 的哪个环境容器中，且该环境必须来自本场 `Env Anchor/Dependent Envs`。**注意：单个 Beat 绝对不允许同时处于多个环境中，`ENV:[...]` 只能填写一个明确的当前环境（如需切换环境必须切分 Beat）。**
   2. **机位层（从哪里看向哪里）**：用固定句式写清 Observer View，说明观察起点与观察目标。
-  3. **舞台层（主体在环境内的绝对落位）**：在 `{空间:...}` 中写明主体在该环境的具体位置、朝向、与关键实体的距离关系。
+  3. **舞台层（主体在环境内的绝对落位与全场景定点）**：在 `{空间:...}` 中必须从零开始精确写明主体及相关人员在该环境的具体绝对位置、身体朝向、与关键实体的距离关系，绝不可因上文写过而省略。
 
 - **主体切换与出入画法则**：当连续 Beat 发生核心表演主体切换时，必须显式交代上一主体如何出画、新主体如何入画，并在 `[Beat切换说明]` 中明确采用的过渡手法。禁止"上一 Beat 在 A 点，下一 Beat 无交代出现在 B 点"的硬切跃迁。
 
@@ -249,7 +248,7 @@
   - 若 Observer View 发生环绕、反向、越轴等大幅方位变化，必须同步切换对应环境变体并补齐 Subject Index。
   - 当 Beat 涉及切换到另一个环境（含同场景衍生变体），在 Observer View 及随后的 `{空间}`、`{主体关系}` 中必须重新进行建置说明，明确交代新环境下的视角与空间落位。
 
-- **核心主体与环境的"绝对落位"规范**：在 `{空间:...}` 与 `{主体关系:...}` 中，至少覆盖：主体在环境中的绝对位置（如门内左侧 1m）、身体朝向（朝向谁/背向谁）、与关键实体的相对距离，以及多人同框时的左右前后层次（FG/MG/BG）与相互朝向。
+- **核心主体与环境的"绝对落位"解耦规范（绝对独立法则）**：不仅在环境切换时，即便是同一环境内的连续动作，**每个 Beat 开始时，也都得先从零交代当前画面内所有实体的绝对空间位置关系。绝不能因为之前 Beat 描述过就省略或简写（严禁使用“位置同上”、“保持现状”或不提位置直接写动作）。所有 Beat 描述间必须保证绝对的独立闭环。** 在 `{空间:...}` 与 `{主体关系:...}` 中，至少要覆盖：主体在环境中的绝对位置（如门内左侧 1m）、身体朝向（朝向谁/背向谁）、与关键实体的相对距离，以及多人同框时的左右前后层次（FG/MG/BG）与相互朝向。
 
 - **环境锚点优先定位规则**：每个环境在本场首次使用时，必须先指定一个稳定可复用的"锚点实体"（优先：门/窗/主桌/吧台/楼梯口等大型固定实体）。此后同一环境中的所有落位与移动都先相对该锚点描述。环境切换到变体时，必须重新声明该变体的锚点实体。
 
@@ -264,7 +263,7 @@
 - **表达指引 02（三层关系一次写清）**：在同一 Beat 内连续写清容器层（ENV 单个环境，禁止填多个）、机位层（Observer View）、舞台层（绝对落位）。
 - **表达指引 03（Observer View 规范表达）**：持续使用固定句式 `[Observer View: 在 ENV:[单个环境名称], 由 <位置/实体> 观察向 <方向/实体>的<朝向>]`。
 - **表达指引 04（朝向与距离具体化）**：优先写"正面/侧面/背面"等朝向，并补充关键距离（如 1m、2m）。
-- **表达指引 05（多人同框矩阵化）**：多人场景用"左/右、前/中/后、谁朝向谁"的矩阵表达。
+- **表达指引 05（建置期全员矩阵与后续强制单极分拆）**：仅在场景建置的首个 Beat 中，使用"左/右、前/中/后、谁朝向谁"的矩阵表达全员站位。后续所有 Beat 强制按单个角色的动作和反应分拆为单人主体描述。
 - **表达指引 06（主体切换连续化）**：主体切换时，完整描述"出画路径 + 入画路径 + 过渡方式"。
 - **表达指引 07（环境切换可视化）**：当朝向或背景变化时，同步切换对应环境变体，并在文本中显式体现切换依据。
 - **表达指引 08（正反打分视角）**：对话场景为双方提供独立视角与对应环境，保持信息对称、情绪对位和空间一致。
@@ -294,7 +293,7 @@
   - **画外音与内心独白**：当存在画外音(O.S.)或内心独白(V.O.)时，画面中出现的所有角色必须明确描述为“紧闭双唇”状态，并配合动作或眼神给出相应的反应微表情。
   - **标准表达模板（强制套用）**：在描述 `{微表情与动作变化: ...}` 时，凡涉及多角色的画面必须使用类似以下固定模式串联：`[说话人]开口讲话，(voice_type:[声音类型], tone:[语调], speed:[语速], volume:[音量])，表情[微表情细节描述]并伴随{对白:"逐字完整台词"}口型同步；[其余人]紧闭双唇，表情[反应微表情细节描述]地[注视/倾听/做某微动作]。`（若为画外音或纯空镜，则直接描述为 `所有角色紧闭双唇，表情...`）。
 
-### 六、输出模板（严格）
+### 七、输出模板（严格）
 
 - 仅输出最终结果，不含 conversational text。
 - 输出前必须移除推理语句、`<think>` 与代码围栏。
@@ -316,7 +315,7 @@
 - **【戏剧结构-闪回桥接】**：本场无闪回，无需处理。若存在闪回进入/退出，请明确列出以何种明显视觉方式（特定道具/图形相似/遮挡/以及其他明确的设计）完成时空过渡。
 - **【特殊场景-长对白破局】**：冗长对话（指同一角色的连续单口长对白或静止说教、独白超过2句话、约30个中文字，或两人在同一景别下站桩对话没有伴随身体移动超过2个来回的情况）部分必须进行镜头切分，并补充听者的 Reaction（反应镜头）微表情与说话人的踱步、走位等空间调度。
 - **【特殊场景-多人同框与群像】**：本场为三人会议，已在背景描述中明确补充了三人围绕圆桌的左、中、右具体方位和距离关系（见改编剧本首段）。（注：若仅为两人或单人戏，则写：本场仅单/两人戏，无需额外群像空间梳理的补充）。
-- **【特殊场景-移动设备】**：手机通话场景补充了设备的正反面朝向与UI界面亮起细节。
+- **【特殊场景-移动智能设备】**：手机通话场景补充了设备的正反面朝向与UI界面亮起细节；对于手机直播场景，已将其作为“人与手机对话”的正反打互打环境进行了视听调度，补充了面部补光灯与手机支架等环境细节。
 - **【特殊场景-隐藏心理】**：内心描写的“他很烦躁”已转译为“手指快速敲击桌面”。
 - **【特殊场景-环境切换与视角跨越】**：剧情中有角色从室内走到窗边的环绕调度，已在剧本正文中明确增写“镜头转至窗边，刺眼的霓虹灯涌入画面”的环境变化线索。
 - **【特殊场景-方向性位移动作】**：凡“走过、跑过、进入、离开、冲出、拐入”等动作，已在改编文本中补齐来去方向并写清起点、路径边界与终点（如“CHAR:[@A]从吧台左侧沿过道穿行至门框内侧，推门冲出到走廊右侧”）。
@@ -346,7 +345,7 @@
     - **{主体关系:...}**：使用自然叙述句写清核心对象与其他角色/实体的相对关系，优先体现“谁面对谁、谁在前后景、谁形成压迫或回避态势”（如 `CHAR:[@Lin Suit]与CHAR:[@Dr. Chen]隔桌对视，Lin前倾施压，Dr.Chen后靠稳住节奏`）。
     - **{环境交互:...}**：使用自然叙述句描述角色与环境或 `PROP:[...]` 的接触动作和过程，尽量体现动作的起势与收势（如 `CHAR:[@Lin Suit]右手拇指轻推PROP:[Silver Lighter]的翻盖，火轮擦响后又迅速合拢`）。如无显著交互可写“无”，但不可省略槽位。
     - **{方向性位移动作编写要求:...}**：若本 Beat 含“走过、跑过、进入、离开、冲出、拐入、穿过”等方向性动作，必须在 `{空间}` 或 `{环境交互}` 中明确写出“起点 + 路径/边界 + 终点”，且起终点优先相对本环境锚点实体表达（如门框、窗、主桌、吧台、楼梯口）。禁止仅写“角色A跑向门口”。
-    - **{微表情与对白动作:...}**：强制交代当前画内所有角色的状态；必须严格套用“口型防混淆”的多角色开口或闭嘴倾听标准模板。若有对白/旁白/画外音，必须显式包含语音字段 `(voice_type, tone, speed, volume)` 且在中文项目使用中文枚举值；若无对白，则全部描述为紧闭双唇及表情动作。
+    - **{微表情与对白动作:...}**：强制交代当前画内所有角色的状态；必须严格套用“口型防混淆”的多角色开口或闭嘴倾听标准模板。若有对白/旁白/画外音，必须显式包含语音字段 `(voice_type, tone, speed, volume)` 且在中文项目使用中文枚举值；若无对白，则全部描述为紧闭双唇及（或无对其特写的则写默认）表情动作。
     - **{对白:...}**：原名台词的逐字摘录并严格置于说话人的描述中（如 `{对白:"我没病"}`，无对白则此插槽可整体省略或填无），**尤其注意：剧本中的对白、旁白、画外音（O.S.）、内心独白（V.O.）等所有语言内容，必须逐字完整、绝不省略地输出，绝对禁止使用“……”等省略号跳过！**。
     - **-> {结果动作/动作余势}**：本 Beat 微动作的直接收尾形体状态或受方的即时物理反应。
     - **[状态触发: ...]**：本 Beat 在情感、氛围或剧情推进上引发了什么微小质变。
@@ -372,20 +371,22 @@
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Adapted Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01 | EP01_SC01 | 1 | 诊所对谈 | 30s | **{Env Anchor}**: ENV:[Office Front], ENV:[Office Reverse], ENV:[Memory Alley]。<br>**{Dependent Envs}**: ENV:[Office Reverse] 是 ENV:[Office Front] 的衍生变体。ENV:[Memory Alley]是闪回环境。<br>**{Environment Context}**: ENV:[Office Front] 午后逆光，Stage为办公桌前的客椅区；ENV:[Office Reverse] 阴影笼罩，Stage为办公桌后的医生坐席区；ENV:[Memory Alley] 阴暗雨夜，Stage为狭窄巷道。<br>**{Plot Stage}**: 【建置】。<br>**{Plot Summary}**: Lin Suit 首次约见心理医生，被勾起雨夜惨案回忆。<br>**{Previous Scene Summary}**: 无，开场首戏。<br>**{Transition Strategy}**: 开场使用危机道具极端特写切入（点燃的打火机特写），以焦躁的把玩动作隐喻主角隐秘的心理创伤与高度防备，奠定对立压抑的悬疑基调。<br>**{Plot Coverage}**: 完整覆盖第一次对话的对立交锋。<br>**{Scene Subjects}**: CHAR:[@Lin Suit], CHAR:[@Dr. Chen], CHAR:[@Shadow Killer], ENV:[Office Front], ENV:[Office Reverse], ENV:[Memory Alley], PROP:[Silver Lighter]。<br>**{Beats}**:<br>Beat 1: **对话**: 试探。[Beat切换说明: 开场首镜入镜无需过渡；离镜起势：本镜结尾Lin Suit猛地抬头死死盯住医生，视线如刀般刺向镜头，为下一镜的视线相交转场给出极强的动作引导]<br> [Observer View: 在 ENV:[Office Front], 由 CHAR:[@Dr. Chen] 的右后侧 观察向 CHAR:[@Lin Suit] 的正面] {空间:CHAR:[@Lin Suit]坐在ENV:[Office Front]办公桌前的客椅中央，身体正对CHAR:[@Dr. Chen]，两人之间约1米}；{主体关系:CHAR:[@Lin Suit]前倾半步形成压迫感，CHAR:[@Dr. Chen]保持坐姿后靠，用稳定视线与其对峙}；{环境交互:CHAR:[@Lin Suit]右手持续把玩PROP:[Silver Lighter]，拇指轻推翻盖后又合拢，金属开合声在安静房间里被放大}；{微表情与对白动作:CHAR:[@Lin Suit]开口讲话，(voice_type:低沉男声, tone:冷峻克制, speed:慢速, volume:低声)，表情眼神冰冷并伴随{对白:"我没病"}口型同步；CHAR:[@Dr. Chen]紧闭双唇，表情克制地倾听，画面定格于Lin Suit抬眼死盯医生的面部特写} -> {视线如刀切出} [状态触发: 建立防备]<br>Beat 2: **对话**: 试探回应。[Beat切换说明: 入镜承接：承接上一镜Lin的凶狠视线，本镜头以Dr.Chen的正面特写反打接回，视线高度吻合碰撞完成对等转场；离镜起势：本镜结尾Dr.Chen松开交叉的双手，将手中的钢笔重重丢向桌面，利用笔尖坠落的动势与清脆声效为下一镜闪回做引导铺垫]<br> [Observer View: 在 ENV:[Office Reverse], 由 CHAR:[@Lin Suit] 的左前侧 观察向 CHAR:[@Dr. Chen] 的正面] {空间:CHAR:[@Dr. Chen]坐在ENV:[Office Reverse]办公桌后的主位，背后靠近书柜，身体朝向CHAR:[@Lin Suit]，两人隔桌对望}；{主体关系:办公桌形成双方之间的物理边界，CHAR:[@Dr. Chen]处于中景中心稳住节奏，CHAR:[@Lin Suit]在前景边缘维持压迫}；{环境交互:CHAR:[@Dr. Chen]双手交叉放在桌面边缘，指节轻微收紧后放下钢笔，钢笔清脆的敲击桌面声引发主角应激}；{微表情与对白动作:CHAR:[@Dr. Chen]紧闭双唇，表情深沉地注视；CHAR:[@Lin Suit]紧闭双唇，眼神瞳孔剧烈震颤，画面定格于坠落并在桌面弹跳的钢笔特写} -> {钢笔坠落声效切出} [状态触发: 记忆闪回]<br>Beat 3: **过渡Beat/闪回**: 雨夜梦魇。[Beat切换说明: 入镜承接：承接钢笔坠落在桌面的残影与清脆声效，本镜首帧以一颗在水坑中激烈跳动的金属弹壳特写相似图形对等切入，伴随暴雷声完成无缝转场；离镜起势：随后镜头猛拉至全景，黑影迈出脚步，为后续追逐大动势留足动作导向]<br> [Observer View: 在 ENV:[Memory Alley], 由 巷道上方 观察向 CHAR:[@Lin Suit] 的头顶] {空间:CHAR:[@Lin Suit]跪倒在ENV:[Memory Alley]的逼仄巷道泥水中，浑身湿透}；{主体关系:CHAR:[@Shadow Killer]站在前方五米处，仅露出一双皮鞋的黑影，在前景形成巨大压迫}；{环境交互:雨水疯狂拍打地面，CHAR:[@Lin Suit]双手死死撑在水洼中，身体因痛苦与寒冷而抽搐}；{微表情与对白动作:CHAR:[@Shadow Killer]紧闭双唇，(脚尖缓缓转动)；CHAR:[@Lin Suit]牙关紧咬，表情极度痛苦扭曲，没有对白，画面定格于跨出脚步的黑影皮鞋局部特写} -> {皮鞋踏出一拍切出} [状态触发: 创伤爆发] | (改编剧本: 林警官坐在对面，把玩着银色打火机，眼神冰冷。“我没病。”他冷冷盯着医生，猛地抬眼死死盯住对方。医生坐在办公桌后，深沉地注视着他，随后松开双手将手中钢笔丢向桌面。“嗒”的一声脆响，犹如一颗坠落的弹壳，瞬间将林警官扯入失控的旋涡。十年前大雨滂沱的暗巷中，弹壳在水洼里弹跳，前方黑影的皮鞋正一步步逼近，浑身颤抖，画面定格在跨出的黑皮鞋上。) | `Office Front, Office Reverse, Memory Alley` | `NEW, VARIANT_OF:Office Front, NEW` | `None, Office Front, None` | `None, 视角反转, 场景闪回` | `Lin Suit落座` | `创伤爆发` | `CHAR:[@Lin Suit], CHAR:[@Dr. Chen], CHAR:[@Shadow Killer]` | `PROP:[Silver Lighter]` |
+| EP01 | EP01_SC01 | 1 | 诊所对谈 | 30s | **{Env Anchor}**: ENV:[Office Front], ENV:[Office Reverse], ENV:[Memory Alley]。<br>**{Dependent Envs}**: ENV:[Office Reverse] 是 ENV:[Office Front] 的衍生变体。ENV:[Memory Alley]是闪回环境。<br>**{Environment Context}**: ENV:[Office Front] 午后逆光，Stage为办公桌前的客椅区；ENV:[Office Reverse] 阴影笼罩，Stage为办公桌后的医生坐席区；ENV:[Memory Alley] 阴暗雨夜，Stage为狭窄巷道。<br>**{Plot Stage}**: 【建置】。<br>**{Plot Summary}**: Lin Suit 首次约见心理医生，被勾起雨夜惨案回忆。<br>**{Previous Scene Summary}**: 无，开场首戏。<br>**{Transition Strategy}**: 开场使用危机道具极端特写切入（点燃的打火机特写），以焦躁的把玩动作隐喻主角隐秘的心理创伤与高度防备，奠定对立压抑的悬疑基调。<br>**{Plot Coverage}**: 完整覆盖第一次对话的对立交锋。<br>**{Scene Subjects}**: CHAR:[@Lin Suit], CHAR:[@Dr. Chen], CHAR:[@Shadow Killer], ENV:[Office Front], ENV:[Office Reverse], ENV:[Memory Alley], PROP:[Silver Lighter]。<br>**{Beats}**:<br>Beat 1: **对话**: 试探。[Beat切换说明: 开场首镜入镜无需过渡；离镜起势：本镜结尾Lin Suit猛地抬头死死盯住医生，视线如刀般刺向镜头，为下一镜的视线相交转场给出极强的动作引导]<br> [Observer View: 在 ENV:[Office Front], 由 CHAR:[@Dr. Chen] 的右后侧 观察向 CHAR:[@Lin Suit] 的正面] {空间:CHAR:[@Lin Suit]坐在ENV:[Office Front]办公桌前的客椅中央，身体正对CHAR:[@Dr. Chen]，两人之间约1米}；{主体关系:CHAR:[@Lin Suit]前倾半步形成压迫感，CHAR:[@Dr. Chen]保持坐姿后靠，用稳定视线与其对峙}；{环境交互:CHAR:[@Lin Suit]右手持续把玩PROP:[Silver Lighter]，拇指轻推翻盖后又合拢，金属开合声在安静房间里被放大}；{微表情与对白动作:CHAR:[@Lin Suit]开口讲话，(voice_type:低沉男声, tone:冷峻克制, speed:慢速, volume:低声)，表情眼神冰冷并伴随{对白:"我没病"}口型同步；CHAR:[@Dr. Chen]紧闭双唇，表情克制地倾听，画面定格于Lin Suit抬眼死盯医生的面部特写} -> {视线如刀切出} [状态触发: 建立防备]<br>Beat 2: **对话**: 试探回应。[Beat切换说明: 入镜承接：承接上一镜Lin的凶狠视线，本镜头以Dr.Chen的正面特写反打接回，视线高度吻合碰撞完成对等转场；离镜起势：本镜结尾Dr.Chen松开交叉的双手，将手中的钢笔重重丢向桌面，利用笔尖坠落的动势与清脆声效为下一镜闪回做引导铺垫]<br> [Observer View: 在 ENV:[Office Reverse], 由 CHAR:[@Lin Suit] 的左前侧 观察向 CHAR:[@Dr. Chen] 的正面] {空间:CHAR:[@Dr. Chen]坐在ENV:[Office Reverse]办公桌后的主位，背后靠近书柜，身体朝向CHAR:[@Lin Suit]，两人隔桌对望}；{主体关系:办公桌形成双方之间的物理边界，CHAR:[@Dr. Chen]处于中景中心稳住节奏，CHAR:[@Lin Suit]在前景边缘维持压迫}；{环境交互:CHAR:[@Dr. Chen]双手交叉放在桌面边缘，指节轻微收紧后放下钢笔，钢笔清脆的敲击桌面声引发主角应激}；{微表情与对白动作:CHAR:[@Dr. Chen]紧闭双唇，表情深沉地注视；CHAR:[@Lin Suit]紧闭双唇，表情眼神瞳孔剧烈震颤地注视，画面定格于坠落并在桌面弹跳的钢笔特写} -> {钢笔坠落声效切出} [状态触发: 记忆闪回]<br>Beat 3: **过渡Beat/闪回**: 雨夜梦魇。[Beat切换说明: 入镜承接：承接钢笔坠落在桌面的残影与清脆声效，本镜首帧以一颗在水坑中激烈跳动的金属弹壳特写相似图形对等切入，伴随暴雷声完成无缝转场；离镜起势：随后镜头猛拉至全景，黑影迈出脚步，为后续追逐大动势留足动作导向]<br> [Observer View: 在 ENV:[Memory Alley], 由 巷道上方 观察向 CHAR:[@Lin Suit] 的头顶] {空间:CHAR:[@Lin Suit]跪倒在ENV:[Memory Alley]的逼仄巷道泥水中，浑身湿透}；{主体关系:CHAR:[@Shadow Killer]站在前方五米处，仅露出一双皮鞋的黑影，在前景形成巨大压迫}；{环境交互:雨水疯狂拍打地面，CHAR:[@Lin Suit]双手死死撑在水洼中，身体因痛苦与寒冷而抽搐}；{微表情与对白动作:CHAR:[@Shadow Killer]紧闭双唇，表情冷漠地做脚步碾压微动作；CHAR:[@Lin Suit]紧闭双唇，表情极度痛苦扭曲地抽搐，画面定格于跨出脚步的黑影皮鞋局部特写} -> {皮鞋踏出一拍切出} [状态触发: 创伤爆发] | (改编剧本: 林警官坐在对面，把玩着银色打火机，眼神冰冷。“我没病。”他冷冷盯着医生，猛地抬眼死死盯住对方。医生坐在办公桌后，深沉地注视着他，随后松开双手将手中钢笔丢向桌面。“嗒”的一声脆响，犹如一颗坠落的弹壳，瞬间将林警官扯入失控的旋涡。十年前大雨滂沱的暗巷中，弹壳在水洼里弹跳，前方黑影的皮鞋正一步步逼近，浑身颤抖，画面定格在跨出的黑皮鞋上。) | `Office Front, Office Reverse, Memory Alley` | `NEW, VARIANT_OF:Office Front, NEW` | `None, Office Front, None` | `None, 视角反转, 场景闪回` | `Lin Suit落座` | `创伤爆发` | `CHAR:[@Lin Suit], CHAR:[@Dr. Chen], CHAR:[@Shadow Killer]` | `PROP:[Silver Lighter]` |
 
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）
 - **分隔符强制要求**：在上方 Part 1 的 Scenes Table 彻底输出完毕后，**必须强制输出一条明显的分隔线 `---------`**。
 - **定位说明**：Subject Index 是实体设定集。明确要求**必须根据剧情进行实体高度总结与全局剧情定位，绝对禁止将明确有剧情的角色与具体的剧情、连贯动作交互与台词语言直接带入 entity_attributes**。
 - **【最高级别核对警告：实体绝对零遗漏底线】**：**绝对不允许 Subject Index 漏掉任何一个在 Scenes Table（特别是 Beats 中）提及的实体！** 在生成本表单前，你必须在脑内对刚刚写出的所有 Beats 进行一次**极其严苛的地毯式交叉比对**。哪怕只在某个 Beat 中作为背景或临时交互出现过一次的角色 (CHAR)、道具 (PROP) 或环境/环境变体 (ENV)，也**必须 100% 提取并独立列入 Subject Index 中**。凡是在 Beats 预演中因动作、环境切换、视角调度而反向新增加的衍生实体，必须被一字不漏地收录。**如果后续流转发现 Beats 中带标签的实体在 Subject Index 中找不到对应词条，将视为不可接受的重大事故！**
+- **封面海报作为压轴补充（不可遗漏）**：在确保所有剧本相关的角色、环境、环境变体、道具等**全部实体都已经完整提取并毫无遗漏**之后，`Subject Index` 列表的**最后一项，最后作为附加才输出**本剧本的全局封面海报（`cover_poster`）。封面海报的编号排在所有其他实体的最后，且必须确保它的优先度让位于其他剧情关联实体。
 - **模板锁定与字段增改**：每一行必须严格采用以下固定骨架，仅允许使用 `|` 作为分隔符，禁止任何 JSON/YAML 嵌套：
-  `subject_no=... | subject_type=... | subject_name_zh=... | subject_name_en=... | dependency_reference=... | entity_attributes=... | script_entity_coverage=...`
+  `subject_no=... | subject_type=... | subject_name_zh=... | subject_name_en=... | base_name_en=... | dependency_reference=... | entity_attributes=... | script_entity_coverage=...`
 - **字段规范**：
   - `subject_no`：全局唯一连续编号（建议 `S001...`）。
   - `subject_type`：允许 `character`、`prop`、`environment`、`cover_poster`（全局封面海报）。
   - `subject_name_zh`：实体的中文名称。
   - `subject_name_en`：实体的英文名称，作为后续流转的唯一主键核心名称，**不需要带 `CHAR:[@...]` / `PROP:[...]` / `ENV:[...]` 这类前缀包装**（注：只需与 Part 1 内部对应的核心英文名称一致即可。对于封面海报可固定使用 `Project Cover Poster`。若名称包含空格请直接保留原始空格，绝不要用下划线 `_` 替代，如直接写 `Office Front`）。
+  - `base_name_en`：实体的基础英文名称。**不考虑状态、角度等衍生实体的原始基础名称**。例如，同一角色在不同状态下的拆分实体，其该列都应填入统一个基础角色名称；同一基础环境在不同视角下的衍生环境，其该列都应填入同一个基础环境名称。如属完全独立的基础实体则与 `subject_name_en` 保持一致，对于封面海报可固定填写 `Project Cover Poster`。
   - **`dependency_reference`（依赖继承声明）**：若该实体是某已有实体的衍生变体（如正反打的对立环境），填入其依赖的 Base 实体核心英文名（无需前缀）；若是独立新建实体则填 `None`。**特别注意：封面海报（cover_poster）必须存在依赖，其 `dependency_reference` 绝对不能为 `None`，必须明确列出构成该封面的核心角色、道具或环境的英文名（如 `Lin Suit, Silver Lighter`）。**
   - **`entity_attributes`（实体特征与定位）**：
     - **角色**：重点提取是否为主角、阵营（正派/反派/中立），以及身份、性别、年龄、种族、个性特征、职业，还有在剧中的核心总体剧情定位。**不需要进行具体的外貌、衣服、饰品的描述（除非剧本中有明确提及）**；若剧本有提，可加入标志性随身物品及习惯动作。**绝对禁止写入角色在该场戏里的具体动作、剧情推进内容、转瞬即逝的表情或台词句子。**
@@ -396,13 +397,13 @@
   - `script_entity_coverage`：写明来源于原剧本的具体名词；若为覆盖了剧本散落物件的环境，需列举具体包含物（如 `剧本实体：客厅；沙发; 墙上挂钟`）。
 
 - **输出示例（禁止照抄具体值，仅做语法参考）**：
-  1. `subject_no=S001 | subject_type=character | subject_name_zh=林总 | subject_name_en=Lin Suit | dependency_reference=None | entity_attributes=阵营：反派主角。身份/职业：掌握生杀大权的集团总裁。性别/年龄/种族：30岁亚裔男性。个性特征：性格冷峻，习惯施压。服装基调（剧本明确提及）：深灰细条纹高定制西装。标志性随身物品：银色打火机。 | script_entity_coverage=剧本实体：林总（主语“他”）`
-  2. `subject_no=S002 | subject_type=environment | subject_name_zh=街道人群状态 | subject_name_en=Street with Crowd | dependency_reference=None | entity_attributes=繁华商业街环境。材质清晰考究，光影具有纵深分层。剧中定位为公共开阔空间。Viewpoint Anchor & Observer View: 观察者从街道转角处路标向宽阔街道看去的视角。Primary Subject: 街道中心巨大的全息广告牌。FG(前景): 路标与正在穿行的无面目路人（作为背景氛围）；MG(中景): 拥挤的街道、广告牌与两侧商铺；BG(后景): 远处高楼轮廓。Stage(舞台): 广告牌下方的水泥路面。 | script_entity_coverage=剧本实体：<街道>; <路人>; <招牌>`
-  3. `subject_no=S003 | subject_type=environment | subject_name_zh=街道清场状态 | subject_name_en=Street Empty | dependency_reference=Street with Crowd | entity_attributes=繁华商业街环境的清场空无一人状态。阴影笼罩，压抑感强。Viewpoint Anchor & Observer View: 观察者从街道转角处路标向宽阔街道看去的视角。Primary Subject: 街道中心巨大的全息广告牌。FG(前景): 孤零零的路标；MG(中景): 绝对空旷无人的街道、广告牌；BG(后景): 远处高楼轮廓。Stage(舞台): 广告牌下方的水泥路面。 | script_entity_coverage=剧本实体：<空无一人的街道>`
-  4. `subject_no=S004 | subject_type=environment | subject_name_zh=办公室废墟状态 | subject_name_en=Office Ruined | dependency_reference=Office Front | entity_attributes=现代极简高管办公室被严重破坏后的废墟状态（重大物理改变）。Viewpoint Anchor & Observer View: 观察者从被砸碎的办公室大门框向内朝核心区看入的视角。Primary Subject: 碎裂的黑胡桃木办公桌。FG(前景): 挂满玻璃渣的门边；MG(中景): 被斩断桌角的办公桌与倒地的皮椅；BG(后景): 破掉的大洞百叶窗。Stage(舞台): 杂乱的碎玻璃地毯区。 | script_entity_coverage=剧本实体：<被砸烂的办公室>`
-  5. `subject_no=S005 | subject_type=character | subject_name_zh=医生 | subject_name_en=Dr. Chen | dependency_reference=None | entity_attributes=阵营：中立。身份/职业：心理医生。性别/年龄：40岁亚裔男性。个性特征：沉稳专业，眼神锐利。服装基调：无框眼镜，浅色羊绒衫搭配休闲西装。 | script_entity_coverage=剧本实体：医生`
-  6. `subject_no=S006 | subject_type=prop | subject_name_zh=银色打火机 | subject_name_en=Silver Lighter | dependency_reference=None | entity_attributes=复古样式的银色金属打火机。体现角色情绪波动和施压的关键线索道具。 | script_entity_coverage=剧本实体：银色打火机`
-  7. `subject_no=S007 | subject_type=cover_poster | subject_name_zh=项目封面海报 | subject_name_en=Project Cover Poster | dependency_reference=Lin Suit, Silver Lighter | entity_attributes=画面主体：反派主角Lin Suit背对镜头惊悚回眸，单手把玩Silver Lighter置于前景。背景氛围：冷色调城市夜景，压抑悬疑。排版留白：上方深色无杂物留白用于放Title。 | script_entity_coverage=无（全局提炼元素）`
+  1. `subject_no=S001 | subject_type=character | subject_name_zh=林总 | subject_name_en=Lin Suit | base_name_en=Lin Suit | dependency_reference=None | entity_attributes=阵营：反派主角。身份/职业：掌握生杀大权的集团总裁。性别/年龄/种族：30岁亚裔男性。个性特征：性格冷峻，习惯施压。服装基调（剧本明确提及）：深灰细条纹高定制西装。标志性随身物品：银色打火机。 | script_entity_coverage=剧本实体：林总（主语“他”）`
+  2. `subject_no=S002 | subject_type=environment | subject_name_zh=街道人群状态 | subject_name_en=Street with Crowd | base_name_en=Street | dependency_reference=None | entity_attributes=繁华商业街环境。材质清晰考究，光影具有纵深分层。剧中定位为公共开阔空间。Viewpoint Anchor & Observer View: 观察者从街道转角处路标向宽阔街道看去的视角。Primary Subject: 街道中心巨大的全息广告牌。FG(前景): 路标与正在穿行的无面目路人（作为背景氛围）；MG(中景): 拥挤的街道、广告牌与两侧商铺；BG(后景): 远处高楼轮廓。Stage(舞台): 广告牌下方的水泥路面。 | script_entity_coverage=剧本实体：<街道>; <路人>; <招牌>`
+  3. `subject_no=S003 | subject_type=environment | subject_name_zh=街道清场状态 | subject_name_en=Street Empty | base_name_en=Street | dependency_reference=Street with Crowd | entity_attributes=繁华商业街环境的清场空无一人状态。阴影笼罩，压抑感强。Viewpoint Anchor & Observer View: 观察者从街道转角处路标向宽阔街道看去的视角。Primary Subject: 街道中心巨大的全息广告牌。FG(前景): 孤零零的路标；MG(中景): 绝对空旷无人的街道、广告牌；BG(后景): 远处高楼轮廓。Stage(舞台): 广告牌下方的水泥路面。 | script_entity_coverage=剧本实体：<空无一人的街道>`
+  4. `subject_no=S004 | subject_type=environment | subject_name_zh=办公室废墟状态 | subject_name_en=Office Ruined | base_name_en=Office | dependency_reference=Office Front | entity_attributes=现代极简高管办公室被严重破坏后的废墟状态（重大物理改变）。Viewpoint Anchor & Observer View: 观察者从被砸碎的办公室大门框向内朝核心区看入的视角。Primary Subject: 碎裂的黑胡桃木办公桌。FG(前景): 挂满玻璃渣的门边；MG(中景): 被斩断桌角的办公桌与倒地的皮椅；BG(后景): 破掉的大洞百叶窗。Stage(舞台): 杂乱的碎玻璃地毯区。 | script_entity_coverage=剧本实体：<被砸烂的办公室>`
+  5. `subject_no=S005 | subject_type=character | subject_name_zh=医生 | subject_name_en=Dr. Chen | base_name_en=Dr. Chen | dependency_reference=None | entity_attributes=阵营：中立。身份/职业：心理医生。性别/年龄：40岁亚裔男性。个性特征：沉稳专业，眼神锐利。服装基调：无框眼镜，浅色羊绒衫搭配休闲西装。 | script_entity_coverage=剧本实体：医生`
+  6. `subject_no=S006 | subject_type=prop | subject_name_zh=银色打火机 | subject_name_en=Silver Lighter | base_name_en=Silver Lighter | dependency_reference=None | entity_attributes=复古样式的银色金属打火机。体现角色情绪波动和施压的关键线索道具。 | script_entity_coverage=剧本实体：银色打火机`
+  7. `subject_no=S007 | subject_type=cover_poster | subject_name_zh=项目封面海报 | subject_name_en=Project Cover Poster | base_name_en=Project Cover Poster | dependency_reference=Lin Suit, Silver Lighter | entity_attributes=画面主体：反派主角Lin Suit背对镜头惊悚回眸，单手把玩Silver Lighter置于前景。背景氛围：冷色调城市夜景，压抑悬疑。排版留白：上方深色无杂物留白用于放Title。 | script_entity_coverage=无（全局提炼元素）`
 
 ### Project Visual Backfill（紧跟 Subject Index，使用 JSON 格式）
 - **分隔符强制要求**：在上方 Subject Index 彻底输出完毕后，**必须强制输出一条明显的分隔线 `---------`**，然后再开始输出本 JSON 模块。
