@@ -369,6 +369,35 @@ def _ensure_core_performance_indexes() -> None:
                 logger.warning("Index DDL failed (non-fatal): %s | err=%s", ddl, exc)
 
 
+def _ensure_entities_episode_scoped_unique_indexes(*, is_postgres: bool) -> None:
+    """Enforce entity uniqueness for project+episode+type+normalized-name at DB level."""
+    # Expression/partial unique indexes are supported by PostgreSQL and SQLite.
+    if not is_postgres and engine.dialect.name != "sqlite":
+        logger.info("Skip entity scoped unique index migration for dialect=%s", engine.dialect.name)
+        return
+
+    ddl_statements = [
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_entities_proj_ep_type_name_norm "
+            "ON entities (project_id, COALESCE(episode_id, -1), lower(trim(type)), lower(trim(name))) "
+            "WHERE name IS NOT NULL AND trim(name) <> ''"
+        ),
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_entities_proj_ep_type_name_en_norm "
+            "ON entities (project_id, COALESCE(episode_id, -1), lower(trim(type)), lower(trim(name_en))) "
+            "WHERE name_en IS NOT NULL AND trim(name_en) <> ''"
+        ),
+    ]
+
+    with engine.begin() as conn:
+        for ddl in ddl_statements:
+            try:
+                conn.execute(text(ddl))
+            except Exception as exc:
+                # Existing duplicate rows may block unique index creation; keep startup non-fatal.
+                logger.warning("Entity unique index migration failed (non-fatal): %s | err=%s", ddl, exc)
+
+
 def _should_manage_api_settings_on_init() -> bool:
     """
     Whether init/deploy flow is allowed to mutate API settings data records.
@@ -686,6 +715,11 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             _ensure_missing_table_columns("entities", models.Entity, is_postgres=is_postgres)
         except Exception as e:
             logger.error(f"Failed to ensure entities columns: {e}")
+
+        try:
+            _ensure_entities_episode_scoped_unique_indexes(is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure entity scoped unique indexes: {e}")
 
         try:
             if hasattr(models, "UserGroup"):

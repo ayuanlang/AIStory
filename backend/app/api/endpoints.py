@@ -15876,6 +15876,7 @@ def read_entities(
     project_id: int,
     type: Optional[str] = None,
     episode_id: Optional[int] = None,
+    include_project_null_episode: Optional[bool] = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -15885,7 +15886,10 @@ def read_entities(
     if type:
         query = query.filter(Entity.type == type)
     if episode_id is not None:
-        query = query.filter(Entity.episode_id == episode_id)
+        if bool(include_project_null_episode):
+            query = query.filter(or_(Entity.episode_id == episode_id, Entity.episode_id.is_(None)))
+        else:
+            query = query.filter(Entity.episode_id == episode_id)
     entities = query.all()
     repaired_entities = _repair_entities_image_urls_from_assets(db, current_user, project, entities)
 
@@ -15945,19 +15949,40 @@ def create_entity(
 ):
     project = _require_project_access(db, project_id, current_user)
 
+    if entity.episode_id is not None:
+        episode = db.query(Episode).filter(Episode.id == entity.episode_id).first()
+        if not episode or int(getattr(episode, "project_id", 0) or 0) != int(project_id):
+            raise HTTPException(status_code=400, detail="episode_id does not belong to this project")
+
     _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
 
-    name_conditions = [Entity.name == entity.name]
-    if entity.name:
-        name_conditions.append(Entity.name_en == entity.name)
-    if entity.name_en:
-        name_conditions.append(Entity.name == entity.name_en)
-        name_conditions.append(Entity.name_en == entity.name_en)
+    normalized_name_candidates = set()
+    for raw_name in (entity.name, entity.name_en):
+        stable = str(raw_name or "").strip().lower()
+        if stable:
+            normalized_name_candidates.add(stable)
+
+    if not normalized_name_candidates:
+        raise HTTPException(status_code=400, detail="Entity name is required")
+
+    normalized_type = str(entity.type or "").strip().lower()
+    entity_name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
+    entity_name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
 
     from sqlalchemy import or_
+    if entity.episode_id is None:
+        episode_scope_filter = Entity.episode_id.is_(None)
+    else:
+        episode_scope_filter = Entity.episode_id == entity.episode_id
+
     existing_entity = db.query(Entity).filter(
         Entity.project_id == project_id,
-        or_(*name_conditions)
+        episode_scope_filter,
+        func.lower(func.trim(func.coalesce(Entity.type, ""))) == normalized_type,
+        or_(
+            entity_name_expr.in_(normalized_name_candidates),
+            entity_name_en_expr.in_(normalized_name_candidates),
+        ),
     ).first()
     
     if existing_entity:
@@ -15966,9 +15991,10 @@ def create_entity(
         existing_entity.generation_prompt_en = entity.generation_prompt_en or existing_entity.generation_prompt_en
         existing_entity.generation_prompt_cn = entity.generation_prompt_cn or existing_entity.generation_prompt_cn
         existing_entity.anchor_description = entity.anchor_description or existing_entity.anchor_description
+        existing_entity.base_name_en = entity.base_name_en or existing_entity.base_name_en
         existing_entity.role = entity.role or existing_entity.role
         existing_entity.appearance_cn = entity.appearance_cn or existing_entity.appearance_cn
-        if entity.episode_id and not existing_entity.episode_id:
+        if entity.episode_id is not None and existing_entity.episode_id is None:
             existing_entity.episode_id = entity.episode_id
         db.commit()
         db.refresh(existing_entity)
@@ -18537,23 +18563,57 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 import httpx
 
 @router.get("/assets/proxy")
-async def proxy_asset(url: str):
-    """Proxy an external asset request to avoid CORS issues on frontend canvas processing."""
+async def proxy_asset(url: str, request: Request):
+    """Proxy external media through backend to avoid client-side network resets/CORS issues."""
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="Invalid URL scheme")
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, follow_redirects=True, timeout=30.0)
-            resp.raise_for_status()
-            
-            headers = {}
-            if "content-type" in resp.headers:
-                headers["Content-Type"] = resp.headers["content-type"]
-            
-            return Response(content=resp.content, status_code=resp.status_code, headers=headers)
-    except Exception as e:
-        logger.error(f"Failed to proxy asset {url}: {e}")
-        raise HTTPException(status_code=502, detail=f"Failed to proxy asset: {e}")
+
+    forward_headers: Dict[str, str] = {}
+    for header_name in ("range", "if-none-match", "if-modified-since"):
+        header_value = request.headers.get(header_name)
+        if header_value:
+            forward_headers[header_name] = header_value
+
+    timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=30.0)
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                upstream = await client.get(url, headers=forward_headers)
+
+            status_code = int(upstream.status_code or 502)
+            if status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"Upstream returned status {status_code}")
+
+            passthrough_headers: Dict[str, str] = {}
+            for header_name in (
+                "content-type",
+                "content-length",
+                "content-range",
+                "accept-ranges",
+                "cache-control",
+                "etag",
+                "last-modified",
+            ):
+                header_value = upstream.headers.get(header_name)
+                if header_value:
+                    # Keep canonical header casing for response output.
+                    passthrough_headers["-".join(part.capitalize() for part in header_name.split("-"))] = header_value
+
+            if "Cache-Control" not in passthrough_headers:
+                passthrough_headers["Cache-Control"] = "private, max-age=120, stale-while-revalidate=60"
+
+            return Response(content=upstream.content, status_code=status_code, headers=passthrough_headers)
+        except HTTPException:
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < 3:
+                continue
+
+    logger.error("Failed to proxy asset %s after retries: %s", url, last_error)
+    raise HTTPException(status_code=502, detail=f"Failed to proxy asset: {last_error}")
 
 @router.get("/assets/thumb/{filename:path}")
 def get_asset_thumbnail(filename: str):
@@ -18589,6 +18649,7 @@ def get_assets(
     type: Optional[str] = None,
     project_id: Optional[str] = None,
     episode_id: Optional[str] = None,
+    include_project_null_episode: Optional[str] = None,
     current_project_asset: Optional[str] = None,
     entity_id: Optional[str] = None,
     shot_id: Optional[str] = None,
@@ -18620,49 +18681,94 @@ def get_assets(
     
     strict_meta_filter = str(os.getenv("ASSETS_META_FILTER_STRICT", "1")).strip().lower() not in {"0", "false", "no", "off"}
     current_only_mode = _normalize_current_project_asset_filter(current_project_asset, project_scoped=bool(project_id))
+    include_null_episode_for_project_scope = bool(_to_bool(include_project_null_episode))
+    assets_filter_debug = str(os.getenv("ASSETS_FILTER_DEBUG", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
-    def _matches_meta_filters(asset_row: Asset, meta: Dict[str, Any]) -> bool:
+    filter_stats: Dict[str, int] = {
+        "scanned": 0,
+        "inaccessible": 0,
+        "meta_filtered": 0,
+        "matched": 0,
+        "returned": 0,
+        "skipped_by_paging": 0,
+    }
+    filter_reason_stats: Dict[str, int] = {}
+    episode_reject_samples: List[Dict[str, Any]] = []
+
+    def _normalize_filter_text(value: Any) -> str:
+        raw = str(value or '').strip()
+        if not raw:
+            return ''
+        lowered = raw.lower()
+        if lowered in {'null', 'none', 'undefined', 'nan'}:
+            return ''
+        return raw
+
+    def _eval_meta_filters(asset_row: Asset, meta: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
         if project_id:
             p_id = meta.get('project_id') or getattr(asset_row, 'project_id', None)
+            p_text = _normalize_filter_text(p_id)
+            req_project_text = _normalize_filter_text(project_id)
             if strict_meta_filter:
-                if str(p_id or '').strip() != str(project_id):
-                    return False
-            elif p_id and str(p_id) != str(project_id):
-                return False
+                if p_text != req_project_text:
+                    return False, "project_mismatch", {
+                        "asset_project": p_text,
+                        "request_project": req_project_text,
+                    }
+            elif p_text and p_text != req_project_text:
+                return False, "project_mismatch", {
+                    "asset_project": p_text,
+                    "request_project": req_project_text,
+                }
 
         if episode_id:
             ep_id = meta.get('episode_id') or getattr(asset_row, 'episode_id', None)
-            if strict_meta_filter:
-                if str(ep_id or '').strip() != str(episode_id):
-                    return False
-            elif ep_id and str(ep_id) != str(episode_id):
-                return False
+            ep_text = _normalize_filter_text(ep_id)
+            req_ep_text = _normalize_filter_text(episode_id)
+            if include_null_episode_for_project_scope and project_id:
+                # Allow either the current episode or project-level shared assets with NULL episode.
+                if ep_text and ep_text != req_ep_text:
+                    return False, "episode_mismatch_when_include_null", {
+                        "asset_episode": ep_text,
+                        "request_episode": req_ep_text,
+                    }
+            elif strict_meta_filter:
+                if ep_text != req_ep_text:
+                    return False, "episode_mismatch", {
+                        "asset_episode": ep_text,
+                        "request_episode": req_ep_text,
+                    }
+            elif ep_text and ep_text != req_ep_text:
+                return False, "episode_mismatch", {
+                    "asset_episode": ep_text,
+                    "request_episode": req_ep_text,
+                }
 
         if entity_id:
             e_id = meta.get('entity_id')
             if strict_meta_filter:
                 if str(e_id or '').strip() != str(entity_id):
-                    return False
+                    return False, "entity_mismatch", {}
             elif e_id and str(e_id) != str(entity_id):
-                return False
+                return False, "entity_mismatch", {}
 
         if shot_id:
             s_id = meta.get('shot_id')
             if strict_meta_filter:
                 if str(s_id or '').strip() != str(shot_id):
-                    return False
+                    return False, "shot_mismatch", {}
             elif s_id and str(s_id) != str(shot_id):
-                return False
+                return False, "shot_mismatch", {}
 
         if scene_id:
             sc_id = meta.get('scene_id')
             if strict_meta_filter:
                 if str(sc_id or '').strip() != str(scene_id):
-                    return False
+                    return False, "scene_mismatch", {}
             elif sc_id and str(sc_id) != str(scene_id):
-                return False
+                return False, "scene_mismatch", {}
 
-        return True
+        return True, "ok", {}
 
     def _is_asset_accessible(asset_row: Asset, meta: Dict[str, Any]) -> bool:
         owner_id = int(asset_row.user_id or 0)
@@ -18694,12 +18800,26 @@ def get_assets(
             break
 
         for asset_row in batch:
+            filter_stats["scanned"] += 1
             meta = _asset_meta_dict(asset_row.meta_info)
             _sync_asset_denormalized_fields(asset_row)
             if not _is_asset_accessible(asset_row, meta):
+                filter_stats["inaccessible"] += 1
                 continue
-            if not _matches_meta_filters(asset_row, meta):
+            is_match, reason, detail = _eval_meta_filters(asset_row, meta)
+            if not is_match:
+                filter_stats["meta_filtered"] += 1
+                filter_reason_stats[reason] = int(filter_reason_stats.get(reason, 0)) + 1
+                if reason.startswith("episode") and len(episode_reject_samples) < 12:
+                    episode_reject_samples.append({
+                        "asset_id": int(getattr(asset_row, "id", 0) or 0),
+                        "asset_episode_raw": str(meta.get("episode_id") or getattr(asset_row, "episode_id", None) or "").strip(),
+                        "asset_project_raw": str(meta.get("project_id") or getattr(asset_row, "project_id", None) or "").strip(),
+                        "detail": detail,
+                    })
                 continue
+
+            filter_stats["matched"] += 1
 
             if current_only_mode is not None:
                 matched_assets.append(asset_row)
@@ -18707,6 +18827,7 @@ def get_assets(
 
             if matched_skipped < safe_skip:
                 matched_skipped += 1
+                filter_stats["skipped_by_paging"] += 1
                 continue
 
             filtered_assets.append(asset_row)
@@ -18724,6 +18845,8 @@ def get_assets(
             if (int(asset_row.id) in effective_current_ids) == bool(current_only_mode)
         ]
         filtered_assets = scoped_assets[safe_skip:safe_skip + safe_limit]
+
+    filter_stats["returned"] = len(filtered_assets)
 
     effective_current_ids_for_results: Set[int] = set()
     if project_id:
@@ -18838,6 +18961,25 @@ def get_assets(
             "created_at": a.created_at
         })
 
+
+    if assets_filter_debug or episode_id or include_null_episode_for_project_scope:
+        logger.info(
+            "[AssetsFilterDiag] user_id=%s params=%s stats=%s reasons=%s episode_reject_samples=%s",
+            int(getattr(current_user, "id", 0) or 0),
+            {
+                "type": type,
+                "project_id": project_id,
+                "episode_id": episode_id,
+                "include_project_null_episode": include_project_null_episode,
+                "current_project_asset": current_project_asset,
+                "skip": safe_skip,
+                "limit": safe_limit,
+                "strict_meta_filter": strict_meta_filter,
+            },
+            filter_stats,
+            filter_reason_stats,
+            episode_reject_samples,
+        )
 
     if results:
         logger.info("Asset response count=%s", len(results))

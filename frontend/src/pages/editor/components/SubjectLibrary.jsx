@@ -495,6 +495,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 const payloadRow = {
                     name: name || nameEn,
                     name_en: nameEn || undefined,
+                    base_name_en: String(row?.base_name_en || '').trim() || nameEn || undefined,
                     type: entityType,
                     episode_id: currentEpisode?.id || undefined,
                     description: String(row?.description_cn || row?.description || row?.entity_attributes || '').trim(),
@@ -937,7 +938,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             if (projectId) {
-                const latest = await fetchEntities(projectId, { episode_id: currentEpisode?.id || undefined });
+                const latest = await fetchEntities(projectId, {
+                    episode_id: currentEpisode?.id || undefined,
+                    include_project_null_episode: true,
+                });
                 const processedLatest = Array.isArray(latest) ? latest.map(item => {
                     if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
                         return { ...item, type: 'poster' };
@@ -1451,7 +1455,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const stableEntityId = String(entityId || '').trim();
         if (!projectId || !stableEntityId) return '';
 
-        const latestEntities = await fetchEntities(projectId, { episode_id: currentEpisode?.id || undefined });
+        const latestEntities = await fetchEntities(projectId, {
+            episode_id: currentEpisode?.id || undefined,
+            include_project_null_episode: true,
+        });
         const latestEntity = (Array.isArray(latestEntities) ? latestEntities : []).find((item) => String(item?.id || '') === stableEntityId);
         const recoveredUrl = String(latestEntity?.image_url || '').trim();
         if (!recoveredUrl || isEphemeralProviderMediaUrl(recoveredUrl)) {
@@ -1473,7 +1480,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         const timeoutMsRaw = Number(options?.timeoutMs || 0) || 0;
         const intervalMsRaw = Number(options?.intervalMs || 0) || 0;
-        const timeoutMs = Math.max(3000, timeoutMsRaw || 20000);
+        const timeoutMs = Math.max(3000, timeoutMsRaw || 120000);
         const intervalMs = Math.max(1000, intervalMsRaw || 2500);
         const entityLabel = String(options?.entityName || stableEntityId).trim() || stableEntityId;
         const deadline = Date.now() + timeoutMs;
@@ -2069,7 +2076,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (!projectId) return [];
         setEntityListLoading(true);
         try {
-            const data = await fetchEntities(projectId, { episode_id: currentEpisode?.id || undefined });
+            const data = await fetchEntities(projectId, {
+                episode_id: currentEpisode?.id || undefined,
+                include_project_null_episode: true,
+            });
             const processedData = Array.isArray(data) ? data.map(item => {
                 if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
                     return { ...item, type: 'poster' };
@@ -2906,6 +2916,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             const data = await fetchAssets({
                 project_id: projectId || undefined,
                 episode_id: includeHistory ? undefined : (currentEpisode?.id || undefined),
+                include_project_null_episode: includeHistory ? undefined : true,
                 current_project_asset: 'all',
             });
             const imageAssets = data.filter(a => a.type === 'image');

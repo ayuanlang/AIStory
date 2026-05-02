@@ -20,6 +20,29 @@ const normalizeExternalMediaUrl = (rawUrl) => {
     return stable;
 };
 
+const shouldProxyExternalMediaUrl = (rawUrl) => {
+    const stable = String(rawUrl || '').trim();
+    if (!stable || !/^https?:\/\//i.test(stable)) return false;
+    if (stable.includes('/api/v1/assets/proxy?url=')) return false;
+
+    try {
+        const parsed = new URL(stable);
+        const host = String(parsed.hostname || '').trim().toLowerCase();
+        // Browser direct access to B2 signed URLs is unstable in some regions/networks.
+        return host.endsWith('backblazeb2.com');
+    } catch {
+        return false;
+    }
+};
+
+const buildAssetProxyUrl = (rawUrl) => {
+    const stable = String(rawUrl || '').trim();
+    if (!stable) return '';
+    const resolvedBase = String(BASE_URL || '').trim().replace(/\/+$/, '');
+    if (!resolvedBase) return stable;
+    return `${resolvedBase}/api/v1/assets/proxy?url=${encodeURIComponent(stable)}`;
+};
+
 // Helper to handle relative URLs
 export const getFullUrl = (url) => {
     if (!url) return '';
@@ -69,6 +92,19 @@ export const getThumbUrl = (url) => {
     const resolvedAssetBase = String(ASSET_BASE_URL || BASE_URL || '').trim();
     const base = resolvedAssetBase.endsWith('/') ? resolvedAssetBase.slice(0, -1) : resolvedAssetBase;
     return `${base}/api/v1/assets/thumb/${normalizedPath}`;
+};
+
+export const canFallbackToAssetProxy = (url) => {
+    return shouldProxyExternalMediaUrl(normalizeExternalMediaUrl(url));
+};
+
+export const getMediaUrlWithFallback = (url, useProxy = false) => {
+    const normalized = normalizeExternalMediaUrl(url);
+    if (!normalized) return '';
+    if (useProxy && canFallbackToAssetProxy(normalized)) {
+        return buildAssetProxyUrl(normalized);
+    }
+    return getFullUrl(normalized);
 };
 
 export const createInitialFrameTrimState = () => ({
@@ -310,12 +346,14 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     const [shouldLoad, setShouldLoad] = useState(() => eagerLoad || isWarmMediaUrl(rawSrc));
     const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
     const [isLoaded, setIsLoaded] = useState(() => isWarmMediaUrl(rawSrc));
+    const [useProxy, setUseProxy] = useState(false);
 
     const { onLoad: userOnLoad, onError: userOnError, ...restImgProps } = imgProps;
 
     useEffect(() => {
         setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
         setIsLoaded(isWarmMediaUrl(rawSrc));
+        setUseProxy(false);
         if (isWarmMediaUrl(rawSrc)) {
             setShouldLoad(true);
         }
@@ -352,7 +390,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
         return () => observer.disconnect();
     }, [eagerLoad, shouldLoad, rawSrc, failed]);
 
-    const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
+    const resolvedSrc = failed ? '' : getMediaUrlWithFallback(rawSrc, useProxy);
     const thumbSrc = getThumbUrl(rawSrc);
     if (!resolvedSrc) return fallback || null;
 
@@ -390,6 +428,11 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                         if (typeof userOnError === 'function') userOnError();
                         return;
                     }
+                    if (!useProxy && canFallbackToAssetProxy(rawSrc)) {
+                        setUseProxy(true);
+                        if (typeof userOnError === 'function') userOnError();
+                        return;
+                    }
                     rememberBrokenMediaUrl(rawSrc);
                     setFailed(true);
                     if (typeof userOnError === 'function') userOnError();
@@ -403,18 +446,24 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
 export const SafeAudio = ({ src, fallback = null, ...audioProps }) => {
     const rawSrc = String(src || '').trim();
     const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
+    const [useProxy, setUseProxy] = useState(false);
 
     useEffect(() => {
         setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
+        setUseProxy(false);
     }, [rawSrc]);
 
-    const resolvedSrc = failed ? '' : getFullUrl(rawSrc);
+    const resolvedSrc = failed ? '' : getMediaUrlWithFallback(rawSrc, useProxy);
     if (!resolvedSrc) return fallback || null;
 
     return (
         <audio
             src={resolvedSrc}
             onError={() => {
+                if (!useProxy && canFallbackToAssetProxy(rawSrc)) {
+                    setUseProxy(true);
+                    return;
+                }
                 rememberBrokenMediaUrl(rawSrc);
                 setFailed(true);
             }}
@@ -903,9 +952,11 @@ export const LazyHoverVideo = ({
     const [videoFailed, setVideoFailed] = useState(() => !src || isBrokenMediaUrl(src));
     const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
     const [isVideoLoaded, setIsVideoLoaded] = useState(() => isWarmMediaUrl(src));
+    const [videoUseProxy, setVideoUseProxy] = useState(false);
 
     useEffect(() => {
         setVideoFailed(!src || isBrokenMediaUrl(src));
+        setVideoUseProxy(false);
         if (isWarmMediaUrl(src)) {
             setShouldLoad(true);
             setIsVideoLoaded(true);
@@ -984,7 +1035,7 @@ export const LazyHoverVideo = ({
 
             <video
                 ref={videoRef}
-                src={shouldLoad && !videoFailed ? getFullUrl(src) : undefined}
+                src={shouldLoad && !videoFailed ? getMediaUrlWithFallback(src, videoUseProxy) : undefined}
                 preload={shouldLoad ? preload : 'none'}
                 className={`z-10 relative transition-all duration-700 ${mediaClassName} ${isVideoLoaded ? 'opacity-100 blur-0 scale-100 bg-transparent' : 'opacity-0 blur-[10px] scale-105 bg-[#151515]'}`}
                 onLoadedData={() => {
@@ -993,6 +1044,10 @@ export const LazyHoverVideo = ({
                     if (poster) rememberWarmMediaUrl(poster);
                 }}
                 onError={() => {
+                    if (!videoUseProxy && canFallbackToAssetProxy(src)) {
+                        setVideoUseProxy(true);
+                        return;
+                    }
                     if (src) rememberBrokenMediaUrl(src);
                     setVideoFailed(true);
                     if (poster) {
@@ -1022,9 +1077,12 @@ export const InViewVideo = ({
     const [shouldLoad, setShouldLoad] = useState(() => isWarmMediaUrl(src));
     const [videoFailed, setVideoFailed] = useState(() => !src || isBrokenMediaUrl(src));
     const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
+    const [videoUseProxy, setVideoUseProxy] = useState(false);
+    const [posterUseProxy, setPosterUseProxy] = useState(false);
 
     useEffect(() => {
         setVideoFailed(!src || isBrokenMediaUrl(src));
+        setVideoUseProxy(false);
         if (isWarmMediaUrl(src)) {
             setShouldLoad(true);
         }
@@ -1032,6 +1090,7 @@ export const InViewVideo = ({
 
     useEffect(() => {
         setPosterFailed(!poster || isBrokenMediaUrl(poster));
+        setPosterUseProxy(false);
     }, [poster]);
 
     useEffect(() => {
@@ -1091,8 +1150,8 @@ export const InViewVideo = ({
     return (
         <div ref={containerRef} className="contents">
             <video
-                src={shouldLoad ? getFullUrl(src) : undefined}
-                poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
+                src={shouldLoad ? getMediaUrlWithFallback(src, videoUseProxy) : undefined}
+                poster={!posterFailed && poster ? getMediaUrlWithFallback(poster, posterUseProxy) : undefined}
                 className={className}
                 preload={shouldLoad ? preload : 'none'}
                 onLoadedData={() => {
@@ -1100,6 +1159,14 @@ export const InViewVideo = ({
                     if (poster) rememberWarmMediaUrl(poster);
                 }}
                 onError={() => {
+                    if (!videoUseProxy && canFallbackToAssetProxy(src)) {
+                        setVideoUseProxy(true);
+                        return;
+                    }
+                    if (poster && !posterUseProxy && canFallbackToAssetProxy(poster)) {
+                        setPosterUseProxy(true);
+                        return;
+                    }
                     rememberBrokenMediaUrl(src);
                     setVideoFailed(true);
                     if (poster) {
@@ -1133,13 +1200,17 @@ export const ManagedVideoPlayer = ({
     const [loadState, setLoadState] = useState(() => (src && !suspend ? 'loading' : 'idle'));
     const [videoFailed, setVideoFailed] = useState(() => !src || isBrokenMediaUrl(src));
     const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
+    const [videoUseProxy, setVideoUseProxy] = useState(false);
+    const [posterUseProxy, setPosterUseProxy] = useState(false);
 
     useEffect(() => {
         setVideoFailed(!src || isBrokenMediaUrl(src));
+        setVideoUseProxy(false);
     }, [src]);
 
     useEffect(() => {
         setPosterFailed(!poster || isBrokenMediaUrl(poster));
+        setPosterUseProxy(false);
     }, [poster]);
 
     useEffect(() => {
@@ -1172,8 +1243,8 @@ export const ManagedVideoPlayer = ({
             {!suspend ? (
                 <video
                     key={src}
-                    src={getFullUrl(src)}
-                    poster={!posterFailed && poster ? getFullUrl(poster) : undefined}
+                    src={getMediaUrlWithFallback(src, videoUseProxy)}
+                    poster={!posterFailed && poster ? getMediaUrlWithFallback(poster, posterUseProxy) : undefined}
                     className={centeredMediaClassName}
                     controls={controls}
                     autoPlay={autoPlay}
@@ -1191,6 +1262,14 @@ export const ManagedVideoPlayer = ({
                     onSeeked={() => setLoadState('ready')}
                     onSuspend={() => setLoadState((prev) => (prev === 'loading' ? 'ready' : prev))}
                     onError={() => {
+                        if (!videoUseProxy && canFallbackToAssetProxy(src)) {
+                            setVideoUseProxy(true);
+                            return;
+                        }
+                        if (poster && !posterUseProxy && canFallbackToAssetProxy(poster)) {
+                            setPosterUseProxy(true);
+                            return;
+                        }
                         rememberBrokenMediaUrl(src);
                         setVideoFailed(true);
                         setLoadState('idle');

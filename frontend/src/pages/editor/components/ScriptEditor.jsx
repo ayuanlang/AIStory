@@ -499,6 +499,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const normalized = stable.toLowerCase();
+        if (normalized.includes('prohibited_content')) {
+            return '出现供应商政策不允许内容';
+        }
         if (stable.includes('第一阶段未解析到完整的 Subject Index 区块')) {
             return t('大模型开小差了，请选择其他AI。', 'The model got distracted. Please choose another AI.');
         }
@@ -2947,9 +2950,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisRunInFlightRef = useRef(false);
     const autoImportRunningRef = useRef(false);
     const lastSubjectsImportIncompleteAlertRef = useRef('');
-    const ANALYSIS_TASK_MAX_AGE_MS = 15 * 60 * 1000;
-    const ANALYSIS_TASK_MARKER_TTL_MS = 62 * 60 * 1000;
-    const AI_SHOTS_TASK_MARKER_TTL_MS = 12 * 60 * 1000;
+    const ANALYSIS_TASK_MAX_AGE_MS = 60 * 60 * 1000;
+    const ANALYSIS_TASK_MARKER_TTL_MS = 120 * 60 * 1000;
+    const AI_SHOTS_TASK_MARKER_TTL_MS = 45 * 60 * 1000;
 
     const isTaskCanceledError = useCallback((error) => {
         if (!error) return false;
@@ -3119,7 +3122,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 resolvedError = err;
             });
 
-        const deadline = Number(startedAt || Date.now()) + 60 * 60 * 1000;
+        // 重新计算超时时间，确保从每次调用开始计时，至少给足60分钟以处理深度回退和排队延迟
+        const actualStartedAt = Date.now(); 
+        const deadline = actualStartedAt + 60 * 60 * 1000;
         while (!settled && Date.now() < deadline) {
             const recoveredText = await waitForEpisodeAnalysisResultUpdate({
                 baselineText,
@@ -3200,7 +3205,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
           onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
 
           if (authoritativeSubjectText.includes("PROHIBITED_CONTENT")) {
-              throw new Error("剧本内容涉嫌违规，已被安全系统拦截，请修改剧本文本后重试。");
+              throw new Error("出现供应商政策不允许内容");
           }
 
         // Try to match the block wrapped by at least 5 dashes: ---------
@@ -5067,6 +5072,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 { startedAt, baselineText: baselineAnalysisText }
             );
             const analyzedText = extractAnalysisTextFromResult(result);
+            if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
+                throw new Error("出现供应商政策不允许内容");
+            }
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
             setAnalysisFlowStatus({
@@ -5564,6 +5572,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 { startedAt, baselineText: baselineAnalysisText }
             );
             const analyzedText = extractAnalysisTextFromResult(result);
+            if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
+                throw new Error("出现供应商政策不允许内容");
+            }
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
 
