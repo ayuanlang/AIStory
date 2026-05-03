@@ -431,9 +431,18 @@ class OSSStorageService:
         if not pool or not cred:
             raise ValueError("OSS pool or credential missing")
 
+        # Some S3-compatible providers (including Qiniu gateways) can persist
+        # aws-chunked as object Content-Encoding when payload signing is enabled.
+        # That can break browser playback (especially over HTTP/2) for video assets.
+        s3_config: Dict[str, Any] = {
+            "addressing_style": "path" if getattr(pool, "force_path_style", False) else "virtual"
+        }
+        if self._is_qiniu_provider(pool):
+            s3_config["payload_signing_enabled"] = False
+
         config = Config(
             signature_version="s3v4",
-            s3={"addressing_style": "path" if getattr(pool, "force_path_style", False) else "virtual"},
+            s3=s3_config,
         )
         return boto3.client(
             "s3",
