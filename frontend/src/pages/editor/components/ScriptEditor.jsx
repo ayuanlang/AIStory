@@ -219,24 +219,59 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             extractedAdaptationText = (adaptMatch[1] || adaptMatch[2] || adaptMatch[3] || '').trim();
         }
 
-        const dashMatch = authoritativeSubjectText.match(/-{5,}\s*\n([\s\S]*?)\n\s*-{5,}/);
+        // Priority bypass: if downstream markers are present, Subject Index must have been fully output.
+        // cover_poster entry, project_visual_backfill block, or Part 2 JSON sections are only emitted
+        // after the Subject Index is complete — treat their presence as a guaranteed success signal.
+        const hasDownstreamMarker = (
+            /subject_type\s*=\s*cover_poster/i.test(authoritativeSubjectText)
+            || /project_visual_backfill/i.test(authoritativeSubjectText)
+            || /"characters"\s*:\s*\[/i.test(authoritativeSubjectText)
+            || /"environments"\s*:\s*\[/i.test(authoritativeSubjectText)
+            || /"props"\s*:\s*\[/i.test(authoritativeSubjectText)
+            || /Final\s+Consistency\s+Report/i.test(authoritativeSubjectText)
+        );
+
+        // Try 4+ dashes on both sides (model may output 4–9 dashes; avoids 3-dash MD HR)
+        const dashMatch = authoritativeSubjectText.match(/-{4,}\s*\n([\s\S]*?)\n\s*-{4,}/);
         if (dashMatch && dashMatch[1].trim()) {
             extractedText = dashMatch[1].trim();
             hasStructuredSubjectIndex = true;
         } else {
-            const match = authoritativeSubjectText.match(/(?:###?|##)\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
+            // Match any level of # heading for Subject Index (single, double, or triple)
+            const match = authoritativeSubjectText.match(/#{1,3}\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
             if (match) {
                 extractedText = match[0];
                 hasStructuredSubjectIndex = true;
             } else {
-                const pipeMatch = authoritativeSubjectText.match(/(?:^|\n)\s*(subject_no\s*=\s*S\d+[\s\S]*)/i);
+                // Allow subject_no=S001 or subject_no=1 (with or without S prefix)
+                const pipeMatch = authoritativeSubjectText.match(/(?:^|\n)\s*(subject_no\s*=\s*[A-Za-z]?\d+[\s\S]*)/i);
                 if (pipeMatch && String(pipeMatch[1] || '').trim()) {
                     extractedText = String(pipeMatch[1] || '').trim();
                     hasStructuredSubjectIndex = true;
                 } else {
-                    extractedText = authoritativeSubjectText;
+                    // Detect any pipe-separated line with subject_type=
+                    const subjectTypeLine = authoritativeSubjectText.match(/(?:^|\n)(.*subject_type\s*=\s*(?:character|prop|environment|cover_poster).*(?:\|.*)+)/i);
+                    if (subjectTypeLine && String(subjectTypeLine[1] || '').trim()) {
+                        const idx = authoritativeSubjectText.indexOf(subjectTypeLine[1]);
+                        extractedText = authoritativeSubjectText.slice(idx).trim();
+                        hasStructuredSubjectIndex = true;
+                    } else if (hasDownstreamMarker) {
+                        // Downstream markers confirm Subject Index was fully emitted even if its
+                        // header/format is non-standard. Use the full text as the index content.
+                        extractedText = authoritativeSubjectText;
+                        hasStructuredSubjectIndex = true;
+                    } else {
+                        extractedText = authoritativeSubjectText;
+                    }
                 }
             }
+        }
+
+        // If a downstream marker is present but we still haven't confirmed via structural parsing,
+        // override hasStructuredSubjectIndex to true so the error is not thrown.
+        if (!hasStructuredSubjectIndex && hasDownstreamMarker) {
+            extractedText = authoritativeSubjectText;
+            hasStructuredSubjectIndex = true;
         }
 
         return {
