@@ -959,6 +959,86 @@ class LLMService:
 
         return out
 
+    def _extract_n1n_responses_options(self, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Whitelist and normalize n1n responses API options."""
+        safe_cfg = dict(cfg or {})
+        out: Dict[str, Any] = {}
+        direct_keys = {
+            "temperature",
+            "top_p",
+            "max_output_tokens",
+            "tools",
+            "tool_choice",
+            "metadata",
+            "reasoning",
+            "stop",
+            "seed",
+        }
+
+        for key, value in safe_cfg.items():
+            if str(key).startswith("__"):
+                continue
+            if key in {"model", "messages", "stream", "input"}:
+                continue
+            if key in direct_keys:
+                out[key] = value
+
+        if "max_output_tokens" not in out:
+            for candidate in ("max_tokens", "max_completion_tokens"):
+                value = safe_cfg.get(candidate)
+                try:
+                    parsed = int(value)
+                except Exception:
+                    parsed = 0
+                if parsed > 0:
+                    out["max_output_tokens"] = parsed
+                    break
+
+        return out
+
+    def _build_n1n_responses_input(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert chat-style messages to n1n /responses input schema."""
+        response_input: List[Dict[str, Any]] = []
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "user").strip().lower() or "user"
+            if role not in {"system", "user", "assistant"}:
+                role = "user"
+            content_text = self._extract_text_from_content(message.get("content"))
+            response_input.append({
+                "role": role,
+                "content": content_text or "",
+            })
+        return response_input
+
+    def _resolve_n1n_llm_url(self, base_url: str, endpoint_hint: str = "") -> str:
+        """Resolve canonical n1n responses URL, preferring /v1/responses."""
+        hinted = str(endpoint_hint or "").strip()
+        if hinted:
+            if hinted.startswith("http"):
+                normalized_hint = hinted.rstrip("/")
+                hint_lower = normalized_hint.lower()
+                if hint_lower.endswith("/chat/completions"):
+                    return re.sub(r"/chat/completions/?$", "/responses", normalized_hint, flags=re.IGNORECASE)
+                if hint_lower.endswith("/responses"):
+                    return normalized_hint
+                if hint_lower.endswith("/v1"):
+                    return f"{normalized_hint}/responses"
+                return f"{normalized_hint}/responses"
+            root_from_base = (base_url or "https://api.n1n.ai").rstrip("/")
+            return f"{root_from_base}/{hinted.lstrip('/')}".rstrip("/")
+
+        root = (base_url or "https://api.n1n.ai").strip().rstrip("/")
+        lower_root = root.lower()
+        if lower_root.endswith("/chat/completions"):
+            return re.sub(r"/chat/completions/?$", "/responses", root, flags=re.IGNORECASE)
+        if lower_root.endswith("/responses"):
+            return root
+        if lower_root.endswith("/v1"):
+            return f"{root}/responses"
+        return f"{root}/v1/responses"
+
     def _build_kie_responses_input(self, messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
         """Convert chat messages into KIE responses API input format."""
         instructions_parts: List[str] = []
@@ -1433,6 +1513,8 @@ class LLMService:
             reason = "供应商服务暂时不可用，通常是维护、过载或短时故障。"
         elif status == 504:
             reason = "供应商网关等待上游超时，本次调用未在时限内完成。"
+        elif status == 524:
+            reason = "供应商前置网关等待上游响应超时（常见于 Cloudflare 524），无法确认任务是否已被受理。"
 
         body_hint = ""
         if body:
@@ -1887,7 +1969,7 @@ class LLMService:
         provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
 
         try:
-            if str(provider or "").strip().lower() == "kie":
+            if str(provider or "").strip().lower() in {"kie", "n1n"}:
                 logger.info(
                     "chat_completion routing: provider=%s model=%s mode=stream_aggregate",
                     provider,
@@ -1919,7 +2001,7 @@ class LLMService:
         except AmbiguousLLMTransportError:
             raise
         except Exception as e:
-            if str(provider or "").strip().lower() == "kie" and self._is_ambiguous_submit_transport_error(e):
+            if str(provider or "").strip().lower() in {"kie", "n1n"} and self._is_ambiguous_submit_transport_error(e):
                 self._raise_ambiguous_submit_error(provider, model, e, base_url)
             logger.error(f"LLM Raw Completion failed: {e}")
             raise Exception(self._vendor_failed_message(provider, e))
@@ -2382,9 +2464,14 @@ class LLMService:
             import re as _re
             configured_endpoint = _re.sub(r'(/v1)/v1(?=/|$)', r'\1', configured_endpoint)
 
+        n1n_use_responses = provider == "n1n" and resolved_category == "LLM" and not use_claude_api
+
         if use_claude_api and resolved_category == "LLM":
             url = self._resolve_claude_llm_url(base_url, configured_endpoint)
             url_source = "claude.messages"
+        elif n1n_use_responses:
+            url = self._resolve_n1n_llm_url(base_url, configured_endpoint)
+            url_source = "n1n.responses"
         elif configured_endpoint and resolved_category == "LLM":
             endpoint_lower = configured_endpoint.lower()
             if "/chat/completions" in endpoint_lower:
@@ -2427,6 +2514,13 @@ class LLMService:
                 extra_config=extra_config,
                 provider=provider,
             )
+        elif n1n_use_responses:
+            payload = {
+                "model": model,
+                "input": self._build_n1n_responses_input(messages),
+                "stream": False,
+            }
+            payload.update(self._extract_n1n_responses_options(extra_config or {}))
         else:
             payload = {
                 "model": model,
@@ -2435,7 +2529,7 @@ class LLMService:
                 "temperature": 0.7
             }
 
-        if extra_config and not (use_claude_api and resolved_category == "LLM"):
+        if extra_config and not (use_claude_api and resolved_category == "LLM") and not n1n_use_responses:
             # Merge extra config, but don't overwrite critical fields if not intended
             # For now, just update, but maybe exclude 'model' or 'messages'
             for k, v in extra_config.items():
@@ -2627,6 +2721,8 @@ class LLMService:
             provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
             resolved_setting_id = (extra_config or {}).get("__resolved_setting_id")
             resolved_source = (extra_config or {}).get("__resolved_source")
+            if str(provider or "").strip().lower() == "n1n" and int(response.status_code or 0) == 524:
+                self._raise_ambiguous_submit_error(provider, model, f"HTTP 524: {response.text[:300]}", url)
             human_summary = self._build_human_readable_http_error_summary(
                 provider=provider,
                 model=model,
@@ -2857,10 +2953,14 @@ class LLMService:
 
         resolved_model = model
         kie_transport_kind = "chat_completions"
+        n1n_use_responses = provider == "n1n" and resolved_category == "LLM" and not use_claude_api
         
         if provider == "kie" and resolved_category == "LLM" and not use_claude_api:
             _, resolved_model, url, kie_transport_kind = self._resolve_kie_llm_url(base_url, model)
             url_source = "kie.model_path"
+        elif n1n_use_responses:
+            url = self._resolve_n1n_llm_url(base_url, configured_endpoint)
+            url_source = "n1n.responses"
         elif use_claude_api and resolved_category == "LLM":
             url = self._resolve_claude_llm_url(base_url, configured_endpoint)
             url_source = "claude.messages"
@@ -2912,6 +3012,13 @@ class LLMService:
                 extra_config=extra_config,
                 provider=provider,
             )
+        elif n1n_use_responses:
+            payload = {
+                "model": model,
+                "input": self._build_n1n_responses_input(messages),
+                "stream": True,
+            }
+            payload.update(self._extract_n1n_responses_options(extra_config or {}))
         elif provider == "kie" and resolved_category == "LLM" and kie_transport_kind == "responses":
             instructions, response_input = self._build_kie_responses_input(messages)
             payload = {
@@ -2934,6 +3041,8 @@ class LLMService:
                 payload.update(self._extract_kie_responses_options(extra_config or {}))
             else:
                 payload.update(self._extract_kie_chat_options(extra_config or {}))
+        elif n1n_use_responses:
+            pass
         elif extra_config and not (use_claude_api and resolved_category == "LLM"):
             for k, v in extra_config.items():
                 if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
@@ -2977,6 +3086,14 @@ class LLMService:
                     if response.status_code != 200:
                         error_body = await response.aread()
                         error_text = error_body.decode("utf-8", errors="replace")[:500]
+                        provider_lower = str(provider or "").strip().lower()
+                        if provider_lower == "n1n" and int(response.status_code or 0) == 524:
+                            self._raise_ambiguous_submit_error(
+                                provider,
+                                payload.get("model") or model,
+                                f"HTTP 524: {error_text}",
+                                url,
+                            )
                         human_summary = self._build_human_readable_http_error_summary(
                             provider=provider,
                             model=payload.get("model") or model,
