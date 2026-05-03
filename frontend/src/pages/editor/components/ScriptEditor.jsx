@@ -5121,10 +5121,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (onLog) onLog(`Scene markdown precheck failed (continue analysis): ${preflightErr?.message || preflightErr}`, 'warning');
         }
 
-        // Bypass Phase 1 if subject index is already present!
-        if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
+        // Resolve Subject Index from persisted field first, then UI/raw text fallback.
+        let resolvedSubjectIndexText = String(
+            activeEpisode?.ai_scene_analysis_subject_index
+            || subjectIndexText
+            || ''
+        ).trim();
+        if (!resolvedSubjectIndexText) {
+            const fallbackAnalysisText = String(
+                activeEpisode?.ai_scene_analysis_result
+                || llmRawResultContent
+                || llmResultContent
+                || ''
+            ).trim();
+            if (fallbackAnalysisText) {
+                const fallbackSections = extractAnalysisSections(fallbackAnalysisText);
+                const extractedFallbackIndex = String(fallbackSections?.subjectIndexText || '').trim();
+                if (fallbackSections?.hasStructuredSubjectIndex && extractedFallbackIndex) {
+                    resolvedSubjectIndexText = extractedFallbackIndex;
+                }
+            }
+        }
+
+        // Bypass Phase 1 if subject index is already present.
+        if (resolvedSubjectIndexText) {
             const bypassConfirmed = true;
             if (bypassConfirmed) {
+                const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+                if (resolvedSubjectIndexText !== persistedSubjectIndexText) {
+                    try {
+                        await updateEpisode(activeEpisode.id, {
+                            ai_scene_analysis_subject_index: resolvedSubjectIndexText,
+                        });
+                        if (subjectIndexText !== resolvedSubjectIndexText) {
+                            setSubjectIndexText(resolvedSubjectIndexText);
+                        }
+                        if (onLog) onLog('Detected Subject Index in current page content and persisted it to episode before bypassing Phase 1.', 'info');
+                    } catch (persistSubjectIndexErr) {
+                        if (onLog) onLog(`Persist Subject Index before bypass failed (continue): ${persistSubjectIndexErr?.message || persistSubjectIndexErr}`, 'warning');
+                    }
+                }
+
                 // Phase 2 Check: if it already exists, do not initiate again
                 if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
                     setAnalysisFlowStatus({
@@ -5168,9 +5205,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     // We just jump straight to Phase 2 logic (runPostImportSceneSubjectPipeline).
                     // We mock an empty import report to keep the pipeline happy.
                     const mockImportReport = { importedSceneRows: [] };
-                    const dummyAnalyzedText = activeEpisode.ai_scene_analysis_result || activeEpisode.ai_scene_analysis_subject_index; // Pass something fallback
+                    const dummyAnalyzedText = String(activeEpisode?.ai_scene_analysis_result || resolvedSubjectIndexText || '');
 
-                    const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, activeEpisode.ai_scene_analysis_subject_index);
+                    const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText);
 
                     const finalImportReport = {
                         ...mockImportReport,
@@ -5655,10 +5692,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (onLog) onLog(`Scene markdown precheck failed (continue analysis): ${preflightErr?.message || preflightErr}`, 'warning');
         }
 
-        // Bypass Phase 1 if subject index is already present!
-        if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
+        // Resolve Subject Index from persisted field first, then UI/raw text fallback.
+        let resolvedSubjectIndexText = String(
+            activeEpisode?.ai_scene_analysis_subject_index
+            || subjectIndexText
+            || ''
+        ).trim();
+        if (!resolvedSubjectIndexText) {
+            const fallbackAnalysisText = String(
+                activeEpisode?.ai_scene_analysis_result
+                || llmRawResultContent
+                || llmResultContent
+                || ''
+            ).trim();
+            if (fallbackAnalysisText) {
+                const fallbackSections = extractAnalysisSections(fallbackAnalysisText);
+                const extractedFallbackIndex = String(fallbackSections?.subjectIndexText || '').trim();
+                if (fallbackSections?.hasStructuredSubjectIndex && extractedFallbackIndex) {
+                    resolvedSubjectIndexText = extractedFallbackIndex;
+                }
+            }
+        }
+
+        // Bypass Phase 1 if subject index is already present.
+        if (resolvedSubjectIndexText) {
             const bypassConfirmed = true;
             if (bypassConfirmed) {
+                const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+                if (resolvedSubjectIndexText !== persistedSubjectIndexText) {
+                    try {
+                        await updateEpisode(activeEpisode.id, {
+                            ai_scene_analysis_subject_index: resolvedSubjectIndexText,
+                        });
+                        if (subjectIndexText !== resolvedSubjectIndexText) {
+                            setSubjectIndexText(resolvedSubjectIndexText);
+                        }
+                        if (onLog) onLog('Detected Subject Index in current page content and persisted it to episode before bypassing Phase 1.', 'info');
+                    } catch (persistSubjectIndexErr) {
+                        if (onLog) onLog(`Persist Subject Index before bypass failed (continue): ${persistSubjectIndexErr?.message || persistSubjectIndexErr}`, 'warning');
+                    }
+                }
+
                 // Phase 2 Check: if it already exists, do not initiate again
                 if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
                     setAnalysisFlowStatus({
@@ -5698,7 +5772,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     // We just jump straight to Phase 2 logic (runPostImportSceneSubjectPipeline).
                     // We mock an empty import report to keep the pipeline happy.
                     const mockImportReport = { importedSceneRows: [] };
-                    const dummyAnalyzedText = activeEpisode.ai_scene_analysis_result || activeEpisode.ai_scene_analysis_subject_index; // Pass something fallback
+                    const dummyAnalyzedText = String(activeEpisode?.ai_scene_analysis_result || resolvedSubjectIndexText || '');
 
                     const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText);
 
