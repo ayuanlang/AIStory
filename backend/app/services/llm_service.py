@@ -541,6 +541,25 @@ class LLMService:
         if event_type in {"message_stop", "content_block_stop"}:
             return "", chunk.get("stop_reason")
 
+        # OpenAI responses-style SSE events (also used by some gateways):
+        # - response.output_text.delta {"delta":"..."}
+        # - response.output_text.done {"text":"..."}
+        # - response.output_item.done {"item": {"type":"message", "content":[{"type":"output_text","text":"..."}]}}
+        # - response.completed {"response": {...}}
+        if event_type == "response.output_text.delta":
+            return str(chunk.get("delta") or ""), None
+        if event_type == "response.output_text.done":
+            return str(chunk.get("text") or ""), None
+        if event_type == "response.output_item.done":
+            item = chunk.get("item") if isinstance(chunk.get("item"), dict) else {}
+            item_text = self._extract_text_from_content(item.get("content"))
+            return item_text, None
+        if event_type == "response.completed":
+            response_obj = chunk.get("response") if isinstance(chunk.get("response"), dict) else {}
+            full_text = self._extract_text_from_response(response_obj) if response_obj else ""
+            finish_reason = self._extract_finish_reason_from_response(response_obj) if response_obj else None
+            return full_text, finish_reason
+
         text = self._extract_text_from_content(chunk.get("content"))
         if text:
             return text, chunk.get("stop_reason")
@@ -3013,7 +3032,8 @@ class LLMService:
             payload = {
                 "model": model,
                 "input": self._build_n1n_responses_input(messages),
-                "stream": True,
+                # n1n responses can return non-SSE JSON; force JSON mode for stable parsing.
+                "stream": False,
             }
             payload.update(self._extract_n1n_responses_options(extra_config or {}))
         elif provider == "kie" and resolved_category == "LLM" and kie_transport_kind == "responses":
@@ -3021,7 +3041,8 @@ class LLMService:
             payload = {
                 "model": resolved_model,
                 "input": response_input,
-                "stream": True,
+                # KIE responses endpoint is more reliable in non-stream JSON mode.
+                "stream": False,
             }
             if instructions:
                 payload["instructions"] = instructions
@@ -3132,7 +3153,8 @@ class LLMService:
                         usage_res = full_json.get("usage", {})
                         if use_claude_api and not usage_res:
                             usage_res = full_json.get("usage", {})
-                        yield {"type": "done", "usage": usage_res, "finish_reason": "stop"}
+                        finish_res = self._extract_finish_reason_from_response(full_json) or "stop"
+                        yield {"type": "done", "usage": usage_res, "finish_reason": finish_res}
                         return
 
                     import asyncio as _asyncio
@@ -3161,6 +3183,10 @@ class LLMService:
                         # Capture usage if the provider includes it in a chunk
                         if chunk.get("usage"):
                             usage = chunk["usage"]
+                        else:
+                            response_obj = chunk.get("response") if isinstance(chunk.get("response"), dict) else {}
+                            if response_obj.get("usage"):
+                                usage = response_obj.get("usage")
 
                         content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
                         if chunk_finish_reason:
