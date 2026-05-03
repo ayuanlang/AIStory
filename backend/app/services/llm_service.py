@@ -700,24 +700,35 @@ class LLMService:
         return normalized
 
     async def _raw_kie_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
-        """KIE LLM — OpenAI-compatible chat/completions with model in URL path."""
+        """KIE LLM request supporting both chat/completions and responses transports."""
         cfg = dict(extra_config or {})
 
-        root, resolved_model, url = self._resolve_kie_llm_url(base_url, model)
+        _, resolved_model, url, transport_kind = self._resolve_kie_llm_url(base_url, model)
+        endpoint_label = "responses" if transport_kind == "responses" else "chat/completions"
 
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
-        payload: Dict[str, Any] = {
-            "model": resolved_model,
-            "messages": messages,
-            "stream": False,
-        }
-
-        # KIE LLM: only forward known-safe chat/completions keys.
-        payload.update(self._extract_kie_chat_options(cfg))
+        if transport_kind == "responses":
+            instructions, response_input = self._build_kie_responses_input(messages)
+            payload = {
+                "model": resolved_model,
+                "input": response_input,
+                "stream": False,
+            }
+            if instructions:
+                payload["instructions"] = instructions
+            payload.update(self._extract_kie_responses_options(cfg))
+        else:
+            payload = {
+                "model": resolved_model,
+                "messages": messages,
+                "stream": False,
+            }
+            # KIE LLM: only forward known-safe chat/completions keys.
+            payload.update(self._extract_kie_chat_options(cfg))
 
         cap_source = "provider_default"
         if any(
@@ -729,7 +740,7 @@ class LLMService:
         prompt_chars = sum(len(str(m.get("content", ""))) for m in (messages or []))
         _debug_log(
             "[DEBUG][LLM][KIE] Request | "
-            f"provider=kie model={resolved_model} url={url} messages={len(messages or [])} "
+            f"provider=kie model={resolved_model} endpoint={endpoint_label} url={url} messages={len(messages or [])} "
             f"prompt_chars={prompt_chars} max_tokens={payload.get('max_tokens')} "
             f"max_completion_tokens={payload.get('max_completion_tokens')} "
             f"max_output_tokens={payload.get('max_output_tokens')} "
@@ -804,7 +815,7 @@ class LLMService:
                 "response_text": resp.text[:500],
                 "human_summary": human_summary,
             })
-            raise Exception(f"KIE chat/completions failed {resp.status_code}: {resp.text[:500]}")
+            raise Exception(f"KIE {endpoint_label} failed {resp.status_code}: {resp.text[:500]}")
 
         data = resp.json()
 
@@ -812,7 +823,7 @@ class LLMService:
         kie_code = data.get("code")
         if kie_code is not None and str(kie_code) != "200" and "choices" not in data:
             err_msg = data.get("msg") or data.get("message") or data.get("error") or str(data)
-            raise Exception(f"KIE chat/completions error code={kie_code}: {err_msg}")
+            raise Exception(f"KIE {endpoint_label} error code={kie_code}: {err_msg}")
 
         # KIE usage occasionally under-reports token counts for large prompts.
         # Normalize with local rough estimates to keep diagnostics/billing consistent.
@@ -874,15 +885,154 @@ class LLMService:
 
         return out
 
-    def _resolve_kie_llm_url(self, base_url: str, model: str) -> Tuple[str, str, str]:
-        """Normalize KIE root URL and produce model-in-path chat/completions endpoint."""
+    def _extract_kie_responses_options(self, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Whitelist and normalize KIE responses API options."""
+        safe_cfg = dict(cfg or {})
+
+        out: Dict[str, Any] = {}
+        direct_keys = {
+            "temperature",
+            "top_p",
+            "max_output_tokens",
+            "tools",
+            "tool_choice",
+            "metadata",
+            "reasoning",
+            "stop",
+            "seed",
+        }
+
+        for key, value in safe_cfg.items():
+            if str(key).startswith("__"):
+                continue
+            if key in {"model", "messages", "stream", "input"}:
+                continue
+            if key in direct_keys:
+                out[key] = value
+
+        if "max_output_tokens" not in out:
+            for candidate in ("max_tokens", "max_completion_tokens"):
+                value = safe_cfg.get(candidate)
+                try:
+                    parsed = int(value)
+                except Exception:
+                    parsed = 0
+                if parsed > 0:
+                    out["max_output_tokens"] = parsed
+                    break
+
+        if "reasoning" not in out:
+            effort = str(safe_cfg.get("reasoning_effort") or "").strip().lower()
+            if effort in {"low", "medium", "high"}:
+                out["reasoning"] = {"effort": effort}
+
+        tools = out.get("tools")
+        if isinstance(tools, list):
+            normalized_tools: List[Dict[str, Any]] = []
+            for item in tools:
+                if isinstance(item, dict) and item.get("type"):
+                    normalized_tools.append(item)
+                elif isinstance(item, str) and item.strip():
+                    normalized_tools.append({"type": item.strip()})
+            out["tools"] = normalized_tools
+
+        return out
+
+    def _build_kie_responses_input(self, messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
+        """Convert chat messages into KIE responses API input format."""
+        instructions_parts: List[str] = []
+        response_input: List[Dict[str, Any]] = []
+
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+
+            role = str(message.get("role") or "user").strip().lower() or "user"
+            raw_content = message.get("content")
+
+            if role == "system":
+                text = self._extract_text_from_content(raw_content)
+                if text:
+                    instructions_parts.append(text)
+                continue
+
+            if role not in {"user", "assistant"}:
+                role = "user"
+
+            content_parts: List[Dict[str, Any]] = []
+
+            if isinstance(raw_content, list):
+                for part in raw_content:
+                    if isinstance(part, dict):
+                        part_type = str(part.get("type") or "").strip().lower()
+                        if part_type in {"text", "input_text"}:
+                            text = str(part.get("text") or "").strip()
+                            if text:
+                                content_parts.append({"type": "input_text", "text": text})
+                            continue
+
+                        if part_type == "image_url":
+                            image_value = part.get("image_url")
+                            if isinstance(image_value, dict):
+                                image_url = str(image_value.get("url") or "").strip()
+                            else:
+                                image_url = str(image_value or "").strip()
+                            if image_url:
+                                content_parts.append({"type": "input_image", "image_url": image_url})
+                            continue
+
+                    fallback_text = self._extract_text_from_content(part)
+                    if fallback_text:
+                        content_parts.append({"type": "input_text", "text": fallback_text})
+            else:
+                text = self._extract_text_from_content(raw_content)
+                if text:
+                    content_parts.append({"type": "input_text", "text": text})
+
+            if not content_parts:
+                content_parts.append({"type": "input_text", "text": ""})
+
+            response_input.append({
+                "role": role,
+                "content": content_parts,
+            })
+
+        instructions = "\n\n".join(chunk for chunk in instructions_parts if chunk).strip()
+        return instructions, response_input
+
+    def _resolve_kie_llm_url(self, base_url: str, model: str) -> Tuple[str, str, str, str]:
+        """Normalize KIE URL and resolve transport endpoint.
+
+        Returns: (root, resolved_model, url, transport_kind)
+        transport_kind is either "chat_completions" or "responses".
+        """
         root = (base_url or "https://api.kie.ai").strip().rstrip("/")
+        lower_root = root.lower()
+
+        # Responses transport (e.g. https://api.kie.ai/codex/v1/responses)
+        responses_match = re.search(r"/(?:codex/)?v1/responses(?:/|$)", lower_root)
+        if responses_match:
+            match_end = responses_match.end()
+            canonical_endpoint = root[:match_end].rstrip("/")
+            canonical_root = root[:responses_match.start()].rstrip("/")
+            if not canonical_root:
+                canonical_root = "https://api.kie.ai"
+
+            kie_llm_alias = {
+                "claude-opus-4.5": "claude-opus-4-5",
+                "claude-sonnet-4.5": "claude-sonnet-4-5",
+            }
+            resolved_model = kie_llm_alias.get(model, model)
+            if resolved_model != model:
+                logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
+
+            return canonical_root, resolved_model, canonical_endpoint, "responses"
 
         # If a full endpoint was saved (including model path), collapse back to provider root.
         root = re.sub(r"/[^/]+/v1/chat/completions/?$", "", root, flags=re.IGNORECASE)
 
         # Strip other legacy fragments if present.
-        for suffix in ("/api/v1/jobs", "/v1/chat/completions", "/v1"):
+        for suffix in ("/api/v1/jobs", "/v1/chat/completions", "/v1", "/responses"):
             if root.endswith(suffix):
                 root = root[: -len(suffix)].rstrip("/")
 
@@ -896,7 +1046,7 @@ class LLMService:
             logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
 
         url = f"{root}/{resolved_model}/v1/chat/completions"
-        return root, resolved_model, url
+        return root, resolved_model, url, "chat_completions"
 
     def _extract_finish_reason_from_response(self, full_response: Dict[str, Any]) -> Any:
         choices = full_response.get("choices") or []
@@ -2609,9 +2759,12 @@ class LLMService:
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
             import re as _re
             configured_endpoint = _re.sub(r'(/v1)/v1(?=/|$)', r'\1', configured_endpoint)
+
+        resolved_model = model
+        kie_transport_kind = "chat_completions"
         
         if provider == "kie" and resolved_category == "LLM" and not use_claude_api:
-            _, resolved_model, url = self._resolve_kie_llm_url(base_url, model)
+            _, resolved_model, url, kie_transport_kind = self._resolve_kie_llm_url(base_url, model)
             url_source = "kie.model_path"
         elif use_claude_api and resolved_category == "LLM":
             url = self._resolve_claude_llm_url(base_url, configured_endpoint)
@@ -2664,6 +2817,15 @@ class LLMService:
                 extra_config=extra_config,
                 provider=provider,
             )
+        elif provider == "kie" and resolved_category == "LLM" and kie_transport_kind == "responses":
+            instructions, response_input = self._build_kie_responses_input(messages)
+            payload = {
+                "model": resolved_model,
+                "input": response_input,
+                "stream": True,
+            }
+            if instructions:
+                payload["instructions"] = instructions
         else:
             payload = {
                 "model": resolved_model if (provider == "kie" and resolved_category == "LLM") else model,
@@ -2673,7 +2835,10 @@ class LLMService:
             }
 
         if provider == "kie" and resolved_category == "LLM":
-            payload.update(self._extract_kie_chat_options(extra_config or {}))
+            if kie_transport_kind == "responses":
+                payload.update(self._extract_kie_responses_options(extra_config or {}))
+            else:
+                payload.update(self._extract_kie_chat_options(extra_config or {}))
         elif extra_config and not (use_claude_api and resolved_category == "LLM"):
             for k, v in extra_config.items():
                 if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):

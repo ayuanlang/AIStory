@@ -2446,6 +2446,149 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
+    const ensureSceneTableConsistencyBeforePhase2 = useCallback(async (analysisText, options = {}) => {
+        const stableEpisodeId = activeEpisode?.id;
+        if (!stableEpisodeId) {
+            return {
+                checked: false,
+                hasSceneMarkdown: false,
+                isConsistent: true,
+                repaired: false,
+                reason: 'no_episode',
+            };
+        }
+
+        const stableAnalysisText = String(analysisText || '').trim();
+        const sceneCheck = validateAutoSceneTableImport(stableAnalysisText);
+        if (!sceneCheck.ok || !String(sceneCheck.tableText || '').trim()) {
+            if (sceneCheck.reason && onLog) {
+                onLog(`Scene markdown precheck skipped: ${sceneCheck.reason}`, 'info');
+            }
+            return {
+                checked: true,
+                hasSceneMarkdown: false,
+                isConsistent: true,
+                repaired: false,
+                reason: 'no_complete_scene_markdown',
+            };
+        }
+
+        const parsed = parseMarkdownTable(sceneCheck.tableText);
+        const headers = Array.isArray(parsed?.headers) ? parsed.headers : [];
+        const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+        if (!headers.length || !rows.length) {
+            return {
+                checked: true,
+                hasSceneMarkdown: false,
+                isConsistent: true,
+                repaired: false,
+                reason: 'scene_markdown_unparseable',
+            };
+        }
+
+        const normalizeKey = (value) => String(value || '').toLowerCase().replace(/\s+/g, '').trim();
+        const findHeaderIndex = (aliases = []) => {
+            const normalizedAliases = aliases.map(normalizeKey);
+            return headers.findIndex((h) => normalizedAliases.includes(normalizeKey(h)));
+        };
+
+        const sceneIdIdx = findHeaderIndex(['Scene ID', '场景ID']);
+        const sceneNoIdx = findHeaderIndex(['Scene No.', 'Scene No', '场次序号', '场次']);
+        const sceneNameIdx = findHeaderIndex(['Scene Name', '场景名', '场景名称']);
+
+        const normalizeSceneToken = (value) => String(value || '').trim().toLowerCase();
+        const markdownKeys = rows.map((row) => {
+            const sceneId = sceneIdIdx >= 0 ? normalizeSceneToken(row?.[sceneIdIdx]) : '';
+            const sceneNo = sceneNoIdx >= 0 ? normalizeSceneToken(row?.[sceneNoIdx]) : '';
+            const sceneName = sceneNameIdx >= 0 ? normalizeSceneToken(row?.[sceneNameIdx]) : '';
+            if (sceneId) return `id:${sceneId}`;
+            if (sceneNo) return `no:${sceneNo}`;
+            return `name:${sceneName}`;
+        }).filter((token) => token !== 'name:' && token !== 'no:' && token !== 'id:');
+
+        const dbScenes = await fetchScenes(stableEpisodeId).catch(() => []);
+        const dbKeys = (Array.isArray(dbScenes) ? dbScenes : []).map((scene) => {
+            const sceneId = normalizeSceneToken(scene?.scene_id || scene?.scene_code || '');
+            const sceneNo = normalizeSceneToken(scene?.scene_no || '');
+            const sceneName = normalizeSceneToken(scene?.scene_name || scene?.location || '');
+            if (sceneId) return `id:${sceneId}`;
+            if (sceneNo) return `no:${sceneNo}`;
+            return `name:${sceneName}`;
+        }).filter((token) => token !== 'name:' && token !== 'no:' && token !== 'id:');
+
+        const uniqueMarkdown = [...new Set(markdownKeys)];
+        const uniqueDb = [...new Set(dbKeys)];
+        const dbSet = new Set(uniqueDb);
+        const markdownSet = new Set(uniqueMarkdown);
+
+        const missingInDb = uniqueMarkdown.filter((k) => !dbSet.has(k));
+        const extraInDb = uniqueDb.filter((k) => !markdownSet.has(k));
+        const isConsistent = missingInDb.length === 0 && extraInDb.length === 0 && uniqueMarkdown.length === uniqueDb.length;
+
+        if (isConsistent) {
+            if (onLog) onLog(`Scene markdown precheck passed: markdown=${uniqueMarkdown.length}, db=${uniqueDb.length}.`, 'success');
+            return {
+                checked: true,
+                hasSceneMarkdown: true,
+                isConsistent: true,
+                repaired: false,
+                reason: 'already_consistent',
+                markdownCount: uniqueMarkdown.length,
+                dbCount: uniqueDb.length,
+            };
+        }
+
+        const stageNotice = t(
+            '检测到 Scene Markdown 与场景数据表不一致：将清理旧场景并按 Markdown 重新导入。',
+            'Detected mismatch between scene markdown and scene table: clearing old scenes and re-importing from markdown.'
+        );
+        setAnalysisFlowStatus({ phase: 'saving_scenes', message: stageNotice });
+        if (onLog) {
+            onLog(`${stageNotice} markdown=${uniqueMarkdown.length}, db=${uniqueDb.length}, missing=${missingInDb.length}, extra=${extraInDb.length}`, 'warning');
+        }
+
+        const shouldSetRunningReport = options?.setRunningReport !== false;
+        if (shouldSetRunningReport) {
+            setAnalysisUiReport(prev => ({
+                status: 'running',
+                startedAt: Number(prev?.startedAt || Date.now()) || Date.now(),
+                durationMs: 0,
+                phaseTimings: prev?.phaseTimings || null,
+                importReport: prev?.importReport || null,
+                runtimeMeta: prev?.runtimeMeta || null,
+                warning: stageNotice,
+                error: '',
+            }));
+        }
+
+        const staleScenes = await fetchScenes(stableEpisodeId);
+        if (Array.isArray(staleScenes) && staleScenes.length > 0) {
+            await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
+        }
+
+        const repairImportReport = await doImportText(sceneCheck.tableText, 'scene', {
+            suppressAlerts: true,
+            autoSupplementSceneSubjects: false,
+        });
+
+        const repairedDbScenes = await fetchScenes(stableEpisodeId).catch(() => []);
+        if (onLog) {
+            onLog(`Scene markdown repair import finished: before=${uniqueDb.length}, after=${Array.isArray(repairedDbScenes) ? repairedDbScenes.length : 0}.`, 'success');
+        }
+
+        return {
+            checked: true,
+            hasSceneMarkdown: true,
+            isConsistent: false,
+            repaired: true,
+            reason: 'reimported_from_markdown',
+            markdownCount: uniqueMarkdown.length,
+            dbCount: uniqueDb.length,
+            repairedCount: Array.isArray(repairedDbScenes) ? repairedDbScenes.length : 0,
+            importReport: repairImportReport || null,
+        };
+    }, [activeEpisode?.id, deleteScene, doImportText, fetchScenes, onLog, parseMarkdownTable, t, validateAutoSceneTableImport]);
+
     
 
     
@@ -4932,6 +5075,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false, retryCount = 0) => {
+        let preflightSceneSyncNotice = '';
+        try {
+            const preflightSource = String(activeEpisode?.ai_scene_analysis_result || llmRawResultContent || llmResultContent || '').trim();
+            const preflightResult = await ensureSceneTableConsistencyBeforePhase2(preflightSource, { setRunningReport: false });
+            if (preflightResult?.repaired) {
+                preflightSceneSyncNotice = t('分析开始前已检测到场景表不一致：旧场景已清理，并按 Markdown Scene 表重新导入。', 'Before analysis started, scene table mismatch was detected: old scenes were cleared and re-imported from markdown scene table.');
+            }
+        } catch (preflightErr) {
+            if (onLog) onLog(`Scene markdown precheck failed (continue analysis): ${preflightErr?.message || preflightErr}`, 'warning');
+        }
+
         // Bypass Phase 1 if subject index is already present!
         if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
             const bypassConfirmed = true;
@@ -4966,7 +5120,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     phaseTimings: null,
                     importReport: null,
                     runtimeMeta: null,
-                    warning: retryResetNotice,
+                    warning: [retryResetNotice, preflightSceneSyncNotice].filter(Boolean).join('；'),
                     error: '',
                 });
 
@@ -5003,7 +5157,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         phaseTimings: null,
                         importReport: finalImportReport,
                         runtimeMeta: null,
-                        warning: '',
+                        warning: preflightSceneSyncNotice,
                         error: '',
                     });
                 } catch (err) {
@@ -5044,7 +5198,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseTimings: null,
             importReport: null,
             runtimeMeta: null,
-            warning: '',
+            warning: preflightSceneSyncNotice,
             error: '',
         });
         if (onLog) onLog("Starting AI Script Analysis...", "start");
@@ -5262,7 +5416,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
-            const combinedReportWarning = [importWarningMessage, retryResetNotice]
+            const combinedReportWarning = [importWarningMessage, retryResetNotice, preflightSceneSyncNotice]
                 .map(item => String(item || '').trim())
                 .filter(Boolean)
                 .join('；');
@@ -5454,6 +5608,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
+        let preflightSceneSyncNotice = '';
+
+        try {
+            const preflightSource = String(activeEpisode?.ai_scene_analysis_result || llmRawResultContent || llmResultContent || '').trim();
+            const preflightResult = await ensureSceneTableConsistencyBeforePhase2(preflightSource, { setRunningReport: false });
+            if (preflightResult?.repaired) {
+                preflightSceneSyncNotice = t('分析开始前已检测到场景表不一致：旧场景已清理，并按 Markdown Scene 表重新导入。', 'Before analysis started, scene table mismatch was detected: old scenes were cleared and re-imported from markdown scene table.');
+            }
+        } catch (preflightErr) {
+            if (onLog) onLog(`Scene markdown precheck failed (continue analysis): ${preflightErr?.message || preflightErr}`, 'warning');
+        }
+
         // Bypass Phase 1 if subject index is already present!
         if (activeEpisode.ai_scene_analysis_subject_index && activeEpisode.ai_scene_analysis_subject_index.trim()) {
             const bypassConfirmed = true;
@@ -5484,7 +5650,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     phaseTimings: null,
                     importReport: null,
                     runtimeMeta: null,
-                    warning: '',
+                    warning: preflightSceneSyncNotice,
                     error: '',
                 });
 
@@ -5521,7 +5687,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         phaseTimings: null,
                         importReport: finalImportReport,
                         runtimeMeta: null,
-                        warning: '',
+                        warning: preflightSceneSyncNotice,
                         error: '',
                     });
                 } catch (err) {
@@ -5567,7 +5733,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseTimings: null,
             importReport: null,
             runtimeMeta: null,
-            warning: retryResetNotice,
+            warning: [retryResetNotice, preflightSceneSyncNotice].filter(Boolean).join('；'),
             error: '',
         });
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
@@ -5774,7 +5940,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
-            const combinedReportWarning = [importWarningMessage, retryResetNotice]
+            const combinedReportWarning = [importWarningMessage, retryResetNotice, preflightSceneSyncNotice]
                 .map(item => String(item || '').trim())
                 .filter(Boolean)
                 .join('；');
