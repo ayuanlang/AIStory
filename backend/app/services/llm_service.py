@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
 DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_CONNECT_TIMEOUT_SECONDS", "15"))
 DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS", "10"))
+DEFAULT_KIE_LLM_TIMEOUT_SECONDS = max(
+    900,
+    DEFAULT_LLM_TIMEOUT_SECONDS,
+    int(os.getenv("KIE_LLM_TIMEOUT_SECONDS", "900")),
+)
 LLM_DEBUG_LOG_ENABLED = os.getenv("LLM_DEBUG_LOG", "0") == "1"
 LLM_DEBUG_LOG_MAX_CHARS = max(512, int(os.getenv("LLM_DEBUG_LOG_MAX_CHARS", "1800") or 1800))
 
@@ -304,6 +309,12 @@ class LLMService:
         if isinstance(error, requests.exceptions.SSLError):
             return any(marker in text for marker in markers)
         return any(marker in text for marker in markers)
+
+    def _get_provider_read_timeout_seconds(self, provider: Any) -> int:
+        normalized = str(provider or "").strip().lower()
+        if normalized == "kie":
+            return DEFAULT_KIE_LLM_TIMEOUT_SECONDS
+        return DEFAULT_LLM_TIMEOUT_SECONDS
 
     def _raise_ambiguous_submit_error(self, provider: Any, model: Any, error: Any, url: str) -> None:
         detail = str(error or "unknown transport error").strip()
@@ -666,6 +677,16 @@ class LLMService:
         provider_prompt = _to_int(normalized.get("prompt_tokens"))
         provider_completion = _to_int(normalized.get("completion_tokens"))
 
+        # KIE responses may return input/output token fields directly.
+        if provider_prompt <= 0:
+            provider_prompt = _to_int(normalized.get("input_tokens"))
+            if provider_prompt > 0:
+                normalized["prompt_tokens"] = provider_prompt
+        if provider_completion <= 0:
+            provider_completion = _to_int(normalized.get("output_tokens"))
+            if provider_completion > 0:
+                normalized["completion_tokens"] = provider_completion
+
         est_prompt = self._estimate_prompt_tokens_rough_from_messages(messages)
         est_completion = self._estimate_tokens_rough_from_text(output_text)
 
@@ -749,7 +770,7 @@ class LLMService:
             f"include_thoughts={payload.get('include_thoughts')}"
         )
 
-        timeout = max(90, DEFAULT_LLM_TIMEOUT_SECONDS)
+        timeout = max(90, self._get_provider_read_timeout_seconds("kie"))
 
         def _do_post():
             return requests.post(url, json=payload, headers=headers, timeout=timeout)
@@ -760,7 +781,7 @@ class LLMService:
             human_summary = self._build_human_readable_transport_error_summary(
                 provider="kie",
                 model=resolved_model,
-                error_kind="timeout",
+                error_kind="ambiguous_submit_transport",
                 error_text=exc,
             )
             _debug_log(f"[DEBUG][LLM][KIE] Timeout before response: {exc}", "error")
@@ -770,11 +791,11 @@ class LLMService:
                 "category": "LLM",
                 "url": url,
                 "model": resolved_model,
-                "error_kind": "timeout",
+                "error_kind": "ambiguous_submit_transport",
                 "error_text": str(exc),
                 "human_summary": human_summary,
             })
-            raise Exception(self._vendor_failed_message("kie", f"Upstream timeout before response: {exc}"))
+            self._raise_ambiguous_submit_error("kie", resolved_model, exc, url)
         except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError) as exc:
             human_summary = self._build_human_readable_transport_error_summary(
                 provider="kie",
@@ -1062,6 +1083,12 @@ class LLMService:
             reason = choice.get("finish_reason")
             if reason is not None and str(reason).strip() != "":
                 return reason
+
+        # KIE responses API often reports terminal status at top-level.
+        status = full_response.get("status")
+        if status is not None and str(status).strip() != "":
+            return status
+
         stop_reason = full_response.get("stop_reason")
         if stop_reason is not None and str(stop_reason).strip() != "":
             return stop_reason
@@ -1129,6 +1156,22 @@ class LLMService:
         }
 
     def _extract_text_from_response(self, full_response: Dict[str, Any]) -> str:
+        # KIE responses API shape:
+        # {"output":[{"type":"message","content":[{"type":"output_text","text":"..."}]}], ...}
+        output_items = full_response.get("output") or []
+        if isinstance(output_items, list) and output_items:
+            output_chunks: List[str] = []
+            for item in output_items:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("type") or "").strip().lower() != "message":
+                    continue
+                content_text = self._extract_text_from_content(item.get("content"))
+                if content_text:
+                    output_chunks.append(content_text)
+            if output_chunks:
+                return "\n".join(output_chunks).strip()
+
         choices = full_response.get("choices") or []
         if isinstance(choices, list):
             all_choice_chunks: List[str] = []
@@ -1841,8 +1884,23 @@ class LLMService:
 
         extra_config = dict(config.get("config", {}) or {})
         extra_config.setdefault("__provider", config.get("provider") or self._infer_provider(base_url, model))
+        provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
 
         try:
+            if str(provider or "").strip().lower() == "kie":
+                logger.info(
+                    "chat_completion routing: provider=%s model=%s mode=stream_aggregate",
+                    provider,
+                    model,
+                )
+                return await self._collect_openai_compatible_text_response(
+                    base_url,
+                    api_key,
+                    model,
+                    messages,
+                    extra_config,
+                )
+
             full_response = await self._raw_llm_request_full(base_url, api_key, model, messages, extra_config)
             raw_content = self._extract_text_from_response(full_response)
             content = self._sanitize_response_content(raw_content)
@@ -1861,8 +1919,9 @@ class LLMService:
         except AmbiguousLLMTransportError:
             raise
         except Exception as e:
+            if str(provider or "").strip().lower() == "kie" and self._is_ambiguous_submit_transport_error(e):
+                self._raise_ambiguous_submit_error(provider, model, e, base_url)
             logger.error(f"LLM Raw Completion failed: {e}")
-            provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
             raise Exception(self._vendor_failed_message(provider, e))
 
     def _to_positive_int(self, value: Any, default: int = 0) -> int:
@@ -2041,25 +2100,61 @@ class LLMService:
             "continuation_stopped_by_max_segments": continuation_stopped_by_max_segments,
         }
 
-    async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
-        # Internally use streaming to bypass gateway 60s/300s idle timeouts
-        content_parts = []
-        usage = {}
+    async def _collect_openai_compatible_text_response(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        messages: List[Dict],
+        extra_config: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """Collect streamed OpenAI-compatible output and expose generic text response fields."""
+        content_parts: List[str] = []
+        usage: Dict[str, Any] = {}
         finish_reason = "stop"
-        
+
         async for event in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config):
             if event.get("type") == "token":
                 content_parts.append(event.get("content", ""))
             elif event.get("type") == "done":
-                if "usage" in event and event["usage"]:
+                if event.get("usage"):
                     usage = event["usage"]
-                if "finish_reason" in event and event["finish_reason"]:
+                if event.get("finish_reason"):
                     finish_reason = event["finish_reason"]
 
-        content = "".join(content_parts)
+        raw_content = "".join(content_parts)
+        content = self._sanitize_response_content(raw_content)
+        logger.info(
+            "[_collect_openai_compatible_text_response] content length=%d finish_reason=%s",
+            len(content or ""),
+            finish_reason,
+        )
+        return {
+            "raw_content": raw_content,
+            "content": content,
+            "usage": usage,
+            "finish_reason": finish_reason,
+            "token_limit_hints": [],
+            "extraction_diagnostics": {
+                "stream_aggregated": True,
+                "provider": (extra_config or {}).get("__provider") or self._infer_provider(base_url, model),
+            },
+        }
+
+    async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
+        # Internally use streaming to bypass gateway 60s/300s idle timeouts
+        aggregated = await self._collect_openai_compatible_text_response(
+            base_url,
+            api_key,
+            model,
+            messages,
+            extra_config,
+        )
+        content = str(aggregated.get("content") or "")
+        usage = aggregated.get("usage") or {}
+        finish_reason = aggregated.get("finish_reason") or "stop"
         
         logger.info("[_call_openai_compatible] extracted content length=%d snippet=%s", len(content or ""), (content or "")[:200])
-        content = self._sanitize_response_content(content)
         logger.info("[_call_openai_compatible] sanitized content length=%d snippet=%s", len(content or ""), (content or "")[:200])
         
         # Parse JSON from content
@@ -2869,7 +2964,12 @@ class LLMService:
         finish_reason: Optional[str] = None
         token_batch_buf = ""
 
-        timeout = httpx.Timeout(connect=30.0, read=float(DEFAULT_LLM_TIMEOUT_SECONDS), write=30.0, pool=30.0)
+        timeout = httpx.Timeout(
+            connect=30.0,
+            read=float(self._get_provider_read_timeout_seconds(provider)),
+            write=30.0,
+            pool=30.0,
+        )
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -2987,7 +3087,7 @@ class LLMService:
             human_summary = self._build_human_readable_transport_error_summary(
                 provider=provider,
                 model=payload.get("model") or model,
-                error_kind="timeout",
+                error_kind="ambiguous_submit_transport" if str(provider or "").strip().lower() == "kie" else "timeout",
                 error_text=exc,
             )
             logger.error("%s", human_summary)
@@ -2996,13 +3096,15 @@ class LLMService:
                 "category": resolved_category,
                 "url": url,
                 "model": payload.get("model") or model,
-                "error_kind": "timeout",
+                "error_kind": "ambiguous_submit_transport" if str(provider or "").strip().lower() == "kie" else "timeout",
                 "error_text": str(exc),
                 "human_summary": human_summary,
                 "resolved_source": (extra_config or {}).get("__resolved_source"),
                 "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
                 "stream": True,
             })
+            if str(provider or "").strip().lower() == "kie":
+                self._raise_ambiguous_submit_error(provider, payload.get("model") or model, exc, url)
             raise Exception(self._vendor_failed_message(provider, f"Read timeout: {exc}"))
         except Exception as exc:
             human_summary = self._build_human_readable_transport_error_summary(
