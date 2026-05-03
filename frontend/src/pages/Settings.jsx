@@ -1103,6 +1103,11 @@ const Settings = () => {
                      setVidToolEndpoint("https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis");
                      setVidToolModel("wanx2.1-kf2v-plus");
                      setVidToolWebHook("");
+                 } else if (toolName === "HappyHorse") {
+                     setVidToolKey("");
+                     setVidToolEndpoint("https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis");
+                     setVidToolModel("happyhorse-1.0-r2v");
+                     setVidToolWebHook("");
                  } else if (toolName === "Grsai-Video") {
                     setVidToolKey("");
                     setVidToolEndpoint("https://grsai.dakka.com.cn");
@@ -1229,6 +1234,7 @@ const Settings = () => {
             else if (frontendProviderName === "Doubao Video") backendProvider = "doubao";
             else if (frontendProviderName === "Zlhub Video" || frontendProviderName === "Lzhbu Video") backendProvider = "zlhub";
             else if (frontendProviderName === "Wanxiang") backendProvider = "wanxiang";
+            else if (frontendProviderName === "HappyHorse") backendProvider = "happyhorse";
             else if (frontendProviderName === "Vidu (Video)") backendProvider = "vidu";
             else if (frontendProviderName === "Tencent Hunyuan") backendProvider = "tencent";
             else if (frontendProviderName === "Kie-Image" || frontendProviderName === "Kie-Video") backendProvider = "kie";

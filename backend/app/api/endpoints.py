@@ -45,7 +45,7 @@ from app.services.payment_service import payment_service
 from app.services.task_manager import create_task_record as _create_task_record, submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async, cancel as _cancel_task, set_task_status as _set_task_status
 from app.services.system_default_api_service import get_task_default_system_setting, list_task_default_system_settings
 from app.services.system_api_runtime_cache import resolve_system_api_cached
-from app.api.settings import get_scene_analysis_system_config
+from app.api.settings import get_scene_analysis_system_config, get_project_cost_estimation_config
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
 import os
@@ -53,6 +53,7 @@ import os
 
 from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
+from app.services.project_cost_service import compute_project_cost_estimation
 from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
@@ -6453,6 +6454,49 @@ async def stream_system_management_agent_command(
     )
 
 
+def _compute_project_cost_estimation_snapshot(db: Session, project_id: int) -> Dict[str, Any]:
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    episodes = db.query(Episode).filter(Episode.project_id == project_id).all()
+    episode_ids = [int(getattr(ep, "id", 0) or 0) for ep in episodes if getattr(ep, "id", None) is not None]
+    scenes = db.query(Scene).filter(Scene.episode_id.in_(episode_ids)).all() if episode_ids else []
+    scene_ids = [int(getattr(sc, "id", 0) or 0) for sc in scenes if getattr(sc, "id", None) is not None]
+    shots = db.query(Shot).filter(Shot.scene_id.in_(scene_ids)).all() if scene_ids else []
+
+    cfg = get_project_cost_estimation_config(db)
+    snapshot = compute_project_cost_estimation(
+        project_title=getattr(project, "title", "") or "",
+        global_info=(project.global_info if isinstance(project.global_info, dict) else {}),
+        episodes=episodes,
+        scenes=scenes,
+        shots=shots,
+        config=cfg,
+    )
+    snapshot["computed_at"] = now_bj_iso()
+    snapshot["project_id"] = int(project_id)
+    return snapshot
+
+
+def _recompute_and_persist_project_cost_estimation(db: Session, project_id: int) -> Dict[str, Any]:
+    try:
+        db.flush()
+    except Exception:
+        pass
+
+    snapshot = _compute_project_cost_estimation_snapshot(db, project_id)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    gi = dict(project.global_info) if isinstance(project.global_info, dict) else {}
+    gi["cost_estimation"] = snapshot
+    project.global_info = gi
+    db.add(project)
+    return snapshot
+
+
 # --- Projects ---
 class ProjectCreate(BaseModel):
     title: str
@@ -8223,6 +8267,10 @@ def create_project(
             share_users=project.share_users,
             reviewer_users=project.reviewer_users,
         )
+        try:
+            _recompute_and_persist_project_cost_estimation(db, int(db_project.id))
+        except Exception as cost_exc:
+            logger.warning("create_project cost recompute skipped | project_id=%s err=%s", getattr(db_project, "id", None), cost_exc)
         db.commit()
     except SQLAlchemyTimeoutError:
         db.rollback()
@@ -9686,6 +9734,10 @@ def update_project(
 
     # Normalize and persist generation defaults for consistent downstream billing inputs.
     project.global_info = _ensure_project_generation_defaults(project.global_info)
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(project.id))
+    except Exception as cost_exc:
+        logger.warning("update_project cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
     
     db.commit()
     db.refresh(project)
@@ -9695,6 +9747,96 @@ def update_project(
     project.description = (project.global_info or {}).get("notes")
     _attach_project_flags(project, current_user)
     return project
+
+
+@router.get("/projects/{project_id}/cost_estimation", response_model=Dict[str, Any])
+def get_project_cost_estimation(
+    project_id: int,
+    refresh: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    existing = (project.global_info or {}).get("cost_estimation") if isinstance(project.global_info, dict) else None
+    if refresh or not isinstance(existing, dict):
+        snapshot = _recompute_and_persist_project_cost_estimation(db, project_id)
+        db.commit()
+        return snapshot
+    return existing
+
+
+@router.post("/projects/{project_id}/cost_estimation/recompute", response_model=Dict[str, Any])
+def recompute_project_cost_estimation(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+    snapshot = _recompute_and_persist_project_cost_estimation(db, project_id)
+    db.commit()
+    return snapshot
+
+
+@router.post("/projects/{project_id}/episodes/{episode_id}/cost_estimation/recompute", response_model=Dict[str, Any])
+def recompute_episode_cost_estimation(
+    project_id: int,
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Recompute cost estimation scoped to a single episode, then persist full project snapshot."""
+    _require_project_access(db, project_id, current_user)
+    episode = db.query(Episode).filter(Episode.id == episode_id, Episode.project_id == project_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    snapshot = _recompute_and_persist_project_cost_estimation(db, project_id)
+    db.commit()
+    # Extract episode-specific slice from snapshot for a focused response
+    ep_costs = [ep for ep in (snapshot.get("episode_costs") or []) if ep.get("episode_id") == episode_id]
+    sc_costs = [sc for sc in (snapshot.get("scene_costs") or []) if sc.get("episode_id") == episode_id]
+    return {
+        "project_id": project_id,
+        "episode_id": episode_id,
+        "episode_cost": ep_costs[0] if ep_costs else None,
+        "scene_costs": sc_costs,
+        "summary": snapshot.get("summary"),
+        "computed_at": snapshot.get("computed_at"),
+    }
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/cost_estimation/recompute", response_model=Dict[str, Any])
+def recompute_scene_cost_estimation(
+    project_id: int,
+    scene_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Recompute cost estimation for a specific scene, persist full project snapshot, return scene slice."""
+    _require_project_access(db, project_id, current_user)
+    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    # Verify scene belongs to this project via episode
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id, Episode.project_id == project_id).first()
+    if not episode:
+        raise HTTPException(status_code=403, detail="Scene does not belong to this project")
+    snapshot = _recompute_and_persist_project_cost_estimation(db, project_id)
+    db.commit()
+    # Return the scene-level slice
+    scene_cost = next((sc for sc in (snapshot.get("scene_costs") or []) if sc.get("scene_id") == scene_id), None)
+    return {
+        "project_id": project_id,
+        "scene_id": scene_id,
+        "episode_id": int(scene.episode_id),
+        "scene_cost": scene_cost,
+        "summary": snapshot.get("summary"),
+        "computed_at": snapshot.get("computed_at"),
+    }
+
 
 @router.delete("/projects/{project_id}", status_code=204)
 def delete_project(
@@ -9972,6 +10114,10 @@ def create_episode(
         character_profiles=episode.character_profiles or []
     )
     db.add(db_episode)
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(project_id))
+    except Exception as cost_exc:
+        logger.warning("create_episode cost recompute skipped | project_id=%s err=%s", project_id, cost_exc)
     db.commit()
     db.refresh(db_episode)
     return db_episode
@@ -9999,6 +10145,10 @@ def update_episode(
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
     if episode_in.character_profiles is not None:
         episode.character_profiles = episode_in.character_profiles
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
+    except Exception as cost_exc:
+        logger.warning("update_episode cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
     
     db.commit()
     db.refresh(episode)
@@ -11171,6 +11321,13 @@ async def generate_episode_scenes_from_story(
     db.commit()
     for sc in created:
         db.refresh(sc)
+
+    # Non-blocking cost recompute after scenes are imported
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
+        db.commit()
+    except Exception:
+        pass
 
     return {
         "episode_id": episode_id,
@@ -12616,6 +12773,10 @@ def create_scene(
         existing_scene.environment_name = scene.environment_name
         existing_scene.linked_characters = scene.linked_characters
         existing_scene.key_props = scene.key_props
+        try:
+            _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
+        except Exception as cost_exc:
+            logger.warning("create_scene(upsert) cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
         db.commit()
         db.refresh(existing_scene)
         return existing_scene
@@ -12632,6 +12793,10 @@ def create_scene(
         key_props=scene.key_props
     )
     db.add(db_scene)
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
+    except Exception as cost_exc:
+        logger.warning("create_scene cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
     db.commit()
     db.refresh(db_scene)
     return db_scene
@@ -12656,6 +12821,10 @@ def update_scene(
         setattr(db_scene, field, value)
         
     db.add(db_scene)
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
+    except Exception as cost_exc:
+        logger.warning("update_scene cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
     db.commit()
     db.refresh(db_scene)
     return db_scene
@@ -12678,6 +12847,10 @@ def delete_scene(
     _require_project_access(db, episode.project_id, current_user, owner_only=True)
 
     db.delete(db_scene)
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
+    except Exception as cost_exc:
+        logger.warning("delete_scene cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
     db.commit()
     return None
 
@@ -15692,6 +15865,10 @@ def create_shot(
             technical_notes=shot.technical_notes
         )
         db.add(db_shot)
+        try:
+            _recompute_and_persist_project_cost_estimation(db, int(project.id))
+        except Exception as cost_exc:
+            logger.warning("create_shot cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
         db.commit()
         db.refresh(db_shot)
         
@@ -15730,6 +15907,10 @@ def update_shot(
 
     for key, value in update_data.items():
         setattr(db_shot, key, value)
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(project.id))
+    except Exception as cost_exc:
+        logger.warning("update_shot cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
         
     db.commit()
     db.refresh(db_shot)
@@ -15747,9 +15928,13 @@ def delete_shot(
          
     scene = db.query(Scene).filter(Scene.id == db_shot.scene_id).first()
     episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
-    _require_project_access(db, episode.project_id, current_user, owner_only=True)
+    project = _require_project_access(db, episode.project_id, current_user, owner_only=True)
         
     db.delete(db_shot)
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(project.id))
+    except Exception as cost_exc:
+        logger.warning("delete_shot cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
     db.commit()
     return {"ok": True}
 
@@ -29119,8 +29304,13 @@ def _video_api_supports_last_frame_mode(provider: Any, model: Any) -> bool:
         return False
 
     if provider_text == "wanxiang":
+        if "happyhorse" in model_text:
+            return False
         if model_text and "kf2v" not in model_text and ("image-to-video" in model_text or model_text.endswith("i2v") or "-i2v" in model_text):
             return False
+
+    if provider_text == "happyhorse":
+        return False
 
     return True
 

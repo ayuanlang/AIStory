@@ -51,6 +51,11 @@ from app.services.system_default_api_service import (
     normalize_task_category,
 )
 from app.services.system_api_runtime_cache import invalidate_system_api_cache
+from app.services.project_cost_service import (
+    default_project_cost_estimation_config,
+    normalize_project_cost_estimation_config,
+    extract_project_create_options,
+)
 from app.schemas.settings import (
     APISettingOut,
     APISettingUpdate,
@@ -83,6 +88,9 @@ from app.schemas.settings import (
     AssetImageRatioConfigUpdate,
     SceneAnalysisSystemConfigOut,
     SceneAnalysisSystemConfigUpdate,
+    ProjectCostEstimationConfigOut,
+    ProjectCostEstimationConfigUpdate,
+    ProjectCreateOptionsConfigOut,
     SystemAIAssistantRequest,
     SystemAIAssistantResponse,
     SystemAIAssistantSuggestion,
@@ -168,6 +176,8 @@ _BILLING_RESET_CONFIG_KEY = "billing_rule_reset_config"
 _SORA_MENTION_CONFIG_KEY = "sora_mention_config"
 _ASSET_IMAGE_RATIO_CONFIG_KEY = "asset_image_ratio_config"
 _SCENE_ANALYSIS_SYSTEM_CONFIG_KEY = "scene_analysis_system_config"
+_PROJECT_COST_ESTIMATION_CONFIG_KEY = "project_cost_estimation_config"
+_PROJECT_CREATE_OPTIONS_CONFIG_KEY = "project_create_options_config"
 _BILLING_RESET_MAX_INCREASE_DEFAULT = 50
 _BILLING_RESET_MIN_MULTIPLIER_DEFAULT = 1.1
 _BILLING_RESET_MAX_MULTIPLIER_DEFAULT = 2.0
@@ -512,6 +522,15 @@ def _default_scene_analysis_system_config() -> Dict[str, Any]:
     }
 
 
+def _default_project_cost_estimation_config() -> Dict[str, Any]:
+    return default_project_cost_estimation_config()
+
+
+def _default_project_create_options_config() -> Dict[str, Any]:
+    base = default_project_cost_estimation_config()
+    return dict(base.get("project_create_options") or {})
+
+
 def _normalize_sora_mention_config(value: Any) -> Dict[str, Any]:
     base = _default_sora_mention_config()
     payload = _safe_json_dict(value)
@@ -567,6 +586,16 @@ def _normalize_scene_analysis_system_config(value: Any) -> Dict[str, Any]:
         normalized_mode = "classic"
     base["default_mode"] = normalized_mode
     return base
+
+
+def _normalize_project_cost_estimation_config(value: Any) -> Dict[str, Any]:
+    return normalize_project_cost_estimation_config(value)
+
+
+def _normalize_project_create_options_config(value: Any) -> Dict[str, List[str]]:
+    if not isinstance(value, dict):
+        return _default_project_create_options_config()
+    return extract_project_create_options({"project_create_options": value})
 
 
 def _normalize_billing_rule_reset_config(value: Any) -> Dict[str, Any]:
@@ -651,6 +680,39 @@ def get_scene_analysis_system_config(db: Session) -> Dict[str, Any]:
     row.config = cfg
     _persist_agent_policy_row_config(db, row.id, row.config)
     return normalized
+
+
+def get_project_cost_estimation_config(db: Session) -> Dict[str, Any]:
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    normalized = _normalize_project_cost_estimation_config(cfg.get(_PROJECT_COST_ESTIMATION_CONFIG_KEY, {}))
+    cfg[_PROJECT_COST_ESTIMATION_CONFIG_KEY] = normalized
+
+    options_cfg = _normalize_project_create_options_config(cfg.get(_PROJECT_CREATE_OPTIONS_CONFIG_KEY, {}))
+    cfg[_PROJECT_CREATE_OPTIONS_CONFIG_KEY] = options_cfg
+
+    merged = dict(normalized)
+    merged["project_create_options"] = options_cfg
+    cfg[_PROJECT_COST_ESTIMATION_CONFIG_KEY] = merged
+
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    return merged
+
+
+def get_project_create_options_config(db: Session) -> Dict[str, List[str]]:
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    cost_cfg = _normalize_project_cost_estimation_config(cfg.get(_PROJECT_COST_ESTIMATION_CONFIG_KEY, {}))
+    options_cfg = _normalize_project_create_options_config(
+        cfg.get(_PROJECT_CREATE_OPTIONS_CONFIG_KEY, cost_cfg.get("project_create_options", {}))
+    )
+    cfg[_PROJECT_CREATE_OPTIONS_CONFIG_KEY] = options_cfg
+    cost_cfg["project_create_options"] = options_cfg
+    cfg[_PROJECT_COST_ESTIMATION_CONFIG_KEY] = cost_cfg
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    return options_cfg
 
 
 def _normalize_unit_type_for_system_ai(raw: Any) -> str:
@@ -4394,6 +4456,13 @@ DEFAULTS = {
         "model": "wanx2.1-kf2v-plus",
         "config": {}
     },
+    "happyhorse": {
+        "category": "Video",
+        "name": "Aliyun HappyHorse",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+        "model": "happyhorse-1.0-r2v",
+        "config": {}
+    },
     "kie": {
         "category": "Video",
         "name": "KIE AI",
@@ -6185,6 +6254,53 @@ def get_scene_analysis_manage_config(
     return SceneAnalysisSystemConfigOut(**cfg)
 
 
+@router.get("/settings/system/manage/project-cost-estimation-config", response_model=ProjectCostEstimationConfigOut)
+def get_project_cost_estimation_manage_config(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage project cost estimation config")
+
+    cfg = get_project_cost_estimation_config(db)
+    db.commit()
+    return ProjectCostEstimationConfigOut(config=cfg)
+
+
+@router.get("/settings/system/project-create-options", response_model=ProjectCreateOptionsConfigOut)
+def get_project_create_options_catalog(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ = current_user
+    options = get_project_create_options_config(db)
+    db.commit()
+    return ProjectCreateOptionsConfigOut(options=options)
+
+
+@router.put("/settings/system/manage/project-create-options", response_model=ProjectCreateOptionsConfigOut)
+def update_project_create_options_catalog(
+    payload: ProjectCreateOptionsConfigOut,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage project create options")
+
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    normalized_options = _normalize_project_create_options_config(payload.options)
+
+    cost_cfg = _normalize_project_cost_estimation_config(cfg.get(_PROJECT_COST_ESTIMATION_CONFIG_KEY, {}))
+    cost_cfg["project_create_options"] = normalized_options
+    cfg[_PROJECT_COST_ESTIMATION_CONFIG_KEY] = cost_cfg
+    cfg[_PROJECT_CREATE_OPTIONS_CONFIG_KEY] = normalized_options
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    db.commit()
+    return ProjectCreateOptionsConfigOut(options=normalized_options)
+
+
 @router.put("/settings/system/manage/billing-rules/reset-config", response_model=BillingRuleResetConfigOut)
 def update_billing_rule_reset_config(
     payload: BillingRuleResetConfigUpdate,
@@ -6275,6 +6391,35 @@ def update_scene_analysis_manage_config(
 
     normalized = _normalize_scene_analysis_system_config(_safe_json_dict(row.config).get(_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY, {}))
     return SceneAnalysisSystemConfigOut(**normalized)
+
+
+@router.put("/settings/system/manage/project-cost-estimation-config", response_model=ProjectCostEstimationConfigOut)
+def update_project_cost_estimation_manage_config(
+    payload: ProjectCostEstimationConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage project cost estimation config")
+
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    current_cfg = _normalize_project_cost_estimation_config(cfg.get(_PROJECT_COST_ESTIMATION_CONFIG_KEY, {}))
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    patch_cfg = _safe_json_dict(patch).get("config")
+    merged_cfg = {**current_cfg, **_safe_json_dict(patch_cfg)}
+    normalized = _normalize_project_cost_estimation_config(merged_cfg)
+
+    normalized_options = _normalize_project_create_options_config(
+        cfg.get(_PROJECT_CREATE_OPTIONS_CONFIG_KEY, normalized.get("project_create_options", {}))
+    )
+    normalized["project_create_options"] = normalized_options
+    cfg[_PROJECT_COST_ESTIMATION_CONFIG_KEY] = normalized
+    cfg[_PROJECT_CREATE_OPTIONS_CONFIG_KEY] = normalized_options
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    db.commit()
+    return ProjectCostEstimationConfigOut(config=normalized)
 
 
 @router.get("/settings/system/manage/{system_api_id}/billing-rules", response_model=List[SystemAPIBillingRuleOut])

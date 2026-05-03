@@ -105,6 +105,7 @@ import {
     rebindShotMediaAssets,
     getCachedUserPreferences,
     fetchProjectSubjectInventoryPrompt,
+    recomputeEpisodeCostEstimation,
 } from '../../../services/api';
 
 import RefineControl from '../../../components/RefineControl.jsx';
@@ -184,6 +185,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
     const [subjectIndexText, setSubjectIndexText] = useState('');
     const [adaptationText, setAdaptationText] = useState('');
@@ -5945,6 +5947,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </button>
                     )}
                     <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90">{t('保存修改', 'Save Changes')}</button>
+                    <button
+                        onClick={async () => {
+                            if (!projectId || !activeEpisode?.id || isRecomputingEpisodeCost) return;
+                            setIsRecomputingEpisodeCost(true);
+                            try {
+                                await recomputeEpisodeCostEstimation(projectId, activeEpisode.id);
+                            } catch (e) {
+                                console.error('Episode cost recompute failed', e);
+                            } finally {
+                                setIsRecomputingEpisodeCost(false);
+                            }
+                        }}
+                        disabled={isRecomputingEpisodeCost || !activeEpisode?.id}
+                        className="px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 border border-emerald-500/30 rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        title={t('重新估算本集成本', 'Recompute episode cost estimation')}
+                    >
+                        {isRecomputingEpisodeCost ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                        {t('重算成本', 'Recompute Cost')}
+                    </button>
                 </div>
             </div>
 

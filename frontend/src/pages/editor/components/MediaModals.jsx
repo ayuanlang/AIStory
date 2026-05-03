@@ -305,190 +305,124 @@ export const AssetHoverMetaOverlay = ({ asset, t, entities = [], position = 'top
 export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, entities = [], episodeId = null, uiLang = 'zh' }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [tab, setTab] = useState('assets');
-    const [assets, setAssets] = useState([]);
     const [allCleanData, setAllCleanData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
-    const [selectedMulti, setSelectedMulti] = useState(new Set()); // Multi-selection state
     const [showHistoricalProjectAssets, setShowHistoricalProjectAssets] = useState(false);
-    
-    // Filters
-    const [filterScope, setFilterScope] = useState('characters'); // 'characters', 'props', 'environments', 'shots', 'all'
-    const [filterType, setFilterType] = useState('all');
-    const [filterValue, setFilterValue] = useState('');
-    const [filterFrameType, setFilterFrameType] = useState('all');
-    const [availableShots, setAvailableShots] = useState([]);
-    const [assetsViewportHeight, setAssetsViewportHeight] = useState(0);
-    const [assetsViewportWidth, setAssetsViewportWidth] = useState(0);
-    const [assetsScrollTop, setAssetsScrollTop] = useState(0);
-    const assetsViewportRef = useRef(null);
 
-    const ASSET_GRID_COLUMNS = 4;
-    const ASSET_GRID_GAP = 12;
-    const assetCardWidth = useMemo(() => {
-        if (!assetsViewportWidth) return 160;
-        const usableWidth = Math.max(0, assetsViewportWidth - ASSET_GRID_GAP * (ASSET_GRID_COLUMNS - 1));
-        return Math.max(96, Math.floor(usableWidth / ASSET_GRID_COLUMNS));
-    }, [assetsViewportWidth]);
-    const assetRowHeight = useMemo(() => Math.max(108, assetCardWidth + ASSET_GRID_GAP), [assetCardWidth]);
-    const assetTotalRows = useMemo(() => Math.ceil((assets?.length || 0) / ASSET_GRID_COLUMNS), [assets?.length]);
-    const assetVisibleRows = useMemo(() => {
-        if (!assetsViewportHeight) return 8;
-        return Math.max(1, Math.ceil(assetsViewportHeight / assetRowHeight));
-    }, [assetsViewportHeight, assetRowHeight]);
-    const assetOverscanRows = 3;
-    const assetStartRow = useMemo(() => {
-        if (!assets?.length) return 0;
-        return Math.max(0, Math.floor(assetsScrollTop / assetRowHeight) - assetOverscanRows);
-    }, [assets?.length, assetsScrollTop, assetRowHeight]);
-    const assetEndRow = useMemo(() => {
-        if (!assetTotalRows) return 0;
-        return Math.min(assetTotalRows, assetStartRow + assetVisibleRows + assetOverscanRows * 2);
-    }, [assetTotalRows, assetStartRow, assetVisibleRows]);
-    const assetStartIndex = useMemo(() => assetStartRow * ASSET_GRID_COLUMNS, [assetStartRow]);
-    const assetEndIndex = useMemo(() => {
-        if (!assets?.length) return 0;
-        return Math.min(assets.length, assetEndRow * ASSET_GRID_COLUMNS);
-    }, [assets?.length, assetEndRow]);
-    const visibleAssets = useMemo(() => {
-        if (!assets?.length) return [];
-        return assets.slice(assetStartIndex, assetEndIndex);
-    }, [assets, assetStartIndex, assetEndIndex]);
-    const assetTopSpacerHeight = useMemo(() => assetStartRow * assetRowHeight, [assetStartRow, assetRowHeight]);
-    const assetBottomSpacerHeight = useMemo(() => {
-        const remainingRows = Math.max(0, assetTotalRows - assetEndRow);
-        return remainingRows * assetRowHeight;
-    }, [assetTotalRows, assetEndRow, assetRowHeight]);
+    const [episodeFilter, setEpisodeFilter] = useState(episodeId ? 'current' : 'all');
+    const [assetTypeFilter, setAssetTypeFilter] = useState('image');
+    const [assetNameFilter, setAssetNameFilter] = useState('');
+    const [availableShots, setAvailableShots] = useState([]);
+
+    const inferPreferredAssetType = useCallback(() => {
+        const stableType = String(context?.type || '').trim().toLowerCase();
+        if (stableType.includes('video')) return 'video';
+        if (stableType.includes('image')) return 'image';
+        if (context?.shotFrameType) return 'image';
+        return 'image';
+    }, [context]);
+
+    const resolveAssetEpisodeId = useCallback((asset) => {
+        const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+        const raw = meta?.episode_id ?? asset?.episode_id;
+        const stable = String(raw ?? '').trim();
+        return stable || '';
+    }, []);
+
+    const resolveAssetEpisodeLabel = useCallback((asset) => {
+        const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+        const title = String(meta?.episode_title || '').trim();
+        if (title) return title;
+        const id = resolveAssetEpisodeId(asset);
+        if (!id) return t('未标记分集', 'Unassigned Episode');
+        return `${t('分集', 'Episode')} ${id}`;
+    }, [resolveAssetEpisodeId, t]);
 
     useEffect(() => {
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
              setShowHistoricalProjectAssets(false);
-             
-             // Setup initial filters based on context
-             if (context && context.entityId) {
-                 const t = entities.find(e => String(e.id) === String(context.entityId))?.type || 'character';
-                 setFilterScope(t === 'character' ? 'characters' : t === 'prop' ? 'props' : t === 'environment' ? 'environments' : 'characters');
-             } else {
-                 setFilterScope('characters');
-             }
+             setEpisodeFilter(episodeId ? 'current' : 'all');
+             setAssetTypeFilter(inferPreferredAssetType());
+             setAssetNameFilter('');
         }
-    }, [isOpen]);
+    }, [episodeId, inferPreferredAssetType, isOpen]);
 
-    useEffect(() => {
-         // Load shots if needed
-         if (filterScope === 'shots' && episodeId && availableShots.length === 0) {
-               fetchEpisodeShots(episodeId, { compact: true }).then(data => {
-                 setAvailableShots(data.sort((a,b) => {
-                      // simple sort by shot_id alphanumeric
-                        return String(a.shot_id || '').localeCompare(String(b.shot_id || ''), undefined, { numeric: true });
-                 }));
-             }).catch(console.error);
-         }
-    }, [filterScope, episodeId]);
+        useEffect(() => {
+                 if (episodeId && availableShots.length === 0) {
+                             fetchEpisodeShots(episodeId, { compact: true }).then(data => {
+                                 setAvailableShots(data.sort((a,b) => {
+                                                return String(a.shot_id || '').localeCompare(String(b.shot_id || ''), undefined, { numeric: true });
+                                 }));
+                         }).catch(console.error);
+                 }
+        }, [episodeId, availableShots.length]);
 
     useEffect(() => {
         if (isOpen && tab === 'assets') {
             loadAssets();
         } else if (!isOpen) {
             setAllCleanData(null);
-            setAssets([]);
+            setSelectedAsset(null);
+            setAssetNameFilter('');
         }
     }, [isOpen, tab, showHistoricalProjectAssets, projectId, episodeId]);
 
-    useEffect(() => {
-        if (!allCleanData) return;
-        
-        // Step 2: Apply Scope Filtering locally fast
-        let res = allCleanData;
+    const episodeOptions = useMemo(() => {
+        const grouped = new Map();
+        (Array.isArray(allCleanData) ? allCleanData : []).forEach((asset) => {
+            const epId = resolveAssetEpisodeId(asset);
+            if (!epId) return;
+            if (!grouped.has(epId)) {
+                grouped.set(epId, resolveAssetEpisodeLabel(asset));
+            }
+        });
+        return Array.from(grouped.entries())
+            .map(([id, label]) => ({ id, label }))
+            .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+    }, [allCleanData, resolveAssetEpisodeId, resolveAssetEpisodeLabel]);
 
-        const buildEntityAssets = (typeMatch) => {
-            return entities
-                .filter(e => e.type === typeMatch && e.image_url)
-                .map(e => ({
-                    id: 'entity_' + e.id,
-                    url: e.image_url,
-                    type: 'image',
-                    meta_info: { entity_id: e.id, source: 'entity' }
-                }));
-        };
+    const filteredAssets = useMemo(() => {
+        const rows = Array.isArray(allCleanData) ? [...allCleanData] : [];
+        let filtered = rows;
 
-        const mergeAssets = (baseAssets, entityAssets) => {
-            const urlSet = new Set(baseAssets.map(a => String(a.url).trim()));
-            const uniqueEntities = entityAssets.filter(ea => !urlSet.has(String(ea.url).trim()));
-            return [...uniqueEntities, ...baseAssets];
-        };
-
-        if (filterScope === 'characters') {
-              res = buildEntityAssets('character');
-          } else if (filterScope === 'props') {
-              res = buildEntityAssets('prop');
-          } else if (filterScope === 'environments') {
-              res = buildEntityAssets('environment');
-          } else if (filterScope === 'shots') {
-                res = availableShots.flatMap(s => {
-                    let startUrl = s.image_url ? String(s.image_url).trim() : '';
-                    let endUrl = s.end_frame_url;
-                    if (!endUrl && s.technical_notes) {
-                        try {
-                            const tech = typeof s.technical_notes === 'string' ? JSON.parse(s.technical_notes) : s.technical_notes;
-                            endUrl = tech?.end_frame_url;
-                        } catch (e) {}
-                    }
-                    endUrl = endUrl ? String(endUrl).trim() : '';
-                    
-                    return [
-                        startUrl && { id: 'shot_start_' + s.id, url: startUrl, type: 'image', meta_info: { source: 'shot', shot_id: s.id } },
-                        endUrl && { id: 'shot_end_' + s.id, url: endUrl, type: 'image', meta_info: { source: 'shot', shot_id: s.id } },
-                        s.video_url && { id: 'shot_video_' + s.id, url: String(s.video_url).trim(), type: 'video', meta_info: { source: 'shot', shot_id: s.id } }
-                    ];
-                }).filter(Boolean);            }
-        // Step 3: Global Media Type Filter
-        if (filterType !== 'all') {
-            res = res.filter(a => a.type === filterType);
+        const currentEpisodeStable = String(episodeId || '').trim();
+        if (episodeFilter === 'current' && currentEpisodeStable) {
+            filtered = filtered.filter((asset) => resolveAssetEpisodeId(asset) === currentEpisodeStable);
+        } else if (episodeFilter !== 'all') {
+            filtered = filtered.filter((asset) => resolveAssetEpisodeId(asset) === episodeFilter);
         }
 
-        console.log("[MediaModal Debug] filterScope:", filterScope, "availableShots:", availableShots.length, "res:", res.length);
-        setAssets(res);
-    }, [allCleanData, filterScope, filterType, filterValue, filterFrameType, entities, availableShots]);
-
-    useEffect(() => {
-        if (isOpen) {
-            setSelectedMulti(new Set());
+        if (assetTypeFilter !== 'all') {
+            filtered = filtered.filter((asset) => String(asset?.type || '').trim().toLowerCase() === assetTypeFilter);
         }
-    }, [isOpen]);
+
+        filtered.sort((left, right) => {
+            const l = new Date(left?.created_at || 0).getTime();
+            const r = new Date(right?.created_at || 0).getTime();
+            return r - l;
+        });
+        return filtered;
+    }, [allCleanData, assetTypeFilter, episodeFilter, episodeId, resolveAssetEpisodeId]);
 
     useEffect(() => {
         if (!isOpen || tab !== 'assets') return;
-        const viewport = assetsViewportRef.current;
-        if (!viewport) return;
-
-        const updateSize = () => {
-            setAssetsViewportHeight(viewport.clientHeight || 0);
-            setAssetsViewportWidth(viewport.clientWidth || 0);
-        };
-
-        updateSize();
-        let observer;
-        if (typeof ResizeObserver !== 'undefined') {
-            observer = new ResizeObserver(updateSize);
-            observer.observe(viewport);
-        } else {
-            window.addEventListener('resize', updateSize);
+        if (!filteredAssets.length) {
+            setSelectedAsset(null);
+            if (assetNameFilter) setAssetNameFilter('');
+            return;
         }
-
-        return () => {
-            if (observer) observer.disconnect();
-            else window.removeEventListener('resize', updateSize);
-        };
-    }, [isOpen, tab]);
-
-    useEffect(() => {
-        setAssetsScrollTop(0);
-        const viewport = assetsViewportRef.current;
-        if (viewport) viewport.scrollTop = 0;
-    }, [filterScope, filterType, filterValue, filterFrameType, tab, isOpen]);
+        const matched = filteredAssets.find((item) => String(item.id) === String(assetNameFilter));
+        if (matched) {
+            if (String(selectedAsset?.id || '') !== String(matched.id)) setSelectedAsset(matched);
+            return;
+        }
+        const first = filteredAssets[0];
+        setAssetNameFilter(String(first.id));
+        setSelectedAsset(first);
+    }, [assetNameFilter, filteredAssets, isOpen, selectedAsset?.id, tab]);
 
     const loadAssets = async () => {
         setLoading(true);
@@ -509,13 +443,15 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             ]);
 
             const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
+            const hasReferencedHints = referencedSet.size > 0;
 
             // Step 1: By default only keep active/current generated assets. History mode keeps all rows.
             const cleanData = ((data || [])).filter(a => {
                 if (!shouldFilterReferencedOnly) return true;
                 const meta = a.meta_info || {};
                 const isGenerated = meta.provider || meta.prompt || meta.source === 'ai_generation';
-                if (isGenerated) {
+                // If backend has no referenced hints yet, keep generated rows to avoid empty picker.
+                if (isGenerated && hasReferencedHints) {
                     return referencedSet.has(String(a.id));
                 }
                 return true;
@@ -601,32 +537,56 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 {tab === 'assets' && (
                     <div className="flex items-center gap-2 p-3 bg-black/10 border-b border-white/5 flex-wrap">
                         <select 
-                            value={filterScope}
+                            value={episodeFilter}
                             onChange={(e) => {
-                                setFilterScope(e.target.value);
-                                setFilterValue('');
+                                setEpisodeFilter(e.target.value);
+                                setAssetNameFilter('');
                             }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
-                            <option value="characters">{t('项目角色', 'Project Characters')}</option>
-                            <option value="props">{t('项目道具', 'Project Props')}</option>
-                            <option value="environments">{t('项目环境', 'Project Environments')}</option>
-                            <option value="shots">{t('项目分镜', 'Project Shots')}</option>
-                            <option value="all">{t('所有素材', 'All Assets')}</option>
+                            {episodeId && <option value="current">{t('本分集', 'Current Episode')}</option>}
+                            <option value="all">{t('全部分集', 'All Episodes')}</option>
+                            {episodeOptions.map((option) => (
+                                <option key={option.id} value={option.id}>{option.label}</option>
+                            ))}
                         </select>
 
-
-
-
-
                         <select 
-                            value={filterType}
-                            onChange={(e) => setFilterType(e.target.value)}
+                            value={assetTypeFilter}
+                            onChange={(e) => {
+                                setAssetTypeFilter(e.target.value);
+                                setAssetNameFilter('');
+                            }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
                             <option value="all">{t('全部类型', 'All Types')}</option>
                             <option value="image">{t('仅图片', 'Images Only')}</option>
                             <option value="video">{t('仅视频', 'Videos Only')}</option>
+                        </select>
+
+                        <select
+                            value={assetNameFilter}
+                            onChange={(e) => {
+                                const nextId = e.target.value;
+                                setAssetNameFilter(nextId);
+                                const picked = filteredAssets.find((item) => String(item.id) === String(nextId));
+                                if (picked) setSelectedAsset(picked);
+                            }}
+                            className="min-w-[260px] flex-1 bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
+                            disabled={filteredAssets.length === 0}
+                        >
+                            {filteredAssets.length === 0 ? (
+                                <option value="">{t('无可选资产', 'No assets available')}</option>
+                            ) : (
+                                filteredAssets.map((asset) => {
+                                    const stableName = String(asset?.name || '').trim() || String(asset?.url || '').split('/').pop() || `${t('素材', 'Asset')} #${asset.id}`;
+                                    return (
+                                        <option key={asset.id} value={String(asset.id)}>
+                                            {stableName}
+                                        </option>
+                                    );
+                                })
+                            )}
                         </select>
 
                         {projectId && (
@@ -640,227 +600,57 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         )}
                         
                         <div className="ml-auto text-[10px] text-muted-foreground">
-                            {assets.length} {t('条结果', 'results')}
+                            {filteredAssets.length} {t('条结果', 'results')}
                         </div>
                     </div>
                 )}
 
-                <div
-                    ref={assetsViewportRef}
-                    onScroll={(e) => setAssetsScrollTop(e.currentTarget.scrollTop || 0)}
-                    className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-[#151515]"
-                >
+                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-[#151515]">
                     {tab === 'assets' && (
                         loading ? <div className="flex items-center justify-center h-full"><RefreshCw className="animate-spin text-muted-foreground"/></div> :
-                        <>
-                            {assetTopSpacerHeight > 0 && <div style={{ height: `${assetTopSpacerHeight}px` }} />}
-                            <div className="grid grid-cols-4 gap-3">
-                            {visibleAssets.map((asset, index) => {
-                                const globalIndex = assetStartIndex + index;
-                                const isFirstRow = globalIndex < 4;
-                                return (
-                                <div
-                                    key={asset.id}
-                                    className="relative group"
-                                >
-                                    <div
-                                        onClick={() => {
-                                            const nextSet = new Set(selectedMulti);
-                                            if (nextSet.has(asset.id)) nextSet.delete(asset.id);
-                                            else nextSet.add(asset.id);
-                                            setSelectedMulti(nextSet);
-                                        }}
-                                        className={`aspect-square bg-black/40 rounded overflow-hidden border cursor-pointer relative transition-all ${selectedMulti.has(asset.id) ? 'border-primary shadow-[0_0_0_2px_rgba(var(--color-primary),0.5)]' : 'border-white/5 hover:border-primary/50'}`}
-                                    >
-                                        {asset.type === 'video' ? (
-                                            <div className="w-full h-full flex items-center justify-center bg-black">
-                                                <Video className="text-white/50 group-hover:text-primary transition-colors"/>
-                                            </div>
-                                        ) : (
-                                            <SafeImage src={asset.url} alt="asset" className="w-full h-full object-cover" />
-                                        )}
-                                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                        {projectId && Number(asset?.id || 0) > 0 && (
-                                            <div className="absolute left-1 top-1 z-10 flex gap-1">
-                                                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold ${asset.is_current_project_asset ? 'bg-emerald-500/90 text-black' : 'bg-black/70 text-white/85 border border-white/10'}`}>
-                                                    {asset.is_current_project_asset ? t('当前', 'Current') : t('历史', 'History')}
-                                                </span>
-                                            </div>
-                                        )}
-                                        <div className="absolute bottom-0 inset-x-0 p-1 bg-black/60 text-[9px] truncate text-white/70">
-                                            <div className="truncate">{asset.name}</div>
-                                            {(asset?.meta_info?.episode_title || asset?.meta_info?.episode_id || asset?.episode_id) && (
-                                                <div className="truncate text-white/50">{asset?.meta_info?.episode_title || `${t('分集', 'Episode')} ${asset?.meta_info?.episode_id || asset?.episode_id}`}</div>
-                                            )}
-                                        </div>
-                                        {/* Floating Button for Detail/Preview */}
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); setSelectedAsset(asset); }}
-                                            className="absolute top-1 right-1 bg-black/60 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-all hover:scale-110 shadow-lg z-10"
-                                            title={t('预览详情', 'Preview Details')}
-                                        >
-                                            <Maximize2 size={12} strokeWidth={2} />
-                                        </button>
-                                        {/* Selected Indicator */}
-                                        {selectedMulti.has(asset.id) && (
-                                            <div className="absolute top-1 left-1 bg-primary text-black p-0.5 rounded-full shadow-lg z-10">
-                                                <Check size={14} strokeWidth={3} />
-                                            </div>
-                                        )}
-                                        {projectId && showHistoricalProjectAssets && Number(asset?.id || 0) > 0 && !asset.is_current_project_asset && (
-                                            <button
-                                                type="button"
-                                                onClick={async (e) => {
-                                                    e.stopPropagation();
-                                                    try {
-                                                        await handleMarkAssetCurrent(asset);
-                                                    } catch (err) {
-                                                        console.error('Failed to switch current asset', err);
-                                                    }
-                                                }}
-                                                className="absolute right-1 bottom-8 z-10 rounded bg-amber-500/90 px-1.5 py-0.5 text-[9px] font-semibold text-black opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
-                                            >
-                                                {t('设当前', 'Set Current')}
-                                            </button>
-                                        )}
-                                    </div>
-                                    <AssetHoverMetaOverlay asset={asset} t={t} entities={entities} position={isFirstRow ? 'bottom' : 'top'} />
-                                </div>
-                                );
-                            })}
-                            </div>
-                            {assetBottomSpacerHeight > 0 && <div style={{ height: `${assetBottomSpacerHeight}px` }} />}
-                            {assets.length === 0 && <div className="text-center text-muted-foreground py-8">{t('未找到素材', 'No assets found')}</div>}
-                        </>
-                    )}
-                    
-                    {/* Asset Detail Overlay */}
-                    {selectedAsset && (
-                        <div className="absolute inset-0 bg-[#1e1e1e] z-20 flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-200">
-                             <div className="flex justify-between items-center p-3 border-b border-white/10 bg-black/20">
-                                <h4 className="font-bold text-sm flex items-center gap-2">
-                                    <button onClick={() => setSelectedAsset(null)} className="hover:bg-white/10 p-1 rounded"><ArrowLeft size={16}/></button>
-                                    {t('素材详情', 'Asset Details')}
-                                </h4>
-                                <div className="flex gap-2">
-                                     {projectId && Number(selectedAsset?.id || 0) > 0 && !selectedAsset?.is_current_project_asset && (
-                                        <button 
-                                            onClick={async () => {
-                                                try {
-                                                    await handleMarkAssetCurrent(selectedAsset);
-                                                } catch (e) {
-                                                    console.error('Failed to mark current asset', e);
-                                                }
-                                            }}
-                                            className="bg-amber-500 text-black text-xs font-bold px-3 py-1.5 rounded hover:opacity-90 flex items-center gap-1"
-                                        >
-                                            <Sparkles size={14}/> {t('设为当前项目资产', 'Set As Current Project Asset')}
-                                        </button>
-                                     )}
-                                     <button 
-                                        onClick={() => { handleSelectAsset(selectedAsset); }}
-                                        className="bg-primary text-black text-xs font-bold px-3 py-1.5 rounded hover:opacity-90 flex items-center gap-1"
-                                     >
-                                        <Check size={14}/> {t('选择该素材', 'Select This Asset')}
-                                     </button>
-                                </div>
-                            </div>
-                            <div className="flex-1 overflow-hidden flex">
-                                <div className="flex-1 bg-black/40 flex items-center justify-center p-4">
-                                     {selectedAsset.type === 'video' ? (
-                                                     <InViewVideo
-                                                          src={selectedAsset.url}
-                                                          controls
-                                                          className="max-w-full max-h-full rounded shadow-lg"
-                                                           visibleDelayMs={420}
-                                                          fallback={<Video className="w-8 h-8 opacity-30" />}
-                                                     />
-                                     ) : (
-                                                     <SafeImage src={selectedAsset.url} className="max-w-full max-h-full object-contain rounded shadow-lg" alt="asset-detail" />
-                                     )}
-                                </div>
-                                <div className="w-80 bg-[#151515] border-l border-white/10 p-4 overflow-y-auto space-y-4">
+                        <div className="h-full">
+                            {filteredAssets.length === 0 || !selectedAsset ? (
+                                <div className="h-full flex items-center justify-center text-center text-muted-foreground">
                                     <div>
-                                        <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('名称', 'Name')}</label>
-                                        <div className="text-sm font-medium">{selectedAsset.name || t('未命名', 'Untitled')}</div>
-                                    </div>
-
-                                    {projectId && Number(selectedAsset?.id || 0) > 0 && (
-                                        <div>
-                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('当前项目资产状态', 'Current Project Asset Status')}</label>
-                                            <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1 flex items-center justify-between gap-2">
-                                                <span>{selectedAsset?.is_current_project_asset ? t('当前选中素材', 'Currently selected asset') : t('历史分集素材', 'Historical episode asset')}</span>
-                                                {(selectedAsset?.meta_info?.episode_title || selectedAsset?.meta_info?.episode_id || selectedAsset?.episode_id) && (
-                                                    <span className="text-white/55">{selectedAsset?.meta_info?.episode_title || `${t('分集', 'Episode')} ${selectedAsset?.meta_info?.episode_id || selectedAsset?.episode_id}`}</span>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-                                    
-                                    {selectedAsset.meta_info?.entity_id && (
-                                        <div>
-                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('关联主体', 'Linked Entity')}</label>
-                                            <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1">
-                                                {entities.find(e => e.id === Number(selectedAsset.meta_info.entity_id))?.name || `Entity #${selectedAsset.meta_info.entity_id}`}
-                                            </div>
-                                        </div>
-                                    )}
-                                    
-                                    {selectedAsset.meta_info?.shot_id && (
-                                        <div>
-                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('来源镜头', 'Source Shot')}</label>
-                                            <div className="text-xs bg-white/5 p-2 rounded border border-white/5 mt-1">
-                                                {availableShots.find(s => s.id === Number(selectedAsset.meta_info.shot_id))?.shot_id || `Shot #${selectedAsset.meta_info.shot_id}`}
-                                                {selectedAsset.meta_info.frame_type || selectedAsset.meta_info.asset_type ? ` - ${selectedAsset.meta_info.frame_type || selectedAsset.meta_info.asset_type}` : ''}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {selectedAsset.meta_info?.prompt && (
-                                        <div>
-                                            <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('提示词', 'Prompt')}</label>
-                                            <div className="text-xs text-gray-400 bg-white/5 p-2 rounded border border-white/5 mt-1 max-h-[150px] overflow-y-auto custom-scrollbar">
-                                                {selectedAsset.meta_info.prompt}
-                                            </div>
-                                        </div>
-                                    )}
-                                    
-                                    {/* Detailed Technical Metadata */}
-                                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
-                                         {selectedAsset.meta_info?.resolution && (
-                                            <div>
-                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('分辨率', 'Resolution')}</label>
-                                                <div className="text-xs text-gray-300">{selectedAsset.meta_info.resolution}</div>
-                                            </div>
-                                         )}
-                                         {selectedAsset.meta_info?.size && (
-                                            <div>
-                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('大小', 'Size')}</label>
-                                                <div className="text-xs text-gray-300">{selectedAsset.meta_info.size}</div>
-                                            </div>
-                                         )}
-                                          {selectedAsset.meta_info?.format && (
-                                            <div>
-                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('格式', 'Format')}</label>
-                                                <div className="text-xs text-gray-300">{selectedAsset.meta_info.format}</div>
-                                            </div>
-                                         )}
-                                          {selectedAsset.meta_info?.duration && (
-                                            <div>
-                                                <label className="text-[10px] tx-muted-foreground font-bold uppercase">{t('时长', 'Duration')}</label>
-                                                <div className="text-xs text-gray-300">{/* Normalize 5.0 to 5s */}
-                                                {String(selectedAsset.meta_info.duration).endsWith('.0') ? parseInt(selectedAsset.meta_info.duration) : selectedAsset.meta_info.duration}s
-                                                </div>
-                                            </div>
-                                         )}
-                                    </div>
-
-                                    <div className="text-[10px] text-muted-foreground pt-4 border-t border-white/5">
-                                        {t('文件', 'File')}: {selectedAsset.url.split('/').pop()} <br/>
-                                        {t('创建时间', 'Created')}: {new Date(selectedAsset.created_at).toLocaleString()}
+                                        <p>{t('未找到素材', 'No assets found')}</p>
+                                        <p className="text-xs mt-2 text-white/40">{t('请调整分集/类型筛选后再试。', 'Please adjust episode/type filters and try again.')}</p>
                                     </div>
                                 </div>
-                            </div>
+                            ) : (
+                                <div className="h-full flex flex-col gap-4">
+                                    <div className="rounded-lg border border-white/10 bg-black/30 p-3 min-h-[260px] flex items-center justify-center">
+                                        {selectedAsset.type === 'video' ? (
+                                            <InViewVideo
+                                                src={selectedAsset.url}
+                                                controls
+                                                className="max-h-[320px] max-w-full rounded"
+                                                visibleDelayMs={280}
+                                                fallback={<Video className="w-8 h-8 opacity-30" />}
+                                            />
+                                        ) : (
+                                            <SafeImage src={selectedAsset.url} className="max-h-[320px] max-w-full object-contain rounded" alt="asset-preview" />
+                                        )}
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-white/80">
+                                        <div className="rounded border border-white/10 bg-black/20 p-3">
+                                            <div className="text-[10px] uppercase text-white/50 mb-1">{t('名称', 'Name')}</div>
+                                            <div>{selectedAsset.name || t('未命名', 'Untitled')}</div>
+                                        </div>
+                                        <div className="rounded border border-white/10 bg-black/20 p-3">
+                                            <div className="text-[10px] uppercase text-white/50 mb-1">{t('分集', 'Episode')}</div>
+                                            <div>{resolveAssetEpisodeLabel(selectedAsset)}</div>
+                                        </div>
+                                        <div className="rounded border border-white/10 bg-black/20 p-3">
+                                            <div className="text-[10px] uppercase text-white/50 mb-1">{t('类型', 'Type')}</div>
+                                            <div>{selectedAsset.type === 'video' ? t('视频', 'Video') : t('图片', 'Image')}</div>
+                                        </div>
+                                        <div className="rounded border border-white/10 bg-black/20 p-3">
+                                            <div className="text-[10px] uppercase text-white/50 mb-1">{t('创建时间', 'Created')}</div>
+                                            <div>{selectedAsset?.created_at ? new Date(selectedAsset.created_at).toLocaleString() : '-'}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -914,19 +704,17 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 {tab === 'assets' && (
                     <div className="flex border-t border-white/10 p-3 bg-black/40 justify-between items-center shrink-0">
                         <div className="text-sm font-medium text-white/80">
-                            {selectedMulti.size} {t('已选中', 'selected')}
+                            {selectedAsset ? (selectedAsset.name || t('已选中目标资产', 'Selected Target Asset')) : t('未选择资产', 'No asset selected')}
                         </div>
                         <button
-                            disabled={selectedMulti.size === 0}
-                                        onClick={async () => {
-                                            const selectedItems = Array.from(selectedMulti).map(id => assets.find(a => a.id === id)).filter(Boolean);
-                                            if (selectedItems.length > 0) {
-                                                await handleSelectAsset(selectedItems[0], selectedItems);
-                                            }
-                                        }}
+                            disabled={!selectedAsset}
+                            onClick={async () => {
+                                if (!selectedAsset) return;
+                                await handleSelectAsset(selectedAsset);
+                            }}
                             className="bg-primary text-black text-sm font-bold px-6 py-2 rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {t('确认', 'Confirm')}
+                            {t('选择目标资产', 'Select Target Asset')}
                         </button>
                     </div>
                 )}

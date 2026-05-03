@@ -27,6 +27,7 @@ import {
     fetchReviewRoundMessages,
     createReviewRoundMessage,
     getKieStandardValueOptions,
+    getProjectCreateOptionsCatalog,
     fetchMe as fetchMeApi,
 } from '../services/api';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
@@ -235,6 +236,7 @@ const pickPreferredOrFirst = (options, preferred = '') => {
 const normalizeProjectCreateOptions = (payload) => {
     const safe = payload && typeof payload === 'object' ? payload : {};
     const type = uniqueNonEmptyStrings(safe.type);
+    const countryRegion = uniqueNonEmptyStrings(safe.country_region);
     const language = uniqueNonEmptyStrings(safe.language);
     const basePositioning = uniqueNonEmptyStrings(safe.base_positioning);
     const aspectRatio = uniqueNonEmptyStrings(safe.aspect_ratio);
@@ -256,7 +258,7 @@ const normalizeProjectCreateOptions = (payload) => {
 
     return {
         type: type.length ? type : [...PROJECT_CREATE_DEFAULT_OPTIONS.type],
-        country_region: [...PROJECT_CREATE_DEFAULT_OPTIONS.country_region],
+        country_region: countryRegion.length ? countryRegion : [...PROJECT_CREATE_DEFAULT_OPTIONS.country_region],
         language: language.length ? language : [...PROJECT_CREATE_DEFAULT_OPTIONS.language],
         base_positioning: basePositioning.length ? basePositioning : [...PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning],
         aspect_ratio: aspectRatio.length ? aspectRatio : [...PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio],
@@ -625,7 +627,16 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     useEffect(() => {
         const loadProjectCreateOptions = async () => {
             try {
-                const data = await getKieStandardValueOptions();
+                let data = null;
+                try {
+                    const catalog = await getProjectCreateOptionsCatalog();
+                    data = catalog?.options || null;
+                } catch (_) {
+                    // Fallback for mixed-version deployments.
+                }
+                if (!data) {
+                    data = await getKieStandardValueOptions();
+                }
                 const normalized = normalizeProjectCreateOptions(data);
                 setProjectCreateOptions(normalized);
                 setNewType((prev) => (normalized.type.includes(prev) ? prev : ''));

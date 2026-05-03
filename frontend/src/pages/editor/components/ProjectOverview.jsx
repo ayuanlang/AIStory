@@ -104,6 +104,8 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
+    getProjectCostEstimation,
+    recomputeProjectCostEstimation,
 } from '../../../services/api';
 
 import RefineControl from '../../../components/RefineControl.jsx';
@@ -279,6 +281,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
     
     const [expandedSections, setExpandedSections] = useState({
         basic: true,
+        cost: true,
         management: false,
         tech: false,
         review: false,
@@ -317,6 +320,10 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
         entity_required: true,
         shot_required: true,
     });
+    const [costEstimation, setCostEstimation] = useState(null);
+    const [isCostLoading, setIsCostLoading] = useState(false);
+    const [isCostRefreshing, setIsCostRefreshing] = useState(false);
+    const [costError, setCostError] = useState('');
 
     useEffect(() => {
         if (mode !== 'generator') {
@@ -340,6 +347,34 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
             setIsReviewPanelLoading(false);
         }
     }, [id]);
+
+    const loadProjectCost = useCallback(async ({ forceRecompute = false } = {}) => {
+        if (!id || mode !== 'overview') return null;
+        if (forceRecompute) {
+            setIsCostRefreshing(true);
+        } else {
+            setIsCostLoading(true);
+        }
+        setCostError('');
+        try {
+            const payload = forceRecompute
+                ? await recomputeProjectCostEstimation(id)
+                : await getProjectCostEstimation(id);
+            const normalized = payload && typeof payload === 'object' ? payload : null;
+            setCostEstimation(normalized);
+            return normalized;
+        } catch (error) {
+            console.warn('Failed to load project cost estimation', error);
+            setCostError(error?.response?.data?.detail || error?.message || 'Failed to load project cost estimation');
+            return null;
+        } finally {
+            if (forceRecompute) {
+                setIsCostRefreshing(false);
+            } else {
+                setIsCostLoading(false);
+            }
+        }
+    }, [id, mode]);
 
     const pollEpisodeScriptsStatus = useCallback(async () => {
         if (!id) return null;
@@ -391,6 +426,11 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
         if (!id || mode !== 'overview') return;
         loadProjectReviewPanel();
     }, [id, mode, loadProjectReviewPanel]);
+
+    useEffect(() => {
+        if (!id || mode !== 'overview') return;
+        loadProjectCost({ forceRecompute: false });
+    }, [id, mode, loadProjectCost]);
 
     useEffect(() => {
         if (!id || mode !== 'overview') return undefined;
@@ -1019,6 +1059,9 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                      skipNextCanonAutosaveRef.current = true;
                      skipNextCanonCategoriesAutosaveRef.current = true;
                 }
+                if (data?.global_info?.cost_estimation && typeof data.global_info.cost_estimation === 'object') {
+                    setCostEstimation(data.global_info.cost_estimation);
+                }
             } catch (e) {
                 console.error("Failed to load project", e);
             }
@@ -1204,6 +1247,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                 share_users: global_info.project_share_users,
                 reviewer_users: global_info.project_reviewer_users,
             });
+            await loadProjectCost({ forceRecompute: true });
             alert("Project info saved!");
             if (onProjectUpdate) onProjectUpdate();
         } catch (e) {
@@ -1864,6 +1908,54 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
 
     const failedEpisodeRows = episodeResultRows.filter(item => item?.status === 'failed' && item?.episode_id);
 
+    const episodeCostChart = useMemo(() => {
+        const rows = (costEstimation && typeof costEstimation === 'object' && Array.isArray(costEstimation.episode_costs))
+            ? costEstimation.episode_costs
+            : [];
+        const normalized = rows.map((item, idx) => {
+            const overviewCost = Number(item?.overview_cost || 0);
+            const hasSuggestedField = Object.prototype.hasOwnProperty.call((item || {}), 'suggested_cost');
+            const suggestedCost = Number(hasSuggestedField ? (item?.suggested_cost || 0) : (item?.budget_cost || 0));
+            const budgetCost = Number(hasSuggestedField ? (item?.budget_cost || 0) : (item?.execution_cost || 0));
+            const currentEstimatedCost = Number(item?.current_estimated_cost || item?.total_cost || 0);
+            const episodeNo = Number(item?.episode_number || (idx + 1));
+            return {
+                episode_number: Number.isFinite(episodeNo) ? episodeNo : (idx + 1),
+                episode_title: String(item?.episode_title || ''),
+                overview_cost: Number.isFinite(overviewCost) ? overviewCost : 0,
+                suggested_cost: Number.isFinite(suggestedCost) ? suggestedCost : 0,
+                budget_cost: Number.isFinite(budgetCost) ? budgetCost : 0,
+                current_stage: String(item?.current_stage || ''),
+                current_estimated_cost: Number.isFinite(currentEstimatedCost) ? currentEstimatedCost : 0,
+            };
+        });
+        const maxStage = normalized.reduce((acc, row) => Math.max(acc, row.overview_cost, row.suggested_cost, row.budget_cost), 0);
+        return { rows: normalized, maxStage };
+    }, [costEstimation]);
+
+    const costExecutionSuggestions = useMemo(() => {
+        const suggestions = (costEstimation && typeof costEstimation === 'object' && Array.isArray(costEstimation.execution_suggestions))
+            ? costEstimation.execution_suggestions
+            : [];
+        return suggestions.filter((item) => typeof item === 'string' && item.trim().length > 0);
+    }, [costEstimation]);
+
+    const hasNewCostSchema = useMemo(() => {
+        if (!costEstimation || typeof costEstimation !== 'object') return false;
+        if (Object.prototype.hasOwnProperty.call((costEstimation?.summary || {}), 'suggested_estimate')) return true;
+        const firstRow = Array.isArray(costEstimation?.episode_costs) ? costEstimation.episode_costs[0] : null;
+        return !!(firstRow && Object.prototype.hasOwnProperty.call(firstRow, 'suggested_cost'));
+    }, [costEstimation]);
+
+    const costStageLabel = useCallback((stageKey) => {
+        const key = String(stageKey || '').trim();
+        if (key === 'overview') return t('概要成本', 'Overview Cost');
+        if (key === 'suggested') return t('建议成本', 'Suggested Cost');
+        if (key === 'budget') return hasNewCostSchema ? t('预算成本', 'Budget Cost') : t('建议成本', 'Suggested Cost');
+        if (key === 'execution') return t('预算成本', 'Budget Cost');
+        return key || t('概要成本', 'Overview Cost');
+    }, [hasNewCostSchema, t]);
+
     if (!project) return <div className="p-8 text-muted-foreground">{t('加载中...', 'Loading...')}</div>;
 
     const prefix = "proj-";
@@ -2076,6 +2168,125 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                             </div>
                         </div>
                     </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </div>
+                )}
+
+                {mode === 'overview' && (
+                <div className="bg-card border border-white/10 rounded-xl overflow-hidden">
+                    <button
+                        onClick={() => toggleSection('cost')}
+                        className="w-full flex items-center justify-between p-4 sm:p-6 bg-white/5 hover:bg-white/10 transition-colors"
+                    >
+                        <div className="flex items-center gap-3">
+                            <h3 className="text-lg font-semibold text-primary">{t('成本评估与执行建议', 'Cost Estimation & Execution Advice')}</h3>
+                            <span className="text-xs text-muted-foreground hidden sm:inline">{t('基于项目属性自动计算', 'Auto-calculated from project attributes')}</span>
+                        </div>
+                        <ChevronDown className={`w-5 h-5 transition-transform ${expandedSections.cost ? 'rotate-180' : ''}`} />
+                    </button>
+                    <AnimatePresence initial={false}>
+                        {expandedSections.cost && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                                className="border-t border-white/10"
+                            >
+                                <div className="p-4 sm:p-6 space-y-6">
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <div className="text-sm text-muted-foreground">
+                                            {t('当前阶段估算', 'Current Stage Estimate')}: <span className="text-white font-semibold">{Number(costEstimation?.summary?.current_estimate || 0).toLocaleString()}</span>
+                                            <span className="ml-3">{t('当前阶段', 'Current Stage')}: <span className="text-white font-semibold">{costStageLabel(costEstimation?.summary?.current_stage || 'overview')}</span></span>
+                                            <span className="ml-3">{t('总倍率', 'Total Multiplier')}: <span className="text-white font-semibold">{Number(costEstimation?.project_multiplier || 1).toFixed(3)}x</span></span>
+                                        </div>
+                                        <button
+                                            onClick={() => loadProjectCost({ forceRecompute: true })}
+                                            disabled={isCostRefreshing || isCostLoading}
+                                            className={`px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 ${(isCostRefreshing || isCostLoading) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                        >
+                                            {isCostRefreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                            {isCostRefreshing ? t('重算中...', 'Recomputing...') : t('重算成本', 'Recompute Cost')}
+                                        </button>
+                                    </div>
+
+                                    {costError && (
+                                        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                                            {costError}
+                                        </div>
+                                    )}
+
+                                    {isCostLoading && !costEstimation && (
+                                        <div className="text-sm text-muted-foreground flex items-center gap-2">
+                                            <Loader2 className="w-4 h-4 animate-spin" /> {t('加载成本评估中...', 'Loading cost estimation...')}
+                                        </div>
+                                    )}
+
+                                    {costEstimation && (
+                                        <>
+                                            <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                                                <div className="flex items-center justify-between gap-3 mb-3">
+                                                    <div className="text-sm font-semibold">{t('分集成本图', 'Per-Episode Cost Chart')}</div>
+                                                    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                                                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-sky-400" />{t('概要成本', 'Overview Cost')}</span>
+                                                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-400" />{t('建议成本', 'Suggested Cost')}</span>
+                                                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400" />{t('预算成本', 'Budget Cost')}</span>
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-3">
+                                                    {episodeCostChart.rows.length > 0 ? (
+                                                        episodeCostChart.rows.map((row) => {
+                                                            const ovPct = episodeCostChart.maxStage > 0 ? Math.max(4, (row.overview_cost / episodeCostChart.maxStage) * 100) : 4;
+                                                            const sgPct = episodeCostChart.maxStage > 0 ? Math.max(4, (row.suggested_cost / episodeCostChart.maxStage) * 100) : 4;
+                                                            const bgPct = episodeCostChart.maxStage > 0 ? Math.max(4, (row.budget_cost / episodeCostChart.maxStage) * 100) : 4;
+                                                            return (
+                                                                <div key={`episode-cost-${row.episode_number}`} className="space-y-1">
+                                                                    <div className="flex items-center justify-between text-xs">
+                                                                        <span className="text-muted-foreground">
+                                                                            {t('第', 'Ep. ')}{row.episode_number}
+                                                                            {row.episode_title ? ` · ${row.episode_title}` : ''}
+                                                                        </span>
+                                                                        <span className="text-white font-semibold">{row.current_estimated_cost.toLocaleString()} ({costStageLabel(row.current_stage || 'overview')})</span>
+                                                                    </div>
+                                                                    <div className="space-y-1">
+                                                                        <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                                                                            <div className="h-full rounded-full" style={{ width: `${ovPct}%`, backgroundColor: '#38bdf8' }} />
+                                                                        </div>
+                                                                        <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                                                                            <div className="h-full rounded-full" style={{ width: `${sgPct}%`, backgroundColor: '#34d399' }} />
+                                                                        </div>
+                                                                        <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                                                                            <div className="h-full rounded-full" style={{ width: `${bgPct}%`, backgroundColor: '#f59e0b' }} />
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })
+                                                    ) : (
+                                                        <div className="text-sm text-muted-foreground">{t('暂无分集成本数据，请先生成分集并重算成本。', 'No per-episode cost data yet. Generate episodes and recompute cost.')}</div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                                                <div className="text-sm font-semibold mb-3">{t('执行建议', 'Execution Suggestions')}</div>
+                                                <div className="space-y-2 text-sm text-primary/95">
+                                                    {costExecutionSuggestions.length > 0 ? (
+                                                        costExecutionSuggestions.map((item, idx) => (
+                                                            <div key={`cost-suggestion-${idx}`} className="rounded-lg bg-white/5 border border-white/10 px-3 py-2">
+                                                                {idx + 1}. {item}
+                                                            </div>
+                                                        ))
+                                                    ) : (
+                                                        <div className="text-muted-foreground">{t('暂无建议。', 'No suggestions yet.')}</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </motion.div>
                         )}

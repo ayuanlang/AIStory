@@ -2738,6 +2738,17 @@ export const getKieStandardValueOptions = async (params = {}) => {
     return response.data;
 }
 
+export const getProjectCreateOptionsCatalog = async () => {
+    const response = await api.get('/settings/system/project-create-options', {
+        params: { _ts: Date.now() },
+        headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+        },
+    });
+    return response.data;
+}
+
 export const listKieStandardMappingsManage = async (params = {}) => {
     const response = await api.get('/settings/system/manage/kie-standard-mappings', {
         params: {
@@ -3282,6 +3293,18 @@ export const getAssetImageRatioConfigManage = async () => (await api.get('/setti
 export const updateAssetImageRatioConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/asset-image-ratio-config', payload || {})).data;
 export const getSceneAnalysisConfigManage = async () => (await api.get('/settings/system/manage/scene-analysis-config')).data;
 export const updateSceneAnalysisConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/scene-analysis-config', payload || {})).data;
+export const getProjectCostEstimationConfigManage = async () => (await api.get('/settings/system/manage/project-cost-estimation-config')).data;
+export const updateProjectCostEstimationConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/project-cost-estimation-config', payload || {})).data;
+export const updateProjectCreateOptionsConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/project-create-options', payload || {})).data;
+export const getProjectCostEstimation = async (projectId, options = {}) => {
+    const response = await api.get(`/projects/${projectId}/cost_estimation`, {
+        params: options?.refresh ? { refresh: true } : {},
+    });
+    return response.data;
+};
+export const recomputeProjectCostEstimation = async (projectId) => (await api.post(`/projects/${projectId}/cost_estimation/recompute`)).data;
+export const recomputeEpisodeCostEstimation = async (projectId, episodeId) => (await api.post(`/projects/${projectId}/episodes/${episodeId}/cost_estimation/recompute`)).data;
+export const recomputeSceneCostEstimation = async (projectId, sceneId) => (await api.post(`/projects/${projectId}/scenes/${sceneId}/cost_estimation/recompute`)).data;
 export const getSystemAIAssistantAnalyze = async (payload = {}) => (await api.post('/settings/system/ai-assistant/analyze', payload || {})).data;
 export const getSystemAIAssistantApply = async (payload = {}) => (await api.post('/settings/system/ai-assistant/apply', payload || {})).data;
 export const aiAssistantExchangeRate = async (payload = {}) => (await api.post('/settings/system/ai-assistant/tools/exchange-rate', payload || {})).data;

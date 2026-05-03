@@ -104,6 +104,8 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
+    recomputeSceneCostEstimation,
+    recomputeEpisodeCostEstimation,
 } from '../../../services/api';
 
 import RefineControl from '../../../components/RefineControl.jsx';
@@ -538,7 +540,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     )
 };
 
-export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, onClick, onGenerateShots, onStopGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false, subjectGap = null, onSupplementSubjects = null, supplementingSubjects = false }) => {
+export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, onClick, onGenerateShots, onStopGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false, subjectGap = null, onSupplementSubjects = null, supplementingSubjects = false, onRecomputeCost = null, sceneCostData = null }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -865,6 +867,27 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                 </div>
 
                 <div className="pt-2 border-t border-white/5 mt-auto">
+                    {(sceneCostData || onRecomputeCost) && (
+                        <div className="flex items-center justify-between mb-2 px-0.5">
+                            <span className="text-[10px] text-white/40">{t('建议成本', 'Est. Cost')}</span>
+                            <div className="flex items-center gap-1.5">
+                                {sceneCostData?.suggested_cost != null && (
+                                    <span className="text-[11px] font-semibold text-emerald-300">¥{Number(sceneCostData.suggested_cost).toFixed(2)}</span>
+                                )}
+                                {onRecomputeCost && (
+                                    <button
+                                        type="button"
+                                        onClick={e => { e.stopPropagation(); onRecomputeCost(scene.id); }}
+                                        className="inline-flex items-center gap-0.5 rounded border border-emerald-400/20 bg-emerald-400/10 px-1.5 py-0.5 text-[9px] text-emerald-200 hover:bg-emerald-400/20"
+                                        title={t('重新估算此场景成本', 'Recompute cost for this scene')}
+                                    >
+                                        <RefreshCw className="w-2.5 h-2.5" />
+                                        {t('重算', 'Recompute')}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    )}
                     <div className="grid grid-cols-3 gap-2">
                         <button
                             onClick={shotsBusy ? handleStop : handleGenerate}
@@ -918,6 +941,8 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         errors: [],
     });
     const [scenes, setScenes] = useState([]);
+    const [sceneCostMap, setSceneCostMap] = useState({}); // scene_id -> cost data
+    const [episodeCostRecomputing, setEpisodeCostRecomputing] = useState(false);
     const [sceneShotCountMap, setSceneShotCountMap] = useState({});
     const [sceneShotDurationMap, setSceneShotDurationMap] = useState({});
     const [sceneListLoading, setSceneListLoading] = useState(false);
@@ -2190,6 +2215,57 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         if (projectId) fetchEntities(projectId).then(setEntities).catch(console.error);
         loadScenes();
     }, [activeEpisode, projectId, parseScenesFromText]);
+
+    // Load cost data from project's cost_estimation snapshot
+    useEffect(() => {
+        if (!projectId) return;
+        const loadCostSnapshot = async () => {
+            try {
+                const { getProjectCostEstimation } = await import('../../../services/api');
+                const snapshot = await getProjectCostEstimation(projectId);
+                const sceneCosts = snapshot?.scene_costs || [];
+                const costMap = {};
+                for (const sc of sceneCosts) {
+                    if (sc.scene_id != null) costMap[sc.scene_id] = sc;
+                }
+                setSceneCostMap(costMap);
+            } catch (_) {
+                // non-blocking
+            }
+        };
+        loadCostSnapshot();
+    }, [projectId, activeEpisode?.id]);
+
+    const handleRecomputeSceneCost = useCallback(async (sceneId) => {
+        if (!projectId || !sceneId) return;
+        try {
+            const result = await recomputeSceneCostEstimation(projectId, sceneId);
+            const sceneCost = result?.scene_cost;
+            if (sceneCost) {
+                setSceneCostMap(prev => ({ ...prev, [sceneId]: sceneCost }));
+            }
+        } catch (e) {
+            console.error('Scene cost recompute failed', e);
+        }
+    }, [projectId]);
+
+    const handleRecomputeEpisodeCost = useCallback(async () => {
+        if (!projectId || !activeEpisode?.id) return;
+        setEpisodeCostRecomputing(true);
+        try {
+            const result = await recomputeEpisodeCostEstimation(projectId, activeEpisode.id);
+            const sceneCosts = result?.scene_costs || [];
+            const updates = {};
+            for (const sc of sceneCosts) {
+                if (sc.scene_id != null) updates[sc.scene_id] = sc;
+            }
+            setSceneCostMap(prev => ({ ...prev, ...updates }));
+        } catch (e) {
+            console.error('Episode cost recompute failed', e);
+        } finally {
+            setEpisodeCostRecomputing(false);
+        }
+    }, [projectId, activeEpisode?.id]);
 
     useEffect(() => {
         if (!activeEpisode?.id) {
@@ -4106,6 +4182,15 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                         <CheckCircle className="w-4 h-4" />
                         {t('保存修改', 'Save Changes')}
                      </button>
+                     <button
+                        onClick={handleRecomputeEpisodeCost}
+                        disabled={episodeCostRecomputing || !activeEpisode?.id}
+                        className="px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 border border-emerald-500/30 rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        title={t('重新计算本集所有场景成本估算', 'Recompute cost estimation for all scenes in this episode')}
+                     >
+                        {episodeCostRecomputing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                        {t('重算成本', 'Recompute Cost')}
+                     </button>
                 </div>
             </div>
 
@@ -4257,6 +4342,8 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                                         return handleRegenerateScene(null, sceneCandidate);
                                     }}
                                     onDelete={handleDeleteScene}
+                                    sceneCostData={sceneCostMap[scene.id] || null}
+                                    onRecomputeCost={handleRecomputeSceneCost}
                                 />
                             );
                         })}

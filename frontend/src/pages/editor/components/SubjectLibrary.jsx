@@ -304,8 +304,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [assets, setAssets] = useState([]);
     const [assetsLoading, setAssetsLoading] = useState(false);
     const [assetKeyword, setAssetKeyword] = useState('');
+    const [assetEpisodeFilter, setAssetEpisodeFilter] = useState('all');
     const [assetProjectFilter, setAssetProjectFilter] = useState('all');
     const [assetImageTypeFilter, setAssetImageTypeFilter] = useState('all');
+    const [assetNameFilter, setAssetNameFilter] = useState('');
     const [includeHistoricalEpisodeAssets, setIncludeHistoricalEpisodeAssets] = useState(false);
     const [imageSelectAction, setImageSelectAction] = useState('direct_use');
     const [viewingEntity, setViewingEntity] = useState(null);
@@ -2875,7 +2877,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setTempPromptSubmitLang('');
         setShowPromptLangMenu(false);
         setAssetKeyword('');
+        setAssetEpisodeFilter(currentEpisode?.id ? `ep:${String(currentEpisode.id)}` : 'all');
         setAssetImageTypeFilter('all');
+        setAssetNameFilter('');
         setIncludeHistoricalEpisodeAssets(false);
         const currentProjectKey = String(projectId || '').trim();
         setAssetProjectFilter(currentProjectKey || 'all');
@@ -2944,6 +2948,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         loadAssets();
     }, [showImageModal, loadAssets]);
 
+    useEffect(() => {
+        if (refSelectionMode !== 'assets') return;
+        if (assets.length > 0) return; // already loaded
+        loadAssets();
+    }, [refSelectionMode, assets.length, loadAssets]);
+
     const getAssetMeta = useCallback((asset) => {
         if (!asset || typeof asset !== 'object') return {};
         const meta = asset.meta_info;
@@ -2965,6 +2975,40 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (projectId) return `Project #${projectId}`;
         return t('未标注项目', 'Unassigned Project');
     }, [getAssetMeta, t]);
+
+    const getAssetEpisodeId = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const episodeId = meta.episode_id;
+        return String(episodeId || '').trim();
+    }, [getAssetMeta]);
+
+    const getAssetEpisodeLabel = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const episodeId = String(meta.episode_id || '').trim();
+        const episodeTitle = String(meta.episode_title || '').trim();
+        if (episodeTitle && episodeId) return `${episodeTitle} (#${episodeId})`;
+        if (episodeTitle) return episodeTitle;
+        if (episodeId) return `${t('分集', 'Episode')} #${episodeId}`;
+        return t('未标注分集', 'Unassigned Episode');
+    }, [getAssetMeta, t]);
+
+    const getAssetDisplayName = useCallback((asset) => {
+        const stableName = String(asset?.name || '').trim();
+        if (stableName) return stableName;
+        const fileName = String(asset?.filename || '').trim();
+        if (fileName) return fileName;
+        const remark = String(asset?.remark || '').trim();
+        if (remark) return remark;
+        return String(asset?.id || '').trim() || t('未命名素材', 'Unnamed asset');
+    }, [t]);
+
+    const inferPreferredAssetImageType = useCallback((entity) => {
+        const entityType = String(entity?.type || '').trim().toLowerCase();
+        if (entityType === 'character') return 'character';
+        if (entityType === 'prop') return 'prop';
+        if (entityType === 'environment' || entityType === 'poster') return 'environment';
+        return 'all';
+    }, []);
 
     const getAssetImageType = useCallback((asset) => {
         const meta = getAssetMeta(asset);
@@ -3014,6 +3058,50 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             .sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
     }, [assets, getAssetImageType, getAssetImageTypeLabel]);
 
+    const assetEpisodeOptions = useMemo(() => {
+        const map = new Map();
+        for (const asset of assets || []) {
+            const episodeId = getAssetEpisodeId(asset);
+            if (!episodeId) continue;
+            if (!map.has(episodeId)) {
+                map.set(episodeId, getAssetEpisodeLabel(asset));
+            }
+        }
+        return Array.from(map.entries())
+            .map(([value, label]) => ({ value: `ep:${value}`, label }))
+            .sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
+    }, [assets, getAssetEpisodeId, getAssetEpisodeLabel]);
+
+    const libraryFilteredAssets = useMemo(() => {
+        return (assets || []).filter((asset) => {
+            const episodeId = getAssetEpisodeId(asset);
+            if (assetEpisodeFilter !== 'all') {
+                const wantedEpisodeId = String(assetEpisodeFilter || '').replace(/^ep:/, '').trim();
+                if (episodeId !== wantedEpisodeId) return false;
+            }
+
+            const imageType = getAssetImageType(asset);
+            if (assetImageTypeFilter !== 'all' && imageType !== assetImageTypeFilter) return false;
+
+            return true;
+        });
+    }, [assets, assetEpisodeFilter, assetImageTypeFilter, getAssetEpisodeId, getAssetImageType]);
+
+    const assetNameOptions = useMemo(() => {
+        return libraryFilteredAssets
+            .map((asset) => ({
+                value: String(asset?.id || '').trim(),
+                label: getAssetDisplayName(asset),
+            }))
+            .filter((item) => item.value)
+            .sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
+    }, [libraryFilteredAssets, getAssetDisplayName]);
+
+    const selectedLibraryAsset = useMemo(() => {
+        if (!assetNameFilter) return libraryFilteredAssets[0] || null;
+        return libraryFilteredAssets.find((asset) => String(asset?.id || '').trim() === assetNameFilter) || null;
+    }, [libraryFilteredAssets, assetNameFilter]);
+
     const filteredAssets = useMemo(() => {
         const keyword = String(assetKeyword || '').trim().toLowerCase();
         return (assets || []).filter((asset) => {
@@ -3051,6 +3139,34 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         getAssetImageType,
         getAssetMeta,
     ]);
+
+    useEffect(() => {
+        if (!showImageModal || imageModalTab !== 'library') return;
+        if (assetImageTypeFilter !== 'all') return;
+
+        const preferredType = inferPreferredAssetImageType(selectedEntity);
+        if (!preferredType || preferredType === 'all') return;
+        if (!assetImageTypeOptions.some((item) => item.value === preferredType)) return;
+        setAssetImageTypeFilter(preferredType);
+    }, [
+        showImageModal,
+        imageModalTab,
+        selectedEntity,
+        assetImageTypeFilter,
+        assetImageTypeOptions,
+        inferPreferredAssetImageType,
+    ]);
+
+    useEffect(() => {
+        if (!showImageModal || imageModalTab !== 'library') return;
+        if (!assetNameOptions.length) {
+            if (assetNameFilter) setAssetNameFilter('');
+            return;
+        }
+        if (!assetNameOptions.some((item) => item.value === assetNameFilter)) {
+            setAssetNameFilter(assetNameOptions[0].value);
+        }
+    }, [showImageModal, imageModalTab, assetNameOptions, assetNameFilter]);
 
     const imageLibraryViewportRef = useRef(null);
     const imageRefPickerViewportRef = useRef(null);
@@ -5123,79 +5239,75 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                      )}
 
                                                      {refSelectionMode === 'assets' && !refImage && (
-                                                         <div className="absolute bottom-full left-0 right-0 mb-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl h-64 overflow-hidden flex flex-col">
+                                                         <div className="absolute bottom-full left-0 right-0 mb-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl overflow-hidden flex flex-col">
                                                              <div className="p-2 border-b border-white/10 flex justify-between items-center bg-black/20">
                                                                  <span className="text-xs font-bold text-muted-foreground ml-2">{t('从素材库选择', 'Select from Assets')}</span>
                                                                  <button onClick={() => setRefSelectionMode(null)}><X size={14} className="text-white/50 hover:text-white"/></button>
                                                              </div>
-                                                             <div className="px-2 py-2 border-b border-white/10 bg-black/20 grid grid-cols-1 sm:grid-cols-[1fr_130px_130px] gap-2">
-                                                                 <input
-                                                                     type="text"
-                                                                     value={assetKeyword}
-                                                                     onChange={(e) => setAssetKeyword(e.target.value)}
-                                                                     placeholder={t('搜索素材', 'Search assets')}
-                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
-                                                                 />
-                                                                 <select
-                                                                     value={assetProjectFilter}
-                                                                     onChange={(e) => setAssetProjectFilter(e.target.value)}
-                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
-                                                                 >
-                                                                     <option value="all">{t('所有项目', 'All Projects')}</option>
-                                                                     {assetProjectOptions.map((item) => (
-                                                                         <option key={item.value} value={item.value}>{item.label}</option>
-                                                                     ))}
-                                                                 </select>
-                                                                 <select
-                                                                     value={assetImageTypeFilter}
-                                                                     onChange={(e) => setAssetImageTypeFilter(e.target.value)}
-                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
-                                                                 >
-                                                                     <option value="all">{t('所有类型', 'All Types')}</option>
-                                                                     {assetImageTypeOptions.map((item) => (
-                                                                         <option key={item.value} value={item.value}>{item.label}</option>
-                                                                     ))}
-                                                                 </select>
-                                                                <label className="sm:col-span-3 inline-flex items-center gap-2 text-[11px] text-muted-foreground">
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        className="rounded border-white/20 bg-black/40"
-                                                                        checked={includeHistoricalEpisodeAssets}
-                                                                        onChange={(e) => setIncludeHistoricalEpisodeAssets(e.target.checked)}
-                                                                    />
-                                                                    {t('包含历史分集素材（用于复用之前分集图片）', 'Include previous-episode assets for reuse')}
-                                                                </label>
-                                                             </div>
-                                                             <div
-                                                                 ref={imageRefPickerViewportRef}
-                                                                 onScroll={(e) => setImageRefPickerScrollTop(e.currentTarget.scrollTop || 0)}
-                                                                 className="flex-1 overflow-y-auto p-2 custom-scrollbar"
-                                                             >
-                                                                 {imageRefPickerWindow.topSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.topSpacerHeight}px` }} />}
-                                                                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                                                                     {imageRefPickerVisibleAssets.map(asset => (
-                                                                         <div
-                                                                             key={asset.id}
-                                                                             onClick={() => {
-                                                                                 setRefImage(asset);
-                                                                                 setRefSelectionMode(null);
-                                                                             }}
-                                                                             className="aspect-square bg-black/40 rounded border border-white/5 hover:border-primary/50 cursor-pointer overflow-hidden relative group"
-                                                                         >
-                                                                             <AssetHoverMetaOverlay asset={asset} t={t} />
-                                                                             <SafeImage src={asset.url} alt={asset.name} className="w-full h-full object-cover" />
-                                                                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                                                         </div>
-                                                                     ))}
+                                                             <div className="p-3 space-y-3">
+                                                                 <div className="grid grid-cols-3 gap-2">
+                                                                     <select
+                                                                         value={assetEpisodeFilter}
+                                                                         onChange={(e) => setAssetEpisodeFilter(e.target.value)}
+                                                                         className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                                     >
+                                                                         <option value="all">{t('全部分集', 'All Episodes')}</option>
+                                                                         {assetEpisodeOptions.map((item) => (
+                                                                             <option key={item.value} value={item.value}>{item.label}</option>
+                                                                         ))}
+                                                                     </select>
+                                                                     <select
+                                                                         value={assetImageTypeFilter}
+                                                                         onChange={(e) => setAssetImageTypeFilter(e.target.value)}
+                                                                         className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                                     >
+                                                                         <option value="all">{t('全部类型', 'All Types')}</option>
+                                                                         {assetImageTypeOptions.map((item) => (
+                                                                             <option key={item.value} value={item.value}>{item.label}</option>
+                                                                         ))}
+                                                                     </select>
+                                                                     <select
+                                                                         value={assetNameFilter}
+                                                                         onChange={(e) => setAssetNameFilter(e.target.value)}
+                                                                         disabled={assetNameOptions.length === 0}
+                                                                         className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none disabled:opacity-50"
+                                                                     >
+                                                                         {assetNameOptions.length === 0 ? (
+                                                                             <option value="">{t('暂无可选素材', 'No matching assets')}</option>
+                                                                         ) : (
+                                                                             assetNameOptions.map((item) => (
+                                                                                 <option key={item.value} value={item.value}>{item.label}</option>
+                                                                             ))
+                                                                         )}
+                                                                     </select>
                                                                  </div>
-                                                                 {imageRefPickerWindow.bottomSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.bottomSpacerHeight}px` }} />}
                                                                  {assetsLoading ? (
-                                                                     <div className="py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                                                     <div className="py-6 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                                                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                                                          {t('素材加载中...', 'Loading assets...')}
                                                                      </div>
-                                                                 ) : filteredAssets.length === 0 && (
-                                                                     <div className="py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
+                                                                 ) : selectedLibraryAsset ? (
+                                                                     <div className="flex gap-3 items-start">
+                                                                         <div className="w-20 h-20 shrink-0 bg-black/40 rounded border border-white/10 overflow-hidden">
+                                                                             <SafeImage src={selectedLibraryAsset.url} alt={getAssetDisplayName(selectedLibraryAsset)} className="w-full h-full object-cover" />
+                                                                         </div>
+                                                                         <div className="flex-1 min-w-0 space-y-1">
+                                                                             <div className="text-xs font-semibold text-white truncate">{getAssetDisplayName(selectedLibraryAsset)}</div>
+                                                                             <div className="text-[10px] text-muted-foreground">{t('分集：', 'Ep: ')}{getAssetEpisodeLabel(selectedLibraryAsset)}</div>
+                                                                             <div className="text-[10px] text-muted-foreground">{t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || '')}</div>
+                                                                             <button
+                                                                                 onClick={() => {
+                                                                                     setRefImage(selectedLibraryAsset);
+                                                                                     setRefSelectionMode(null);
+                                                                                 }}
+                                                                                 className="mt-1 px-2.5 py-1 rounded text-xs font-bold bg-primary/80 hover:bg-primary text-white"
+                                                                             >
+                                                                                 {t('选用', 'Use')}
+                                                                             </button>
+                                                                         </div>
+                                                                     </div>
+                                                                 ) : (
+                                                                     <div className="py-6 text-center text-xs text-muted-foreground">{t('暂无符合条件的素材', 'No assets matched')}</div>
                                                                  )}
                                                              </div>
                                                          </div>
@@ -5527,22 +5639,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 className="flex-1 overflow-y-auto p-4 custom-scrollbar"
                             >
                                 {imageModalTab === 'library' && (
-                                    <div>
-                                        <div className="mb-3 grid grid-cols-1 sm:grid-cols-[1fr_180px_180px_auto] gap-2">
-                                            <input
-                                                type="text"
-                                                value={assetKeyword}
-                                                onChange={(e) => setAssetKeyword(e.target.value)}
-                                                placeholder={t('搜索素材名称/项目/类型/备注', 'Search name/project/type/remark')}
-                                                className="bg-black/40 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:border-primary/50 outline-none"
-                                            />
+                                    <div className="space-y-4">
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                             <select
-                                                value={assetProjectFilter}
-                                                onChange={(e) => setAssetProjectFilter(e.target.value)}
+                                                value={assetEpisodeFilter}
+                                                onChange={(e) => setAssetEpisodeFilter(e.target.value)}
                                                 className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
                                             >
-                                                <option value="all">{t('全部项目', 'All Projects')}</option>
-                                                {assetProjectOptions.map((item) => (
+                                                <option value="all">{t('全部分集', 'All Episodes')}</option>
+                                                {assetEpisodeOptions.map((item) => (
                                                     <option key={item.value} value={item.value}>{item.label}</option>
                                                 ))}
                                             </select>
@@ -5556,56 +5661,69 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     <option key={item.value} value={item.value}>{item.label}</option>
                                                 ))}
                                             </select>
-                                            <button
-                                                onClick={() => {
-                                                    setAssetKeyword('');
-                                                    setAssetProjectFilter('all');
-                                                    setAssetImageTypeFilter('all');
-                                                    setIncludeHistoricalEpisodeAssets(false);
-                                                }}
-                                                className="px-3 py-2 rounded-md text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
+                                            <select
+                                                value={assetNameFilter}
+                                                onChange={(e) => setAssetNameFilter(e.target.value)}
+                                                disabled={assetNameOptions.length === 0}
+                                                className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none disabled:opacity-50"
                                             >
-                                                {t('重置', 'Reset')}
-                                            </button>
-                                            <label className="sm:col-span-4 inline-flex items-center gap-2 text-[11px] text-muted-foreground px-1 py-0.5">
-                                                <input
-                                                    type="checkbox"
-                                                    className="rounded border-white/20 bg-black/40"
-                                                    checked={includeHistoricalEpisodeAssets}
-                                                    onChange={(e) => setIncludeHistoricalEpisodeAssets(e.target.checked)}
-                                                />
-                                                {t('包含历史分集素材（用于复用之前分集图片）', 'Include previous-episode assets for reuse')}
-                                            </label>
+                                                {assetNameOptions.length === 0 ? (
+                                                    <option value="">{t('暂无可选素材', 'No matching assets')}</option>
+                                                ) : (
+                                                    assetNameOptions.map((item) => (
+                                                        <option key={item.value} value={item.value}>{item.label}</option>
+                                                    ))
+                                                )}
+                                            </select>
                                         </div>
-                                        {imageLibraryWindow.topSpacerHeight > 0 && <div style={{ height: `${imageLibraryWindow.topSpacerHeight}px` }} />}
-                                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                                        {imageLibraryVisibleAssets.map(asset => (
-                                            <div 
-                                                key={asset.id} 
-                                                onClick={() => {
-                                                    if (selectedEntityImageLocked) {
-                                                        notifySubjectImageActionLocked(selectedEntity);
-                                                        return;
-                                                    }
-                                                    handleSelectAsset(asset);
-                                                }}
-                                                className={`aspect-square bg-black/40 rounded-lg overflow-hidden border border-white/5 group relative ${selectedEntityImageLocked ? 'cursor-not-allowed opacity-60' : 'hover:border-primary/50 cursor-pointer'}`}
-                                            >
-                                                <AssetHoverMetaOverlay asset={asset} t={t} />
-                                                <SafeImage src={asset.url} alt="asset" className="w-full h-full object-cover" />
-                                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                            </div>
-                                        ))}
+
+                                        <div className="text-[11px] text-muted-foreground">
+                                            {t('当前筛选命中素材：', 'Matched assets: ')}{libraryFilteredAssets.length}
                                         </div>
-                                        {imageLibraryWindow.bottomSpacerHeight > 0 && <div style={{ height: `${imageLibraryWindow.bottomSpacerHeight}px` }} />}
+
                                         {assetsLoading ? (
-                                            <div className="py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
+                                            <div className="text-center py-16 text-muted-foreground text-sm flex items-center justify-center gap-2">
                                                 <Loader2 className="w-4 h-4 animate-spin" />
-                                                {t('素材加载中...', 'Loading assets...')}
+                                                {t('加载素材中...', 'Loading assets...')}
                                             </div>
-                                        ) : filteredAssets.length === 0 && (
-                                            <div className="py-12 text-center text-muted-foreground">
-                                                {t('没有匹配筛选条件的素材', 'No assets matched current filters')}
+                                        ) : selectedLibraryAsset ? (
+                                            <div className="rounded-xl border border-white/10 bg-black/30 p-3 space-y-3">
+                                                <div className="aspect-video sm:aspect-[16/9] bg-black/40 rounded-lg overflow-hidden border border-white/10">
+                                                    <SafeImage
+                                                        src={selectedLibraryAsset.url}
+                                                        alt={getAssetDisplayName(selectedLibraryAsset)}
+                                                        className="w-full h-full object-contain"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <div className="text-sm font-semibold text-white truncate">{getAssetDisplayName(selectedLibraryAsset)}</div>
+                                                    <div className="text-[11px] text-muted-foreground truncate">
+                                                        {t('分集：', 'Episode: ')}{getAssetEpisodeLabel(selectedLibraryAsset)}
+                                                    </div>
+                                                    <div className="text-[11px] text-muted-foreground truncate">
+                                                        {t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || t('未标注', 'Unknown'))}
+                                                    </div>
+                                                    <div className="text-[11px] text-muted-foreground truncate">
+                                                        {t('项目：', 'Project: ')}{getAssetProjectLabel(selectedLibraryAsset)}
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={() => {
+                                                        if (selectedEntityImageLocked) {
+                                                            notifySubjectImageActionLocked(selectedEntity);
+                                                            return;
+                                                        }
+                                                        handleSelectAsset(selectedLibraryAsset);
+                                                    }}
+                                                    disabled={selectedEntityImageLocked}
+                                                    className="w-full rounded-md px-3 py-2 text-xs font-bold bg-primary/80 hover:bg-primary text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                                >
+                                                    {t('选用该素材', 'Use this asset')}
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div className="text-center py-16 text-muted-foreground text-sm">
+                                                {t('暂无符合条件的图片素材', 'No image assets matched')}
                                             </div>
                                         )}
                                     </div>
@@ -5834,79 +5952,75 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                                                  {/* Asset Picker Popover */}
                                                  {refSelectionMode === 'assets' && !refImage && (
-                                                     <div className="absolute top-full left-0 right-0 mt-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl h-64 overflow-hidden flex flex-col">
+                                                     <div className="absolute top-full left-0 right-0 mt-2 z-10 bg-[#09090b] border border-white/10 rounded-xl shadow-2xl overflow-hidden flex flex-col">
                                                          <div className="p-2 border-b border-white/10 flex justify-between items-center bg-black/20">
                                                              <span className="text-xs font-bold text-muted-foreground ml-2">{t('从素材中选择', 'Select from Assets')}</span>
                                                              <button onClick={() => setRefSelectionMode(null)}><X size={14} className="text-white/50 hover:text-white"/></button>
                                                          </div>
-                                                         <div className="px-2 py-2 border-b border-white/10 bg-black/20 grid grid-cols-1 sm:grid-cols-[1fr_130px_130px] gap-2">
-                                                             <input
-                                                                 type="text"
-                                                                 value={assetKeyword}
-                                                                 onChange={(e) => setAssetKeyword(e.target.value)}
-                                                                 placeholder={t('搜索素材', 'Search assets')}
-                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
-                                                             />
-                                                             <select
-                                                                 value={assetProjectFilter}
-                                                                 onChange={(e) => setAssetProjectFilter(e.target.value)}
-                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
-                                                             >
-                                                                 <option value="all">{t('全部项目', 'All Projects')}</option>
-                                                                 {assetProjectOptions.map((item) => (
-                                                                     <option key={item.value} value={item.value}>{item.label}</option>
-                                                                 ))}
-                                                             </select>
-                                                             <select
-                                                                 value={assetImageTypeFilter}
-                                                                 onChange={(e) => setAssetImageTypeFilter(e.target.value)}
-                                                                 className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
-                                                             >
-                                                                 <option value="all">{t('全部类型', 'All Types')}</option>
-                                                                 {assetImageTypeOptions.map((item) => (
-                                                                     <option key={item.value} value={item.value}>{item.label}</option>
-                                                                 ))}
-                                                             </select>
-                                                            <label className="sm:col-span-3 inline-flex items-center gap-2 text-[11px] text-muted-foreground">
-                                                                <input
-                                                                    type="checkbox"
-                                                                    className="rounded border-white/20 bg-black/40"
-                                                                    checked={includeHistoricalEpisodeAssets}
-                                                                    onChange={(e) => setIncludeHistoricalEpisodeAssets(e.target.checked)}
-                                                                />
-                                                                {t('包含历史分集素材（用于复用之前分集图片）', 'Include previous-episode assets for reuse')}
-                                                            </label>
-                                                         </div>
-                                                         <div
-                                                             ref={imageRefPickerViewportRef}
-                                                             onScroll={(e) => setImageRefPickerScrollTop(e.currentTarget.scrollTop || 0)}
-                                                             className="flex-1 overflow-y-auto p-2 custom-scrollbar"
-                                                         >
-                                                             {imageRefPickerWindow.topSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.topSpacerHeight}px` }} />}
-                                                             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                                                                 {imageRefPickerVisibleAssets.map(asset => (
-                                                                     <div 
-                                                                         key={asset.id} 
-                                                                         onClick={() => {
-                                                                             setRefImage(asset);
-                                                                             setRefSelectionMode(null);
-                                                                         }}
-                                                                         className="aspect-square bg-black/40 rounded border border-white/5 hover:border-primary/50 cursor-pointer overflow-hidden relative group"
-                                                                     >
-                                                                         <AssetHoverMetaOverlay asset={asset} t={t} />
-                                                                         <SafeImage src={asset.url} alt={asset.name} className="w-full h-full object-cover" />
-                                                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                                                     </div>
-                                                                 ))}
+                                                         <div className="p-3 space-y-3">
+                                                             <div className="grid grid-cols-3 gap-2">
+                                                                 <select
+                                                                     value={assetEpisodeFilter}
+                                                                     onChange={(e) => setAssetEpisodeFilter(e.target.value)}
+                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                                 >
+                                                                     <option value="all">{t('全部分集', 'All Episodes')}</option>
+                                                                     {assetEpisodeOptions.map((item) => (
+                                                                         <option key={item.value} value={item.value}>{item.label}</option>
+                                                                     ))}
+                                                                 </select>
+                                                                 <select
+                                                                     value={assetImageTypeFilter}
+                                                                     onChange={(e) => setAssetImageTypeFilter(e.target.value)}
+                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                                 >
+                                                                     <option value="all">{t('全部类型', 'All Types')}</option>
+                                                                     {assetImageTypeOptions.map((item) => (
+                                                                         <option key={item.value} value={item.value}>{item.label}</option>
+                                                                     ))}
+                                                                 </select>
+                                                                 <select
+                                                                     value={assetNameFilter}
+                                                                     onChange={(e) => setAssetNameFilter(e.target.value)}
+                                                                     disabled={assetNameOptions.length === 0}
+                                                                     className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none disabled:opacity-50"
+                                                                 >
+                                                                     {assetNameOptions.length === 0 ? (
+                                                                         <option value="">{t('暂无可选素材', 'No matching assets')}</option>
+                                                                     ) : (
+                                                                         assetNameOptions.map((item) => (
+                                                                             <option key={item.value} value={item.value}>{item.label}</option>
+                                                                         ))
+                                                                     )}
+                                                                 </select>
                                                              </div>
-                                                             {imageRefPickerWindow.bottomSpacerHeight > 0 && <div style={{ height: `${imageRefPickerWindow.bottomSpacerHeight}px` }} />}
                                                              {assetsLoading ? (
-                                                                 <div className="py-8 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                                                                 <div className="py-6 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                                                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                                                      {t('素材加载中...', 'Loading assets...')}
                                                                  </div>
-                                                             ) : filteredAssets.length === 0 && (
-                                                                 <div className="py-8 text-center text-xs text-muted-foreground">{t('未找到素材', 'No assets found')}</div>
+                                                             ) : selectedLibraryAsset ? (
+                                                                 <div className="flex gap-3 items-start">
+                                                                     <div className="w-20 h-20 shrink-0 bg-black/40 rounded border border-white/10 overflow-hidden">
+                                                                         <SafeImage src={selectedLibraryAsset.url} alt={getAssetDisplayName(selectedLibraryAsset)} className="w-full h-full object-cover" />
+                                                                     </div>
+                                                                     <div className="flex-1 min-w-0 space-y-1">
+                                                                         <div className="text-xs font-semibold text-white truncate">{getAssetDisplayName(selectedLibraryAsset)}</div>
+                                                                         <div className="text-[10px] text-muted-foreground">{t('分集：', 'Ep: ')}{getAssetEpisodeLabel(selectedLibraryAsset)}</div>
+                                                                         <div className="text-[10px] text-muted-foreground">{t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || '')}</div>
+                                                                         <button
+                                                                             onClick={() => {
+                                                                                 setRefImage(selectedLibraryAsset);
+                                                                                 setRefSelectionMode(null);
+                                                                             }}
+                                                                             className="mt-1 px-2.5 py-1 rounded text-xs font-bold bg-primary/80 hover:bg-primary text-white"
+                                                                         >
+                                                                             {t('选用', 'Use')}
+                                                                         </button>
+                                                                     </div>
+                                                                 </div>
+                                                             ) : (
+                                                                 <div className="py-6 text-center text-xs text-muted-foreground">{t('暂无符合条件的素材', 'No assets matched')}</div>
                                                              )}
                                                          </div>
                                                      </div>

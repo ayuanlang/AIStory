@@ -2131,8 +2131,6 @@ Negative prompt constraints: {neg_prompt}"""
             return False
         resolved_category = str(category or "").strip()
         resolved_provider = self._normalize_provider_name(getattr(system_row, "provider", None), resolved_category)
-        if not self._is_supported_provider(resolved_category, resolved_provider):
-            return False
 
         runtime_config = self._promote_runtime_endpoint(
             resolved_category,
@@ -2416,6 +2414,9 @@ Negative prompt constraints: {neg_prompt}"""
             "tencent hunyuan": "tencent",
             "wanxiang": "wanxiang",
             "wanx": "wanxiang",
+            "happyhorse": "happyhorse",
+            "happy horse": "happyhorse",
+            "aliyun happyhorse": "happyhorse",
             "vidu (video)": "vidu",
             "runway": "runway",
             "kling": "kling",
@@ -2438,15 +2439,7 @@ Negative prompt constraints: {neg_prompt}"""
 
     def _is_supported_provider(self, category: str, provider: Optional[str]) -> bool:
         normalized = self._normalize_provider_name(provider, category)
-        cat = str(category or "").strip().lower()
-        if cat in {"llm", "vision", "tools", "digitalhuman", "music"}:
-            return bool(normalized)
-        if cat == "image":
-              return normalized in {"doubao", "grsai", "kie", "tencent", "stability", "runninghub", "apiyi", "n1n", "aiclub"}
-        if cat == "video":
-            return normalized in {"doubao", "grsai", "kie", "tencent", "wanxiang", "vidu", "runninghub", "apiyi", "zlhub", "aiclub", "pixelmove"}
-        if cat == "voice":
-              return normalized in {"kie", "runninghub"}
+        # Provider validity follows system settings in DB; avoid hard-coded allowlists.
         return bool(normalized)
 
     def _infer_n1n_runtime_model(self, system_row: Optional[SystemAPISetting], cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
@@ -2909,6 +2902,7 @@ Negative prompt constraints: {neg_prompt}"""
             "kie": {"base_url": "https://api.kie.ai", "model": "veo-3-1-fast"},
             "tencent": {"base_url": "https://aiart.tencentcloudapi.com", "model": "hunyuan-vision"},
             "wanxiang": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis", "model": "wanx2.1-i2v-plus"},
+            "happyhorse": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis", "model": "happyhorse-1.0-r2v"},
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
             "runninghub": {"base_url": "https://www.runninghub.cn", "model": "runninghub-model"},
             "pixelmove": {"base_url": "https://portal.pixelmove.ai", "model": "seedance-2.0"},
@@ -3161,9 +3155,9 @@ Negative prompt constraints: {neg_prompt}"""
                 if effective_provider in ["stability", "stable diffusion"]:
                     return await self._handle_stability_generation("image", prompt, active_config, effective_reference_image_url, negative_prompt=negative_prompt)
 
-                _debug_log(f"Unsupported Image provider: {effective_provider}", "warning")
+                _debug_log(f"No runnable Image handler for provider={effective_provider}", "warning")
                 return {
-                    "error": f"Unsupported image provider: {effective_provider}",
+                    "error": f"No runnable image handler configured for provider: {effective_provider}",
                     "submit_failed": True,
                     "details": {
                         "provider": effective_provider,
@@ -3206,6 +3200,16 @@ Negative prompt constraints: {neg_prompt}"""
                     return await self._handle_tencent_generation("video", prompt, active_config, effective_reference_image_url, duration=effective_duration, negative_prompt=negative_prompt)
                 if effective_provider in ["wanxiang", "wanx"]:
                     return await self._handle_wanxiang_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
+                if effective_provider == "happyhorse":
+                    return await self._handle_happyhorse_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
                 if effective_provider == "vidu":
                     return await self._handle_vidu_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, keyframes=effective_keyframes, negative_prompt=negative_prompt)
                 if effective_provider == "runninghub":
@@ -3256,9 +3260,23 @@ Negative prompt constraints: {neg_prompt}"""
                         ref_mode=ref_mode,
                     )
 
-                _debug_log(f"Unsupported Video provider: {effective_provider}", "warning")
+                # Some system rows may carry a generic/legacy provider while model is HappyHorse.
+                # Keep video generation resilient by dispatching via model hint before hard-failing.
+                model_hint = str((active_config or {}).get("model") or "").strip().lower()
+                if "happyhorse" in model_hint:
+                    return await self._handle_happyhorse_generation(
+                        "video",
+                        prompt,
+                        active_config,
+                        effective_reference_image_url,
+                        duration=effective_duration,
+                        aspect_ratio=effective_aspect_ratio,
+                        negative_prompt=negative_prompt,
+                    )
+
+                _debug_log(f"No runnable Video handler for provider={effective_provider}", "warning")
                 return {
-                    "error": f"Unsupported video provider: {effective_provider}",
+                    "error": f"No runnable video handler configured for provider: {effective_provider}",
                     "submit_failed": True,
                     "details": {
                         "provider": effective_provider,
@@ -3297,9 +3315,9 @@ Negative prompt constraints: {neg_prompt}"""
                         negative_prompt=negative_prompt,
                     )
 
-                _debug_log(f"Unsupported Voice provider: {effective_provider}", "warning")
+                _debug_log(f"No runnable Voice handler for provider={effective_provider}", "warning")
                 return {
-                    "error": f"Unsupported voice provider: {effective_provider}",
+                    "error": f"No runnable voice handler configured for provider: {effective_provider}",
                     "submit_failed": True,
                     "details": {
                         "provider": effective_provider,
@@ -3816,6 +3834,7 @@ Negative prompt constraints: {neg_prompt}"""
             "grsai": {"base_url": "https://grsaiapi.com", "model": "sora-image"},
             "tencent": {"base_url": "https://aiart.tencentcloudapi.com", "model": "hunyuan-vision"},
             "wanxiang": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis", "model": "wanx2.1-i2v-plus"},
+            "happyhorse": {"base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis", "model": "happyhorse-1.0-r2v"},
             "vidu": {"base_url": "https://api.vidu.studio/open/v1/creation/video", "model": "vidu2.0"},
         }
 
@@ -5633,6 +5652,19 @@ Negative prompt constraints: {neg_prompt}"""
     async def _handle_wanxiang_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
         if gen_type != "video": return {"error": "Wanxiang only supports video"}
 
+        model_hint = str((config or {}).get("model") or "").strip().lower()
+        if "happyhorse" in model_hint:
+            return await self._handle_happyhorse_generation(
+                gen_type,
+                prompt,
+                config,
+                ref_image=ref_image,
+                last_frame_url=last_frame_url,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                negative_prompt=negative_prompt,
+            )
+
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
         
         api_key = config.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
@@ -5763,6 +5795,227 @@ Negative prompt constraints: {neg_prompt}"""
                      _debug_log(f"[Wanxiang] Task Failed: {err_msg}", "error")
                      return {"error": "Generation Failed", "details": err_msg}
         return {"error": "Timeout"}
+
+    async def _handle_happyhorse_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None):
+        if gen_type != "video":
+            return {"error": "HappyHorse only supports video"}
+
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
+        api_key = config.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
+        if not api_key:
+            return {"error": "Missing DASHSCOPE_API_KEY"}
+
+        endpoint = str(
+            config.get("base_url")
+            or config.get("endpoint")
+            or "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
+        ).strip()
+        model = str(config.get("model") or "happyhorse-1.0-r2v").strip() or "happyhorse-1.0-r2v"
+
+        raw_refs: List[str] = []
+        if isinstance(ref_image, list):
+            raw_refs.extend([str(item).strip() for item in ref_image if str(item).strip()])
+        else:
+            one = str(ref_image or "").strip()
+            if one:
+                raw_refs.append(one)
+
+        for extra_key in ("image_urls", "reference_image_urls", "referenceImageUrls"):
+            extra_refs = config.get(extra_key)
+            if isinstance(extra_refs, list):
+                raw_refs.extend([str(item).strip() for item in extra_refs if str(item).strip()])
+
+        last_ref = str(last_frame_url or "").strip()
+        if last_ref:
+            raw_refs.append(last_ref)
+
+        # Keep order stable while removing duplicates.
+        unique_refs: List[str] = []
+        seen = set()
+        for item in raw_refs:
+            if item and item not in seen:
+                seen.add(item)
+                unique_refs.append(item)
+
+        if not unique_refs:
+            return {"error": "HappyHorse requires 1-9 reference images"}
+
+        if len(unique_refs) > 9:
+            unique_refs = unique_refs[:9]
+
+        resolved_refs: List[str] = []
+        for item in unique_refs:
+            resolved = await self._resolve_ref_for_api_async(
+                item,
+                force_data_uri_for_local=False,
+                prefer_public_upload_url=True,
+            )
+            resolved_text = str(resolved or "").strip()
+            if not resolved_text:
+                continue
+            if not resolved_text.lower().startswith(("http://", "https://")):
+                continue
+            resolved_refs.append(resolved_text)
+
+        if not resolved_refs:
+            return {"error": "HappyHorse reference images must be public HTTP/HTTPS URLs"}
+
+        if len(resolved_refs) > 9:
+            resolved_refs = resolved_refs[:9]
+
+        cfg = self._safe_json_dict(config.get("config"))
+        ratio = str(
+            aspect_ratio
+            or config.get("ratio")
+            or config.get("aspect_ratio")
+            or cfg.get("ratio")
+            or "16:9"
+        ).strip()
+
+        resolution = str(
+            config.get("resolution")
+            or cfg.get("resolution")
+            or "1080P"
+        ).strip().upper()
+        if resolution not in {"1080P", "720P"}:
+            resolution = "1080P"
+
+        safe_duration = 5
+        try:
+            safe_duration = int(duration)
+        except Exception:
+            safe_duration = 5
+        safe_duration = max(3, min(15, safe_duration))
+
+        seed_value = config.get("seed")
+        try:
+            seed_value = int(seed_value) if seed_value is not None and str(seed_value).strip() != "" else None
+        except Exception:
+            seed_value = None
+
+        watermark_value = config.get("watermark")
+        if watermark_value is None:
+            watermark_value = cfg.get("watermark")
+        if watermark_value is None:
+            watermark_value = True
+        watermark = bool(watermark_value)
+
+        payload = {
+            "model": model,
+            "input": {
+                "prompt": prompt,
+                "media": [{"type": "reference_image", "url": ref} for ref in resolved_refs],
+            },
+            "parameters": {
+                "resolution": resolution,
+                "ratio": ratio or "16:9",
+                "duration": safe_duration,
+                "watermark": watermark,
+            },
+        }
+        if seed_value is not None:
+            payload["parameters"]["seed"] = seed_value
+
+        headers = {
+            "X-DashScope-Async": "enable",
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        _debug_log(f"[HappyHorse] POSTING to {endpoint} with model={model} refs={len(resolved_refs)}")
+
+        def _post():
+            return requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
+
+        try:
+            resp = await asyncio.to_thread(_post)
+            if resp.status_code != 200:
+                _debug_log(f"[HappyHorse] HTTP {resp.status_code} Error Body: {resp.text}", "error")
+                try:
+                    err_body = resp.json()
+                    return {
+                        "error": f"HappyHorse API Error ({err_body.get('code', 'Unknown')})",
+                        "details": err_body.get("message", resp.text),
+                    }
+                except Exception:
+                    return {"error": f"Submission Failed {resp.status_code}", "details": resp.text}
+            data = resp.json()
+        except Exception as e:
+            _debug_log(f"[HappyHorse] Exception: {e}", "error")
+            return {"error": f"HappyHorse Request Exception: {e}"}
+
+        task_id = str((data.get("output") or {}).get("task_id") or "").strip()
+        if not task_id:
+            return {"error": "No Task ID", "details": data}
+
+        parsed = urllib.parse.urlparse(endpoint)
+        if not parsed.scheme or not parsed.netloc:
+            return {"error": "Invalid HappyHorse endpoint", "details": endpoint}
+        task_endpoint = f"{parsed.scheme}://{parsed.netloc}/api/v1/tasks/{task_id}"
+
+        poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+        poll_interval_seconds = 15
+        try:
+            if config.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = min(1800, max(60, int(config.get("poll_timeout_seconds"))))
+            elif cfg.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = min(1800, max(60, int(cfg.get("poll_timeout_seconds"))))
+        except Exception:
+            poll_timeout_seconds = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
+
+        try:
+            if config.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(2, int(config.get("poll_interval_seconds")))
+            elif cfg.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(2, int(cfg.get("poll_interval_seconds")))
+        except Exception:
+            poll_interval_seconds = 15
+
+        max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+        for _ in range(max_attempts):
+            await asyncio.sleep(poll_interval_seconds)
+
+            def _poll():
+                return requests.get(
+                    task_endpoint,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=30,
+                    verify=False,
+                )
+
+            p_resp = await asyncio.to_thread(_poll)
+            if p_resp.status_code != 200:
+                continue
+
+            p_data = p_resp.json()
+            output = p_data.get("output") or {}
+            status = str(output.get("task_status") or "").strip().upper()
+            if status == "SUCCEEDED":
+                video_url = output.get("video_url")
+                if not video_url:
+                    result_list = output.get("results") if isinstance(output.get("results"), list) else []
+                    if result_list:
+                        first_result = result_list[0] if isinstance(result_list[0], dict) else {}
+                        video_url = first_result.get("video_url") or first_result.get("url")
+
+                meta = {
+                    "provider": "happyhorse",
+                    "model": model,
+                    "prompt": prompt,
+                    "task_id": task_id,
+                    "raw": p_data,
+                    "submit_raw": data,
+                    "reference_images": resolved_refs,
+                }
+                return {"url": video_url, "metadata": meta}
+
+            if status in {"FAILED", "CANCELED", "UNKNOWN"}:
+                return {
+                    "error": f"HappyHorse task {status or 'FAILED'}",
+                    "details": output.get("message") or output.get("code") or p_data,
+                }
+
+        return {"error": f"Timeout after {poll_timeout_seconds}s"}
 
     def _looks_like_video_media_ref(self, value: Any) -> bool:
         raw = str(value or "").strip().lower()

@@ -699,6 +699,18 @@ class SceneAnalysisSystemConfigUpdate(BaseModel):
     default_mode: Optional[str] = None
 
 
+class ProjectCostEstimationConfigOut(BaseModel):
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectCostEstimationConfigUpdate(BaseModel):
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectCreateOptionsConfigOut(BaseModel):
+    options: Dict[str, List[str]] = Field(default_factory=dict)
+
+
 class SystemAIAssistantModelInput(BaseModel):
     """AI助手模型输入。
 

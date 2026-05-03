@@ -374,7 +374,25 @@ class LLMService:
         hinted = str(endpoint_hint or "").strip()
         if hinted:
             if hinted.startswith("http"):
-                return hinted.rstrip("/")
+                hinted_root = hinted.rstrip("/")
+                hinted_lower = hinted_root.lower()
+
+                if "kie.ai" in hinted_lower:
+                    clean_root = re.sub(
+                        r"(/claude/v1/messages|/api/v1/jobs/createTask|/[^/]+/v1/chat/completions|/v1/chat/completions|/chat/completions|/v1)+/?$",
+                        "",
+                        hinted_root,
+                        flags=re.IGNORECASE,
+                    ).rstrip("/")
+                    return f"{clean_root}/claude/v1/messages"
+
+                if hinted_lower.endswith("/chat/completions"):
+                    return re.sub(r"/chat/completions/?$", "/messages", hinted_root, flags=re.IGNORECASE)
+
+                if hinted_lower.endswith("/v1"):
+                    return f"{hinted_root}/messages"
+
+                return hinted_root
             return f"{str(base_url or '').rstrip('/')}/{hinted.lstrip('/')}".rstrip("/")
 
         root = (base_url or "").strip().rstrip("/")

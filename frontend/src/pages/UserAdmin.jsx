@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
 import Footer from '../components/Footer';
 import QueueAdmin from '../components/QueueAdmin';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
@@ -24,6 +24,36 @@ const RuleField = ({ label, children }) => (
         {children}
     </label>
 );
+
+const DEFAULT_PROJECT_COST_VISUAL_CONFIG = {
+    version: 1,
+    overview: {
+        word_rate: 0.012,
+    },
+    suggested: {
+        base_scene_point: 1.0,
+        role_complexity: 1.0,
+        env_complexity: 0.8,
+        prop_complexity: 0.5,
+        entity_tier_ratios: {
+            tier1_max: 3,
+            tier2_max: 6,
+            tier3_max: 9,
+            tier1_factor: 1.0,
+            tier2_factor: 1.2,
+            tier3_factor: 1.5,
+            tier4_factor: 1.8,
+        },
+    },
+    budget: {
+        shot_unit_rate: 1.0,
+        duration_weight: 1.0,
+        asset_weight: 0.8,
+    },
+    project_multiplier: {
+        default_factor: 1.0,
+    },
+};
 
 const UserAdmin = () => {
     const uiLang = getUiLang();
@@ -123,6 +153,9 @@ const UserAdmin = () => {
     const [isAssetImageRatioConfigSaving, setIsAssetImageRatioConfigSaving] = useState(false);
     const [sceneAnalysisDefaultMode, setSceneAnalysisDefaultMode] = useState('classic');
     const [isSceneAnalysisConfigSaving, setIsSceneAnalysisConfigSaving] = useState(false);
+    const [projectCostConfigData, setProjectCostConfigData] = useState(DEFAULT_PROJECT_COST_VISUAL_CONFIG);
+    const [isProjectCostConfigSaving, setIsProjectCostConfigSaving] = useState(false);
+    const [costFormKey, setCostFormKey] = useState(0);
     const [isBillingRuleEditing, setIsBillingRuleEditing] = useState(false);
     const [billingRuleEditToast, setBillingRuleEditToast] = useState('');
     const [selectedBillingRuleId, setSelectedBillingRuleId] = useState('');
@@ -1188,6 +1221,165 @@ const UserAdmin = () => {
         }
     };
 
+    const normalizeProjectCostConfigForUi = (rawConfig) => {
+        const src = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+        const srcSuggested = src?.suggested && typeof src.suggested === 'object' ? src.suggested : {};
+        const srcTier = srcSuggested?.entity_tier_ratios && typeof srcSuggested.entity_tier_ratios === 'object'
+            ? srcSuggested.entity_tier_ratios
+            : {};
+
+        return {
+            ...src,
+            overview: {
+                ...DEFAULT_PROJECT_COST_VISUAL_CONFIG.overview,
+                ...(src?.overview && typeof src.overview === 'object' ? src.overview : {}),
+            },
+            suggested: {
+                ...DEFAULT_PROJECT_COST_VISUAL_CONFIG.suggested,
+                ...srcSuggested,
+                entity_tier_ratios: {
+                    ...DEFAULT_PROJECT_COST_VISUAL_CONFIG.suggested.entity_tier_ratios,
+                    ...srcTier,
+                },
+            },
+            budget: {
+                ...DEFAULT_PROJECT_COST_VISUAL_CONFIG.budget,
+                ...(src?.budget && typeof src.budget === 'object' ? src.budget : {}),
+            },
+            project_multiplier: {
+                ...DEFAULT_PROJECT_COST_VISUAL_CONFIG.project_multiplier,
+                ...(src?.project_multiplier && typeof src.project_multiplier === 'object' ? src.project_multiplier : {}),
+            },
+        };
+    };
+
+    const getCostConfigNumber = (path, fallback = 0) => {
+        let cursor = projectCostConfigData;
+        for (const key of path) {
+            if (!cursor || typeof cursor !== 'object') return fallback;
+            cursor = cursor[key];
+        }
+        const parsed = Number(cursor);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    };
+
+    const setCostConfigNumber = (path, value, fallback = 0, asInt = false) => {
+        const raw = String(value ?? '').trim();
+        const parsed = asInt ? Number.parseInt(raw, 10) : Number.parseFloat(raw);
+        const nextValue = Number.isFinite(parsed) ? parsed : fallback;
+
+        setProjectCostConfigData((prev) => {
+            const next = { ...(prev || {}) };
+            let cursor = next;
+            for (let i = 0; i < path.length - 1; i += 1) {
+                const key = path[i];
+                const child = cursor?.[key];
+                cursor[key] = child && typeof child === 'object' && !Array.isArray(child) ? { ...child } : {};
+                cursor = cursor[key];
+            }
+            cursor[path[path.length - 1]] = nextValue;
+            return next;
+        });
+    };
+
+    const getCostFieldFactors = () => {
+        const ff = projectCostConfigData?.project_multiplier?.field_factors;
+        return ff && typeof ff === 'object' && !Array.isArray(ff) ? ff : {};
+    };
+
+    const setFieldFactors = (updater) => {
+        setProjectCostConfigData((prev) => {
+            const prevPm = prev?.project_multiplier && typeof prev.project_multiplier === 'object' ? prev.project_multiplier : {};
+            const prevFf = prevPm?.field_factors && typeof prevPm.field_factors === 'object' ? prevPm.field_factors : {};
+            const nextFf = typeof updater === 'function' ? updater(prevFf) : updater;
+            return { ...prev, project_multiplier: { ...prevPm, field_factors: nextFf } };
+        });
+    };
+
+    const addCostField = () => {
+        setFieldFactors((ff) => {
+            let name = 'new_field';
+            let i = 1;
+            while (Object.prototype.hasOwnProperty.call(ff, name)) { name = `new_field_${i}`; i += 1; }
+            return { ...ff, [name]: { __default__: 1.0 } };
+        });
+    };
+
+    const removeCostField = (fieldName) => {
+        setFieldFactors((ff) => {
+            const next = { ...ff };
+            delete next[fieldName];
+            return next;
+        });
+    };
+
+    const renameCostField = (oldName, newName) => {
+        const trimmed = String(newName || '').trim();
+        if (!trimmed || trimmed === oldName) return;
+        setFieldFactors((ff) => {
+            if (Object.prototype.hasOwnProperty.call(ff, trimmed)) return ff;
+            const next = {};
+            for (const [k, v] of Object.entries(ff)) {
+                next[k === oldName ? trimmed : k] = v;
+            }
+            return next;
+        });
+    };
+
+    const addCostFieldMapping = (fieldName) => {
+        setFieldFactors((ff) => {
+            const existing = ff[fieldName] && typeof ff[fieldName] === 'object' ? ff[fieldName] : {};
+            let val = 'value';
+            let i = 1;
+            while (Object.prototype.hasOwnProperty.call(existing, val)) { val = `value${i}`; i += 1; }
+            return { ...ff, [fieldName]: { ...existing, [val]: 1.0 } };
+        });
+    };
+
+    const removeCostFieldMapping = (fieldName, mappingKey) => {
+        setFieldFactors((ff) => {
+            const existing = { ...(ff[fieldName] || {}) };
+            delete existing[mappingKey];
+            return { ...ff, [fieldName]: existing };
+        });
+    };
+
+    const updateCostFieldMappingKey = (fieldName, oldKey, newKey) => {
+        const trimmed = String(newKey || '').trim();
+        if (!trimmed || trimmed === oldKey) return;
+        setFieldFactors((ff) => {
+            const existing = ff[fieldName] && typeof ff[fieldName] === 'object' ? ff[fieldName] : {};
+            if (Object.prototype.hasOwnProperty.call(existing, trimmed)) return ff;
+            const next = {};
+            for (const [k, v] of Object.entries(existing)) {
+                next[k === oldKey ? trimmed : k] = v;
+            }
+            return { ...ff, [fieldName]: next };
+        });
+    };
+
+    const updateCostFieldMappingFactor = (fieldName, mappingKey, value) => {
+        const raw = String(value ?? '').trim();
+        const parsed = Number.parseFloat(raw);
+        const nextVal = Number.isFinite(parsed) ? parsed : 1.0;
+        setFieldFactors((ff) => {
+            const existing = { ...(ff[fieldName] || {}) };
+            existing[mappingKey] = nextVal;
+            return { ...ff, [fieldName]: existing };
+        });
+    };
+
+    const fetchProjectCostEstimationConfig = async () => {
+        try {
+            const cfg = await getProjectCostEstimationConfigManage();
+            const payload = cfg?.config && typeof cfg.config === 'object' ? cfg.config : {};
+            setProjectCostConfigData(normalizeProjectCostConfigForUi(payload));
+            setCostFormKey((k) => k + 1);
+        } catch (e) {
+            console.error('Failed to load project cost estimation config', e);
+        }
+    };
+
     const saveAssetImageRatioConfig = async (overrides = {}) => {
         const payload = {
             subject_aspect_ratio: String(overrides.subject_aspect_ratio ?? subjectAssetAspectRatio ?? '').trim() || '16:9',
@@ -1224,6 +1416,22 @@ const UserAdmin = () => {
         }
     };
 
+    const saveProjectCostEstimationConfig = async () => {
+        const payload = normalizeProjectCostConfigForUi(projectCostConfigData);
+        setIsProjectCostConfigSaving(true);
+        try {
+            const saved = await updateProjectCostEstimationConfigManage({ config: payload });
+            const normalized = saved?.config && typeof saved.config === 'object' ? saved.config : payload;
+            setProjectCostConfigData(normalizeProjectCostConfigForUi(normalized));
+            setCostFormKey((k) => k + 1);
+        } catch (e) {
+            console.error('Failed to save project cost estimation config', e);
+            alert(e?.response?.data?.detail || e?.message || t('保存项目成本配置失败', 'Failed to save project cost estimation config'));
+        } finally {
+            setIsProjectCostConfigSaving(false);
+        }
+    };
+
     useEffect(() => {
         if (activeTab === 'pricing_rules') {
             fetchBillingRuleResetConfig();
@@ -1234,6 +1442,12 @@ const UserAdmin = () => {
         if (activeTab === 'system_api') {
             fetchAssetImageRatioConfig();
             fetchSceneAnalysisConfig();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab === 'cost_estimation') {
+            fetchProjectCostEstimationConfig();
         }
     }, [activeTab]);
 
@@ -4865,6 +5079,7 @@ const UserAdmin = () => {
         { id: 'function_api_config', label: t('功能API配置', 'Function APIs'), icon: Settings },
         { id: 'pricing', label: t('定价', 'Pricing'), icon: DollarSign },
         { id: 'transactions', label: t('记录', 'History'), icon: Activity },
+        { id: 'cost_estimation', label: t('成本估算', 'Cost Estimation'), icon: DollarSign },
         { id: 'system_api', label: t('系统 API', 'System API'), icon: Key },
         { id: 'queue', label: t('队列', 'Queue'), icon: Activity },
         { id: 'config_sync', label: t('配置同步', 'Config Sync'), icon: Database },
@@ -6223,6 +6438,343 @@ const UserAdmin = () => {
                                           ))}
                                       </tbody>
                                   </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* COST ESTIMATION TAB */}
+                    {activeTab === 'cost_estimation' && (
+                        <div className="space-y-5">
+                            <div className="border border-cyan-500/30 rounded-xl p-4 bg-cyan-500/5 space-y-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-white">{t('项目成本评估模型配置', 'Project Cost Estimation Model Config')}</h4>
+                                        <p className="text-xs text-gray-400 mt-1">{t('核心参数可视化编辑（不再只靠 JSON）：概要成本 / 建议成本 / 预算成本、实体分档与项目基础倍率。', 'Edit core parameters visually (no longer JSON-only): Overview/Suggested/Budget, entity tiers, and base project multiplier.')}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            onClick={fetchProjectCostEstimationConfig}
+                                            disabled={isProjectCostConfigSaving}
+                                            className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded text-xs disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            <RefreshCw size={14} /> {t('刷新配置', 'Refresh Config')}
+                                        </button>
+                                        <button
+                                            onClick={saveProjectCostEstimationConfig}
+                                            disabled={isProjectCostConfigSaving}
+                                            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1 rounded text-xs disabled:opacity-50"
+                                        >
+                                            {isProjectCostConfigSaving ? t('保存中...', 'Saving...') : t('保存配置', 'Save Config')}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div key={costFormKey} className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
+                                        <h5 className="text-xs font-semibold text-white">{t('概要成本（Overview）', 'Overview')}</h5>
+                                        <label className="block text-xs text-gray-300">
+                                            {t('word_rate（每词基价）', 'word_rate (unit price per word)')}
+                                            <input
+                                                type="number"
+                                                step="0.0001"
+                                                min="0"
+                                                defaultValue={String(getCostConfigNumber(['overview', 'word_rate'], 0.012))}
+                                                onBlur={(e) => setCostConfigNumber(['overview', 'word_rate'], e.target.value, 0.012)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
+                                        <h5 className="text-xs font-semibold text-white">{t('预算成本（Budget）', 'Budget')}</h5>
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                            <label className="block text-xs text-gray-300">
+                                                {t('shot_unit_rate（镜头单位成本）', 'shot_unit_rate (shot unit rate)')}
+                                                <input
+                                                    type="number"
+                                                    step="0.0001"
+                                                    min="0"
+                                                    defaultValue={String(getCostConfigNumber(['budget', 'shot_unit_rate'], 1.0))}
+                                                    onBlur={(e) => setCostConfigNumber(['budget', 'shot_unit_rate'], e.target.value, 1.0)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </label>
+                                            <label className="block text-xs text-gray-300">
+                                                {t('duration_weight（时长权重）', 'duration_weight (duration weight)')}
+                                                <input
+                                                    type="number"
+                                                    step="0.0001"
+                                                    min="0"
+                                                    defaultValue={String(getCostConfigNumber(['budget', 'duration_weight'], 1.0))}
+                                                    onBlur={(e) => setCostConfigNumber(['budget', 'duration_weight'], e.target.value, 1.0)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </label>
+                                            <label className="block text-xs text-gray-300">
+                                                {t('asset_weight（资产权重）', 'asset_weight (asset weight)')}
+                                                <input
+                                                    type="number"
+                                                    step="0.0001"
+                                                    min="0"
+                                                    defaultValue={String(getCostConfigNumber(['budget', 'asset_weight'], 0.8))}
+                                                    onBlur={(e) => setCostConfigNumber(['budget', 'asset_weight'], e.target.value, 0.8)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div className="xl:col-span-2 rounded-lg border border-cyan-400/20 bg-cyan-500/5 p-3 space-y-3">
+                                        <h5 className="text-xs font-semibold text-cyan-100">{t('建议成本（Suggested，按 Scene）', 'Suggested (per Scene)')}</h5>
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                            <label className="block text-xs text-gray-200">
+                                                {t('base_scene_point（场景基点）', 'base_scene_point (base scene point)')}
+                                                <input
+                                                    type="number"
+                                                    step="0.0001"
+                                                    min="0"
+                                                    defaultValue={String(getCostConfigNumber(['suggested', 'base_scene_point'], 1.0))}
+                                                    onBlur={(e) => setCostConfigNumber(['suggested', 'base_scene_point'], e.target.value, 1.0)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </label>
+                                            <label className="block text-xs text-gray-200">
+                                                {t('role_complexity（角色复杂度）', 'role_complexity (role complexity)')}
+                                                <input
+                                                    type="number"
+                                                    step="0.0001"
+                                                    min="0"
+                                                    defaultValue={String(getCostConfigNumber(['suggested', 'role_complexity'], 1.0))}
+                                                    onBlur={(e) => setCostConfigNumber(['suggested', 'role_complexity'], e.target.value, 1.0)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </label>
+                                            <label className="block text-xs text-gray-200">
+                                                {t('env_complexity（环境复杂度）', 'env_complexity (environment complexity)')}
+                                                <input
+                                                    type="number"
+                                                    step="0.0001"
+                                                    min="0"
+                                                    defaultValue={String(getCostConfigNumber(['suggested', 'env_complexity'], 0.8))}
+                                                    onBlur={(e) => setCostConfigNumber(['suggested', 'env_complexity'], e.target.value, 0.8)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </label>
+                                            <label className="block text-xs text-gray-200">
+                                                {t('prop_complexity（道具复杂度）', 'prop_complexity (prop complexity)')}
+                                                <input
+                                                    type="number"
+                                                    step="0.0001"
+                                                    min="0"
+                                                    defaultValue={String(getCostConfigNumber(['suggested', 'prop_complexity'], 0.5))}
+                                                    onBlur={(e) => setCostConfigNumber(['suggested', 'prop_complexity'], e.target.value, 0.5)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                                />
+                                            </label>
+                                        </div>
+
+                                        <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                            <div className="text-xs font-semibold text-gray-200 mb-2">{t('实体总数分档系数（entity_tier_ratios）', 'Entity Tier Ratios')}</div>
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                                <label className="block text-xs text-gray-300">{t('tier1_max（第一档上限）', 'tier1_max (tier-1 upper bound)')}
+                                                    <input type="number" step="1" min="1" defaultValue={String(getCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier1_max'], 3))} onBlur={(e) => setCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier1_max'], e.target.value, 3, true)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" />
+                                                </label>
+                                                <label className="block text-xs text-gray-300">{t('tier2_max（第二档上限）', 'tier2_max (tier-2 upper bound)')}
+                                                    <input type="number" step="1" min="1" defaultValue={String(getCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier2_max'], 6))} onBlur={(e) => setCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier2_max'], e.target.value, 6, true)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" />
+                                                </label>
+                                                <label className="block text-xs text-gray-300">{t('tier3_max（第三档上限）', 'tier3_max (tier-3 upper bound)')}
+                                                    <input type="number" step="1" min="1" defaultValue={String(getCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier3_max'], 9))} onBlur={(e) => setCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier3_max'], e.target.value, 9, true)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" />
+                                                </label>
+                                                <label className="block text-xs text-gray-300">{t('tier4_factor（第四档系数）', 'tier4_factor (tier-4 factor)')}
+                                                    <input type="number" step="0.0001" min="0" defaultValue={String(getCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier4_factor'], 1.8))} onBlur={(e) => setCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier4_factor'], e.target.value, 1.8)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" />
+                                                </label>
+                                                <label className="block text-xs text-gray-300">{t('tier1_factor（第一档系数）', 'tier1_factor (tier-1 factor)')}
+                                                    <input type="number" step="0.0001" min="0" defaultValue={String(getCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier1_factor'], 1.0))} onBlur={(e) => setCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier1_factor'], e.target.value, 1.0)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" />
+                                                </label>
+                                                <label className="block text-xs text-gray-300">{t('tier2_factor（第二档系数）', 'tier2_factor (tier-2 factor)')}
+                                                    <input type="number" step="0.0001" min="0" defaultValue={String(getCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier2_factor'], 1.2))} onBlur={(e) => setCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier2_factor'], e.target.value, 1.2)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" />
+                                                </label>
+                                                <label className="block text-xs text-gray-300">{t('tier3_factor（第三档系数）', 'tier3_factor (tier-3 factor)')}
+                                                    <input type="number" step="0.0001" min="0" defaultValue={String(getCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier3_factor'], 1.5))} onBlur={(e) => setCostConfigNumber(['suggested', 'entity_tier_ratios', 'tier3_factor'], e.target.value, 1.5)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} className="mt-1 w-full bg-black/40 border border-gray-700 rounded p-2 text-sm" />
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="xl:col-span-2 rounded-lg border border-amber-400/20 bg-amber-500/5 p-3 space-y-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div>
+                                                <h5 className="text-xs font-semibold text-amber-100">{t('项目信息字段倍率规则（project_multiplier）', 'Project Field Multiplier Rules (project_multiplier)')}</h5>
+                                                <p className="text-[11px] text-gray-400 mt-0.5">{t('default_factor 为基础倍率；field_factors 根据项目字段值精确匹配后连乘，匹配不到则走 __default__。最终 project_info_multiplier = default_factor × ∏ 字段系数', 'default_factor is base; field_factors are multiplied by matched project field values; fallback to __default__. Final: project_info_multiplier = default_factor × ∏ field_factor')}</p>
+                                            </div>
+                                        </div>
+
+                                        <label className="block text-xs text-gray-300">
+                                            {t('default_factor（基础倍率，未命中任何字段规则时的起点）', 'default_factor (base multiplier when no field rules match)')}
+                                            <input
+                                                type="number"
+                                                step="0.0001"
+                                                min="0"
+                                                defaultValue={String(getCostConfigNumber(['project_multiplier', 'default_factor'], 1.0))}
+                                                onBlur={(e) => setCostConfigNumber(['project_multiplier', 'default_factor'], e.target.value, 1.0)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                className="mt-1 w-48 bg-black/40 border border-gray-700 rounded p-2 text-sm"
+                                            />
+                                        </label>
+
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs font-semibold text-gray-200">{t('字段倍率规则（field_factors）', 'Field Factor Rules (field_factors)')}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={addCostField}
+                                                    className="text-[11px] bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/30 text-amber-100 px-2 py-1 rounded flex items-center gap-1"
+                                                >
+                                                    <Plus size={11} /> {t('添加字段', 'Add Field')}
+                                                </button>
+                                            </div>
+
+                                            {Object.keys(getCostFieldFactors()).length === 0 && (
+                                                <div className="text-[11px] text-gray-500 italic">{t('暂无字段规则，点击「添加字段」创建。', 'No field rules yet. Click "Add Field" to create one.')}</div>
+                                            )}
+
+                                            {Object.entries(getCostFieldFactors()).map(([fieldName, mapping]) => (
+                                                <div key={fieldName} className="rounded-lg border border-white/10 bg-black/30 p-3 space-y-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[11px] text-gray-400 shrink-0">{t('字段名', 'Field')}</span>
+                                                        <input
+                                                            type="text"
+                                                            defaultValue={fieldName}
+                                                            onBlur={(e) => renameCostField(fieldName, e.target.value)}
+                                                            onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+                                                            className="flex-1 bg-black/40 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-amber-200"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeCostField(fieldName)}
+                                                            className="text-[11px] text-red-400 hover:text-red-300 px-1.5 py-0.5 rounded border border-red-500/20 hover:bg-red-500/10 shrink-0"
+                                                        >
+                                                            <Trash2 size={11} />
+                                                        </button>
+                                                    </div>
+
+                                                    <div className="space-y-1">
+                                                        {Object.entries(mapping && typeof mapping === 'object' ? mapping : {}).map(([mappingKey, factor]) => (
+                                                            <div key={mappingKey} className="flex items-center gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    defaultValue={mappingKey}
+                                                                    onBlur={(e) => updateCostFieldMappingKey(fieldName, mappingKey, e.target.value)}
+                                                                    onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+                                                                    className="flex-1 bg-black/40 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-200"
+                                                                    placeholder={t('字段值（或 __default__）', 'field value or __default__')}
+                                                                />
+                                                                <input
+                                                                    type="number"
+                                                                    step="0.01"
+                                                                    min="0"
+                                                                    defaultValue={String(Number.isFinite(Number(factor)) ? Number(factor) : 1.0)}
+                                                                    onBlur={(e) => updateCostFieldMappingFactor(fieldName, mappingKey, e.target.value)}
+                                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                                    className="w-24 bg-black/40 border border-gray-700 rounded px-2 py-1 text-xs text-right"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => removeCostFieldMapping(fieldName, mappingKey)}
+                                                                    className="text-red-400/60 hover:text-red-300 shrink-0"
+                                                                >
+                                                                    <X size={11} />
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => addCostFieldMapping(fieldName)}
+                                                        className="text-[11px] text-gray-400 hover:text-gray-200 flex items-center gap-1"
+                                                    >
+                                                        <Plus size={10} /> {t('添加值映射', 'Add mapping')}
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-gray-400 leading-6">
+                                        <div>{t('说明：dimension_rules 等高级影响因子规则暂未在界面展示，会在保存时原样保留，如需调整请联系开发者。', 'Note: advanced dimension_rules are not shown here and will be preserved as-is on save.')}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="border border-white/10 rounded-xl p-4 bg-white/5 space-y-3">
+                                <h4 className="text-sm font-semibold text-white">{t('估算算法梳理', 'Estimation Algorithm Summary')}</h4>
+                                <div className="text-xs text-gray-300 leading-6 space-y-2">
+                                    <div>{t('核心规则：三阶段是逐步精细化估算，不相加；当前结果只取最精细可用阶段。', 'Core rule: stages are progressive refinements, not additive; current result uses only the finest available stage.')}</div>
+                                </div>
+
+                                <details className="rounded-lg border border-white/10 bg-black/20 p-3">
+                                    <summary className="cursor-pointer text-xs font-semibold text-white">{t('展开：公式视图', 'Expand: Formula View')}</summary>
+                                    <div className="mt-3 space-y-2 text-xs text-gray-300">
+                                        <div>{t('阶段选择：若 shot_count > 0 => 当前阶段=budget；否则若 scene_count > 0 => 当前阶段=suggested；否则=overview。', 'Stage selection: if shot_count > 0 => stage=budget; else if scene_count > 0 => stage=suggested; else overview.')}</div>
+                                        <div>{t('概要成本 raw_overview = word_count * overview.word_rate', 'Overview raw_overview = word_count * overview.word_rate')}</div>
+                                        <div>{t('建议成本（逐 Scene）：scene_cost = duration * base_scene_point * ((role_count - 1) * role_complexity + (env_count - 1) * env_complexity + (prop_count - 1) * prop_complexity) * entity_tier_ratio * project_info_multiplier', 'Suggested (per scene): scene_cost = duration * base_scene_point * ((role_count - 1) * role_complexity + (env_count - 1) * env_complexity + (prop_count - 1) * prop_complexity) * entity_tier_ratio * project_info_multiplier')}</div>
+                                        <div>{t('汇总：raw_suggested = sum(scene_cost) * dimension_multiplier_only（避免 project_info_multiplier 重复乘算）', 'Aggregation: raw_suggested = sum(scene_cost) * dimension_multiplier_only (to avoid double-multiplying project_info_multiplier)')}</div>
+                                        <div>{t('预算成本 raw_budget = sum(shot_complexity) * budget.shot_unit_rate', 'Budget raw_budget = sum(shot_complexity) * budget.shot_unit_rate')}</div>
+                                        <div>{t('shot_complexity = duration_weight * duration + asset_weight * shot_asset_count', 'shot_complexity = duration_weight * duration + asset_weight * shot_asset_count')}</div>
+                                        <div>{t('总倍率 total_multiplier = project_info_multiplier * dimension_multiplier', 'total_multiplier = project_info_multiplier * dimension_multiplier')}</div>
+                                        <div>{t('阶段估算值 estimated_stage_cost = raw_stage * total_multiplier', 'estimated_stage_cost = raw_stage * total_multiplier')}</div>
+                                    </div>
+                                </details>
+
+                                <details className="rounded-lg border border-white/10 bg-black/20 p-3">
+                                    <summary className="cursor-pointer text-xs font-semibold text-white">{t('展开：字段对照', 'Expand: Field Mapping')}</summary>
+                                    <div className="mt-3 overflow-x-auto">
+                                        <table className="w-full text-xs min-w-[680px]">
+                                            <thead className="text-gray-400">
+                                                <tr className="border-b border-white/10">
+                                                    <th className="text-left py-2 pr-3">{t('业务名', 'Business Name')}</th>
+                                                    <th className="text-left py-2 pr-3">{t('配置键', 'Config Key')}</th>
+                                                    <th className="text-left py-2 pr-3">{t('主要参数', 'Main Params')}</th>
+                                                    <th className="text-left py-2">{t('输出字段', 'Output Fields')}</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="text-gray-200">
+                                                <tr className="border-b border-white/5">
+                                                    <td className="py-2 pr-3">{t('概要成本', 'Overview Cost')}</td>
+                                                    <td className="py-2 pr-3">overview</td>
+                                                    <td className="py-2 pr-3">word_rate</td>
+                                                    <td className="py-2">stages.overview, episode_costs[].overview_cost</td>
+                                                </tr>
+                                                <tr className="border-b border-white/5">
+                                                    <td className="py-2 pr-3">{t('建议成本', 'Suggested Cost')}</td>
+                                                    <td className="py-2 pr-3">suggested</td>
+                                                    <td className="py-2 pr-3">base_scene_point, role/env/prop_complexity, entity_tier_ratios</td>
+                                                    <td className="py-2">stages.suggested, episode_costs[].suggested_cost</td>
+                                                </tr>
+                                                <tr className="border-b border-white/5">
+                                                    <td className="py-2 pr-3">{t('预算成本', 'Budget Cost')}</td>
+                                                    <td className="py-2 pr-3">budget</td>
+                                                    <td className="py-2 pr-3">shot_unit_rate, duration_weight, asset_weight</td>
+                                                    <td className="py-2">stages.budget, episode_costs[].budget_cost</td>
+                                                </tr>
+                                                <tr>
+                                                    <td className="py-2 pr-3">{t('当前阶段估算', 'Current Stage Estimate')}</td>
+                                                    <td className="py-2 pr-3">summary.current_stage</td>
+                                                    <td className="py-2 pr-3">按 scene/shot 可用性自动选择</td>
+                                                    <td className="py-2">summary.current_estimate, episode_costs[].current_estimated_cost</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </details>
                             </div>
                         </div>
                     )}

@@ -1,0 +1,1 @@
+﻿const fs = require(fs); const lines = fs.readFileSync(c:/AS/AIStory/frontend/src/pages/editor/components/ScriptEditor.jsx, utf8).split(\n); lines.forEach((l, i) => { if (l.includes(const analyzedText = extractAnalysisTextFromResult)) console.log(i + 1, l.trim()); });
