@@ -2593,7 +2593,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     
 
-    const parseMarkdownTable = (text) => {
+    function parseMarkdownTable(text) {
         if (!text || typeof text !== 'string') return null;
         const lines = text
             .split('\n')
@@ -2633,7 +2633,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         return { headers, rows };
-    };
+    }
 
     const buildMarkdownTable = (headers, rows) => {
         const esc = (val) => (val || '')
