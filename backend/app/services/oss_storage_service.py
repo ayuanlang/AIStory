@@ -88,6 +88,8 @@ class OSSStorageService:
         is_qiniu = self._is_qiniu_provider(pool)
 
         if "://" in public_base_url:
+            if is_qiniu and public_base_url.lower().startswith("http://"):
+                return f"https://{public_base_url[len('http://') :]}"
             return public_base_url
             
         endpoint = str(getattr(pool, "endpoint", "") or "").strip()
@@ -711,8 +713,15 @@ class OSSStorageService:
         if not raw:
             return None, None
 
+        candidate_raw = raw
+        # Legacy records may store Qiniu URL without scheme, e.g. host/path.
+        if "://" not in candidate_raw and "/" in candidate_raw:
+            host_part = candidate_raw.split("/", 1)[0].strip().lower()
+            if host_part.endswith("clouddn.com") or host_part.endswith("qiniucs.com") or ".bkt." in host_part:
+                candidate_raw = f"https://{candidate_raw}"
+
         try:
-            parsed = urllib.parse.urlparse(raw)
+            parsed = urllib.parse.urlparse(candidate_raw)
         except Exception:
             return None, None
 
@@ -722,9 +731,26 @@ class OSSStorageService:
 
         for pool in self._get_all_pools(None):
             public_base_url = self._normalize_public_base_url(pool)
-            if public_base_url and raw.startswith(f"{public_base_url}/"):
-                extracted_key = raw[len(public_base_url) + 1 :].split("?")[0]
+            if public_base_url and candidate_raw.startswith(f"{public_base_url}/"):
+                extracted_key = candidate_raw[len(public_base_url) + 1 :].split("?")[0]
                 return pool, urllib.parse.unquote(extracted_key)
+
+            if (
+                self._is_qiniu_provider(pool)
+                and public_base_url
+                and public_base_url.lower().startswith("https://")
+            ):
+                legacy_http_base = f"http://{public_base_url[len('https://') :]}"
+                if candidate_raw.startswith(f"{legacy_http_base}/"):
+                    extracted_key = candidate_raw[len(legacy_http_base) + 1 :].split("?")[0]
+                    return pool, urllib.parse.unquote(extracted_key)
+
+            if self._is_qiniu_provider(pool):
+                host = str(parsed.netloc or "").strip().lower()
+                root_prefix = str(getattr(pool, "root_prefix", "") or "").strip().strip("/")
+                if host and (host.endswith("clouddn.com") or host.endswith("qiniucs.com") or ".bkt." in host):
+                    if not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/"):
+                        return pool, path
 
             endpoint_host = urllib.parse.urlparse(str(getattr(pool, "endpoint", "") or "")).netloc.lower()
             bucket = str(getattr(pool, "bucket", "") or "").strip()
