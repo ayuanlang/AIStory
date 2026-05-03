@@ -549,6 +549,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return stable;
     }, [t]);
 
+    const isProviderPolicyViolationError = useCallback((error) => {
+        const raw = [
+            error?.message,
+            error?.response?.data?.detail,
+            error?.response?.data?.message,
+            error?.detail,
+        ]
+            .map(item => String(item || '').trim())
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+
+        if (!raw) return false;
+        return (
+            raw.includes('prohibited_content')
+            || raw.includes('供应商政策不允许')
+            || raw.includes('policy')
+        );
+    }, []);
+
     const extractAnalysisRuntimeMeta = useCallback((meta) => {
         if (!meta || typeof meta !== 'object') return null;
         const integrity = (meta.integrity && typeof meta.integrity === 'object') ? meta.integrity : {};
@@ -4763,7 +4783,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (onLog) onLog('Project language is empty. Analysis continues with warning.', 'warning');
         }
 
-        setAnalysisUiReport(null);
         setAnalysisFlowStatus({ phase: 'idle', message: '' });
 
         if (isSuperuser) {
@@ -4936,6 +4955,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     return;
                 }
                 const startedAt = Date.now();
+                const retryResetNotice = retryCount > 0
+                    ? t('检测到首轮未返回完整 Subject Index，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing Subject Index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
+                    : '';
+
                 setAnalysisUiReport({
                     status: 'running',
                     startedAt,
@@ -4943,7 +4966,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     phaseTimings: null,
                     importReport: null,
                     runtimeMeta: null,
-                    warning: '',
+                    warning: retryResetNotice,
                     error: '',
                 });
 
@@ -5239,6 +5262,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
+            const combinedReportWarning = [importWarningMessage, retryResetNotice]
+                .map(item => String(item || '').trim())
+                .filter(Boolean)
+                .join('；');
+
             setAnalysisUiReport({
                 status: 'completed',
                 startedAt,
@@ -5246,7 +5274,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseTimings,
                 importReport,
                 runtimeMeta,
-                warning: importWarningMessage,
+                warning: combinedReportWarning,
                 error: '',
             });
 
@@ -5269,9 +5297,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
-            if (e?.message?.includes("第一阶段未解析到完整的 Subject Index 区块") && retryCount < 1) {
+            const providerPolicyViolated = isProviderPolicyViolationError(e);
+            if (!providerPolicyViolated && e?.message?.includes("第一阶段未解析到完整的 Subject Index 区块") && retryCount < 1) {
                 if (onLog) onLog("未检测到 Subject Index，自动清理数据并准备重新发起(1/1)", "warning");
-                setAnalysisFlowStatus({ phase: 'warning', message: '未检测到完整实体区块，将在3秒后重置场景并重启分析...' });
+                const resetNotice = t('未检测到完整 Subject Index：将清空当前分集已导入场景并从头重启分析（资产保留）。', 'Missing Subject Index: imported scenes in this episode will be cleared and analysis will restart from scratch (assets kept).');
+                setAnalysisFlowStatus({ phase: 'warning', message: `${resetNotice} ${t('3秒后自动开始新一轮。', 'A fresh run starts in 3 seconds.')}` });
+                setAnalysisUiReport({
+                    status: 'running',
+                    startedAt: Date.now(),
+                    durationMs: 0,
+                    phaseTimings: null,
+                    importReport: null,
+                    runtimeMeta: null,
+                    warning: resetNotice,
+                    error: '',
+                });
                 try {
                     const scenes = await fetchScenes(activeEpisode.id);
                     if (scenes && scenes.length > 0) {
@@ -5289,8 +5329,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     setAdaptationText("");
                     analysisRunInFlightRef.current = false;
                     setTimeout(() => {
-                          executeAnalysis(content, customSystemPrompt, skipMetadata, retryCount + 1).catch(console.error);
-                      }, 3000);
+                        executeAnalysis(content, customSystemPrompt, skipMetadata, retryCount + 1).catch(console.error);
+                    }, 3000);
                     return;
                 } catch(cleanupErr) {
                     console.error('Failed cleanup during auto retry', cleanupErr);
@@ -5396,7 +5436,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Keep supplement submit behavior aligned with primary scene analysis:
         // superuser previews/edits prompt first, then manually runs submission.
         if (isSuperuser) {
-            setAnalysisUiReport(null);
             setAnalysisFlowStatus({ phase: 'idle', message: '' });
             setSystemPrompt(supplementPrompt);
             setUserPrompt(supplementInput);
@@ -5517,6 +5556,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase: 'autosaving',
             message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
         });
+        const retryResetNotice = retryCount > 0
+            ? t('检测到首轮未返回完整 Subject Index，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing Subject Index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
+            : '';
+
         setAnalysisUiReport({
             status: 'running',
             startedAt,
@@ -5524,7 +5567,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseTimings: null,
             importReport: null,
             runtimeMeta: null,
-            warning: '',
+            warning: retryResetNotice,
             error: '',
         });
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
@@ -5731,6 +5774,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
+            const combinedReportWarning = [importWarningMessage, retryResetNotice]
+                .map(item => String(item || '').trim())
+                .filter(Boolean)
+                .join('；');
+
             setAnalysisUiReport({
                 status: 'completed',
                 startedAt,
@@ -5738,7 +5786,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseTimings,
                 importReport,
                 runtimeMeta,
-                warning: importWarningMessage,
+                warning: combinedReportWarning,
                 error: '',
             });
 
@@ -5760,9 +5808,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
-            if (e?.message?.includes("第一阶段未解析到完整的 Subject Index 区块") && retryCount < 1) {
+            const providerPolicyViolated = isProviderPolicyViolationError(e);
+            if (!providerPolicyViolated && e?.message?.includes("第一阶段未解析到完整的 Subject Index 区块") && retryCount < 1) {
                 if (onLog) onLog("未检测到 Subject Index，自动清理数据并准备重新发起(1/1)", "warning");
-                setAnalysisFlowStatus({ phase: 'warning', message: '未检测到完整实体区块，将在3秒后重置场景并重启分析...' });
+                const resetNotice = t('未检测到完整 Subject Index：将清空当前分集已导入场景并从头重启分析（资产保留）。', 'Missing Subject Index: imported scenes in this episode will be cleared and analysis will restart from scratch (assets kept).');
+                setAnalysisFlowStatus({ phase: 'warning', message: `${resetNotice} ${t('3秒后自动开始新一轮。', 'A fresh run starts in 3 seconds.')}` });
+                setAnalysisUiReport({
+                    status: 'running',
+                    startedAt: Date.now(),
+                    durationMs: 0,
+                    phaseTimings: null,
+                    importReport: null,
+                    runtimeMeta: null,
+                    warning: resetNotice,
+                    error: '',
+                });
                 try {
                     const scenes = await fetchScenes(activeEpisode.id);
                     if (scenes && scenes.length > 0) {
@@ -6102,6 +6162,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <span className="font-medium">⏱️ {t('运行时长', 'Duration')}:</span> <span className="text-blue-300 font-semibold">{formatDurationMs(analysisUiReport.durationMs || analysisUiReport?.phaseTimings?.totalMs)}</span>
                                 </div>
+                                {String(analysisUiReport?.warning || '').trim() && (
+                                    <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-2 text-amber-100">
+                                        <span className="font-medium">⚠️ {t('提示', 'Notice')}:</span> {String(analysisUiReport.warning).trim()}
+                                    </div>
+                                )}
                             </div>
                             <div className="text-xs text-white/60 space-y-1 pt-1">
                                 <div>
