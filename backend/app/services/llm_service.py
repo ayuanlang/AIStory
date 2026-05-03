@@ -1110,6 +1110,15 @@ class LLMService:
         root = (base_url or "https://api.kie.ai").strip().rstrip("/")
         lower_root = root.lower()
 
+        # Normalize model aliases first.
+        kie_llm_alias = {
+            "claude-opus-4.5": "claude-opus-4-5",
+            "claude-sonnet-4.5": "claude-sonnet-4-5",
+        }
+        resolved_model = kie_llm_alias.get(model, model)
+        if resolved_model != model:
+            logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
+
         # Responses transport (e.g. https://api.kie.ai/codex/v1/responses)
         responses_match = re.search(r"/(?:codex/)?v1/responses(?:/|$)", lower_root)
         if responses_match:
@@ -1118,14 +1127,6 @@ class LLMService:
             canonical_root = root[:responses_match.start()].rstrip("/")
             if not canonical_root:
                 canonical_root = "https://api.kie.ai"
-
-            kie_llm_alias = {
-                "claude-opus-4.5": "claude-opus-4-5",
-                "claude-sonnet-4.5": "claude-sonnet-4-5",
-            }
-            resolved_model = kie_llm_alias.get(model, model)
-            if resolved_model != model:
-                logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
 
             return canonical_root, resolved_model, canonical_endpoint, "responses"
 
@@ -1137,14 +1138,10 @@ class LLMService:
             if root.endswith(suffix):
                 root = root[: -len(suffix)].rstrip("/")
 
-        # KIE uses hyphens in version numbers, not dots (e.g. claude-opus-4-5, not claude-opus-4.5)
-        kie_llm_alias = {
-            "claude-opus-4.5": "claude-opus-4-5",
-            "claude-sonnet-4.5": "claude-sonnet-4-5",
-        }
-        resolved_model = kie_llm_alias.get(model, model)
-        if resolved_model != model:
-            logger.info("KIE LLM model remapped | from=%s to=%s", model, resolved_model)
+        # For KIE GPT family, prefer canonical responses endpoint by default.
+        if str(resolved_model or "").strip().lower().startswith("gpt-"):
+            url = f"{root}/codex/v1/responses"
+            return root, resolved_model, url, "responses"
 
         url = f"{root}/{resolved_model}/v1/chat/completions"
         return root, resolved_model, url, "chat_completions"
@@ -2979,7 +2976,7 @@ class LLMService:
                 url = f"{url}/chat/completions"
             url_source = "base_url"
 
-        if configured_endpoint and resolved_category == "LLM":
+        if configured_endpoint and resolved_category == "LLM" and not use_claude_api and provider not in {"kie", "n1n"}:
             endpoint_lower = configured_endpoint.lower()
             if "/chat/completions" in endpoint_lower:
                 url_source = "config.endpoint"
