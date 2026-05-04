@@ -398,9 +398,13 @@ class LLMService:
                     return f"{clean_root}/claude/v1/messages"
 
                 if hinted_lower.endswith("/chat/completions"):
+                    if "apiyi.com" in hinted_lower:
+                        return hinted_root
                     return re.sub(r"/chat/completions/?$", "/messages", hinted_root, flags=re.IGNORECASE)
 
                 if hinted_lower.endswith("/v1"):
+                    if "apiyi.com" in hinted_lower:
+                        return f"{hinted_root}/chat/completions"
                     return f"{hinted_root}/messages"
 
                 return hinted_root
@@ -422,8 +426,12 @@ class LLMService:
             return f"{root[:len(clean_root)]}/claude/v1/messages"
 
         if lower_root.endswith("/v1"):
+            if "apiyi.com" in lower_root:
+                return f"{root}/chat/completions"
             return f"{root}/messages"
         if lower_root.endswith("/chat/completions"):
+            if "apiyi.com" in lower_root:
+                return root
             return re.sub(r"/chat/completions/?$", "/messages", root, flags=re.IGNORECASE)
         if lower_root.endswith("/model") or "zimaocloud" in lower_root:
             return f"{root}/openApi/v1/messages"
@@ -2476,7 +2484,7 @@ class LLMService:
         configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
         if provider == "zlhub":
             configured_endpoint = "" 
-        
+
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
             # De-duplicate /v1/v1/ that can occur when base_url already ends with /v1
@@ -2968,6 +2976,7 @@ class LLMService:
         configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
         if provider == "zlhub":
             configured_endpoint = "" 
+
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
             import re as _re
