@@ -3115,7 +3115,8 @@ class LLMService:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            # Enable HTTP/2 for better connection resilience on long streams
+            async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
                 async with client.stream("POST", url, json=payload, headers=headers) as response:
                     if response.status_code != 200:
                         error_body = await response.aread()
