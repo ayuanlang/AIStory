@@ -2472,6 +2472,8 @@ class LLMService:
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
         configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
+        if provider == "zlhub":
+            configured_endpoint = ""
         
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
@@ -2490,7 +2492,7 @@ class LLMService:
             url_source = "n1n.responses"
         elif configured_endpoint and resolved_category == "LLM":
             endpoint_lower = configured_endpoint.lower()
-            if "/chat/completions" in endpoint_lower:
+            if "/chat/completions" in endpoint_lower or provider == "zlhub" or "createtask" in endpoint_lower:
                 url = configured_endpoint.rstrip("/")
             else:
                 url = f"{configured_endpoint.rstrip('/')}/chat/completions"
@@ -2500,7 +2502,7 @@ class LLMService:
             url_source = "config.endpoint(non-llm)"
         else:
             url = base_url.rstrip("/")
-            if resolved_category == "LLM" and not url.endswith("/chat/completions"):
+            if resolved_category == "LLM" and not url.endswith("/chat/completions") and provider != "zlhub" and "createtask" not in url.lower():
                 url = f"{url}/chat/completions"
             url_source = "base_url"
 
@@ -2737,7 +2739,7 @@ class LLMService:
             provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
             resolved_setting_id = (extra_config or {}).get("__resolved_setting_id")
             resolved_source = (extra_config or {}).get("__resolved_source")
-            if str(provider or "").strip().lower() == "n1n" and int(response.status_code or 0) == 524:
+            if str(provider or "").strip().lower() in {"n1n", "kie"} and int(response.status_code or 0) == 524:
                 self._raise_ambiguous_submit_error(provider, model, f"HTTP 524: {response.text[:300]}", url)
             human_summary = self._build_human_readable_http_error_summary(
                 provider=provider,
@@ -2962,6 +2964,8 @@ class LLMService:
 
         # ── Build URL (same logic as _raw_llm_request_full) ──
         configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
+        if provider == "zlhub":
+            configured_endpoint = ""
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
             import re as _re
@@ -2982,7 +2986,7 @@ class LLMService:
             url_source = "claude.messages"
         elif configured_endpoint and resolved_category == "LLM":
             endpoint_lower = configured_endpoint.lower()
-            if "/chat/completions" in endpoint_lower:
+            if "/chat/completions" in endpoint_lower or provider == "zlhub" or "createtask" in endpoint_lower:
                 url = configured_endpoint.rstrip("/")
             else:
                 url = f"{configured_endpoint.rstrip('/')}/chat/completions"
@@ -2991,7 +2995,7 @@ class LLMService:
             url_source = "config.endpoint(non-llm)"
         else:
             url = base_url.rstrip("/")
-            if resolved_category == "LLM" and not url.endswith("/chat/completions"):
+            if resolved_category == "LLM" and not url.endswith("/chat/completions") and provider != "zlhub" and "createtask" not in url.lower():
                 url = f"{url}/chat/completions"
             url_source = "base_url"
 
@@ -3105,7 +3109,7 @@ class LLMService:
                         error_body = await response.aread()
                         error_text = error_body.decode("utf-8", errors="replace")[:500]
                         provider_lower = str(provider or "").strip().lower()
-                        if provider_lower == "n1n" and int(response.status_code or 0) == 524:
+                        if provider_lower in {"n1n", "kie"} and int(response.status_code or 0) == 524:
                             self._raise_ambiguous_submit_error(
                                 provider,
                                 payload.get("model") or model,
