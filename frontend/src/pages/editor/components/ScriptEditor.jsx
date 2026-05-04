@@ -5106,12 +5106,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const prepareSceneAnalysisResumeState = useCallback(async () => {
-        const sceneAnalysisText = String(
-            activeEpisode?.ai_scene_analysis_result
-            || llmRawResultContent
-            || llmResultContent
-            || ''
-        ).trim();
+        const sceneAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
 
         let preflightSceneSyncNotice = '';
         let scenePreflightResult = null;
@@ -5124,11 +5119,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (onLog) onLog(`Scene markdown precheck failed (continue analysis): ${preflightErr?.message || preflightErr}`, 'warning');
         }
 
-        let resolvedSubjectIndexText = String(
-            activeEpisode?.ai_scene_analysis_subject_index
-            || subjectIndexText
-            || ''
-        ).trim();
+        let resolvedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
         if (!resolvedSubjectIndexText && sceneAnalysisText) {
             const fallbackSections = extractAnalysisSections(sceneAnalysisText);
             const extractedFallbackIndex = String(fallbackSections?.subjectIndexText || '').trim();
@@ -5137,11 +5128,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        const subjectsJsonText = String(
-            activeEpisode?.ai_entity_design_result
-            || llmAssetRawResultContent
-            || ''
-        ).trim();
+        const subjectsJsonText = String(activeEpisode?.ai_entity_design_result || '').trim();
         const parsedSubjectsPayload = getAnalysisEntitiesPayloadFromJsonText(subjectsJsonText);
         const subjectsJsonCount = ['characters', 'props', 'environments'].reduce((sum, key) => {
             const items = Array.isArray(parsedSubjectsPayload?.[key]) ? parsedSubjectsPayload[key] : [];
@@ -5809,7 +5796,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
-            const baselineAnalysisText = String(llmRawResultContent || activeEpisode?.ai_scene_analysis_result || '').trim();
+            const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => analyzeScene(
                     userInput,
