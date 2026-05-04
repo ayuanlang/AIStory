@@ -4955,6 +4955,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             return '';
         };
+
+        if (activeEpisode?.id) {
+            const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+            const hasExistingSubjectIndex = !!(subjectIndexText || activeEpisode?.ai_scene_analysis_subject_index);
+            const hasExistingScenes = existingScenes && existingScenes.length > 0;
+            
+            if (hasExistingScenes || hasExistingSubjectIndex) {
+                const ok = await confirmUiMessage(t(
+                    '检测到已存在场景或Subject Index数据。重新分析将覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
+                    'Existing scenes or subject index detected. Regenerating will overwrite previous analysis results. Do you want to continue? (Choose Cancel to use original results)'
+                ));
+                if (!ok) {
+                    return;
+                }
+            }
+        }
+
         const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
         
         setIsAnalyzing(true); // Disable button immediately
