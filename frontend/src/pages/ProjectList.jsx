@@ -496,6 +496,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isCreateSceneAnalysisCollapsed, setIsCreateSceneAnalysisCollapsed] = useState(true);
     const [newSceneAnalysisConfig, setNewSceneAnalysisConfig] = useState(createDefaultProjectSceneAnalysisConfig());
     const [activeTab, setActiveTab] = useState(initialTab);
+    const [selectedProject, setSelectedProject] = useState(null);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
     const [currentUser, setCurrentUser] = useState(null); // Simple user state to check permissions if we had endpoint
@@ -1509,11 +1510,13 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         return (
             <Editor
                 projectId={selectedProjectId}
+                initialProject={selectedProject}
                 onClose={() => {
+                    setSelectedProject(null);
                     setSelectedProjectId(null);
                     setRestoredEditorState(null);
                 }}
-                initialActiveTab={restoredEditorState?.activeTab || 'overview'}
+                initialActiveTab={restoredEditorState?.activeTab}
                 initialEpisodeId={restoredEditorState?.activeEpisodeId ?? null}
                 initialEditingShotId={restoredEditorState?.editingShotId ?? null}
                 initialEditingShotSceneId={restoredEditorState?.editingShotSceneId ?? null}
@@ -1826,7 +1829,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                     animate={{ opacity: 1, y: 0 }}
                                     className="h-full flex-1"
                                 >
-                                    <Editor projectId={selectedProjectId} />
+                                    <Editor projectId={selectedProjectId} initialProject={selectedProject} onClose={() => { setSelectedProjectId(null); setSelectedProject(null); }} />
                                 </motion.div>
                             ) : (
                             <>
@@ -2107,6 +2110,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                         {projects.map(p => (
                                             <div onClick={() => {
                                                 setRestoredEditorState(null);
+                                                setSelectedProject(p);
                                                 setSelectedProjectId(p.id);
                                             }} key={p.id} className="cursor-pointer">
                                                 <motion.div 

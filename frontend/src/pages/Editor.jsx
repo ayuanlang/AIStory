@@ -108,8 +108,7 @@ import {
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
-import InputGroup from './editor/components/InputGroup';
-import MarkdownCell from './editor/components/MarkdownCell';
+
 import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
@@ -154,8 +153,8 @@ import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from './editor/editorConstants';
-import { MediaDetailModal, AssetHoverMetaOverlay, MediaPickerModal } from './editor/components/MediaModals';
-import { ReferenceManager, SceneCard } from './editor/components/SceneManager';
+
+
 import { ImportModal } from './editor/components/ImportModal';
 
 // Safe lazy loading wrapper that forces a reload if a chunk fails to load
@@ -191,8 +190,9 @@ const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 
 const Editor = ({
     projectId,
+    initialProject,
     onClose,
-    initialActiveTab = 'overview',
+    initialActiveTab,
     initialEpisodeId = null,
     initialEditingShotId = null,
     initialEditingShotSceneId = null,
@@ -202,13 +202,15 @@ const Editor = ({
     const id = projectId || params.id;
     const navigate = useNavigate();
 
-    const [isInitializing, setIsInitializing] = useState(true);
-    const [project, setProject] = useState(null);
+    const [isInitializing, setIsInitializing] = useState(!initialProject);
+    const [project, setProject] = useState(initialProject || null);
     const [episodes, setEpisodes] = useState([]);
     const [activeEpisodeId, setActiveEpisodeId] = useState(initialEpisodeId);
     const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
     const [activeTab, setActiveTab] = useState(
-        (initialActiveTab === 'ep_info' ? 'overview' : initialActiveTab) || 'overview'
+        (initialActiveTab === 'ep_info' ? 'overview' : initialActiveTab) 
+          || initialProject?.global_info?.workflow_stage 
+          || 'overview'
     );
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [isJobPoolOpen, setIsJobPoolOpen] = useState(false);
@@ -371,7 +373,9 @@ const Editor = ({
         let isStale = false;
         const initEditor = async () => {
             if (!id) return;
-            setIsInitializing(true);
+            if (!initialProject) {
+                setIsInitializing(true);
+            }
             try {
                 const [p, user] = await Promise.all([
                     fetchProject(id).catch(e => { console.error(e); return null; }),
@@ -3105,22 +3109,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
         setActiveTab(item.id);
     };
 
-    if (isInitializing) {
-        return (
-            <div className="bg-background flex items-center justify-center h-screen w-full flex-col text-foreground">
-                <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ repeat: Infinity, duration: 1.2, ease: "linear" }}
-                    className="mb-4"
-                >
-                    <Loader2 className="w-10 h-10 text-primary opacity-80" />
-                </motion.div>
-                <div className="text-white/60 text-sm font-medium tracking-wide uppercase animate-pulse">
-                    {t('正在初始化项目', 'Initializing Project')}...
-                </div>
-            </div>
-        );
-    }
+
 
     return (
         <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative text-foreground">
@@ -3316,6 +3305,16 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
             <div className="flex-1 overflow-hidden relative bg-background">
                 <div className="h-full overflow-y-auto custom-scrollbar p-0">
                     <div className="animate-in fade-in duration-300 min-h-full">
+                        {isInitializing ? (
+                            <div className="flex-1 flex flex-col items-center justify-center h-[50vh]">
+                                <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.2, ease: "linear" }} className="mb-4">
+                                    <Loader2 className="h-8 w-8 text-primary opacity-80" />
+                                </motion.div>
+                                <div className="text-white/60 text-sm font-medium tracking-wide uppercase animate-pulse">
+                                    {t('正在加载', 'Loading')}...
+                                </div>
+                            </div>
+                        ) : (
                         <React.Suspense fallback={<div className="flex-1 flex items-center justify-center h-[50vh]"><Loader2 className="h-8 w-8 text-primary animate-spin" /></div>}>
                             {activeTab === 'overview' && (
                                 <>
@@ -3366,6 +3365,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                             {activeTab === 'shots' && <ShotsView key={`shots-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
                             {activeTab === 'montage' && <VideoStudio key={`montage-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                         </React.Suspense>
+                        )}
                     </div>
                 </div>
             </div>
