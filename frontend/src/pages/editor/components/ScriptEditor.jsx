@@ -274,6 +274,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             hasStructuredSubjectIndex = true;
         }
 
+        // Clean up downstream trailing sections that got accidentally captured by greedy matching,
+        // but WE KEEP the 'Project Visual Backfill' JSON as it provides useful visual constraints for Phase 2 asset generation.
+        const trailingConsistencyReport = extractedText.match(/(?:\n-{3,}\n*)?###?\s*(?:Final\s*Consistency\s*Report|一致性检查)[\s\S]*/i);
+        if (trailingConsistencyReport) {
+            extractedText = extractedText.replace(trailingConsistencyReport[0], '').trim();
+        }
+
         return {
             authoritativeSubjectText,
             subjectIndexText: extractedText,
@@ -3295,7 +3302,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const fresh = (eps || []).find(e => e.id === activeEpisode.id);
                 // Dynamically check the target field
                 const dbText = String((fresh && fresh[resultField]) || '').trim();
-                if (dbText && dbText !== base) {
+                
+                // Strictly guard: ensure the DB result has actually advanced and contains structural completeness flags.
+                // We do NOT want to accept a truncated, half-written string that got saved by an aborted task.
+                const hasValidMarker = resultField === 'ai_scene_analysis_result' 
+                    ? (/###?\s*Subject\s*Index/i.test(dbText) || /subject_no\s*=\s*/i.test(dbText))
+                    : (/"characters".*:/i.test(dbText) || /"props".*:/i.test(dbText));
+
+                if (dbText && dbText !== base && hasValidMarker) {
                     return dbText;
                 }
             } catch (_) {
@@ -5308,6 +5322,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
+        
+        // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
+        if (activeAnalysisTaskId) {
+            try {
+                const { stopAsyncTask } = await import('../../../services/api');
+                await stopAsyncTask(activeAnalysisTaskId);
+                if (onLog) onLog(`Stopped existing analysis task ${activeAnalysisTaskId} before starting new one.`, 'info');
+            } catch (e) {
+                console.warn('Silent failure trying to stop previous task', e);
+            }
+        }
+
         analysisRunInFlightRef.current = true;
         clearAnalysisTaskMarker(activeEpisode?.id);
         const startedAt = Date.now();
@@ -5578,46 +5604,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
-            const providerPolicyViolated = isProviderPolicyViolationError(e);
-            if (!providerPolicyViolated && e?.message?.includes("第一阶段未解析到完整的 Subject Index 区块") && retryCount < 1) {
-                if (onLog) onLog("未检测到 Subject Index，自动清理数据并准备重新发起(1/1)", "warning");
-                const resetNotice = t('未检测到完整 Subject Index：将清空当前分集已导入场景并从头重启分析（资产保留）。', 'Missing Subject Index: imported scenes in this episode will be cleared and analysis will restart from scratch (assets kept).');
-                setAnalysisFlowStatus({ phase: 'warning', message: `${resetNotice} ${t('3秒后自动开始新一轮。', 'A fresh run starts in 3 seconds.')}` });
-                setAnalysisUiReport({
-                    status: 'running',
-                    startedAt: Date.now(),
-                    durationMs: 0,
-                    phaseTimings: null,
-                    importReport: null,
-                    runtimeMeta: null,
-                    warning: resetNotice,
-                    error: '',
-                });
-                try {
-                    const scenes = await fetchScenes(activeEpisode.id);
-                    if (scenes && scenes.length > 0) {
-                        await Promise.all(scenes.map(s => deleteScene(s.id)));
-                    }
-                    await updateEpisode(activeEpisode.id, {
-                        ai_scene_analysis_result: null,
-                        ai_scene_analysis_subject_index: null,
-                        ai_entity_design_result: null,
-                        ai_scene_analysis_adaptation: null,
-                    });
-                    setLlmRawResultContent("");
-                    setLlmResultContent("");
-                    setSubjectIndexText("");
-                    setAdaptationText("");
-                    analysisRunInFlightRef.current = false;
-                    setTimeout(() => {
-                        executeAnalysis(content, customSystemPrompt, skipMetadata, retryCount + 1).catch(console.error);
-                    }, 3000);
-                    return;
-                } catch(cleanupErr) {
-                    console.error('Failed cleanup during auto retry', cleanupErr);
-                }
-            }
-
+            
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
             const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
             phaseMarks.completedAt = Date.now();
@@ -5744,6 +5731,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
+
+        // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
+        if (activeAnalysisTaskId) {
+            try {
+                const { stopAsyncTask } = await import('../../../services/api');
+                await stopAsyncTask(activeAnalysisTaskId);
+                if (onLog) onLog(`Stopped existing advanced analysis task ${activeAnalysisTaskId} before starting new one.`, 'info');
+            } catch (e) {
+                console.warn('Silent failure trying to stop previous task', e);
+            }
+        }
+
         analysisRunInFlightRef.current = true;
         clearAnalysisTaskMarker(activeEpisode?.id);
 
@@ -6007,45 +6006,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setShowAnalysisModal(false);
         } catch (e) {
             console.error(e);
-            const providerPolicyViolated = isProviderPolicyViolationError(e);
-            if (!providerPolicyViolated && e?.message?.includes("第一阶段未解析到完整的 Subject Index 区块") && retryCount < 1) {
-                if (onLog) onLog("未检测到 Subject Index，自动清理数据并准备重新发起(1/1)", "warning");
-                const resetNotice = t('未检测到完整 Subject Index：将清空当前分集已导入场景并从头重启分析（资产保留）。', 'Missing Subject Index: imported scenes in this episode will be cleared and analysis will restart from scratch (assets kept).');
-                setAnalysisFlowStatus({ phase: 'warning', message: `${resetNotice} ${t('3秒后自动开始新一轮。', 'A fresh run starts in 3 seconds.')}` });
-                setAnalysisUiReport({
-                    status: 'running',
-                    startedAt: Date.now(),
-                    durationMs: 0,
-                    phaseTimings: null,
-                    importReport: null,
-                    runtimeMeta: null,
-                    warning: resetNotice,
-                    error: '',
-                });
-                try {
-                    const scenes = await fetchScenes(activeEpisode.id);
-                    if (scenes && scenes.length > 0) {
-                        await Promise.all(scenes.map(s => deleteScene(s.id)));
-                    }
-                    await updateEpisode(activeEpisode.id, {
-                        ai_scene_analysis_result: null,
-                        ai_scene_analysis_subject_index: null,
-                        ai_entity_design_result: null,
-                        ai_scene_analysis_adaptation: null,
-                    });
-                    setLlmRawResultContent("");
-                    setLlmResultContent("");
-                    setSubjectIndexText("");
-                    setAdaptationText("");
-                    analysisRunInFlightRef.current = false;
-                    setTimeout(() => {
-                        executeAdvancedAnalysis(userInput, customSystemPrompt, retryCount + 1).catch(console.error);
-                    }, 3000);
-                    return;
-                } catch(cleanupErr) {
-                    console.error('Failed cleanup during auto retry', cleanupErr);
-                }
-            }
+            
 
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
             const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
