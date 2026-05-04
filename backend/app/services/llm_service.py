@@ -423,6 +423,8 @@ class LLMService:
 
         if lower_root.endswith("/v1"):
             return f"{root}/messages"
+        if lower_root.endswith("/chat/completions"):
+            return re.sub(r"/chat/completions/?$", "/messages", root, flags=re.IGNORECASE)
         if lower_root.endswith("/model") or "zimaocloud" in lower_root:
             return f"{root}/openApi/v1/messages"
         return f"{root}/messages"
