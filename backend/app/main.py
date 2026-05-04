@@ -721,6 +721,11 @@ if render_frontend_origin and render_frontend_origin not in origins:
 default_render_frontend_origin = "https://aistory-frontend.onrender.com"
 if default_render_frontend_origin not in origins:
     origins.append(default_render_frontend_origin)
+
+for default_origin in ["https://www.woola.fun", "https://woola.fun"]:
+    if default_origin not in origins:
+        origins.append(default_origin)
+
 if os.getenv("RENDER_EXTERNAL_URL"):
     render_origin = os.getenv("RENDER_EXTERNAL_URL").strip()
     if render_origin and render_origin not in origins:
