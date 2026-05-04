@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Some providers (e.g., Ark/Doubao) can take several minutes for large prompts.
 # Default timeout set to 300s, with env override support.
-DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "300"))
+DEFAULT_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "900"))
 DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_CONNECT_TIMEOUT_SECONDS", "15"))
 DEFAULT_LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS = int(os.getenv("LLM_NO_PROXY_CONNECT_TIMEOUT_SECONDS", "10"))
 DEFAULT_KIE_LLM_TIMEOUT_SECONDS = max(
@@ -1995,7 +1995,8 @@ class LLMService:
         provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
 
         try:
-            if str(provider or "").strip().lower() in {"kie", "n1n"}:
+            # 开启后端流式聚合以穿透长时网关限时
+            if str(provider or "").strip().lower() in {"kie", "n1n", "zlhub", "apiyi", "apiyi2", "openai", "deepseek", "grsai", "zimaocloud"}:
                 logger.info(
                     "chat_completion routing: provider=%s model=%s mode=stream_aggregate",
                     provider,
