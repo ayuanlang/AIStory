@@ -2473,7 +2473,9 @@ class LLMService:
         if provider == "grsai" and resolved_category == "LLM":
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
-        configured_endpoint = ""  # Force ignore extra_config's endpoint override for all providers
+        configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
+        if provider == "zlhub":
+            configured_endpoint = "" 
         
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
@@ -2963,7 +2965,9 @@ class LLMService:
             base_url = self._normalize_grsai_llm_base_url(base_url)
 
         # ── Build URL (same logic as _raw_llm_request_full) ──
-        configured_endpoint = ""  # Force ignore extra_config's endpoint override for all providers
+        configured_endpoint = ((extra_config or {}).get("endpoint") or "").strip()
+        if provider == "zlhub":
+            configured_endpoint = "" 
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
             import re as _re
