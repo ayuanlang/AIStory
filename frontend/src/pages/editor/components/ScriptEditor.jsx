@@ -3404,10 +3404,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
           onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
 
-          if (authoritativeSubjectText.includes("PROHIBITED_CONTENT")) {
-              throw new Error("出现供应商政策不允许内容");
-          }
-
         // Try to match the block wrapped by at least 5 dashes: ---------
         if (extractedSections.hasStructuredSubjectIndex) {
             onLog?.(`[Asset Gen Tracking] Extracted Subject Index (length: ${subjectIndexText.length})`);
@@ -5109,146 +5105,218 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
-    const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false, retryCount = 0) => {
+    const prepareSceneAnalysisResumeState = useCallback(async () => {
+        const sceneAnalysisText = String(
+            activeEpisode?.ai_scene_analysis_result
+            || llmRawResultContent
+            || llmResultContent
+            || ''
+        ).trim();
+
         let preflightSceneSyncNotice = '';
+        let scenePreflightResult = null;
         try {
-            const preflightSource = String(activeEpisode?.ai_scene_analysis_result || llmRawResultContent || llmResultContent || '').trim();
-            const preflightResult = await ensureSceneTableConsistencyBeforePhase2(preflightSource, { setRunningReport: false });
-            if (preflightResult?.repaired) {
+            scenePreflightResult = await ensureSceneTableConsistencyBeforePhase2(sceneAnalysisText, { setRunningReport: false });
+            if (scenePreflightResult?.repaired) {
                 preflightSceneSyncNotice = t('分析开始前已检测到场景表不一致：旧场景已清理，并按 Markdown Scene 表重新导入。', 'Before analysis started, scene table mismatch was detected: old scenes were cleared and re-imported from markdown scene table.');
             }
         } catch (preflightErr) {
             if (onLog) onLog(`Scene markdown precheck failed (continue analysis): ${preflightErr?.message || preflightErr}`, 'warning');
         }
 
-        // Resolve Subject Index from persisted field first, then UI/raw text fallback.
         let resolvedSubjectIndexText = String(
             activeEpisode?.ai_scene_analysis_subject_index
             || subjectIndexText
             || ''
         ).trim();
-        if (!resolvedSubjectIndexText) {
-            const fallbackAnalysisText = String(
-                activeEpisode?.ai_scene_analysis_result
-                || llmRawResultContent
-                || llmResultContent
-                || ''
-            ).trim();
-            if (fallbackAnalysisText) {
-                const fallbackSections = extractAnalysisSections(fallbackAnalysisText);
-                const extractedFallbackIndex = String(fallbackSections?.subjectIndexText || '').trim();
-                if (fallbackSections?.hasStructuredSubjectIndex && extractedFallbackIndex) {
-                    resolvedSubjectIndexText = extractedFallbackIndex;
-                }
+        if (!resolvedSubjectIndexText && sceneAnalysisText) {
+            const fallbackSections = extractAnalysisSections(sceneAnalysisText);
+            const extractedFallbackIndex = String(fallbackSections?.subjectIndexText || '').trim();
+            if (fallbackSections?.hasStructuredSubjectIndex && extractedFallbackIndex) {
+                resolvedSubjectIndexText = extractedFallbackIndex;
             }
         }
 
-        // Bypass Phase 1 if subject index is already present.
-        if (resolvedSubjectIndexText) {
-            const bypassConfirmed = true;
-            if (bypassConfirmed) {
-                const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
-                if (resolvedSubjectIndexText !== persistedSubjectIndexText) {
-                    try {
-                        await updateEpisode(activeEpisode.id, {
-                            ai_scene_analysis_subject_index: resolvedSubjectIndexText,
-                        });
-                        if (subjectIndexText !== resolvedSubjectIndexText) {
-                            setSubjectIndexText(resolvedSubjectIndexText);
-                        }
-                        if (onLog) onLog('Detected Subject Index in current page content and persisted it to episode before bypassing Phase 1.', 'info');
-                    } catch (persistSubjectIndexErr) {
-                        if (onLog) onLog(`Persist Subject Index before bypass failed (continue): ${persistSubjectIndexErr?.message || persistSubjectIndexErr}`, 'warning');
-                    }
-                }
+        const subjectsJsonText = String(
+            activeEpisode?.ai_entity_design_result
+            || llmAssetRawResultContent
+            || ''
+        ).trim();
+        const parsedSubjectsPayload = getAnalysisEntitiesPayloadFromJsonText(subjectsJsonText);
+        const subjectsJsonCount = ['characters', 'props', 'environments'].reduce((sum, key) => {
+            const items = Array.isArray(parsedSubjectsPayload?.[key]) ? parsedSubjectsPayload[key] : [];
+            return sum + items.length;
+        }, 0);
+        const hasSubjectsJson = subjectsJsonCount > 0;
+        const subjectJsonReport = hasSubjectsJson
+            ? buildSubjectConsistencyReport([sceneAnalysisText, subjectsJsonText].filter(Boolean).join('\n\n'))
+            : null;
+        const hasCompleteSubjectsJson = Boolean(hasSubjectsJson && (!subjectJsonReport || subjectJsonReport.ok));
+        const hasSceneMarkdown = Boolean(scenePreflightResult?.hasSceneMarkdown);
+        const hasSubjectIndex = Boolean(resolvedSubjectIndexText);
 
-                // Phase 2 Check: if it already exists, do not initiate again
-                if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
-                    setAnalysisFlowStatus({
-                        phase: 'completed',
-                        message: "🎉 专属实体资产定制均已存在，无需重复生成！"
-                    });
-                    if (onLog) onLog("AI Analysis bypassed entirely; both phases are already completed.");
-                    return;
-                }
-                // Phase 2 Check: if it already exists, do not initiate again
-                if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
-                    setAnalysisFlowStatus({
-                        phase: 'completed',
-                        message: "🎉 专属实体资产定制均已存在，无需重复生成！"
-                    });
-                    if (onLog) onLog("AI Analysis bypassed entirely; both phases are already completed.");
-                    return;
-                }
-                const startedAt = Date.now();
-                const retryResetNotice = retryCount > 0
-                    ? t('检测到首轮未返回完整 Subject Index，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing Subject Index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
-                    : '';
+        let decision = 'phase1';
+        if (hasSceneMarkdown && hasSubjectIndex && hasCompleteSubjectsJson) {
+            decision = 'completed';
+        } else if (hasSceneMarkdown && hasSubjectIndex) {
+            decision = 'phase2';
+        }
 
-                setAnalysisUiReport({
-                    status: 'running',
-                    startedAt,
-                    durationMs: 0,
-                    phaseTimings: null,
-                    importReport: null,
-                    runtimeMeta: null,
-                    warning: [retryResetNotice, preflightSceneSyncNotice].filter(Boolean).join('；'),
-                    error: '',
+        let resumeNotice = '';
+        if (decision === 'phase2') {
+            resumeNotice = hasSubjectsJson
+                ? t('检测到已有 subjects JSON 不完整，将直接重新执行资产设计阶段。', 'Detected incomplete existing subjects JSON. Phase 2 asset generation will be rerun directly.')
+                : t('未检测到完整的 subjects JSON，将直接重新执行资产设计阶段。', 'No complete subjects JSON was found. Phase 2 asset generation will be rerun directly.');
+        } else if (decision === 'completed') {
+            resumeNotice = t('检测到完整的 Markdown Scene、Subject Index 与 subjects JSON，本次启动将直接复用现有结果。', 'Detected complete markdown scenes, Subject Index, and subjects JSON. This run will reuse the existing results directly.');
+        }
+
+        if (onLog) {
+            onLog(
+                `[Analysis Resume] decision=${decision} sceneMarkdown=${hasSceneMarkdown ? 1 : 0} subjectIndex=${hasSubjectIndex ? 1 : 0} subjectsJson=${hasSubjectsJson ? 1 : 0} completeSubjectsJson=${hasCompleteSubjectsJson ? 1 : 0}`,
+                decision === 'phase1' ? 'info' : 'warning'
+            );
+        }
+
+        return {
+            decision,
+            preflightSceneSyncNotice,
+            resumeNotice,
+            sceneAnalysisText,
+            resolvedSubjectIndexText,
+        };
+    }, [
+        activeEpisode?.ai_entity_design_result,
+        activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.ai_scene_analysis_subject_index,
+        buildSubjectConsistencyReport,
+        ensureSceneTableConsistencyBeforePhase2,
+        extractAnalysisSections,
+        getAnalysisEntitiesPayloadFromJsonText,
+        llmAssetRawResultContent,
+        llmRawResultContent,
+        llmResultContent,
+        onLog,
+        subjectIndexText,
+        t,
+    ]);
+
+    const tryResumeAnalysisFromExistingArtifacts = useCallback(async (resumeState, retryCount = 0) => {
+        if (!activeEpisode?.id || !resumeState || resumeState.decision === 'phase1') {
+            return false;
+        }
+
+        const resolvedSubjectIndexText = String(resumeState?.resolvedSubjectIndexText || '').trim();
+        const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+        if (resolvedSubjectIndexText && resolvedSubjectIndexText !== persistedSubjectIndexText) {
+            try {
+                await updateEpisode(activeEpisode.id, {
+                    ai_scene_analysis_subject_index: resolvedSubjectIndexText,
                 });
-
-                setAnalysisFlowStatus({
-                    phase: 'processing_output_workspace',
-                    message: "🚀 跳过 Phase 1，直接进入资产设计...",
-                });
-
-                try {
-                    // We just jump straight to Phase 2 logic (runPostImportSceneSubjectPipeline).
-                    // We mock an empty import report to keep the pipeline happy.
-                    const mockImportReport = { importedSceneRows: [] };
-                    const dummyAnalyzedText = String(activeEpisode?.ai_scene_analysis_result || resolvedSubjectIndexText || '');
-
-                    const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText);
-
-                    const finalImportReport = {
-                        ...mockImportReport,
-                        sceneSubjectPostImportReport: postImportSceneSubjectReport,
-                        dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
-                        dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
-                        importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
-                    };
-
-                    setAnalysisFlowStatus({
-                        phase: 'completed',
-                        message: "🎉 专属实体资产定制完毕，可随时投产使用！",
-                    });
-
-                    setAnalysisUiReport({
-                        status: 'completed',
-                        startedAt,
-                        durationMs: Date.now() - startedAt,
-                        phaseTimings: null,
-                        importReport: finalImportReport,
-                        runtimeMeta: null,
-                        warning: preflightSceneSyncNotice,
-                        error: '',
-                    });
-                } catch (err) {
-                    console.error(err);
-                    setAnalysisFlowStatus({ phase: 'failed', message: "❌ 资产生成失败: " + err.message });
-                    setAnalysisUiReport({
-                        status: 'failed',
-                        startedAt,
-                        durationMs: Date.now() - startedAt,
-                        phaseTimings: null,
-                        importReport: null,
-                        runtimeMeta: null,
-                        warning: '',
-                        error: err.message,
-                    });
+                if (subjectIndexText !== resolvedSubjectIndexText) {
+                    setSubjectIndexText(resolvedSubjectIndexText);
                 }
-                return; // Early return to completely bypass standard analysis flow
+                if (onLog) onLog('Detected Subject Index in current page content and persisted it to episode before resuming analysis.', 'info');
+            } catch (persistSubjectIndexErr) {
+                if (onLog) onLog(`Persist Subject Index before resume failed (continue): ${persistSubjectIndexErr?.message || persistSubjectIndexErr}`, 'warning');
             }
         }
+
+        const retryResetNotice = retryCount > 0
+            ? t('检测到首轮未返回完整 Subject Index，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing Subject Index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
+            : '';
+        const combinedWarning = [retryResetNotice, resumeState?.preflightSceneSyncNotice, resumeState?.resumeNotice]
+            .filter(Boolean)
+            .join('；');
+
+        if (resumeState.decision === 'completed') {
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: '🎉 已检测到完整分析结果，无需重复导入或调用 AI！',
+            });
+            setAnalysisUiReport({
+                status: 'completed',
+                startedAt: Date.now(),
+                durationMs: 0,
+                phaseTimings: null,
+                importReport: null,
+                runtimeMeta: null,
+                warning: combinedWarning,
+                error: '',
+            });
+            if (onLog) onLog('AI Analysis startup reused existing markdown scenes, Subject Index, and subjects JSON. No LLM call was needed.', 'success');
+            return true;
+        }
+
+        const startedAt = Date.now();
+        setAnalysisUiReport({
+            status: 'running',
+            startedAt,
+            durationMs: 0,
+            phaseTimings: null,
+            importReport: null,
+            runtimeMeta: null,
+            warning: combinedWarning,
+            error: '',
+        });
+
+        setAnalysisFlowStatus({
+            phase: 'processing_output_workspace',
+            message: '🚀 检测到场景与 Subject Index 已完整，直接进入资产设计...',
+        });
+
+        try {
+            const mockImportReport = { importedSceneRows: [] };
+            const dummyAnalyzedText = String(resumeState?.sceneAnalysisText || resolvedSubjectIndexText || '');
+            const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText);
+
+            const finalImportReport = {
+                ...mockImportReport,
+                sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
+                dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
+                importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
+            };
+
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: '🎉 专属实体资产定制完毕，可随时投产使用！',
+            });
+
+            setAnalysisUiReport({
+                status: 'completed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings: null,
+                importReport: finalImportReport,
+                runtimeMeta: null,
+                warning: combinedWarning,
+                error: '',
+            });
+        } catch (err) {
+            console.error(err);
+            setAnalysisFlowStatus({ phase: 'failed', message: '❌ 资产生成失败: ' + err.message });
+            setAnalysisUiReport({
+                status: 'failed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings: null,
+                importReport: null,
+                runtimeMeta: null,
+                warning: combinedWarning,
+                error: err.message,
+            });
+        }
+
+        return true;
+    }, [activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.id, onLog, runPostImportSceneSubjectPipeline, subjectIndexText, t, updateEpisode]);
+
+    const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false, retryCount = 0) => {
+        const resumeState = await prepareSceneAnalysisResumeState();
+        if (await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
+            return;
+        }
+        const preflightSceneSyncNotice = resumeState?.preflightSceneSyncNotice || '';
         if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
             if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
@@ -5680,142 +5748,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        let preflightSceneSyncNotice = '';
-
-        try {
-            const preflightSource = String(activeEpisode?.ai_scene_analysis_result || llmRawResultContent || llmResultContent || '').trim();
-            const preflightResult = await ensureSceneTableConsistencyBeforePhase2(preflightSource, { setRunningReport: false });
-            if (preflightResult?.repaired) {
-                preflightSceneSyncNotice = t('分析开始前已检测到场景表不一致：旧场景已清理，并按 Markdown Scene 表重新导入。', 'Before analysis started, scene table mismatch was detected: old scenes were cleared and re-imported from markdown scene table.');
-            }
-        } catch (preflightErr) {
-            if (onLog) onLog(`Scene markdown precheck failed (continue analysis): ${preflightErr?.message || preflightErr}`, 'warning');
+        const resumeState = await prepareSceneAnalysisResumeState();
+        if (await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
+            return;
         }
-
-        // Resolve Subject Index from persisted field first, then UI/raw text fallback.
-        let resolvedSubjectIndexText = String(
-            activeEpisode?.ai_scene_analysis_subject_index
-            || subjectIndexText
-            || ''
-        ).trim();
-        if (!resolvedSubjectIndexText) {
-            const fallbackAnalysisText = String(
-                activeEpisode?.ai_scene_analysis_result
-                || llmRawResultContent
-                || llmResultContent
-                || ''
-            ).trim();
-            if (fallbackAnalysisText) {
-                const fallbackSections = extractAnalysisSections(fallbackAnalysisText);
-                const extractedFallbackIndex = String(fallbackSections?.subjectIndexText || '').trim();
-                if (fallbackSections?.hasStructuredSubjectIndex && extractedFallbackIndex) {
-                    resolvedSubjectIndexText = extractedFallbackIndex;
-                }
-            }
-        }
-
-        // Bypass Phase 1 if subject index is already present.
-        if (resolvedSubjectIndexText) {
-            const bypassConfirmed = true;
-            if (bypassConfirmed) {
-                const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
-                if (resolvedSubjectIndexText !== persistedSubjectIndexText) {
-                    try {
-                        await updateEpisode(activeEpisode.id, {
-                            ai_scene_analysis_subject_index: resolvedSubjectIndexText,
-                        });
-                        if (subjectIndexText !== resolvedSubjectIndexText) {
-                            setSubjectIndexText(resolvedSubjectIndexText);
-                        }
-                        if (onLog) onLog('Detected Subject Index in current page content and persisted it to episode before bypassing Phase 1.', 'info');
-                    } catch (persistSubjectIndexErr) {
-                        if (onLog) onLog(`Persist Subject Index before bypass failed (continue): ${persistSubjectIndexErr?.message || persistSubjectIndexErr}`, 'warning');
-                    }
-                }
-
-                // Phase 2 Check: if it already exists, do not initiate again
-                if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
-                    setAnalysisFlowStatus({
-                        phase: 'completed',
-                        message: "🎉 专属实体资产定制均已存在，无需重复生成！"
-                    });
-                    if (onLog) onLog("AI Analysis bypassed entirely; both phases are already completed.");
-                    return;
-                }
-                // Phase 2 Check: if it already exists, do not initiate again
-                if (activeEpisode.ai_entity_design_result && activeEpisode.ai_entity_design_result.trim()) {
-                    setAnalysisFlowStatus({
-                        phase: 'completed',
-                        message: "🎉 专属实体资产定制均已存在，无需重复生成！"
-                    });
-                    if (onLog) onLog("AI Analysis bypassed entirely; both phases are already completed.");
-                    return;
-                }
-                const startedAt = Date.now();
-                setAnalysisUiReport({
-                    status: 'running',
-                    startedAt,
-                    durationMs: 0,
-                    phaseTimings: null,
-                    importReport: null,
-                    runtimeMeta: null,
-                    warning: preflightSceneSyncNotice,
-                    error: '',
-                });
-
-                setAnalysisFlowStatus({
-                    phase: 'processing_output_workspace',
-                    message: "🚀 跳过 Phase 1，直接进入资产设计...",
-                });
-
-                try {
-                    // We just jump straight to Phase 2 logic (runPostImportSceneSubjectPipeline).
-                    // We mock an empty import report to keep the pipeline happy.
-                    const mockImportReport = { importedSceneRows: [] };
-                    const dummyAnalyzedText = String(activeEpisode?.ai_scene_analysis_result || resolvedSubjectIndexText || '');
-
-                    const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText);
-
-                    const finalImportReport = {
-                        ...mockImportReport,
-                        sceneSubjectPostImportReport: postImportSceneSubjectReport,
-                        dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
-                        dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
-                        importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
-                    };
-
-                    setAnalysisFlowStatus({
-                        phase: 'completed',
-                        message: "🎉 专属实体资产定制完毕，可随时投产使用！",
-                    });
-
-                    setAnalysisUiReport({
-                        status: 'completed',
-                        startedAt,
-                        durationMs: Date.now() - startedAt,
-                        phaseTimings: null,
-                        importReport: finalImportReport,
-                        runtimeMeta: null,
-                        warning: preflightSceneSyncNotice,
-                        error: '',
-                    });
-                } catch (err) {
-                    console.error(err);
-                    setAnalysisFlowStatus({ phase: 'failed', message: "❌ 资产生成失败: " + err.message });
-                    setAnalysisUiReport({
-                        status: 'failed',
-                        startedAt,
-                        durationMs: Date.now() - startedAt,
-                        phaseTimings: null,
-                        importReport: null,
-                        runtimeMeta: null,
-                        warning: '',
-                        error: err.message,
-                    });
-                }
-                return; // Early return to completely bypass standard analysis flow
-            }
-        }
+        const preflightSceneSyncNotice = resumeState?.preflightSceneSyncNotice || '';
         if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
