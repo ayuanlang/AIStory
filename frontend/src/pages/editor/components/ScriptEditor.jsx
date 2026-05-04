@@ -3700,6 +3700,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setIsAnalyzing(false);
             setIsRetryingPhase2(true);
             setActiveAnalysisTaskId(String(marker?.taskId || '').trim());
+            setAnalysisUiReport({ status: 'running', startTime: startedAt, etaSeconds: 90 });
             setAnalysisFlowStatus({
                 phase: 'generating_assets',
                 message: t("✨ 发现有个没完成的第二阶段任务，正在为您继续生成对应的人物和场景资产...", "Resuming Phase 2 asset generation..."),
@@ -3776,7 +3777,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 console.error("Phase 2 recovery error:", e);
                 const friendlyRecoveryError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
                 setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第二阶段分析任务失败：${friendlyRecoveryError}`, `Failed to resume Phase 2 analysis task: ${friendlyRecoveryError}`) });
-                clearAnalysisTaskMarker(activeEpisode.id);
+                  setAnalysisUiReport(prev => ({ ...prev, status: 'error', error: friendlyRecoveryError }));
+                  clearAnalysisTaskMarker(activeEpisode.id);
             } finally {
                 analysisResumeInFlightRef.current = false;
                 setIsRetryingPhase2(false);
