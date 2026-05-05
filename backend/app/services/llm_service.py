@@ -2493,7 +2493,7 @@ class LLMService:
             import re as _re
             configured_endpoint = _re.sub(r'(/v1)/v1(?=/|$)', r'\1', configured_endpoint)
 
-        n1n_use_responses = provider == "n1n" and resolved_category == "LLM" and not use_claude_api
+        n1n_use_responses = provider == "n1n" and resolved_category == "LLM" and not use_claude_api and not model.lower().startswith("gemini")
 
         if use_claude_api and resolved_category == "LLM":
             url = self._resolve_claude_llm_url(base_url, configured_endpoint)
@@ -2985,7 +2985,7 @@ class LLMService:
 
         resolved_model = model
         kie_transport_kind = "chat_completions"
-        n1n_use_responses = provider == "n1n" and resolved_category == "LLM" and not use_claude_api
+        n1n_use_responses = provider == "n1n" and resolved_category == "LLM" and not use_claude_api and not model.lower().startswith("gemini")
         
         if provider == "kie" and resolved_category == "LLM" and not use_claude_api:
             _, resolved_model, url, kie_transport_kind = self._resolve_kie_llm_url(base_url, model)
