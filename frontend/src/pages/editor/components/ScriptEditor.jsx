@@ -4944,6 +4944,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
+        if (rawContent && rawContent.trim().length > 2500) {
+            const ok = await confirmUiMessage(t(
+                '检测到剧本内容超过2500字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
+                'Script length exceeds 2500 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
+            ));
+            if (ok) {
+                if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
+                setAnalysisFlowStatus({ phase: 'analyzing', message: t('正在为您深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, this may take a while...') });
+                try {
+                    const { splitEpisodeScript } = await import('../../../services/api');
+                    await splitEpisodeScript(projectId, activeEpisode.id, { script_content: rawContent });
+                    if (onLog) onLog("分集保存成功，即将刷新！");
+                    setAnalysisFlowStatus({ phase: 'completed', message: t('剧本分集成功！即将自动刷新以加载新集数...', 'Script split successfully! Reloading to show new episodes...') });
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                } catch (e) {
+                    console.error("Script split failed", e);
+                    setAnalysisFlowStatus({ phase: 'failed', message: t('剧本分集失败：', 'Split failed: ') + (e.message || e) });
+                    alert(t("分集失败: ", "Split failed: ") + (e.message || e));
+                }
+                return;
+            }
+        }
+
         const projectInfo = (project?.global_info && typeof project.global_info === 'object')
             ? project.global_info
             : {};

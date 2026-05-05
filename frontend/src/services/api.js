@@ -3409,3 +3409,8 @@ export const apiRequestInvoice = async (request) => {
         body: JSON.stringify(request)
     }));
 };
+
+export const splitEpisodeScript = async (projectId, episodeId, payload) => {
+    const response = await api.post(`/projects/${projectId}/episodes/${episodeId}/split`, payload);
+    return response.data;
+};
