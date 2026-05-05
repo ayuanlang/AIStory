@@ -2058,6 +2058,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     );
 
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
+    const [isEditingVideoPreviewArmed, setIsEditingVideoPreviewArmed] = useState(false);
     const [frameTrimModal, setFrameTrimModal] = useState(() => createInitialFrameTrimState());
     const [shotImageCfgDefault, setShotImageCfgDefault] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
     const [shotImageCfgValue, setShotImageCfgValue] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
@@ -2077,6 +2078,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (type === 'start' || type === 'end' || type === 'keyframe') {
             syncShotImageCfgFromSettings();
         }
+        if (type === 'video') {
+            setIsEditingVideoPreviewArmed(true);
+        }
         setTempPromptSubmitLang('');
         setShowPromptLangMenu(false);
         setAssetDetailModal({ open: true, type, keyframeIndex });
@@ -2087,6 +2091,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setShowPromptLangMenu(false);
         setAssetDetailModal({ open: false, type: 'start', keyframeIndex: -1 });
     };
+
+    useEffect(() => {
+        setIsEditingVideoPreviewArmed(false);
+    }, [editingShot?.id]);
 
     const closeFrameTrimModal = useCallback(() => {
         setFrameTrimModal(createInitialFrameTrimState());
@@ -7615,8 +7623,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         {sortedShots.map((shot, idx) => {
                             const shotState = generatingStateByShot[String(shot.id)] || { start: false, end: false, video: false };
                             const isGeneratingThisShot = !!(shotState.start || shotState.end || shotState.video);
-const isCroppingThisShot = !!(shotState.cropping);
+                            const isCroppingThisShot = !!(shotState.cropping);
                             const shotCardPromptPreview = getShotCardPromptPreview(shot);
+                            const shotCardPosterUrl = resolveShotVideoPosterUrl(shot) || shot.image_url || getShotEndFrameUrl(shot);
                             return (
                             <div 
                                 key={shot.id} 
@@ -7625,29 +7634,23 @@ const isCroppingThisShot = !!(shotState.cropping);
                             >
                                 {/* Image / Thumbnail */}
                                 <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden`}>
-                                    
-                                    {/* Preload End Frame so it's cached exactly like the Start Frame when user opens the shot inspector */}
-                                    {getShotEndFrameUrl(shot) && (
-                                        <div className="absolute inset-0 opacity-0 pointer-events-none -z-10">
-                                            <SafeImage src={getShotEndFrameUrl(shot)} loading="lazy" />
-                                        </div>
-                                    )}
-
                                     {shot.video_url ? (
-                                        <LazyHoverVideo
-                                            key={shot.video_url}
-                                            src={shot.video_url}
-                                            poster={resolveShotVideoPosterUrl(shot)}
-                                            className="w-full h-full flex items-center justify-center"
-                                            mediaClassName="w-full h-full object-contain object-center"
-                                            muted
-                                            loop
-                                            playsInline
-                                            playOnHover
-                                            resetOnLeave
-                                        />
+                                        shotCardPosterUrl ? (
+                                            <SafeImage
+                                                src={shotCardPosterUrl}
+                                                alt={shot.shot_name}
+                                                loading="lazy"
+                                                className="w-full h-full object-contain object-center"
+                                                fallback={<div className="flex flex-col items-center gap-2 opacity-50"><Video className="w-8 h-8" /><span className="text-xs">{t('视频待加载', 'Video ready')}</span></div>}
+                                            />
+                                        ) : (
+                                            <div className="flex flex-col items-center gap-2 opacity-50">
+                                                <Video className="w-8 h-8" />
+                                                <span className="text-xs">{t('视频待加载', 'Video ready')}</span>
+                                            </div>
+                                        )
                                     ) : shot.image_url ? (
-                                        <SafeImage src={shot.image_url} alt={shot.shot_name} className="w-full h-full object-contain object-center" fallback={<div className="flex flex-col items-center gap-2 opacity-50"><ImageIcon className="w-8 h-8" /><span className="text-xs">{t('无图片', 'No Image')}</span></div>} />
+                                        <SafeImage src={shot.image_url} alt={shot.shot_name} loading="lazy" className="w-full h-full object-contain object-center" fallback={<div className="flex flex-col items-center gap-2 opacity-50"><ImageIcon className="w-8 h-8" /><span className="text-xs">{t('无图片', 'No Image')}</span></div>} />
                                     ) : (
                                         <div className="flex flex-col items-center gap-2 opacity-50">
                                             <ImageIcon className="w-8 h-8" />
@@ -8275,17 +8278,41 @@ const isCroppingThisShot = !!(shotState.cropping);
                                                 </div>
                                             )}
                                             {(editingShot.video_url) ? (
-                                                <ManagedVideoPlayer
-                                                    src={editingShot.video_url}
-                                                    poster={resolveShotVideoPosterUrl(editingShot)}
-                                                    className="max-w-full max-h-full object-contain"
-                                                    wrapperClassName="w-full h-full"
-                                                    preload="metadata"
-                                                    suspend={assetDetailModal.open && assetDetailModal.type === 'video'}
-                                                    hideBusyOverlay={Boolean(currentGeneratingState.video)}
-                                                    uiLang={uiLang}
-                                                    onClick={(e) => e?.preventDefault?.()}
-                                                />
+                                                (isEditingVideoPreviewArmed || currentGeneratingState.video) ? (
+                                                    <ManagedVideoPlayer
+                                                        src={editingShot.video_url}
+                                                        poster={resolveShotVideoPosterUrl(editingShot)}
+                                                        className="max-w-full max-h-full object-contain"
+                                                        wrapperClassName="w-full h-full"
+                                                        preload="metadata"
+                                                        suspend={assetDetailModal.open && assetDetailModal.type === 'video'}
+                                                        hideBusyOverlay={Boolean(currentGeneratingState.video)}
+                                                        uiLang={uiLang}
+                                                        onClick={(e) => e?.preventDefault?.()}
+                                                    />
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/20 hover:bg-black/10 transition-colors"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setIsEditingVideoPreviewArmed(true);
+                                                        }}
+                                                    >
+                                                        {resolveShotVideoPosterUrl(editingShot) ? (
+                                                            <SafeImage
+                                                                src={resolveShotVideoPosterUrl(editingShot)}
+                                                                alt={editingShot.shot_name || 'video poster'}
+                                                                loading="lazy"
+                                                                className="absolute inset-0 w-full h-full object-contain opacity-70"
+                                                            />
+                                                        ) : null}
+                                                        <span className="relative z-10 inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/65 px-4 py-2 text-xs font-medium text-white shadow-lg">
+                                                            <Video className="w-4 h-4" />
+                                                            {t('点击加载视频预览', 'Click to load video preview')}
+                                                        </span>
+                                                    </button>
+                                                )
                                             ) : (
                                                 <div className="absolute inset-0 flex items-center justify-center opacity-20 flex-col gap-2">
                                                     <Video className="w-10 h-10"/>
