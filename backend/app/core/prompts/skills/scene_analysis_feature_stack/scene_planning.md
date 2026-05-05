@@ -302,26 +302,27 @@
 ### 七点五、场景计时预估规则（Equivalent Duration 强制）
 - **目标**：`Equivalent Duration` 必须由可复核公式得出，严禁拍脑袋填写；估算必须综合角色动作、语言内容字数（对白/自白/旁白/画外音/内心独白）、语速与转场留白。
 - **计时单位**：先在 Beat 级估算秒数，再汇总到 Scene；最终 `Equivalent Duration` 以整数秒输出（如 `28s`）。
+- **统一降幅（新增硬规则）**：动作、语言、转场、缓冲等所有基础计时口径，统一按旧标准的 `75%` 执行；如与旧示例冲突，以本条和下列新数值为准。
 - **语言内容耗时（沿用 shot 口径并上移到 Scene）**：
   - 统一口径：对白、自白、旁白、画外音（O.S.）、内心独白（V.O.）全部按与对白相同规则计时。
-  - 默认中速：`语言内容耗时 = 中文字数 ÷ 4`。
-  - 慢速：`中文字数 ÷ 3.2`；快速：`中文字数 ÷ 4.8`。
-  - 超短语言句保底 `2s/句`；情绪停顿明显的语言段额外 `+1~2s`。
+  - 默认中速：`语言内容耗时 = 中文字数 ÷ 5.33`。
+  - 慢速：`中文字数 ÷ 4.27`；快速：`中文字数 ÷ 6.4`。
+  - 超短语言句保底 `1.5s/句`；情绪停顿明显的语言段额外 `+0.75~1.5s`。
 - **动作耗时（按复杂度分层）**：
-  - 微动作/微表情：`1~2s`（如抬眼、咬牙、短促回避）。
-  - 简单肢体动作：`2~3s`（如起身、转身、短距离抬手/放下）。
-  - 复杂位移或多人交互：`4~5s`（如跨区域走位、推门穿越、多人攻防）。
+  - 微动作/微表情：`0.75~1.5s`（如抬眼、咬牙、短促回避）。
+  - 简单肢体动作：`1.5~2.25s`（如起身、转身、短距离抬手/放下）。
+  - 复杂位移或多人交互：`3~3.75s`（如跨区域走位、推门穿越、多人攻防）。
 - **转场与留白耗时（必须计入）**：
-  - Beat 切换留白：每次 `0.5~1s`。
-  - 明显视觉桥接（遮挡、相似图形、焦点转移、闪回桥等）：每次再加 `0.5~1.5s`。
+  - Beat 切换留白：每次 `0.375~0.75s`。
+  - 明显视觉桥接（遮挡、相似图形、焦点转移、闪回桥等）：每次再加 `0.375~1.125s`。
 - **单 Beat 综合公式（必须二选一并说明）**：
   - 串行（先动作后说话）：`Beat时长 = 动作耗时 + 语言内容耗时 + 转场留白`。
   - 并行（边动作边说话）：`Beat时长 = Max(动作耗时, 语言内容耗时) + 转场留白`。
 - **题材节奏修正（必须执行）**：
   - 动作/悬疑：整体乘以 `0.85~0.95`（更紧凑，镜头更短）。
   - 情感/文戏：整体乘以 `1.05~1.25`（反应与停顿更长）。
-- **Scene 汇总公式**：`Scene时长 = Σ(Beat时长) + 场景级首尾缓冲(0.5~2s)`。
-- **校验示例（必须可回算）**：某场含对白8字 + 画外音8字（共16字，中速），语言内容耗时 `16 ÷ 4 = 4s`；Beat1（并行）`Max(2,4)+1=5s`，Beat2（串行）`3+0+1=4s`，Scene缓冲 `1s`，小计 `10s`；若为悬疑节奏修正取 `×0.9`，则 `9s`，四舍五入后写 `Equivalent Duration: 9s`。
+- **Scene 汇总公式**：`Scene时长 = Σ(Beat时长) + 场景级首尾缓冲(0.375~1.5s)`。
+- **校验示例（必须可回算）**：某场含对白8字 + 画外音8字（共16字，中速），语言内容耗时 `16 ÷ 5.33 ≈ 3s`；Beat1（并行）`Max(1.5,3)+0.75=3.75s`，Beat2（串行）`2.25+0+0.75=3s`，Scene缓冲 `0.75s`，小计 `7.5s`；若为悬疑节奏修正取 `×0.9`，则 `6.75s`，四舍五入后写 `Equivalent Duration: 7s`。
 - **取整规则（强制）**：按四舍五入取整到整数秒；写入 `Equivalent Duration` 时必须带 `s`。
 - **可追溯性要求（强制）**：在 `Core Scene Info` 中新增并填写 `**{Duration Estimate Basis}**`，至少包含：语言总字数（含对白/自白/旁白/画外音/内心独白）、主要语速、动作复杂度、转场次数、并行/串行策略与最终秒数。
 
@@ -398,7 +399,7 @@
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Adapted Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EP01 | EP01_SC01 | 1 | 诊所对谈 | 11s | **{Env Anchor}**: ENV:[Office Front], ENV:[Office Reverse], ENV:[Memory Alley]。<br>**{Dependent Envs}**: ENV:[Office Reverse] 是 ENV:[Office Front] 的衍生变体。ENV:[Memory Alley]是闪回环境。<br>**{Environment Context}**: ENV:[Office Front] 午后逆光，Stage为办公桌前的客椅区；ENV:[Office Reverse] 阴影笼罩，Stage为办公桌后的医生坐席区；ENV:[Memory Alley] 阴暗雨夜，Stage为狭窄巷道。<br>**{Plot Stage}**: 【建置】。<br>**{Plot Summary}**: Lin Suit 首次约见心理医生，被勾起雨夜惨案回忆。<br>**{Previous Scene Summary}**: 无，开场首戏。<br>**{Transition Strategy}**: 开场使用危机道具极端特写切入（点燃的打火机特写），以焦躁的把玩动作隐喻主角隐秘的心理创伤与高度防备，奠定对立压抑的悬疑基调。<br>**{Duration Estimate Basis}**: 语言总字数约4字（对白4字，旁白/画外音/内心独白0字），慢速并触发短句保底后语言耗时按2s计；Beat1并行`Max(2,2)+1=3s`，Beat2并行`Max(2,0)+1=3s`，Beat3串行`4+0+1.5=5.5s`，场景缓冲1s，小计12.5s；悬疑节奏修正`×0.9=11.25s`，四舍五入为11s。<br>**{Plot Coverage}**: 完整覆盖第一次对话的对立交锋。<br>**{Scene Subjects}**: CHAR:[@Lin Suit], CHAR:[@Dr. Chen], CHAR:[@Shadow Killer], ENV:[Office Front], ENV:[Office Reverse], ENV:[Memory Alley], PROP:[Silver Lighter]。<br>**{Beats}**:<br>Beat 1: **对话**: 试探。[Beat切换说明: 开场首镜入镜无需过渡；离镜起势：本镜结尾Lin Suit猛地抬头死死盯住医生，视线如刀般刺向镜头，为下一镜的视线相交转场给出极强的动作引导]<br> [Observer View: 在 ENV:[Office Front], 由 CHAR:[@Dr. Chen] 的右后侧 观察向 CHAR:[@Lin Suit] 的正面] {空间:CHAR:[@Lin Suit]坐在ENV:[Office Front]办公桌前的客椅中央，身体正对CHAR:[@Dr. Chen]，两人之间约1米}；{主体关系:CHAR:[@Lin Suit]前倾半步形成压迫感，CHAR:[@Dr. Chen]保持坐姿后靠，用稳定视线与其对峙}；{环境交互:CHAR:[@Lin Suit]右手持续把玩PROP:[Silver Lighter]，拇指轻推翻盖后又合拢，金属开合声在安静房间里被放大}；{微表情与对白动作:CHAR:[@Lin Suit]开口讲话，(voice_type:低沉男声, tone:冷峻克制, speed:慢速, volume:低声)，表情眼神冰冷并伴随{对白:"我没病"}口型同步；CHAR:[@Dr. Chen]紧闭双唇，表情克制地倾听，画面定格于Lin Suit抬眼死盯医生的面部特写} -> {视线如刀切出} [状态触发: 建立防备]<br>Beat 2: **对话**: 试探回应。[Beat切换说明: 入镜承接：承接上一镜Lin的凶狠视线，本镜头以Dr.Chen的正面特写反打接回，视线高度吻合碰撞完成对等转场；离镜起势：本镜结尾Dr.Chen松开交叉的双手，将手中的钢笔重重丢向桌面，利用笔尖坠落的动势与清脆声效为下一镜闪回做引导铺垫]<br> [Observer View: 在 ENV:[Office Reverse], 由 CHAR:[@Lin Suit] 的左前侧 观察向 CHAR:[@Dr. Chen] 的正面] {空间:CHAR:[@Dr. Chen]坐在ENV:[Office Reverse]办公桌后的主位，背后靠近书柜，身体朝向CHAR:[@Lin Suit]，两人隔桌对望}；{主体关系:办公桌形成双方之间的物理边界，CHAR:[@Dr. Chen]处于中景中心稳住节奏，CHAR:[@Lin Suit]在前景边缘维持压迫}；{环境交互:CHAR:[@Dr. Chen]双手交叉放在桌面边缘，指节轻微收紧后放下钢笔，钢笔清脆的敲击桌面声引发主角应激}；{微表情与对白动作:CHAR:[@Dr. Chen]紧闭双唇，表情深沉地注视；CHAR:[@Lin Suit]紧闭双唇，表情眼神瞳孔剧烈震颤地注视，画面定格于坠落并在桌面弹跳的钢笔特写} -> {钢笔坠落声效切出} [状态触发: 记忆闪回]<br>Beat 3: **过渡Beat/闪回**: 雨夜梦魇。[Beat切换说明: 入镜承接：承接钢笔坠落在桌面的残影与清脆声效，本镜首帧以一颗在水坑中激烈跳动的金属弹壳特写相似图形对等切入，伴随暴雷声完成无缝转场；离镜起势：随后镜头猛拉至全景，黑影迈出脚步，为后续追逐大动势留足动作导向]<br> [Observer View: 在 ENV:[Memory Alley], 由 巷道上方 观察向 CHAR:[@Lin Suit] 的头顶] {空间:CHAR:[@Lin Suit]跪倒在ENV:[Memory Alley]的逼仄巷道泥水中，浑身湿透}；{主体关系:CHAR:[@Shadow Killer]站在前方五米处，仅露出一双皮鞋的黑影，在前景形成巨大压迫}；{环境交互:雨水疯狂拍打地面，CHAR:[@Lin Suit]双手死死撑在水洼中，身体因痛苦与寒冷而抽搐}；{微表情与对白动作:CHAR:[@Shadow Killer]紧闭双唇，表情冷漠地做脚步碾压微动作；CHAR:[@Lin Suit]紧闭双唇，表情极度痛苦扭曲地抽搐，画面定格于跨出脚步的黑影皮鞋局部特写} -> {皮鞋踏出一拍切出} [状态触发: 创伤爆发] | (改编剧本: 林警官坐在对面，把玩着银色打火机，眼神冰冷。“我没病。”他冷冷盯着医生，猛地抬眼死死盯住对方。医生坐在办公桌后，深沉地注视着他，随后松开双手将手中钢笔丢向桌面。“嗒”的一声脆响，犹如一颗坠落的弹壳，瞬间将林警官扯入失控的旋涡。十年前大雨滂沱的暗巷中，弹壳在水洼里弹跳，前方黑影的皮鞋正一步步逼近，浑身颤抖，画面定格在跨出的黑皮鞋上。) | `Office Front, Office Reverse, Memory Alley` | `NEW, VARIANT_OF:Office Front, NEW` | `None, Office Front, None` | `None, 视角反转, 场景闪回` | `Lin Suit落座` | `创伤爆发` | `CHAR:[@Lin Suit], CHAR:[@Dr. Chen], CHAR:[@Shadow Killer]` | `PROP:[Silver Lighter]` |
+| EP01 | EP01_SC01 | 1 | 诊所对谈 | 8s | **{Env Anchor}**: ENV:[Office Front], ENV:[Office Reverse], ENV:[Memory Alley]。<br>**{Dependent Envs}**: ENV:[Office Reverse] 是 ENV:[Office Front] 的衍生变体。ENV:[Memory Alley]是闪回环境。<br>**{Environment Context}**: ENV:[Office Front] 午后逆光，Stage为办公桌前的客椅区；ENV:[Office Reverse] 阴影笼罩，Stage为办公桌后的医生坐席区；ENV:[Memory Alley] 阴暗雨夜，Stage为狭窄巷道。<br>**{Plot Stage}**: 【建置】。<br>**{Plot Summary}**: Lin Suit 首次约见心理医生，被勾起雨夜惨案回忆。<br>**{Previous Scene Summary}**: 无，开场首戏。<br>**{Transition Strategy}**: 开场使用危机道具极端特写切入（点燃的打火机特写），以焦躁的把玩动作隐喻主角隐秘的心理创伤与高度防备，奠定对立压抑的悬疑基调。<br>**{Duration Estimate Basis}**: 语言总字数约4字（对白4字，旁白/画外音/内心独白0字），慢速并触发短句保底后语言耗时按1.5s计；Beat1并行`Max(1.5,1.5)+0.75=2.25s`，Beat2并行`Max(1.5,0)+0.75=2.25s`，Beat3串行`3+0+1.125=4.125s`，场景缓冲0.75s，小计9.375s；悬疑节奏修正`×0.9=8.4375s`，四舍五入为8s。<br>**{Plot Coverage}**: 完整覆盖第一次对话的对立交锋。<br>**{Scene Subjects}**: CHAR:[@Lin Suit], CHAR:[@Dr. Chen], CHAR:[@Shadow Killer], ENV:[Office Front], ENV:[Office Reverse], ENV:[Memory Alley], PROP:[Silver Lighter]。<br>**{Beats}**:<br>Beat 1: **对话**: 试探。[Beat切换说明: 开场首镜入镜无需过渡；离镜起势：本镜结尾Lin Suit猛地抬头死死盯住医生，视线如刀般刺向镜头，为下一镜的视线相交转场给出极强的动作引导]<br> [Observer View: 在 ENV:[Office Front], 由 CHAR:[@Dr. Chen] 的右后侧 观察向 CHAR:[@Lin Suit] 的正面] {空间:CHAR:[@Lin Suit]坐在ENV:[Office Front]办公桌前的客椅中央，身体正对CHAR:[@Dr. Chen]，两人之间约1米}；{主体关系:CHAR:[@Lin Suit]前倾半步形成压迫感，CHAR:[@Dr. Chen]保持坐姿后靠，用稳定视线与其对峙}；{环境交互:CHAR:[@Lin Suit]右手持续把玩PROP:[Silver Lighter]，拇指轻推翻盖后又合拢，金属开合声在安静房间里被放大}；{微表情与对白动作:CHAR:[@Lin Suit]开口讲话，(voice_type:低沉男声, tone:冷峻克制, speed:慢速, volume:低声)，表情眼神冰冷并伴随{对白:"我没病"}口型同步；CHAR:[@Dr. Chen]紧闭双唇，表情克制地倾听，画面定格于Lin Suit抬眼死盯医生的面部特写} -> {视线如刀切出} [状态触发: 建立防备]<br>Beat 2: **对话**: 试探回应。[Beat切换说明: 入镜承接：承接上一镜Lin的凶狠视线，本镜头以Dr.Chen的正面特写反打接回，视线高度吻合碰撞完成对等转场；离镜起势：本镜结尾Dr.Chen松开交叉的双手，将手中的钢笔重重丢向桌面，利用笔尖坠落的动势与清脆声效为下一镜闪回做引导铺垫]<br> [Observer View: 在 ENV:[Office Reverse], 由 CHAR:[@Lin Suit] 的左前侧 观察向 CHAR:[@Dr. Chen] 的正面] {空间:CHAR:[@Dr. Chen]坐在ENV:[Office Reverse]办公桌后的主位，背后靠近书柜，身体朝向CHAR:[@Lin Suit]，两人隔桌对望}；{主体关系:办公桌形成双方之间的物理边界，CHAR:[@Dr. Chen]处于中景中心稳住节奏，CHAR:[@Lin Suit]在前景边缘维持压迫}；{环境交互:CHAR:[@Dr. Chen]双手交叉放在桌面边缘，指节轻微收紧后放下钢笔，钢笔清脆的敲击桌面声引发主角应激}；{微表情与对白动作:CHAR:[@Dr. Chen]紧闭双唇，表情深沉地注视；CHAR:[@Lin Suit]紧闭双唇，表情眼神瞳孔剧烈震颤地注视，画面定格于坠落并在桌面弹跳的钢笔特写} -> {钢笔坠落声效切出} [状态触发: 记忆闪回]<br>Beat 3: **过渡Beat/闪回**: 雨夜梦魇。[Beat切换说明: 入镜承接：承接钢笔坠落在桌面的残影与清脆声效，本镜首帧以一颗在水坑中激烈跳动的金属弹壳特写相似图形对等切入，伴随暴雷声完成无缝转场；离镜起势：随后镜头猛拉至全景，黑影迈出脚步，为后续追逐大动势留足动作导向]<br> [Observer View: 在 ENV:[Memory Alley], 由 巷道上方 观察向 CHAR:[@Lin Suit] 的头顶] {空间:CHAR:[@Lin Suit]跪倒在ENV:[Memory Alley]的逼仄巷道泥水中，浑身湿透}；{主体关系:CHAR:[@Shadow Killer]站在前方五米处，仅露出一双皮鞋的黑影，在前景形成巨大压迫}；{环境交互:雨水疯狂拍打地面，CHAR:[@Lin Suit]双手死死撑在水洼中，身体因痛苦与寒冷而抽搐}；{微表情与对白动作:CHAR:[@Shadow Killer]紧闭双唇，表情冷漠地做脚步碾压微动作；CHAR:[@Lin Suit]紧闭双唇，表情极度痛苦扭曲地抽搐，画面定格于跨出脚步的黑影皮鞋局部特写} -> {皮鞋踏出一拍切出} [状态触发: 创伤爆发] | (改编剧本: 林警官坐在对面，把玩着银色打火机，眼神冰冷。“我没病。”他冷冷盯着医生，猛地抬眼死死盯住对方。医生坐在办公桌后，深沉地注视着他，随后松开双手将手中钢笔丢向桌面。“嗒”的一声脆响，犹如一颗坠落的弹壳，瞬间将林警官扯入失控的旋涡。十年前大雨滂沱的暗巷中，弹壳在水洼里弹跳，前方黑影的皮鞋正一步步逼近，浑身颤抖，画面定格在跨出的黑皮鞋上。) | `Office Front, Office Reverse, Memory Alley` | `NEW, VARIANT_OF:Office Front, NEW` | `None, Office Front, None` | `None, 视角反转, 场景闪回` | `Lin Suit落座` | `创伤爆发` | `CHAR:[@Lin Suit], CHAR:[@Dr. Chen], CHAR:[@Shadow Killer]` | `PROP:[Silver Lighter]` |
 
 
 ### Subject Index（紧跟 Part 1，非 Markdown 表）

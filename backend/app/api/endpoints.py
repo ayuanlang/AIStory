@@ -2418,7 +2418,14 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
         if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
             _register_asset_helper(db, current_user.id, normalized_url, req_context, normalized_meta)
             if request_mode != "joint_diptych":
-                _bind_generated_media_to_shot(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
+                _bind_generated_media_to_shot(
+                    db,
+                    current_user,
+                    req_context,
+                    normalized_url,
+                    oss_uploaded_success=True,
+                    media_metadata=normalized_meta,
+                )
                 _bind_generated_media_to_entity(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
         elif normalized_url:
             if request_mode != "joint_diptych":
@@ -2698,7 +2705,14 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         # Try to bind if relevant and not ephemeral
         if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
             try:
-                _bind_generated_media_to_shot(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
+                _bind_generated_media_to_shot(
+                    db,
+                    current_user,
+                    req_context,
+                    normalized_url,
+                    oss_uploaded_success=True,
+                    media_metadata=normalized_meta,
+                )
             except Exception as bind_exc:
                 logger.warning(f"[_finalize_video_job_result_persistence] _bind_generated_media_to_shot failed: {bind_exc}")
 
@@ -23130,7 +23144,14 @@ def _log_api_switch_regenerate_if_needed(
     )
 
 
-def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
+def _bind_generated_media_to_shot(
+    db: Session,
+    current_user: User,
+    req: Any,
+    media_url: Optional[str],
+    oss_uploaded_success: Optional[bool] = None,
+    media_metadata: Optional[Dict[str, Any]] = None,
+) -> None:
     if not media_url:
         return
 
@@ -23166,8 +23187,14 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
         return
 
     asset_type = str(get_attr(req, "asset_type") or "").strip().lower()
-    req_prompt = str(get_attr(req, "prompt") or "").strip()
     changed = False
+
+    normalized_media_metadata: Optional[Dict[str, Any]] = None
+    if isinstance(media_metadata, dict):
+        try:
+            normalized_media_metadata = json.loads(json.dumps(media_metadata, ensure_ascii=False, default=str))
+        except Exception:
+            normalized_media_metadata = dict(media_metadata)
 
     tech = {}
     try:
@@ -23178,7 +23205,17 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
         tech = {}
 
     if asset_type in {"start_frame", "start"}:
-        if shot.image_url != media_url or (oss_uploaded_success is not None and tech.get("start_frame_oss_uploaded") != oss_uploaded_success):
+        metadata_changed = False
+        if isinstance(normalized_media_metadata, dict):
+            previous_meta = tech.get("start_frame_metadata")
+            if not isinstance(previous_meta, dict) or previous_meta != normalized_media_metadata:
+                tech["start_frame_metadata"] = normalized_media_metadata
+                metadata_changed = True
+        if (
+            shot.image_url != media_url
+            or (oss_uploaded_success is not None and tech.get("start_frame_oss_uploaded") != oss_uploaded_success)
+            or metadata_changed
+        ):
             shot.image_url = media_url
             if oss_uploaded_success is not None:
                 tech["start_frame_oss_uploaded"] = oss_uploaded_success
@@ -23186,7 +23223,17 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
             changed = True
 
     elif asset_type in {"end_frame", "end"}:
-        if tech.get("end_frame_url") != media_url or (oss_uploaded_success is not None and tech.get("end_frame_oss_uploaded") != oss_uploaded_success):
+        metadata_changed = False
+        if isinstance(normalized_media_metadata, dict):
+            previous_meta = tech.get("end_frame_metadata")
+            if not isinstance(previous_meta, dict) or previous_meta != normalized_media_metadata:
+                tech["end_frame_metadata"] = normalized_media_metadata
+                metadata_changed = True
+        if (
+            tech.get("end_frame_url") != media_url
+            or (oss_uploaded_success is not None and tech.get("end_frame_oss_uploaded") != oss_uploaded_success)
+            or metadata_changed
+        ):
             tech["end_frame_url"] = media_url
             if oss_uploaded_success is not None:
                 tech["end_frame_oss_uploaded"] = oss_uploaded_success
@@ -23194,7 +23241,17 @@ def _bind_generated_media_to_shot(db: Session, current_user: User, req: Any, med
             changed = True
 
     elif asset_type == "video":
-        if shot.video_url != media_url or (oss_uploaded_success is not None and tech.get("video_oss_uploaded") != oss_uploaded_success):
+        metadata_changed = False
+        if isinstance(normalized_media_metadata, dict):
+            previous_meta = tech.get("video_metadata")
+            if not isinstance(previous_meta, dict) or previous_meta != normalized_media_metadata:
+                tech["video_metadata"] = normalized_media_metadata
+                metadata_changed = True
+        if (
+            shot.video_url != media_url
+            or (oss_uploaded_success is not None and tech.get("video_oss_uploaded") != oss_uploaded_success)
+            or metadata_changed
+        ):
             shot.video_url = media_url
             if oss_uploaded_success is not None:
                 tech["video_oss_uploaded"] = oss_uploaded_success

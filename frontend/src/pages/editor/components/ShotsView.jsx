@@ -2484,6 +2484,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const syncedKeys = [
             'end_frame_url',
             'end_frame_reused_from_start',
+            'start_frame_metadata',
+            'end_frame_metadata',
+            'video_metadata',
             'keyframes',
             'keyframe_images',
             'voiceover_url',
@@ -8791,6 +8794,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 const linkedAsset = resolveShotAssetByUrl(detailUrl, detailType);
                                                 const linkedAssetDetail = buildShotAssetDetail(linkedAsset, detailType, detailUrl);
                                                 const linkedAssetMeta = linkedAssetDetail.rawMeta;
+                                                const persistedStartMeta = (tech.start_frame_metadata && typeof tech.start_frame_metadata === 'object') ? tech.start_frame_metadata : null;
+                                                const persistedEndMeta = (tech.end_frame_metadata && typeof tech.end_frame_metadata === 'object') ? tech.end_frame_metadata : null;
+                                                const persistedVideoMeta = (tech.video_metadata && typeof tech.video_metadata === 'object') ? tech.video_metadata : null;
+                                                const hasLinkedAssetMeta = Boolean(linkedAssetMeta && Object.keys(linkedAssetMeta).length > 0);
+                                                const resolvedShotMediaMeta = hasLinkedAssetMeta
+                                                    ? linkedAssetMeta
+                                                    : (modalType === 'start'
+                                                        ? persistedStartMeta
+                                                        : (modalType === 'end'
+                                                            ? persistedEndMeta
+                                                            : (modalType === 'video' ? persistedVideoMeta : null)));
                                                 const shotConfiguredDuration = String(editingShot?.duration ?? '').trim();
 
                                                 const renderAssetMetaPanel = (assetDetail = linkedAssetDetail, rawMeta = linkedAssetMeta, titleText = t('资产元数据', 'Asset Metadata')) => (
@@ -9134,7 +9148,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     { label: t('图片 URL', 'Image URL'), value: editingShot.image_url || '-', breakAll: true },
                                                                     { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0) },
                                                                 ])}
-                                                                {renderAssetMetaPanel(linkedAssetDetail, linkedAssetMeta, t('素材元信息', 'Asset Metadata'))}
+                                                                {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
                                                                 {renderFrameGeneratingNotice('start')}
@@ -9241,7 +9255,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     { label: t('结束帧 URL', 'End Frame URL'), value: endFrameUrl || '-', breakAll: true },
                                                                     { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0) },
                                                                 ])}
-                                                                {renderAssetMetaPanel(linkedAssetDetail, linkedAssetMeta, t('素材元信息', 'Asset Metadata'))}
+                                                                {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
                                                                 {renderFrameGeneratingNotice('end')}
@@ -9433,7 +9447,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <pre className="mt-1 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(voicePlanMeta, null, 2)}</pre>
                                                                     </div>
                                                                 )}
-                                                                {renderAssetMetaPanel()}
+                                                                {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div className="flex flex-wrap items-center gap-2">
