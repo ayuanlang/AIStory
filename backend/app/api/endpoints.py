@@ -32204,3 +32204,96 @@ async def split_script(
          
     return {"status": "success", "episodes": episodes_data}
 
+
+
+
+@router.get("/entities/{entity_id}/history")
+def get_entity_history(entity_id: int, db: Session = Depends(get_db)):
+    from app.models.all_models import EntityHistory
+    history = db.query(EntityHistory).filter(EntityHistory.entity_id == entity_id).order_by(EntityHistory.created_at.desc()).all()
+    return history
+
+@router.post("/entities/{entity_id}/save_history")
+def save_entity_history(entity_id: int, db: Session = Depends(get_db)):
+    from app.models.all_models import Entity, EntityHistory
+    import datetime
+    entity = db.query(Entity).filter(Entity.id == entity_id).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+        
+    history = EntityHistory(
+        entity_id=entity.id,
+        name=entity.name,
+        type=entity.type,
+        description=entity.description,
+        name_en=entity.name_en,
+        base_name_en=entity.base_name_en,
+        gender=entity.gender,
+        role=entity.role,
+        archetype=entity.archetype,
+        appearance_cn=entity.appearance_cn,
+        clothing=entity.clothing,
+        action_characteristics=entity.action_characteristics,
+        atmosphere=entity.atmosphere,
+        visual_params=entity.visual_params,
+        narrative_description=entity.narrative_description,
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(history)
+    db.commit()
+    return {"status": "ok"}
+
+@router.post("/entities/history/{history_id}/restore")
+def restore_entity_history(history_id: int, db: Session = Depends(get_db)):
+    from app.models.all_models import Entity, EntityHistory
+    history = db.query(EntityHistory).filter(EntityHistory.id == history_id).first()
+    if not history:
+        raise HTTPException(status_code=404, detail="History not found")
+        
+    entity = db.query(Entity).filter(Entity.id == history.entity_id).first()
+    if entity:
+        entity.name = history.name
+        entity.type = history.type
+        entity.description = history.description
+        entity.name_en = history.name_en
+        entity.base_name_en = history.base_name_en
+        entity.gender = history.gender
+        entity.role = history.role
+        entity.archetype = history.archetype
+        entity.appearance_cn = history.appearance_cn
+        entity.clothing = history.clothing
+        entity.action_characteristics = history.action_characteristics
+        entity.atmosphere = history.atmosphere
+        entity.visual_params = history.visual_params
+        entity.narrative_description = history.narrative_description
+        db.commit()
+        db.refresh(entity)
+    return {"status": "ok"}
+
+@router.post("/entities/sync")
+def sync_entity(req: dict, db: Session = Depends(get_db)):
+    from app.models.all_models import Entity
+    source_id = req.get("source_entity_id")
+    target_id = req.get("target_entity_id")
+    source = db.query(Entity).filter(Entity.id == source_id).first()
+    target = db.query(Entity).filter(Entity.id == target_id).first()
+    if not source or not target:
+        raise HTTPException(status_code=404, detail="Entity not found")
+        
+    target.name = source.name
+    target.type = source.type
+    target.description = source.description
+    target.name_en = source.name_en
+    target.base_name_en = source.base_name_en
+    target.gender = source.gender
+    target.role = source.role
+    target.archetype = source.archetype
+    target.appearance_cn = source.appearance_cn
+    target.clothing = source.clothing
+    target.action_characteristics = source.action_characteristics
+    target.atmosphere = source.atmosphere
+    target.visual_params = source.visual_params
+    target.narrative_description = source.narrative_description
+    db.commit()
+    db.refresh(target)
+    return {"status": "ok"}

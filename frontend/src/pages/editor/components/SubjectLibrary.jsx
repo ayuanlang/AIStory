@@ -320,9 +320,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             setHistoryLoading(true);
             setShowHistoryModal(true);
             setHistoryList([]);
-            const url = `${BASE_URL}/api/entity/${entityId}/history/`;
+            const url = `${API_URL}/entities/${entityId}/history`;
             const header = { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } };
-            const resp = await fetch(url, header).then(r => r.json());
+            const f_resp = await fetch(url, header);
+            if (!f_resp.ok) throw new Error(`HTTP error! status: ${f_resp.status}`);
+            const resp = await f_resp.json();
             setHistoryList(Array.isArray(resp) ? resp : []);
         } catch (e) {
             console.error('Failed to load history', e);
@@ -335,7 +337,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const handleRestoreHistory = async (historyId) => {
         if (!confirm(t('确定要恢复到此历史版本吗？', 'Are you sure you want to restore this history version?'))) return;
         try {
-            const url = `${BASE_URL}/api/entity/history/${historyId}/restore`;
+            const url = `${API_URL}/entities/history/${historyId}/restore`;
             const header = { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } };
             const resp = await fetch(url, header);
             if(resp.ok) {
@@ -353,7 +355,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const handleSyncFromOld = async (oldId, newId) => {
         if (!confirm(t('将把源实体的当前状态覆盖到此实体，确定吗？', 'Warning: This will overwrite this entity with the source entity state. Continue?'))) return;
         try {
-            const url = `${BASE_URL}/api/entity/sync`;
+            const url = `${API_URL}/entities/sync`;
             const header = { 
                 method: 'POST', 
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}`, 'Content-Type': 'application/json' },

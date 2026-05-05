@@ -763,3 +763,31 @@ class Invoice(Base):
     wechat_invoice_id = Column(String, nullable=True)
     pdf_url = Column(String, nullable=True)
     created_at = Column(String, default=now_bj_iso)
+
+
+import datetime
+
+class EntityHistory(Base):
+    __tablename__ = "entity_history"
+    id = Column(Integer, primary_key=True, index=True)
+    entity_id = Column(Integer, ForeignKey("entities.id"), index=True)
+    
+    # Store history snapshot fields
+    name = Column(String)
+    type = Column(String)
+    description = Column(Text)
+    
+    # Extended Fields for Character Import
+    name_en = Column(String, nullable=True)
+    base_name_en = Column(String, nullable=True)
+    gender = Column(String, nullable=True)
+    role = Column(String, nullable=True)
+    archetype = Column(String, nullable=True)
+    appearance_cn = Column(Text, nullable=True)
+    clothing = Column(Text, nullable=True)
+    action_characteristics = Column(Text, nullable=True)
+    atmosphere = Column(String, nullable=True)
+    visual_params = Column(Text, nullable=True)
+    narrative_description = Column(Text, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
