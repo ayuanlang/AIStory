@@ -1995,7 +1995,6 @@ class LLMService:
         provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
 
         try:
-            # 开启后端流式聚合以穿透长时网关限时
             if str(provider or "").strip().lower() in {"kie", "n1n", "zlhub", "apiyi", "apiyi2", "openai", "deepseek", "grsai", "zimaocloud"}:
                 logger.info(
                     "chat_completion routing: provider=%s model=%s mode=stream_aggregate",
@@ -2222,21 +2221,30 @@ class LLMService:
         usage: Dict[str, Any] = {}
         finish_reason = "stop"
 
-        async for event in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config):
-            if event.get("type") == "token":
-                content_parts.append(event.get("content", ""))
-            elif event.get("type") == "done":
-                if event.get("usage"):
-                    usage = event["usage"]
-                if event.get("finish_reason"):
-                    finish_reason = event["finish_reason"]
+        from contextlib import aclosing
+        try:
+            async with aclosing(self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config)) as _stream:
+                async for event in _stream:
+                    if event.get("type") == "token":
+                        content_parts.append(event.get("content", ""))
+                    elif event.get("type") == "done":
+                        if event.get("usage"):
+                            usage = event["usage"]
+                        if event.get("finish_reason"):
+                            finish_reason = event["finish_reason"]
+        except Exception as _collect_exc:
+            # If stream raised (e.g. incomplete chunked read not handled upstream), use whatever was collected.
+            logger.warning(
+                "[_collect_openai_compatible_text_response] stream raised; using partial content parts=%d err=%s",
+                len(content_parts), _collect_exc,
+            )
+            finish_reason = "incomplete"
 
         raw_content = "".join(content_parts)
         content = self._sanitize_response_content(raw_content)
         logger.info(
-            "[_collect_openai_compatible_text_response] content length=%d finish_reason=%s",
-            len(content or ""),
-            finish_reason,
+            "[STREAM_COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s snippet=%r",
+            len(content_parts), len(raw_content), len(content or ""), finish_reason, (content or "")[:120],
         )
         return {
             "raw_content": raw_content,
@@ -3156,7 +3164,15 @@ class LLMService:
                         )
 
                     content_type = response.headers.get("content-type", "").lower()
+                    logger.info(
+                        "[STREAM_RESPONSE_TYPE] provider=%s model=%s status=%s content_type=%r payload_stream=%s",
+                        provider, model, response.status_code, content_type, payload.get("stream"),
+                    )
                     if "application/json" in content_type and "event-stream" not in content_type:
+                        logger.warning(
+                            "[STREAM_FALLBACK_JSON] provider=%s model=%s returned JSON instead of SSE; treating as full response",
+                            provider, model,
+                        )
                         body_bytes = await response.aread()
                         try:
                             import json as _json
@@ -3178,46 +3194,50 @@ class LLMService:
                     _heartbeat_interval = 15  # seconds
                     _last_yield_time = _asyncio.get_event_loop().time()
 
-                    async for raw_line in response.aiter_lines():
-                        line = raw_line.strip()
-                        if not line:
-                            # Send heartbeat if no data for a while (keeps SSE alive)
-                            now = _asyncio.get_event_loop().time()
-                            if now - _last_yield_time > _heartbeat_interval:
-                                yield {"type": "heartbeat", "content": ""}
-                                _last_yield_time = now
-                            continue
-                        if not line.startswith("data:"):
-                            continue
-                        data_str = line[5:].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            continue
+                    from contextlib import aclosing
+                    async with aclosing(response.aiter_lines()) as _stream:
+                        async for raw_line in _stream:
+                            line = raw_line.strip()
+                            if not line:
+                                # Send heartbeat if no data for a while (keeps SSE alive)
+                                now = _asyncio.get_event_loop().time()
+                                if now - _last_yield_time > _heartbeat_interval:
+                                    yield {"type": "heartbeat", "content": ""}
+                                    _last_yield_time = now
+                                continue
+                            if not line.startswith("data:"):
+                                continue
+                            data_str = line[5:].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                            except json.JSONDecodeError:
+                                continue
 
-                        # Capture usage if the provider includes it in a chunk
-                        if chunk.get("usage"):
-                            usage = chunk["usage"]
-                        else:
-                            response_obj = chunk.get("response") if isinstance(chunk.get("response"), dict) else {}
-                            if response_obj.get("usage"):
-                                usage = response_obj.get("usage")
-
-                        content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
-                        if chunk_finish_reason:
-                            finish_reason = chunk_finish_reason
-                        if content:
-                            if use_claude_api:
-                                token_batch_buf += content
-                                if len(token_batch_buf) >= 32 or "\n" in token_batch_buf:
-                                    yield {"type": "token", "content": token_batch_buf}
-                                    token_batch_buf = ""
-                                    _last_yield_time = _asyncio.get_event_loop().time()
+                            # Capture usage if the provider includes it in a chunk
+                            if chunk.get("usage"):
+                                usage = chunk["usage"]
                             else:
-                                yield {"type": "token", "content": content}
-                                _last_yield_time = _asyncio.get_event_loop().time()
+                                response_obj = chunk.get("response") if isinstance(chunk.get("response"), dict) else {}
+                                if response_obj.get("usage"):
+                                    usage = response_obj.get("usage")
+
+                            content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
+                            if chunk_finish_reason:
+                                finish_reason = chunk_finish_reason
+                            if content:
+                                if use_claude_api:
+                                    token_batch_buf += content
+                                    if len(token_batch_buf) >= 32 or "\n" in token_batch_buf:
+                                        logger.debug("[STREAM_TOKEN][claude_batch] provider=%s len=%d snippet=%r", provider, len(token_batch_buf), token_batch_buf[:80])
+                                        yield {"type": "token", "content": token_batch_buf}
+                                        token_batch_buf = ""
+                                        _last_yield_time = _asyncio.get_event_loop().time()
+                                else:
+                                    logger.debug("[STREAM_TOKEN] provider=%s len=%d snippet=%r", provider, len(content), content[:80])
+                                    yield {"type": "token", "content": content}
+                                    _last_yield_time = _asyncio.get_event_loop().time()
 
         except httpx.ConnectError as exc:
             human_summary = self._build_human_readable_transport_error_summary(
@@ -3263,6 +3283,28 @@ class LLMService:
             if str(provider or "").strip().lower() == "kie":
                 self._raise_ambiguous_submit_error(provider, payload.get("model") or model, exc, url)
             raise Exception(self._vendor_failed_message(provider, f"Read timeout: {exc}"))
+        except httpx.RemoteProtocolError as exc:
+            # Supplier closed the TCP connection mid-stream (incomplete chunked read).
+            # Yield whatever was already buffered so callers can use partial results.
+            logger.warning(
+                "[STREAM_INCOMPLETE] provider=%s model=%s incomplete chunked read; yielding partial content "
+                "buf_len=%d err=%s",
+                provider, model, len(token_batch_buf), exc,
+            )
+            self._safe_log_json("LLM_STREAM_INCOMPLETE", {
+                "provider": provider,
+                "category": resolved_category,
+                "url": url,
+                "model": payload.get("model") or model,
+                "error_kind": "incomplete_chunked_read",
+                "error_text": str(exc),
+                "token_batch_buf_len": len(token_batch_buf),
+                "resolved_source": (extra_config or {}).get("__resolved_source"),
+                "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
+                "stream": True,
+            })
+            # Fall through to yield buffered content + done below (finish_reason="incomplete")
+            finish_reason = "incomplete"
         except Exception as exc:
             human_summary = self._build_human_readable_transport_error_summary(
                 provider=provider,
@@ -3286,7 +3328,9 @@ class LLMService:
             raise
 
         if token_batch_buf:
+            logger.debug("[STREAM_TOKEN][claude_batch_final] provider=%s len=%d snippet=%r", provider, len(token_batch_buf), token_batch_buf[:80])
             yield {"type": "token", "content": token_batch_buf}
+        logger.info("[STREAM_DONE] provider=%s finish_reason=%s usage=%s", provider, finish_reason, usage)
         yield {"type": "done", "usage": usage, "finish_reason": finish_reason}
 
     async def stream_analyze_intent(
@@ -3326,12 +3370,14 @@ class LLMService:
         accumulated = ""
         usage: Dict[str, Any] = {}
         try:
-            async for event in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config):
-                if event["type"] == "token":
-                    accumulated += event["content"]
-                    yield event
-                elif event["type"] == "done":
-                    usage = event.get("usage", {})
+            from contextlib import aclosing
+            async with aclosing(self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config)) as _stream:
+                async for event in _stream:
+                    if event["type"] == "token":
+                        accumulated += event["content"]
+                        yield event
+                    elif event["type"] == "done":
+                        usage = event.get("usage", {})
         except Exception as e:
             logger.error("stream_analyze_intent error: %s", e)
             provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
@@ -3405,12 +3451,14 @@ class LLMService:
         accumulated = ""
         usage: Dict[str, Any] = {}
         try:
-            async for event in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config):
-                if event["type"] == "token":
-                    accumulated += event["content"]
-                    yield event
-                elif event["type"] == "done":
-                    usage = event.get("usage", {})
+            from contextlib import aclosing
+            async with aclosing(self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config)) as _stream:
+                async for event in _stream:
+                    if event["type"] == "token":
+                        accumulated += event["content"]
+                        yield event
+                    elif event["type"] == "done":
+                        usage = event.get("usage", {})
         except Exception as e:
             logger.error("stream_analyze_intent_with_system_prompt error: %s", e)
             provider = extra_config.get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
@@ -3565,99 +3613,11 @@ class LLMService:
         category: str = "LLM",
         modality: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """chat_completion with active-config×2 retry + 3 fallback candidates."""
-        from app.services.agent_service import agent_service
-
-        active_setting_id = (config.get("config") or {}).get("__resolved_setting_id")
-        if user_id is None:
-            user_id = (config.get("config") or {}).get("__resolved_user_id") or 1
-        last_exc: Optional[Exception] = None
-        failed_attempts: List[str] = []
-
-        def _record_failed_attempt(provider: Any, model: Any, stage: str, attempt_no: int, err: Exception) -> None:
-            provider_text = str(provider or "unknown").strip() or "unknown"
-            model_text = str(model or "unknown").strip() or "unknown"
-            detail = str(err or "unknown error").strip()
-            failed_attempts.append(
-                f"{stage} attempt {attempt_no} failed ({provider_text}/{model_text}): {detail}"
-            )
-
-        def _attach_fallback_warnings(result: Dict[str, Any]) -> Dict[str, Any]:
-            if not isinstance(result, dict):
-                return result
-            if not failed_attempts:
-                return result
-            # Keep payload bounded to avoid oversized meta and UI spam.
-            result["fallback_warnings"] = failed_attempts[:8]
-            result["fallback_warning_codes"] = ["LLM_CALL_FAILED_RETRIED"]
-            return result
-
-        # ── active config: 2 attempts ──
-        for attempt in range(1, 3):
-            try:
-                result = await self.chat_completion(messages, config)
-                result = await self._auto_continue_chat_completion_on_length(messages, config, result)
-                result = self._attach_routing_metadata(result, config)
-                return _attach_fallback_warnings(result)
-            except AmbiguousLLMTransportError:
-                raise
-            except Exception as e:
-                last_exc = e
-                if self._is_runtime_shutdown_error(e):
-                    logger.warning(
-                        "[llm_fallback] chat_completion active attempt %d/2 aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
-                        attempt,
-                        config.get("provider"),
-                        config.get("model"),
-                    )
-                    raise
-                _record_failed_attempt(config.get("provider"), config.get("model"), "active", attempt, e)
-                logger.warning(
-                    "[llm_fallback] chat_completion active attempt %d/2 failed | provider=%s model=%s err=%s",
-                    attempt, config.get("provider"), config.get("model"), str(e)[:200],
-                )
-
-        # ── fallback candidates: up to 3 ──
-        active_cfg_obj = dict((config.get('config') or {}))
-        __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
-        if __override_fallback_candidates is not None:
-            override_ids = [int(x) for x in __override_fallback_candidates]
-            fallbacks = agent_service.get_fallback_configs_by_ids(override_ids)
-        else:
-            fallbacks = agent_service.get_fallback_configs(
-            user_id, category=category, exclude_setting_id=active_setting_id,
-            modality=modality, limit=3,
-        )
-        for idx, fb_cfg in enumerate(fallbacks, 1):
-            try:
-                logger.info(
-                    "[llm_fallback] chat_completion fallback %d/%d | provider=%s model=%s",
-                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
-                )
-                result = await self.chat_completion(messages, fb_cfg)
-                result = await self._auto_continue_chat_completion_on_length(messages, fb_cfg, result)
-                result = self._attach_routing_metadata(result, fb_cfg)
-                return _attach_fallback_warnings(result)
-            except AmbiguousLLMTransportError:
-                raise
-            except Exception as e:
-                last_exc = e
-                if self._is_runtime_shutdown_error(e):
-                    logger.warning(
-                        "[llm_fallback] chat_completion fallback %d/%d aborted: runtime shutting down | provider=%s model=%s",
-                        idx,
-                        len(fallbacks),
-                        fb_cfg.get("provider"),
-                        fb_cfg.get("model"),
-                    )
-                    raise
-                _record_failed_attempt(fb_cfg.get("provider"), fb_cfg.get("model"), "fallback", idx, e)
-                logger.warning(
-                    "[llm_fallback] chat_completion fallback %d/%d failed | provider=%s model=%s err=%s",
-                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), str(e)[:200],
-                )
-
-        raise last_exc or Exception("All LLM attempts exhausted")
+        """chat_completion with no retry and no fallback: fail immediately on first error."""
+        result = await self.chat_completion(messages, config)
+        result = await self._auto_continue_chat_completion_on_length(messages, config, result)
+        result = self._attach_routing_metadata(result, config)
+        return result
 
     def _mock_fallback(self, query: str) -> Dict[str, Any]:
         if "analyze" in query.lower():

@@ -456,6 +456,21 @@ def submit_async_endpoint(fn, *, user_id: int, kind: str, **fn_kwargs) -> str:
                     f"Async endpoint task timed out after {_ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS}s"
                 ) from exc
             finally:
+                # Avoid leaking async generators (e.g. streaming HTTP iterators)
+                # when endpoint code raises/cancels before fully consuming them.
+                try:
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass
+                
+                try:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                except Exception:
+                    pass
                 loop.close()
         finally:
             db.close()

@@ -1145,6 +1145,8 @@ _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "..", "frontend",
 
 if os.path.isdir(_FRONTEND_DIST):
     # 挂载除 API 外的所有静态资源 (js, css, assets 等)
+    os.makedirs(os.path.join(_FRONTEND_DIST, "assets"), exist_ok=True)
+    os.makedirs(os.path.join(_FRONTEND_DIST, "assets"), exist_ok=True)
     app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIST, "assets")), name="frontend-assets")
     
     @app.get("/{full_path:path}", include_in_schema=False)

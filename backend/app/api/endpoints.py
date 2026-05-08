@@ -67,7 +67,7 @@ from app.core.config import settings
 from app.core.homepage_referral import parse_homepage_referral_token
 from app.core.entity_token import normalize_entity_token
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi import File, UploadFile
+from fastapi import File, UploadFile, Form
 import shutil
 import os
 import uuid
@@ -115,6 +115,7 @@ APISetting = models.APISetting
 SystemAPISetting = models.SystemAPISetting
 ScriptSegment = models.ScriptSegment
 TransactionHistory = models.TransactionHistory
+TransactionAction = models.TransactionAction
 SMTPSystemConfig = models.SMTPSystemConfig
 WechatPayConfig = models.WechatPayConfig
 ProviderKeyPool = models.ProviderKeyPool
@@ -3151,6 +3152,8 @@ def _build_scene_analysis_blocking_failure_detail(
         reasons_cn.append("返回内容疑似被截断，结果不完整")
     if "ANALYSIS_JSON_INVALID" in codes:
         reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
+    if "ANALYSIS_SUBJECT_INDEX_MISSING" in codes:
+        reasons_cn.append("第一阶段未解析到完整的 Subject Index 区块")
 
     raw_reasons: List[str] = []
     raw_reasons.extend([str(x or "").strip() for x in (integrity_warnings or []) if str(x or "").strip()])
@@ -4852,75 +4855,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     _estimate_tokens(meta_str),
                 )
 
-        # Inject project entity inventory as system-level subject baseline for recognizability.
-        try:
-            project_id_for_inventory = None
-            direct_project_id = getattr(request, "project_id", None)
-            try:
-                direct_project_id = int(direct_project_id) if direct_project_id is not None else None
-            except Exception:
-                direct_project_id = None
-
-            if direct_project_id:
-                try:
-                    _require_project_access(db, direct_project_id, current_user)
-                    project_id_for_inventory = direct_project_id
-                except HTTPException as access_err:
-                    logger.warning(
-                        "[analyze_scene] ignored direct project_id for subject inventory injection: project_id=%s detail=%s",
-                        direct_project_id,
-                        getattr(access_err, "detail", None),
-                    )
-
-            ep_id_for_inventory = getattr(request, "episode_id", None)
-            if not project_id_for_inventory and ep_id_for_inventory:
-                episode_for_inventory = db.query(Episode).filter(Episode.id == ep_id_for_inventory).first()
-                if episode_for_inventory:
-                    project_id_for_inventory = int(episode_for_inventory.project_id)
-
-            inventory = {
-                "characters": [], "covers": [],
-                "props": [],
-                "environments": [],
-            }
-            inventory_source = "empty_fallback"
-            if project_id_for_inventory:
-                inventory = _build_project_subject_inventory(db, project_id_for_inventory, limit_per_type=80)
-                inventory_source = f"project:{project_id_for_inventory}"
-
-            inventory_block = _format_project_subject_inventory_block(inventory)
-            inventory_system_guard = (
-                "\n\n"
-                "[Existing Subjects Reuse Guard - High Priority]\n"
-                "The injected Project Existing Subject Index contains authoritative existing reusable subjects for this project.\n"
-                "You MUST reuse these existing subjects first whenever they match the script.\n"
-                "Do NOT rename, redefine, replace, overwrite, or regenerate them as new entities.\n"
-                "When names and descriptions are provided, treat both as canonical recognition anchors.\n"
-                "Only create a new subject when the script clearly requires an entity that is not already present in the inventory.\n"
-                "If the injected inventory is empty, you must still treat it as an explicit empty baseline rather than as a missing section.\n"
-                "If you output entity JSON, existing inventory subjects must be reused by reference and MUST NOT be duplicated as newly generated entities."
-            )
-            if "[Project Existing Subject Index]" in user_content:
-                logger.info("Project Existing Subject Index already present in user_content; skipping automatic injection.")
-            else:
-                system_instruction = f"{system_instruction}{inventory_system_guard}"
-                inventory_guidance = (
-                    "Project Existing Subject Index reuse rules:\n"
-                    "- Treat the above Project Existing Subject Index as authoritative identifiers for this project.\n"
-                    "- This inventory block is always present, even when all categories are empty.\n"
-                    "- Extract and reuse the Entities as your baselines. Do not duplicate existing inventory subjects in newly generated entity outputs."
-                )
-                user_content = f"{inventory_block}\n\n{inventory_guidance}\n\n{user_content}"
-                logger.info(
-                    "Injected system-level subject inventory into analyze_scene prompt: source=%s chars=%s props=%s envs=%s",
-                    inventory_source,
-                    len(inventory.get("characters") or []),
-                    len(inventory.get("props") or []),
-                    len(inventory.get("environments") or []),
-                )
-        except Exception as inventory_inject_err:
-            logger.warning("[analyze_scene] failed to inject system-level subject inventory: %s", inventory_inject_err)
-
         attention_notes = (getattr(request, "analysis_attention_notes", None) or "").strip()
         if attention_notes:
             attention_block = (
@@ -5444,7 +5378,115 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "provider_limit_hints": provider_limit_hints,
             "llm_fallback_warnings": llm_fallback_warnings,
             "integrity": integrity_meta,
+            "raw_total_chars": raw_total_chars,
+            "dedup_total_chars": dedup_total_chars,
         })
+
+        # Persist raw LLM output as soon as it is available so phase-1/phase-2
+        # source text is retained even if later validation or billing fails.
+        saved_to_episode = False
+        persisted_field_name = None
+        persisted_chars_readback = None
+        if getattr(request, "episode_id", None):
+            episode_id = request.episode_id
+            episode = db.query(Episode).filter(Episode.id == episode_id).first()
+            if episode and not current_user_is_superuser:
+                auth_user = db.query(User).filter(User.id == current_user_id).first()
+                if not auth_user:
+                    raise HTTPException(status_code=401, detail="User not found")
+                _require_project_access(db, episode.project_id, auth_user)
+            if not episode:
+                raise HTTPException(status_code=404, detail="Episode not found")
+
+            if effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"]:
+                persisted_field_name = "ai_entity_design_result"
+                episode.ai_entity_design_result = result_content
+                logger.info(
+                    "[analyze_scene] Persisted raw phase2 output to ai_entity_design_result episode_id=%s chars=%s",
+                    episode_id,
+                    len(result_content or ""),
+                )
+            else:
+                persisted_field_name = "ai_scene_analysis_result"
+                episode.ai_scene_analysis_result = result_content
+                logger.info(
+                    "[analyze_scene] Persisted raw phase1 output to ai_scene_analysis_result episode_id=%s chars=%s",
+                    episode_id,
+                    len(result_content or ""),
+                )
+
+            saved_to_episode = True
+            debug_meta["saved_to_episode"] = True
+            debug_meta["saved_episode_id"] = episode_id
+            debug_meta["saved_field"] = persisted_field_name
+            try:
+                db.commit()
+                try:
+                    db.refresh(episode)
+                except Exception:
+                    pass
+
+                if persisted_field_name == "ai_entity_design_result":
+                    persisted_chars_readback = len(str(getattr(episode, "ai_entity_design_result", "") or ""))
+                else:
+                    persisted_chars_readback = len(str(getattr(episode, "ai_scene_analysis_result", "") or ""))
+                debug_meta["saved_chars_readback"] = persisted_chars_readback
+                logger.info(
+                    "[analyze_scene] persisted_readback episode_id=%s field=%s chars=%s raw_total_chars=%s dedup_total_chars=%s output_chars=%s",
+                    episode_id,
+                    persisted_field_name,
+                    persisted_chars_readback,
+                    raw_total_chars,
+                    dedup_total_chars,
+                    len(result_content or ""),
+                )
+            except Exception:
+                db.rollback()
+                raise
+        else:
+            debug_meta["saved_to_episode"] = False
+            debug_meta["saved_field"] = None
+            debug_meta["saved_chars_readback"] = 0
+            logger.warning(
+                "[analyze_scene] no_episode_id_skip_persist provider=%s model=%s output_chars=%s raw_total_chars=%s dedup_total_chars=%s",
+                (config or {}).get("provider"),
+                (config or {}).get("model"),
+                len(result_content or ""),
+                raw_total_chars,
+                dedup_total_chars,
+            )
+
+        # Phase 1 guard: if Subject Index is missing, mark as review-required.
+        # Do not hard-fail here so callers can still inspect/import partial output.
+        blocking_codes: List[str] = []
+        blocking_subject_warnings: List[str] = []
+        if not is_entity_design_phase:
+            has_subject_index = bool(
+                re.search(r"(?im)^\s*(?:#{1,6}\s*)?subject\s*index\b", str(result_content or ""))
+                or re.search(r"(?im)\bsubject_no\s*=", str(result_content or ""))
+            )
+            if not has_subject_index:
+                blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
+                blocking_subject_warnings.append(
+                    "第一阶段未解析到完整的 Subject Index 区块，请确认返回结果中包含完整的 Subject Index 内容（如标题区块或 subject_no=... 条目）后重试。"
+                )
+
+        if blocking_codes:
+            for code in blocking_codes:
+                if code not in (integrity_meta.get("warning_codes") or []):
+                    integrity_meta.setdefault("warning_codes", []).append(code)
+            for warn in blocking_subject_warnings:
+                warn_text = str(warn or "").strip()
+                if warn_text and warn_text not in (integrity_meta.get("warnings") or []):
+                    integrity_meta.setdefault("warnings", []).append(warn_text)
+
+            logger.warning(
+                "[analyze_scene] subject_index_missing_non_blocking episode_id=%s codes=%s warnings=%s output_chars=%s",
+                getattr(request, "episode_id", None),
+                blocking_codes,
+                blocking_subject_warnings,
+                len(result_content or ""),
+            )
 
         if integrity_meta.get("truncation_suspected") or continuation_stopped_by_max_segments:
             logger.warning(
@@ -5469,43 +5511,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 integrity_meta.get("warning_codes") or [],
             )
 
-        # Persist result to DB if caller provided episode_id.
-        saved_to_episode = False
-        if getattr(request, "episode_id", None):
-            episode_id = request.episode_id
-            episode = db.query(Episode).filter(Episode.id == episode_id).first()
-            if episode and not current_user_is_superuser:
-                auth_user = db.query(User).filter(User.id == current_user_id).first()
-                if not auth_user:
-                    raise HTTPException(status_code=401, detail="User not found")
-                _require_project_access(db, episode.project_id, auth_user)
-            if not episode:
-                raise HTTPException(status_code=404, detail="Episode not found")
-            if effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"]:
-                episode.ai_entity_design_result = result_content
-                logger.info(
-                    "[analyze_scene] Saved ai_entity_design_result to episode_id=%s chars=%s",
-                    episode_id,
-                    len(result_content or ""),
-                )
-            else:
-                episode.ai_scene_analysis_result = result_content
-                logger.info(
-                    "[analyze_scene] Saved ai_scene_analysis_result to episode_id=%s chars=%s",
-                    episode_id,
-                    len(result_content or ""),
-                )
-            saved_to_episode = True
-            debug_meta["saved_to_episode"] = True
-            debug_meta["saved_episode_id"] = episode_id
-            try:
-                db.flush()
-            except Exception:
-                db.rollback()
-                raise
-        else:
-            debug_meta["saved_to_episode"] = False
-        
         # Billing finalize (commit happens inside billing service; will persist episode update if set above)
         if reservation_tx:
             actual_details = {"item": "scene_analysis"}
@@ -5530,19 +5535,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 details["output_tokens"] = details.get("completion_tokens", 0)
             billing_service.deduct_credits(db, current_user_id, "analysis", provider, model, details)
 
-        # Ensure episode save is committed even if billing is disabled/mocked.
-        if saved_to_episode:
-            try:
-                db.commit()
-                try:
-                    db.refresh(episode)
-                except Exception:
-                    pass
-            except Exception:
-                db.rollback()
-                raise
-        
         response_payload: Dict[str, Any] = {"success": True, "result": result_content, "meta": debug_meta}
+        if not saved_to_episode:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                "No episode_id was provided; raw LLM output was returned but not persisted to episode fields.",
+            ]
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                "ANALYSIS_EPISODE_ID_MISSING_NOT_PERSISTED",
+            ]
 
         # Extract subjects_json from LLM output so frontend can use pre-parsed
         # clean JSON instead of re-parsing the raw markdown with heuristic regex.
@@ -5659,6 +5661,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         severe_import_review_codes = {
             "ANALYSIS_JSON_INVALID",
             "ANALYSIS_STRUCTURE_INCOMPLETE",
+            "ANALYSIS_SUBJECT_INDEX_MISSING",
         }
         matched_review_codes = [code for code in severe_import_review_codes if code in review_required_codes]
         if matched_review_codes:
@@ -6313,12 +6316,14 @@ async def _sse_event_generator(events_gen):
     """Wrap an async generator of dicts into SSE-formatted text lines."""
     import json as _json
     try:
-        async for event in events_gen:
-            if event is None:
-                continue
-            event_type = event.get("type", "message")
-            data = _json.dumps(event, ensure_ascii=False, default=str)
-            yield f"event: {event_type}\ndata: {data}\n\n"
+        from contextlib import aclosing
+        async with aclosing(events_gen) as _stream:
+            async for event in _stream:
+                if event is None:
+                    continue
+                event_type = event.get("type", "message")
+                data = _json.dumps(event, ensure_ascii=False, default=str)
+                yield f"event: {event_type}\ndata: {data}\n\n"
     except Exception as exc:
         logger.error("SSE generator error: %s", exc)
         err = _json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
@@ -6377,12 +6382,14 @@ async def stream_agent_command(
     async def _generate():
         print(f"[STREAM-DEBUG] _generate() started iterating stream_process_command")
         try:
-            async for event in agent_service.stream_process_command(request_for_agent, current_user):
-                if event.get("type") == "heartbeat":
+            from contextlib import aclosing
+            async with aclosing(agent_service.stream_process_command(request_for_agent, current_user)) as _stream:
+                async for event in _stream:
+                    if event.get("type") == "heartbeat":
+                        yield event
+                        continue
+                    print(f"[STREAM-DEBUG] endpoint yielding event: type={event.get('type')}, content_len={len(str(event.get('content','')))}, keys={list(event.keys())}")
                     yield event
-                    continue
-                print(f"[STREAM-DEBUG] endpoint yielding event: type={event.get('type')}, content_len={len(str(event.get('content','')))}, keys={list(event.keys())}")
-                yield event
             # Billing deduction after successful completion
             with SessionLocal() as billing_db:
                 billing_service.deduct_credits(
@@ -6441,8 +6448,10 @@ async def stream_system_management_agent_command(
 
     async def _generate():
         try:
-            async for event in agent_service.stream_process_system_management_command(request, current_user):
-                yield event
+            from contextlib import aclosing
+            async with aclosing(agent_service.stream_process_system_management_command(request, current_user)) as _stream:
+                async for event in _stream:
+                    yield event
             with SessionLocal() as billing_db:
                 billing_service.deduct_credits(
                     billing_db,
@@ -12315,15 +12324,26 @@ class SceneRegenerateRequest(BaseModel):
     entity_only_mode: Optional[bool] = False
 
 
-def _build_project_subject_inventory(db: Session, project_id: int, limit_per_type: int = 120) -> Dict[str, List[Dict[str, str]]]:
-    """Build canonical project subject inventory for prompt-time reuse and recognition."""
+def _build_project_subject_inventory(
+    db: Session,
+    project_id: int,
+    limit_per_type: int = 120,
+    episode_id: Optional[int] = None,
+) -> Dict[str, List[Dict[str, str]]]:
+    """Build subject inventory for prompt-time reuse and recognition.
+
+    When episode_id is provided, inventory is scoped to that episode only.
+    """
     inventory: Dict[str, List[Dict[str, str]]] = {
         "characters": [], "covers": [],
         "props": [],
         "environments": [],
     }
 
-    entities = db.query(Entity).filter(Entity.project_id == int(project_id)).order_by(Entity.id.asc()).all()
+    entities_query = db.query(Entity).filter(Entity.project_id == int(project_id))
+    if episode_id is not None:
+        entities_query = entities_query.filter(Entity.episode_id == int(episode_id))
+    entities = entities_query.order_by(Entity.id.asc()).all()
     seen_keys = set()
 
     for ent in entities:
@@ -13010,13 +13030,17 @@ async def regenerate_scene(
         f"| EP{int(episode.id):02d} | EP{int(episode.id):02d}_SCXX | {db_scene.scene_no or ''} | {db_scene.scene_name or ''} | {db_scene.equivalent_duration or ''} | {(db_scene.core_scene_info or '').replace(chr(10), '<br>')} | {(db_scene.original_script_text or '').replace(chr(10), '<br>')} | {db_scene.environment_name or ''} | {db_scene.linked_characters or ''} | {db_scene.key_props or ''} |"
     )
 
-    existing_subject_inventory = _build_project_subject_inventory(db, int(project.id))
+    existing_subject_inventory = _build_project_subject_inventory(
+        db,
+        int(project.id),
+        episode_id=int(episode.id),
+    )
     existing_subjects_block = _format_project_subject_inventory_block(existing_subject_inventory)
 
     existing_subjects_system_guard = (
         "\n\n"
         "[Existing Entity Reuse Guard - High Priority]\n"
-        "The following entities already exist in the project database and are dependency baselines.\n"
+        "The following entities already exist in the current episode scope and are dependency baselines.\n"
         "You MUST treat them as immutable references: do NOT rewrite, rename, redefine, or replace these entities.\n"
         "Do NOT output them as newly generated entities in SUBJECTS_JSON.\n"
         "SUBJECTS_JSON must include only truly missing entities.\n"
@@ -21010,14 +21034,12 @@ def get_transactions(
 
     query = db.query(TransactionHistory)
 
-    if task_type or provider or model:
-        query = query.outerjoin(TransactionAction, TransactionAction.transaction_id == TransactionHistory.id).distinct()
-        if task_type:
-            query = query.filter(TransactionAction.task_type == task_type)
-        if provider:
-            query = query.filter(TransactionAction.provider == provider)
-        if model:
-            query = query.filter(TransactionAction.model == model)
+    if task_type:
+        query = query.filter(TransactionHistory.action_audit.has(task_type=task_type))
+    if provider:
+        query = query.filter(TransactionHistory.action_audit.has(provider=provider))
+    if model:
+        query = query.filter(TransactionHistory.action_audit.has(model=model))
 
     from sqlalchemy.orm import joinedload
     query = query.options(joinedload(TransactionHistory.action_audit))
@@ -29910,8 +29932,9 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 {"prompt": video_prompt, "type": "en"},
                 {"prompt": video_prompt_cn, "type": "zh"}
             ]
+        batch_status = _read_shot_media_batch_status(episode) if episode else {}
         video_req = VideoGenerationRequest(
-            draft_mode=bool(latest.get("draft_mode")),
+            draft_mode=bool((batch_status or {}).get("draft_mode")),
             prompt=video_prompt,
             multi_prompt=multi_prompt_payload,
             ref_image_url=normalized_refs,
@@ -30624,8 +30647,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 {"prompt": video_prompt, "type": "en"},
                                 {"prompt": video_prompt_cn, "type": "zh"}
                             ]
+                        batch_status = _read_shot_media_batch_status(episode) if episode else {}
                         video_req = VideoGenerationRequest(
-                            draft_mode=bool(latest.get("draft_mode")),
+                            draft_mode=bool((batch_status or {}).get("draft_mode")),
                             prompt=video_prompt,
                             multi_prompt=multi_prompt_payload,
                             ref_image_url=normalized_refs,
@@ -32297,3 +32321,207 @@ def sync_entity(req: dict, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(target)
     return {"status": "ok"}
+
+
+def _extract_first_json_object(raw_text: str) -> Dict[str, Any]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {}
+
+    fenced = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    direct_obj = re.search(r"\{[\s\S]*\}", text)
+    if direct_obj:
+        try:
+            parsed = json.loads(direct_obj.group(0))
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
+
+
+def _create_generated_entity_from_payload(
+    db: Session,
+    project_id: int,
+    payload: Dict[str, Any],
+    *,
+    fallback_name: str,
+    fallback_type: str = "character",
+) -> Entity:
+    name = str(payload.get("name") or fallback_name or "Generated Entity").strip()
+    ent_type = str(payload.get("type") or fallback_type or "character").strip().lower()
+    if ent_type not in {"character", "environment", "prop", "poster"}:
+        ent_type = "character"
+
+    new_entity = Entity(
+        project_id=project_id,
+        name=name,
+        type=ent_type,
+        name_en=str(payload.get("name_en") or "").strip() or None,
+        base_name_en=str(payload.get("base_name_en") or payload.get("name_en") or "").strip() or None,
+        description=str(payload.get("description") or payload.get("bio") or "").strip() or None,
+        atmosphere=str(payload.get("atmosphere") or payload.get("personality") or "").strip() or None,
+        appearance_cn=str(payload.get("appearance_cn") or payload.get("features") or "").strip() or None,
+        narrative_description=str(payload.get("narrative_description") or payload.get("bio") or "").strip() or None,
+    )
+    db.add(new_entity)
+    db.commit()
+    db.refresh(new_entity)
+    return new_entity
+
+
+@router.post("/projects/{project_id}/entities/llm-text", response_model=EntityOut)
+async def api_generate_entity_from_text(
+    project_id: int,
+    text_desc: str = Form(...),
+    model: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+
+    llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        category="LLM",
+        function_name="script_analysis",
+    )
+    if not llm_config:
+        llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    if not llm_config or not llm_config.get("api_key"):
+        raise HTTPException(status_code=400, detail="No active LLM config found")
+
+    if model:
+        llm_config = {**llm_config, "model": model}
+
+    system_prompt = (
+        "You are an entity designer. Return ONLY JSON with fields: "
+        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
+    )
+    user_prompt = (
+        "根据用户输入生成一个可入库的新实体。\n"
+        "要求 type 仅可为 character/environment/prop/poster 之一。\n"
+        "用户输入：\n"
+        f"{text_desc}"
+    )
+
+    try:
+        resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
+        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
+        return _create_generated_entity_from_payload(db, project_id, payload, fallback_name="文本生成实体")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM text generation failed: {e}")
+
+
+@router.post("/projects/{project_id}/entities/llm-image", response_model=EntityOut)
+async def api_generate_entity_from_image(
+    project_id: int,
+    file: UploadFile = File(...),
+    model: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+
+    llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        category="LLM",
+        function_name="script_analysis",
+    )
+    if not llm_config:
+        llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    if not llm_config or not llm_config.get("api_key"):
+        raise HTTPException(status_code=400, detail="No active LLM config found")
+
+    if model:
+        llm_config = {**llm_config, "model": model}
+
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Image file is empty")
+
+    mime = str(file.content_type or "image/png").strip() or "image/png"
+    img_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{mime};base64,{img_b64}"
+
+    system_prompt = (
+        "You are a vision entity designer. Return ONLY JSON with fields: "
+        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
+    )
+    user_prompt = "请根据图片反推一个可入库的新实体。"
+
+    try:
+        resp = await llm_service.generate_content_with_fallback(
+            user_prompt,
+            system_prompt,
+            llm_config,
+            image_urls=[data_url],
+        )
+        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
+        return _create_generated_entity_from_payload(db, project_id, payload, fallback_name="图片反推实体")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM image generation failed: {e}")
+
+
+@router.post("/projects/{project_id}/entities/llm-derive", response_model=EntityOut)
+async def api_generate_entity_from_derive(
+    project_id: int,
+    base_entity_id: int = Form(...),
+    derive_desc: str = Form(""),
+    model: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+
+    base_entity = db.query(Entity).filter(Entity.id == base_entity_id, Entity.project_id == project_id).first()
+    if not base_entity:
+        raise HTTPException(status_code=404, detail="Base entity not found in this project")
+
+    llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        category="LLM",
+        function_name="script_analysis",
+    )
+    if not llm_config:
+        llm_config = agent_service.get_active_llm_config(current_user.id, category="LLM")
+    if not llm_config or not llm_config.get("api_key"):
+        raise HTTPException(status_code=400, detail="No active LLM config found")
+
+    if model:
+        llm_config = {**llm_config, "model": model}
+
+    system_prompt = (
+        "You are an entity variation designer. Return ONLY JSON with fields: "
+        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
+    )
+    user_prompt = (
+        "基于已有实体生成一个新的衍生实体，不要覆盖原实体。\n"
+        f"基础实体名称: {base_entity.name}\n"
+        f"基础实体类型: {base_entity.type}\n"
+        f"基础描述: {base_entity.description or ''}\n"
+        f"基础外观: {base_entity.appearance_cn or ''}\n"
+        f"新增描述要求: {derive_desc or '在保持主体特征下，生成一个合理新变体'}"
+    )
+
+    try:
+        resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
+        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
+        return _create_generated_entity_from_payload(
+            db,
+            project_id,
+            payload,
+            fallback_name=f"{base_entity.name}-变体",
+            fallback_type=str(base_entity.type or "character"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM derive generation failed: {e}")

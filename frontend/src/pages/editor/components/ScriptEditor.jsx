@@ -3153,8 +3153,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const llmRawAutoSaveArmedRef = useRef(false);
     const analysisResumeInFlightRef = useRef(false);
     const phase2ResolverRef = useRef(null);
+    const phase2GenerationInFlightRef = useRef(false);
     const analysisStopRequestedRef = useRef(false);
     const analysisRunInFlightRef = useRef(false);
+    const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
     const lastSubjectsImportIncompleteAlertRef = useRef('');
     const ANALYSIS_TASK_MAX_AGE_MS = 60 * 60 * 1000;
@@ -3184,14 +3186,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const parsed = JSON.parse(raw);
             const taskId = String(parsed?.taskId || '').trim();
             const startedAt = Number(parsed?.startedAt || 0);
+            const phase = Number(parsed?.phase || 1);
             if (!taskId) return null;
-            if (!Number.isFinite(startedAt) || startedAt <= 0) return { taskId, startedAt: Date.now() };
+            if (!Number.isFinite(startedAt) || startedAt <= 0) return { taskId, startedAt: Date.now(), phase };
             // Align marker TTL with task polling timeout to avoid endless resume loops after reload.
             if ((Date.now() - startedAt) > ANALYSIS_TASK_MARKER_TTL_MS) {
                 window.localStorage.removeItem(key);
                 return null;
             }
-            return { taskId, startedAt };
+            return { taskId, startedAt, phase };
         } catch (_) {
             return null;
         }
@@ -3206,6 +3209,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const payload = {
                 taskId,
                 startedAt: Number(marker?.startedAt || Date.now()),
+                phase: Number(marker?.phase || 1),
             };
             window.localStorage.setItem(key, JSON.stringify(payload));
             setActiveAnalysisTaskId(taskId);
@@ -3387,6 +3391,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [availableSubjectAssets, selectedReuseSubjectIds]);
 
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
+        if (phase2GenerationInFlightRef.current) {
+            onLog?.('Skipped duplicate Phase 2 asset generation trigger while one is already running.', 'warning');
+            return {
+                checkedSceneCount: 0,
+                missingSceneCount: 0,
+                missingItemCount: 0,
+                missingSceneReports: [],
+                supplementReport: {
+                    createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
+                    countsByType: { character: 0, prop: 0, environment: 0 },
+                },
+                importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
+            };
+        }
+
         const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
         const emptyReport = {
             checkedSceneCount: importedSceneRows.length,
@@ -3445,6 +3464,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             console.log("No Subject Index found in the analysis result. Skipping asset generation.");
             return emptyReport;
         }
+
+        phase2GenerationInFlightRef.current = true;
 
         setAnalysisFlowStatus({
             phase: "generating_assets",
@@ -3584,16 +3605,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 finalSubjectIndexText = confirmed.userPrompt || finalSubjectIndexText;
             }
 
-            onLog?.(`[Asset Gen Tracking] Launching second LLM call for 'subject_generation'`);
+            onLog?.('[Asset Gen Tracking] Launching Phase 2 entity-design LLM call');
 
             const phase1SystemApiId = Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
                 || Number(localStorage.getItem('func_api_script_analysis') || 0)
                 || null;
             if (phase1SystemApiId) {
-                onLog?.(`[Phase 2] Reusing Phase 1 system_api_id=${phase1SystemApiId} for subject_generation.`, 'info');
+                onLog?.(`[Phase 2] Reusing Phase 1 system_api_id=${phase1SystemApiId} for script_analysis routing.`, 'info');
             } else {
                 onLog?.('[Phase 2] Phase 1 system_api_id is missing; fallback routing may select a different API.', 'warning');
             }
+
+            const phase2StartedAt = Date.now();
 
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => analyzeScene(
@@ -3606,15 +3629,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     {
                         onTaskCreated: (taskId) => {
                             setActiveAnalysisTaskId(String(taskId || '').trim());
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt: Date.now(), phase: 2 });
+                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt: phase2StartedAt, phase: 2 });
                         }
                     }, 
                     projectId,
-                    "subject_generation",
+                    "script_analysis",
                     phase1SystemApiId,
                     "2_pass_generate_assets"
                 ),
-                { startedAt: Date.now(), baselineText: activeEpisode?.ai_entity_design_result || '', resultField: 'ai_entity_design_result' }
+                { startedAt: phase2StartedAt, baselineText: activeEpisode?.ai_entity_design_result || '', resultField: 'ai_entity_design_result' }
             );
 
             const analyzedText = extractAnalysisTextFromResult(result);
@@ -3674,6 +3697,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             console.error("Asset generation step failed:", error);
             onLog?.(`Asset generation failed: ${error.message}`);
             throw error;
+        } finally {
+            phase2GenerationInFlightRef.current = false;
         }
 
         return emptyReport;
@@ -3694,13 +3719,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (analysisResumeInFlightRef.current || analysisRunInFlightRef.current) return;
         analysisResumeInFlightRef.current = true;
 
-        const startedAt = Date.now(); // Clear previous time on resume/retry
-        const remainingTimeoutMs = ANALYSIS_TASK_MAX_AGE_MS;
+        const markerStartedAt = Number(marker?.startedAt || 0);
+        const startedAt = (Number.isFinite(markerStartedAt) && markerStartedAt > 0) ? markerStartedAt : Date.now();
+        const elapsedMs = Math.max(0, Date.now() - startedAt);
+        const remainingTimeoutMs = Math.max(0, ANALYSIS_TASK_MAX_AGE_MS - elapsedMs);
         if (marker?.phase === 2) {
             setIsAnalyzing(false);
             setIsRetryingPhase2(true);
             setActiveAnalysisTaskId(String(marker?.taskId || '').trim());
-            setAnalysisUiReport({ status: 'running', startTime: startedAt, etaSeconds: 90 });
+            setAnalysisUiReport({
+                status: 'running',
+                startedAt,
+                durationMs: elapsedMs,
+                phaseTimings: null,
+                importReport: null,
+                runtimeMeta: null,
+                warning: '',
+                error: '',
+            });
             setAnalysisFlowStatus({
                 phase: 'generating_assets',
                 message: t("✨ 发现有个没完成的第二阶段任务，正在为您继续生成对应的人物和场景资产...", "Resuming Phase 2 asset generation..."),
@@ -4996,6 +5032,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!ok) {
                     return;
                 }
+                // User confirmed full regeneration — bypass resume logic and clear stale data
+                forceRegenerateRef.current = true;
             }
         }
 
@@ -5114,19 +5152,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                      if (metaParts.length > 1) {
                         fullContent = `${metaParts.join('\n')}\n\nScript to Analyze:\n\n${rawContent}`;
                      }
-                }
-
-                try {
-                    const projectIdForInventory = project?.id;
-                    if (projectIdForInventory) {
-                        const inventoryObj = await fetchProjectSubjectInventoryPrompt(projectIdForInventory);
-                        if (inventoryObj && inventoryObj.inventory_block) {
-                            let inventoryStr = `\n\n${inventoryObj.inventory_block.trim()}\n\n${(inventoryObj.inventory_guidance || '').trim()}\n\n`;
-                            fullContent = `[Project Existing Subject Index]${inventoryStr}${fullContent}`;
-                        }
-                    }
-                } catch(e) {
-                    console.error("Failed to fetch inventory", e);
                 }
 
                 setUserPrompt(fullContent);
@@ -5293,6 +5318,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return true;
         }
 
+        if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) return true;
+        analysisRunInFlightRef.current = true;
+        setIsAnalyzing(true);
         const startedAt = Date.now();
         setAnalysisUiReport({
             status: 'running',
@@ -5351,17 +5379,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 warning: combinedWarning,
                 error: err.message,
             });
+        } finally {
+            clearAnalysisTaskMarker(activeEpisode?.id);
+            setIsAnalyzing(false);
+            analysisRunInFlightRef.current = false;
         }
 
         return true;
     }, [activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.id, onLog, runPostImportSceneSubjectPipeline, subjectIndexText, t, updateEpisode]);
 
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false, retryCount = 0) => {
+        const forceRegenerate = forceRegenerateRef.current;
+        forceRegenerateRef.current = false;
         const resumeState = await prepareSceneAnalysisResumeState();
-        if (await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
+        if (!forceRegenerate && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
             return;
         }
-        const preflightSceneSyncNotice = resumeState?.preflightSceneSyncNotice || '';
+        const preflightSceneSyncNotice = forceRegenerate ? '' : (resumeState?.preflightSceneSyncNotice || '');
         if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
             if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
@@ -5399,6 +5433,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             error: '',
         });
         if (onLog) onLog("Starting AI Script Analysis...", "start");
+
+        // When force-regenerating, clear existing scenes and episode analysis fields so
+        // the new results are imported fresh rather than merged onto stale data.
+        if (forceRegenerate && activeEpisode?.id) {
+            try {
+                if (onLog) onLog('Force-regenerate: clearing existing scenes and analysis data...', 'process');
+                const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                if (existingScenes && existingScenes.length > 0) {
+                    await Promise.all(existingScenes.map((sc) => deleteScene(sc.id)));
+                    if (onLog) onLog(`Force-regenerate: deleted ${existingScenes.length} existing scene(s).`, 'info');
+                }
+                await Promise.all([
+                    persistLlmResultContent('', 'ai_scene_analysis_result'),
+                    persistLlmResultContent('', 'ai_scene_analysis_subject_index'),
+                    persistLlmResultContent('', 'ai_entity_design_result'),
+                ]).catch((e) => onLog?.(`Force-regenerate: episode field clear warning: ${e?.message || e}`, 'warning'));
+                setLlmRawResultContent('');
+                setLlmResultContent('');
+                setSubjectIndexText('');
+                lastLoadedAnalysisRef.current = null;
+            } catch (clearErr) {
+                if (onLog) onLog(`Force-regenerate: clear warning (continuing): ${clearErr?.message || clearErr}`, 'warning');
+            }
+        }
 
         let llmReturned = false;
         let runtimeMeta = null;
@@ -5766,14 +5824,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
+        const forceRegenerate = forceRegenerateRef.current;
+        forceRegenerateRef.current = false;
         const resumeState = await prepareSceneAnalysisResumeState();
-        if (await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
+        if (!forceRegenerate && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
             return;
         }
-        const preflightSceneSyncNotice = resumeState?.preflightSceneSyncNotice || '';
+        const preflightSceneSyncNotice = forceRegenerate ? '' : (resumeState?.preflightSceneSyncNotice || '');
         if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
+        }
+
+        // When force-regenerating, clear existing scenes and episode analysis fields.
+        if (forceRegenerate && activeEpisode?.id) {
+            try {
+                if (onLog) onLog('Force-regenerate: clearing existing scenes and analysis data...', 'process');
+                const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                if (existingScenes && existingScenes.length > 0) {
+                    await Promise.all(existingScenes.map((sc) => deleteScene(sc.id)));
+                    if (onLog) onLog(`Force-regenerate: deleted ${existingScenes.length} existing scene(s).`, 'info');
+                }
+                await Promise.all([
+                    persistLlmResultContent('', 'ai_scene_analysis_result'),
+                    persistLlmResultContent('', 'ai_scene_analysis_subject_index'),
+                    persistLlmResultContent('', 'ai_entity_design_result'),
+                ]).catch((e) => onLog?.(`Force-regenerate: episode field clear warning: ${e?.message || e}`, 'warning'));
+                setLlmRawResultContent('');
+                setLlmResultContent('');
+                setSubjectIndexText('');
+                lastLoadedAnalysisRef.current = null;
+            } catch (clearErr) {
+                if (onLog) onLog(`Force-regenerate: clear warning (continuing): ${clearErr?.message || clearErr}`, 'warning');
+            }
         }
 
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
@@ -6149,6 +6232,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onLog?.(`Retry Phase 2 failed: ${error.message || String(error)}`, 'error');
             alert(`Retry Phase 2 failed: ${error.message}`);
         } finally {
+            clearAnalysisTaskMarker(activeEpisode?.id);
             setIsRetryingPhase2(false);
         }
     };

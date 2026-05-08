@@ -376,6 +376,30 @@ def _ensure_entities_episode_scoped_unique_indexes(*, is_postgres: bool) -> None
         logger.info("Skip entity scoped unique index migration for dialect=%s", engine.dialect.name)
         return
 
+    # Clean up duplicates before creating unique indexes
+    dedup_statements = [
+        (
+            "DELETE FROM entities WHERE id NOT IN ("
+            "    SELECT max(id) FROM entities "
+            "    GROUP BY project_id, coalesce(episode_id, -1), lower(trim(type)), coalesce(lower(trim(name)), '')"
+            ")"
+        ),
+        (
+            "DELETE FROM entities WHERE id NOT IN ("
+            "    SELECT max(id) FROM entities "
+            "    WHERE name_en IS NOT NULL AND trim(name_en) <> '' "
+            "    GROUP BY project_id, coalesce(episode_id, -1), lower(trim(type)), lower(trim(name_en))"
+            ") AND name_en IS NOT NULL AND trim(name_en) <> ''"
+        )
+    ]
+    
+    with engine.begin() as conn:
+        for ddl in dedup_statements:
+            try:
+                conn.execute(text(ddl))
+            except Exception as exc:
+                logger.warning("Entity deduplication failed: %s | err=%s", ddl, exc)
+
     ddl_statements = [
         (
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_entities_proj_ep_type_name_norm "
