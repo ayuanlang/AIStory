@@ -29544,6 +29544,39 @@ def _append_video_api_ref_mapping(
     if not text:
         return text
 
+    def _collect_prompt_entity_mentions(source_text: str) -> List[Tuple[str, str]]:
+        mentions: List[Tuple[str, str]] = []
+        seen_entities: set[str] = set()
+        mention_regex = re.compile(
+            r"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?([^\]】]+?)\s*[\]】]|[\[【]\s*@?([^\]】]+?)\s*[\]】]",
+            re.IGNORECASE,
+        )
+
+        for match in mention_regex.finditer(source_text):
+            raw_name = str(match.group(1) or match.group(2) or "").strip()
+            normalized = _normalize_entity_anchor_token(raw_name)
+            if not normalized or normalized in seen_entities:
+                continue
+            row = entity_lookup.get(normalized) if entity_lookup else None
+            if not row:
+                continue
+
+            entity_type = str(row.get("entity_type") or "").strip().lower()
+            if entity_type and entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
+                continue
+
+            raw_entity_name = str(row.get("name") or "").strip()
+            entity_name = raw_entity_name[1:] if raw_entity_name.startswith("@") else raw_entity_name
+            if not entity_name:
+                entity_name = raw_name.lstrip("@").strip()
+            if not entity_name:
+                continue
+
+            seen_entities.add(normalized)
+            mentions.append((normalized, entity_name))
+
+        return mentions
+
     # Remove legacy inline URL-index tags injected into prompt anchors.
     text = re.sub(
         r"\(\s*ref_image_url\s*:\s*#\d+\s*\)",
@@ -29622,7 +29655,7 @@ def _append_video_api_ref_mapping(
 
     seen_urls: set[str] = set()
 
-    normalized_text = _normalize_entity_anchor_token(text)
+    mentioned_entity_keys = {normalized for normalized, _ in _collect_prompt_entity_mentions(text)}
     if entity_lookup:
         # Relaxed matching to map any entity in ordered_refs
         for key, row in entity_lookup.items():
@@ -29643,13 +29676,8 @@ def _append_video_api_ref_mapping(
             if not image_url or mapped_idx is None:
                 continue
 
-            has_ascii = bool(re.search(r"[a-z0-9]", norm_key, flags=re.IGNORECASE))
-            if has_ascii:
-                pattern = rf"(?<![a-z0-9]){re.escape(norm_key)}(?![a-z0-9])"
-                matched = re.search(pattern, normalized_text, flags=re.IGNORECASE) is not None
-            else:
-                matched = norm_key in normalized_text
-            
+            matched = norm_key in mentioned_entity_keys
+
             if matched and image_url not in seen_urls:
                 seen_urls.add(image_url)
                 raw_name = str(row.get('name') or '')
@@ -29662,7 +29690,45 @@ def _append_video_api_ref_mapping(
     pairs.sort(key=lambda x: x[0])
 
     if not pairs:
+        pure_multi_entity_ref_mode = (
+            len(start_urls) >= 2
+            and not end_url
+            and not keyframe_urls
+            and not reference_video_urls
+        )
+        if not pure_multi_entity_ref_mode:
+            return text
+
+        fallback_mentions = _collect_prompt_entity_mentions(text)
+        if not fallback_mentions:
+            return text
+
+        used_indexes: set[int] = set()
+        next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
+        for (_, entity_name), mapped_idx in zip(fallback_mentions, next_ref_indexes):
+            pairs.append((mapped_idx, entity_name, ""))
+
+    elif (
+        len(start_urls) >= 2
+        and not end_url
+        and not keyframe_urls
+        and not reference_video_urls
+        and len(pairs) < len(ordered_refs)
+    ):
+        fallback_mentions = _collect_prompt_entity_mentions(text)
+        paired_names = {name for _, name, _ in pairs}
+        used_indexes = {idx for idx, _, _ in pairs}
+        next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
+        for (_, entity_name), mapped_idx in zip(
+            [item for item in fallback_mentions if item[1] not in paired_names],
+            next_ref_indexes,
+        ):
+            pairs.append((mapped_idx, entity_name, ""))
+
+    if not pairs:
         return text
+
+    pairs.sort(key=lambda x: x[0])
 
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:

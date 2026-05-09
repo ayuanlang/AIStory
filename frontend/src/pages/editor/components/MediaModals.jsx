@@ -303,6 +303,12 @@ export const AssetHoverMetaOverlay = ({ asset, t, entities = [], position = 'top
 };
 
 export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context = {}, entities = [], episodeId = null, uiLang = 'zh' }) => {
+        // 调试日志：弹窗打开时的 context
+        useEffect(() => {
+            if (isOpen && typeof window !== 'undefined') {
+                console.log('[素材选择][弹窗context]', context);
+            }
+        }, [isOpen, context]);
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [tab, setTab] = useState('assets');
     const [allCleanData, setAllCleanData] = useState(null);
@@ -313,16 +319,35 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     const [episodeFilter, setEpisodeFilter] = useState(episodeId ? 'current' : 'all');
     const [assetTypeFilter, setAssetTypeFilter] = useState('image');
-    const [assetNameFilter, setAssetNameFilter] = useState('');
+    const [secondaryFilterKind, setSecondaryFilterKind] = useState('all'); // all | entity | shot
+    const [secondaryFilterValue, setSecondaryFilterValue] = useState('');
+    const [secondaryAutoFollow, setSecondaryAutoFollow] = useState(false);
+    const [nameFilter, setNameFilter] = useState('');
+    const [selectedAssetId, setSelectedAssetId] = useState('');
+    const [selectedMulti, setSelectedMulti] = useState(new Set());
     const [availableShots, setAvailableShots] = useState([]);
+
+    const contextShotId = useMemo(() => String(context?.shotId ?? context?.shot_id ?? '').trim(), [context?.shotId, context?.shot_id]);
+    const contextEntityId = useMemo(() => String(context?.entityId ?? context?.entity_id ?? '').trim(), [context?.entityId, context?.entity_id]);
+    const contextFrameType = useMemo(() => String(context?.shotFrameType ?? context?.shot_frame_type ?? context?.frame_type ?? context?.type ?? '').trim().toLowerCase(), [context?.frame_type, context?.shotFrameType, context?.shot_frame_type, context?.type]);
+
+    const contextualSecondary = useMemo(() => {
+        const stableShotId = contextShotId;
+        const stableEntityId = contextEntityId;
+        if (stableShotId) return { kind: 'shot', value: stableShotId };
+        if (stableEntityId) return { kind: 'entity', value: stableEntityId };
+        return null;
+    }, [contextEntityId, contextShotId]);
 
     const inferPreferredAssetType = useCallback(() => {
         const stableType = String(context?.type || '').trim().toLowerCase();
+        const stableFrameType = contextFrameType;
+        if (stableFrameType.includes('video')) return 'video';
         if (stableType.includes('video')) return 'video';
         if (stableType.includes('image')) return 'image';
-        if (context?.shotFrameType) return 'image';
+        if (stableFrameType) return 'image';
         return 'image';
-    }, [context]);
+    }, [context?.type, contextFrameType]);
 
     const resolveAssetEpisodeId = useCallback((asset) => {
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
@@ -340,15 +365,113 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         return `${t('分集', 'Episode')} ${id}`;
     }, [resolveAssetEpisodeId, t]);
 
+    const resolveAssetDisplayName = useCallback((asset) => {
+        const meta = (asset?.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
+        const fallbackName = String(asset?.url || '').split('/').pop();
+        return String(
+            asset?.name
+            || asset?.asset_name
+            || meta?.asset_name
+            || meta?.display_name
+            || meta?.name
+            || meta?.title
+            || asset?.filename
+            || meta?.original_filename
+            || meta?.filename
+            || fallbackName
+            || `${t('素材', 'Asset')} #${asset?.id ?? '-'}`
+        ).trim();
+    }, [t]);
+
+    const resolveAssetEntityId = useCallback((asset) => {
+        const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+        return String(meta?.entity_id ?? asset?.entity_id ?? '').trim();
+    }, []);
+
+    const resolveAssetShotId = useCallback((asset) => {
+        const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+        return String(meta?.shot_id ?? asset?.shot_id ?? '').trim();
+    }, []);
+
+    const resolveAssetFrameType = useCallback((asset) => {
+        const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+        return String(meta?.frame_type || meta?.asset_type || '').trim().toLowerCase();
+    }, []);
+
+    const resolveContextualAssetDisplayName = useCallback((asset) => {
+        const meta = (asset?.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
+        const baseName = resolveAssetDisplayName(asset);
+        const frameType = resolveAssetFrameType(asset);
+        const shotNumber = String(meta?.shot_number || '').trim();
+        const shotName = String(meta?.shot_name || '').trim();
+        const entityId = resolveAssetEntityId(asset);
+        const entityName = String(meta?.entity_name || '').trim();
+        const frameLabel = frameType.includes('start')
+            ? t('起始帧', 'Start Frame')
+            : frameType.includes('end')
+                ? t('结束帧', 'End Frame')
+                : (frameType.includes('video') || String(asset?.type || '').toLowerCase() === 'video')
+                    ? t('视频', 'Video')
+                    : frameType.includes('subject')
+                        ? t('实体素材', 'Entity Asset')
+                        : '';
+
+        const stableContextShotId = contextShotId;
+        const stableContextEntityId = contextEntityId;
+        const useShotPrefix = stableContextShotId || resolveAssetShotId(asset);
+        const useEntityPrefix = !useShotPrefix && (stableContextEntityId || entityId);
+
+        if (useShotPrefix) {
+            const shotLabel = shotNumber
+                ? `${t('分镜', 'Shot')} ${shotNumber}`
+                : (shotName ? `${t('分镜', 'Shot')} ${shotName}` : t('分镜素材', 'Shot Asset'));
+            const prefix = frameLabel ? `${shotLabel} ${frameLabel}` : shotLabel;
+            return `${prefix} · ${baseName}`;
+        }
+
+        if (useEntityPrefix) {
+            const entityRecord = entityId
+                ? (Array.isArray(entities) ? entities.find((item) => String(item?.id || '') === entityId) : null)
+                : null;
+            const entityType = String(entityRecord?.type || '').trim().toLowerCase();
+            const entityTypeLabel = entityType === 'character'
+                ? t('角色', 'Character')
+                : entityType === 'prop'
+                    ? t('道具', 'Prop')
+                    : entityType === 'environment'
+                        ? t('环境', 'Environment')
+                        : t('实体', 'Entity');
+            const labelName = entityName || String(entityRecord?.name || '').trim() || t('未命名实体', 'Unnamed Entity');
+            return `${entityTypeLabel} ${labelName} · ${baseName}`;
+        }
+
+        if (frameLabel) {
+            return `${frameLabel} · ${baseName}`;
+        }
+
+        return baseName;
+    }, [contextEntityId, contextShotId, entities, resolveAssetDisplayName, resolveAssetEntityId, resolveAssetFrameType, resolveAssetShotId, t]);
+
     useEffect(() => {
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
              setShowHistoricalProjectAssets(false);
              setEpisodeFilter(episodeId ? 'current' : 'all');
              setAssetTypeFilter(inferPreferredAssetType());
-             setAssetNameFilter('');
+             if (contextualSecondary) {
+                 setSecondaryFilterKind(contextualSecondary.kind);
+                 setSecondaryFilterValue(contextualSecondary.value);
+                 setSecondaryAutoFollow(true);
+             } else {
+                 setSecondaryFilterKind('all');
+                 setSecondaryFilterValue('');
+                 setSecondaryAutoFollow(false);
+             }
+             setNameFilter('');
+             setSelectedAssetId('');
+             setSelectedMulti(new Set());
         }
-    }, [episodeId, inferPreferredAssetType, isOpen]);
+    }, [contextualSecondary, episodeId, inferPreferredAssetType, isOpen]);
 
         useEffect(() => {
                  if (episodeId && availableShots.length === 0) {
@@ -366,7 +489,9 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         } else if (!isOpen) {
             setAllCleanData(null);
             setSelectedAsset(null);
-            setAssetNameFilter('');
+            setNameFilter('');
+            setSelectedAssetId('');
+            setSelectedMulti(new Set());
         }
     }, [isOpen, tab, showHistoricalProjectAssets, projectId, episodeId]);
 
@@ -384,7 +509,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
     }, [allCleanData, resolveAssetEpisodeId, resolveAssetEpisodeLabel]);
 
-    const filteredAssets = useMemo(() => {
+    const levelOneAssets = useMemo(() => {
         const rows = Array.isArray(allCleanData) ? [...allCleanData] : [];
         let filtered = rows;
 
@@ -399,48 +524,220 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             filtered = filtered.filter((asset) => String(asset?.type || '').trim().toLowerCase() === assetTypeFilter);
         }
 
+        return filtered;
+    }, [allCleanData, assetTypeFilter, episodeFilter, episodeId, resolveAssetEpisodeId]);
+
+    const secondaryEntityOptions = useMemo(() => {
+        const grouped = new Map();
+        levelOneAssets.forEach((asset) => {
+            const eid = String(resolveAssetEntityId(asset) || '').trim();
+            if (!eid) return;
+            if (grouped.has(eid)) return;
+            const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+            const entityRecord = (Array.isArray(entities) ? entities.find((item) => String(item?.id || '') === eid) : null);
+            const entityName = String(meta?.entity_name || entityRecord?.name || '').trim() || `${t('实体', 'Entity')} #${eid}`;
+            grouped.set(eid, entityName);
+        });
+        return Array.from(grouped.entries())
+            .map(([id, label]) => ({ id, label }))
+            .sort((a, b) => String(a.label).localeCompare(String(b.label), undefined, { numeric: true }));
+    }, [entities, levelOneAssets, resolveAssetEntityId, t]);
+
+    const secondaryShotOptions = useMemo(() => {
+        const grouped = new Map();
+        levelOneAssets.forEach((asset) => {
+            const sid = String(resolveAssetShotId(asset) || '').trim();
+            if (!sid) return;
+            if (grouped.has(sid)) return;
+            const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+            const shotNumber = String(meta?.shot_number || '').trim();
+            const shotName = String(meta?.shot_name || '').trim();
+            let label = shotNumber ? `${t('分镜', 'Shot')} ${shotNumber}` : (shotName ? `${t('分镜', 'Shot')} ${shotName}` : `${t('分镜', 'Shot')} #${sid}`);
+            const shotRecord = Array.isArray(availableShots) ? availableShots.find((row) => String(row?.id || '') === sid) : null;
+            if (shotRecord?.shot_id) {
+                label = `${label} (${shotRecord.shot_id})`;
+            }
+            grouped.set(sid, label);
+        });
+        return Array.from(grouped.entries())
+            .map(([id, label]) => ({ id, label }))
+            .sort((a, b) => String(a.label).localeCompare(String(b.label), undefined, { numeric: true }));
+    }, [availableShots, levelOneAssets, resolveAssetShotId, t]);
+
+    useEffect(() => {
+        if (!isOpen || !secondaryAutoFollow || !contextualSecondary) return;
+
+        const nextKind = contextualSecondary.kind;
+        let nextValue = contextualSecondary.value;
+
+        // 自动跟随时，如果上下文值不在当前可选项中，降级为该类型下“全部”，避免空结果和状态抖动。
+        if (nextKind === 'entity') {
+            const exists = secondaryEntityOptions.some((item) => String(item.id) === String(nextValue));
+            if (!exists) nextValue = '';
+        } else if (nextKind === 'shot') {
+            const exists = secondaryShotOptions.some((item) => String(item.id) === String(nextValue));
+            if (!exists) nextValue = '';
+        }
+
+        if (secondaryFilterKind !== nextKind) {
+            setSecondaryFilterKind(nextKind);
+        }
+        if (secondaryFilterValue !== nextValue) {
+            setSecondaryFilterValue(nextValue);
+        }
+    }, [contextualSecondary, isOpen, secondaryAutoFollow, secondaryEntityOptions, secondaryFilterKind, secondaryFilterValue, secondaryShotOptions]);
+
+    const filteredAssets = useMemo(() => {
+        let filtered = [...levelOneAssets];
+
+        if (secondaryFilterKind === 'entity' && secondaryFilterValue) {
+            filtered = filtered.filter((asset) => String(resolveAssetEntityId(asset)) === String(secondaryFilterValue));
+        } else if (secondaryFilterKind === 'shot' && secondaryFilterValue) {
+            filtered = filtered.filter((asset) => String(resolveAssetShotId(asset)) === String(secondaryFilterValue));
+        }
+
+        const stableContextEntityId = contextEntityId;
+        const stableContextShotId = contextShotId;
+        const stableContextFrameType = contextFrameType;
+
+        const applyPreferScopedFilter = (items, predicate) => {
+            const scoped = items.filter(predicate);
+            return scoped.length ? scoped : items;
+        };
+
+        if (stableContextEntityId) {
+            filtered = applyPreferScopedFilter(filtered, (asset) => resolveAssetEntityId(asset) === stableContextEntityId);
+        }
+
+        if (stableContextShotId) {
+            filtered = applyPreferScopedFilter(filtered, (asset) => resolveAssetShotId(asset) === stableContextShotId);
+        }
+
+        if (stableContextFrameType.includes('start')) {
+            filtered = applyPreferScopedFilter(filtered, (asset) => {
+                const frameType = resolveAssetFrameType(asset);
+                const stableType = String(asset?.type || '').trim().toLowerCase();
+                return stableType === 'image' && (frameType.includes('start') || frameType === '' || frameType.includes('keyframe'));
+            });
+        } else if (stableContextFrameType.includes('end')) {
+            filtered = applyPreferScopedFilter(filtered, (asset) => {
+                const frameType = resolveAssetFrameType(asset);
+                const stableType = String(asset?.type || '').trim().toLowerCase();
+                return stableType === 'image' && frameType.includes('end');
+            });
+        } else if (stableContextFrameType.includes('video')) {
+            filtered = applyPreferScopedFilter(filtered, (asset) => {
+                const frameType = resolveAssetFrameType(asset);
+                const stableType = String(asset?.type || '').trim().toLowerCase();
+                return stableType === 'video' || frameType.includes('video');
+            });
+        }
+
+        const stableNameFilter = String(nameFilter || '').trim().toLowerCase();
+        if (stableNameFilter) {
+            filtered = filtered.filter((asset) => String(resolveContextualAssetDisplayName(asset) || '').toLowerCase().includes(stableNameFilter));
+        }
+
         filtered.sort((left, right) => {
             const l = new Date(left?.created_at || 0).getTime();
             const r = new Date(right?.created_at || 0).getTime();
             return r - l;
         });
         return filtered;
-    }, [allCleanData, assetTypeFilter, episodeFilter, episodeId, resolveAssetEpisodeId]);
+    }, [assetTypeFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, nameFilter, resolveAssetEntityId, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryFilterKind, secondaryFilterValue]);
+
+    useEffect(() => {
+        if (secondaryAutoFollow) return;
+        if (secondaryFilterKind === 'entity') {
+            const exists = secondaryEntityOptions.some((item) => String(item.id) === String(secondaryFilterValue));
+            if (!exists && secondaryFilterValue) setSecondaryFilterValue('');
+            return;
+        }
+        if (secondaryFilterKind === 'shot') {
+            const exists = secondaryShotOptions.some((item) => String(item.id) === String(secondaryFilterValue));
+            if (!exists && secondaryFilterValue) setSecondaryFilterValue('');
+            return;
+        }
+        if (secondaryFilterValue) setSecondaryFilterValue('');
+    }, [secondaryAutoFollow, secondaryEntityOptions, secondaryFilterKind, secondaryFilterValue, secondaryShotOptions]);
 
     useEffect(() => {
         if (!isOpen || tab !== 'assets') return;
         if (!filteredAssets.length) {
             setSelectedAsset(null);
-            if (assetNameFilter) setAssetNameFilter('');
+            if (selectedAssetId) setSelectedAssetId('');
             return;
         }
-        const matched = filteredAssets.find((item) => String(item.id) === String(assetNameFilter));
+        // 如果当前选中的资产不在新筛选结果里，或切换了二级筛选，则自动选中第一个
+        const matched = filteredAssets.find((item) => String(item.id) === String(selectedAssetId));
         if (matched) {
             if (String(selectedAsset?.id || '') !== String(matched.id)) setSelectedAsset(matched);
             return;
         }
+        // 只要 filteredAssets 变化或二级筛选变化就自动选第一个
         const first = filteredAssets[0];
-        setAssetNameFilter(String(first.id));
+        setSelectedAssetId(String(first.id));
         setSelectedAsset(first);
-    }, [assetNameFilter, filteredAssets, isOpen, selectedAsset?.id, tab]);
+    }, [filteredAssets, isOpen, selectedAsset?.id, selectedAssetId, tab, secondaryFilterKind, secondaryFilterValue]);
+
+    useEffect(() => {
+        if (!isOpen || tab !== 'assets') return;
+        const visibleIds = new Set(filteredAssets.map((item) => String(item.id)));
+        setSelectedMulti((prev) => {
+            if (!prev || prev.size === 0) return prev;
+            const next = new Set();
+            prev.forEach((id) => {
+                if (visibleIds.has(String(id))) next.add(id);
+            });
+            return next;
+        });
+    }, [filteredAssets, isOpen, tab]);
 
     const loadAssets = async () => {
+                if (typeof window !== 'undefined') {
+                    console.log('[素材选择][loadAssets] params', {
+                        projectId,
+                        episodeId,
+                        entityId: contextEntityId,
+                        shotId: contextShotId,
+                    });
+                }
         setLoading(true);
         try {
-            const params = {};
+            const baseParams = {};
             if (projectId) {
-                params.project_id = projectId;
-                params.current_project_asset = showHistoricalProjectAssets ? 'all' : '1';
+                baseParams.project_id = projectId;
+                baseParams.current_project_asset = showHistoricalProjectAssets ? 'all' : '1';
             }
             if (episodeId) {
-                params.episode_id = episodeId;
+                baseParams.episode_id = episodeId;
+                baseParams.include_project_null_episode = 'true';
+            }
+            const scopedParams = { ...baseParams };
+            if (contextEntityId) {
+                scopedParams.entity_id = contextEntityId;
+            }
+            if (contextShotId) {
+                scopedParams.shot_id = contextShotId;
             }
 
             const shouldFilterReferencedOnly = Boolean(projectId) && !showHistoricalProjectAssets;
-            const [data, refsPayload] = await Promise.all([
-                fetchAssets(params),
+            const [scopedData, refsPayload] = await Promise.all([
+                fetchAssets(scopedParams),
                 shouldFilterReferencedOnly ? fetchUnreferencedAssetIds({ project_id: projectId, episode_id: episodeId || undefined }) : Promise.resolve(null)
             ]);
+
+            let data = scopedData;
+            const usedScopedQuery = Boolean(contextEntityId || contextShotId);
+            if (usedScopedQuery && (!Array.isArray(scopedData) || scopedData.length === 0)) {
+                if (typeof window !== 'undefined') {
+                    console.warn('[素材选择][loadAssets] scoped query empty, fallback to base query', {
+                        scopedParams,
+                        baseParams,
+                    });
+                }
+                data = await fetchAssets(baseParams);
+            }
 
             const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
             const hasReferencedHints = referencedSet.size > 0;
@@ -540,7 +837,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             value={episodeFilter}
                             onChange={(e) => {
                                 setEpisodeFilter(e.target.value);
-                                setAssetNameFilter('');
+                                setSelectedAssetId('');
                             }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
@@ -555,7 +852,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             value={assetTypeFilter}
                             onChange={(e) => {
                                 setAssetTypeFilter(e.target.value);
-                                setAssetNameFilter('');
+                                setSelectedAssetId('');
                             }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
@@ -565,29 +862,66 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         </select>
 
                         <select
-                            value={assetNameFilter}
+                            value={secondaryFilterKind}
                             onChange={(e) => {
-                                const nextId = e.target.value;
-                                setAssetNameFilter(nextId);
-                                const picked = filteredAssets.find((item) => String(item.id) === String(nextId));
-                                if (picked) setSelectedAsset(picked);
+                                setSecondaryAutoFollow(false);
+                                setSecondaryFilterKind(e.target.value);
+                                setSecondaryFilterValue('');
+                                setSelectedAssetId('');
                             }}
-                            className="min-w-[260px] flex-1 bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
-                            disabled={filteredAssets.length === 0}
+                            className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
-                            {filteredAssets.length === 0 ? (
-                                <option value="">{t('无可选资产', 'No assets available')}</option>
-                            ) : (
-                                filteredAssets.map((asset) => {
-                                    const stableName = String(asset?.name || '').trim() || String(asset?.url || '').split('/').pop() || `${t('素材', 'Asset')} #${asset.id}`;
-                                    return (
-                                        <option key={asset.id} value={String(asset.id)}>
-                                            {stableName}
-                                        </option>
-                                    );
-                                })
-                            )}
+                            <option value="all">{t('二级筛选：全部', 'Level 2: All')}</option>
+                            <option value="entity">{t('二级筛选：实体', 'Level 2: Entity')}</option>
+                            <option value="shot">{t('二级筛选：分镜', 'Level 2: Shot')}</option>
                         </select>
+
+                        <select
+                            value={secondaryFilterValue}
+                            onChange={(e) => {
+                                setSecondaryAutoFollow(false);
+                                setSecondaryFilterValue(e.target.value);
+                                setSelectedAssetId('');
+                            }}
+                            className="min-w-[180px] bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
+                            disabled={secondaryFilterKind === 'all'}
+                        >
+                            <option value="">{secondaryFilterKind === 'shot' ? t('全部分镜', 'All Shots') : t('全部实体', 'All Entities')}</option>
+                            {(secondaryFilterKind === 'shot' ? secondaryShotOptions : secondaryEntityOptions).map((option) => (
+                                <option key={option.id} value={option.id}>{option.label}</option>
+                            ))}
+                        </select>
+
+                        {contextualSecondary && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (secondaryAutoFollow) {
+                                        setSecondaryAutoFollow(false);
+                                        return;
+                                    }
+                                    setSecondaryAutoFollow(true);
+                                    setSecondaryFilterKind(contextualSecondary.kind);
+                                    setSecondaryFilterValue(contextualSecondary.value);
+                                    setSelectedAssetId('');
+                                }}
+                                className={`text-xs px-2.5 py-1 rounded border transition-colors ${secondaryAutoFollow ? 'border-emerald-400/50 bg-emerald-500/10 text-emerald-100' : 'border-white/10 bg-[#151515] text-white/75 hover:bg-white/5'}`}
+                            >
+                                {secondaryAutoFollow
+                                    ? t('二级筛选跟随中', 'Level 2 Following Context')
+                                    : t('恢复二级跟随', 'Restore Level 2 Follow')}
+                            </button>
+                        )}
+
+                        <input
+                            value={nameFilter}
+                            onChange={(e) => {
+                                setNameFilter(e.target.value);
+                                setSelectedAssetId('');
+                            }}
+                            className="min-w-[180px] flex-1 bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
+                            placeholder={t('三级筛选：按名称搜索', 'Level 3: Search by name')}
+                        />
 
                         {projectId && (
                             <button
@@ -600,7 +934,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         )}
                         
                         <div className="ml-auto text-[10px] text-muted-foreground">
-                            {filteredAssets.length} {t('条结果', 'results')}
+                            {filteredAssets.length} {t('条结果', 'results')} · {selectedMulti.size} {t('已选', 'selected')}
                         </div>
                     </div>
                 )}
@@ -618,6 +952,45 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                 </div>
                             ) : (
                                 <div className="h-full flex flex-col gap-4">
+                                    <div className="rounded-lg border border-white/10 bg-black/20 p-2 max-h-[150px] overflow-y-auto custom-scrollbar">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                                            {filteredAssets.map((asset) => {
+                                                const checked = selectedMulti.has(String(asset.id));
+                                                return (
+                                                    <label key={asset.id} className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer border ${checked ? 'border-primary/60 bg-primary/10' : 'border-white/5 hover:border-white/20'}`}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={checked}
+                                                            onChange={(e) => {
+                                                                const stableId = String(asset.id);
+                                                                setSelectedMulti((prev) => {
+                                                                    const next = new Set(prev);
+                                                                    if (e.target.checked) {
+                                                                        next.add(stableId);
+                                                                    } else {
+                                                                        next.delete(stableId);
+                                                                    }
+                                                                    return next;
+                                                                });
+                                                                setSelectedAsset(asset);
+                                                                setSelectedAssetId(stableId);
+                                                            }}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setSelectedAsset(asset);
+                                                                setSelectedAssetId(String(asset.id));
+                                                            }}
+                                                            className="text-left truncate text-xs text-white/90"
+                                                        >
+                                                            {resolveContextualAssetDisplayName(asset)}
+                                                        </button>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
                                     <div className="rounded-lg border border-white/10 bg-black/30 p-3 min-h-[260px] flex items-center justify-center">
                                         {selectedAsset.type === 'video' ? (
                                             <InViewVideo
@@ -634,7 +1007,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-white/80">
                                         <div className="rounded border border-white/10 bg-black/20 p-3">
                                             <div className="text-[10px] uppercase text-white/50 mb-1">{t('名称', 'Name')}</div>
-                                            <div>{selectedAsset.name || t('未命名', 'Untitled')}</div>
+                                            <div>{resolveContextualAssetDisplayName(selectedAsset) || t('未命名', 'Untitled')}</div>
                                         </div>
                                         <div className="rounded border border-white/10 bg-black/20 p-3">
                                             <div className="text-[10px] uppercase text-white/50 mb-1">{t('分集', 'Episode')}</div>
@@ -704,17 +1077,28 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 {tab === 'assets' && (
                     <div className="flex border-t border-white/10 p-3 bg-black/40 justify-between items-center shrink-0">
                         <div className="text-sm font-medium text-white/80">
-                            {selectedAsset ? (selectedAsset.name || t('已选中目标资产', 'Selected Target Asset')) : t('未选择资产', 'No asset selected')}
+                            {selectedMulti.size > 0
+                                ? `${selectedMulti.size} ${t('个资产已选中', 'assets selected')}`
+                                : (selectedAsset ? (resolveContextualAssetDisplayName(selectedAsset) || t('已选中目标资产', 'Selected Target Asset')) : t('未选择资产', 'No asset selected'))}
                         </div>
                         <button
-                            disabled={!selectedAsset}
+                            disabled={!selectedAsset && selectedMulti.size === 0}
                             onClick={async () => {
+                                const selectedItems = filteredAssets.filter((asset) => selectedMulti.has(String(asset.id)));
+                                if (selectedItems.length > 0) {
+                                    if (projectId) {
+                                        await Promise.all(selectedItems.map((asset) => handleMarkAssetCurrent(asset).catch(() => null)));
+                                    }
+                                    const first = selectedItems[0];
+                                    onSelect(first?.url, first?.type, selectedItems);
+                                    return;
+                                }
                                 if (!selectedAsset) return;
                                 await handleSelectAsset(selectedAsset);
                             }}
                             className="bg-primary text-black text-sm font-bold px-6 py-2 rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {t('选择目标资产', 'Select Target Asset')}
+                            {selectedMulti.size > 0 ? t('选择已勾选资产', 'Select Checked Assets') : t('选择目标资产', 'Select Target Asset')}
                         </button>
                     </div>
                 )}

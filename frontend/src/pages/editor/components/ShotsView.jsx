@@ -462,6 +462,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     // Media Handling
     const [viewMedia, setViewMedia] = useState(null);
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, callback: null });
+    const pickerCallbackRef = useRef(null);
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [videoStatuses, setVideoStatuses] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
@@ -2063,6 +2064,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [shotImageCfgDefault, setShotImageCfgDefault] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
     const [shotImageCfgValue, setShotImageCfgValue] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
     const [shotAssetsMetaIndex, setShotAssetsMetaIndex] = useState({});
+    const [shotAssetsMetaRows, setShotAssetsMetaRows] = useState([]);
     const [shotAssetsMetaLoading, setShotAssetsMetaLoading] = useState(false);
     const [shotAssetsRefreshKey, setShotAssetsRefreshKey] = useState(0);
     const refreshShotAssetsMeta = useCallback(() => setShotAssetsRefreshKey(k => k + 1), []);
@@ -2144,6 +2146,30 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return raw.split('?')[0].split('#')[0].toLowerCase();
         }
     }, []);
+
+    const buildAssetUrlTokens = useCallback((value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return [];
+        const tokens = new Set();
+        const fullToken = normalizeAssetUrlToken(raw);
+        if (fullToken) tokens.add(fullToken);
+        try {
+            const parsed = new URL(raw, BASE_URL || window.location.origin);
+            const pathToken = String(parsed.pathname || '').trim().toLowerCase();
+            if (pathToken) tokens.add(pathToken);
+            const baseName = pathToken.split('/').pop();
+            if (baseName) tokens.add(baseName);
+        } catch (e) {
+            const noQuery = raw.split('?')[0].split('#')[0];
+            const pathPart = String(noQuery || '').trim().toLowerCase();
+            if (pathPart) {
+                tokens.add(pathPart);
+                const baseName = pathPart.split('/').pop();
+                if (baseName) tokens.add(baseName);
+            }
+        }
+        return Array.from(tokens);
+    }, [normalizeAssetUrlToken]);
 
     const updateFrameTrimMargin = useCallback((key, value) => {
         setFrameTrimModal((prev) => ({
@@ -2348,23 +2374,144 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return { width: null, height: null, resolution: '' };
     }, []);
 
-    const resolveShotAssetByUrl = useCallback((url, preferredType = '') => {
-        const token = normalizeAssetUrlToken(url);
-        if (!token) return null;
-        const candidates = Array.isArray(shotAssetsMetaIndex[token]) ? shotAssetsMetaIndex[token] : [];
-        if (candidates.length === 0) return null;
+    const resolveShotAssetByUrl = useCallback((url, preferredType = '', modalType = '') => {
         const expectedType = String(preferredType || '').trim().toLowerCase();
-        if (expectedType) {
-            const matched = candidates.find((asset) => String(asset?.type || '').trim().toLowerCase() === expectedType);
-            if (matched) return matched;
+        const stableModalType = String(modalType || '').trim().toLowerCase();
+        const stableShotId = String(editingShot?.id || '').trim();
+
+        const sortByCreatedDesc = (rows = []) => {
+            return [...rows].sort((left, right) => {
+                const l = Date.parse(String(left?.created_at || '')) || 0;
+                const r = Date.parse(String(right?.created_at || '')) || 0;
+                return r - l;
+            });
+        };
+
+        const pickByType = (rows = []) => {
+            if (!rows.length) return null;
+            if (!expectedType) return rows[0] || null;
+            return rows.find((asset) => String(asset?.type || '').trim().toLowerCase() === expectedType) || rows[0] || null;
+        };
+
+        const tokenCandidates = buildAssetUrlTokens(url);
+        const tokenMatches = [];
+        const tokenSeenIds = new Set();
+        tokenCandidates.forEach((token) => {
+            const rows = Array.isArray(shotAssetsMetaIndex[token]) ? shotAssetsMetaIndex[token] : [];
+            rows.forEach((asset) => {
+                const idKey = String(asset?.id || `${asset?.url || ''}|${asset?.created_at || ''}`);
+                if (!idKey || tokenSeenIds.has(idKey)) return;
+                tokenSeenIds.add(idKey);
+                tokenMatches.push(asset);
+            });
+        });
+
+        // 调试日志：token 匹配
+        if (typeof window !== 'undefined') {
+            console.log('[分镜预览][resolveShotAssetByUrl]', {
+                url,
+                preferredType,
+                modalType,
+                stableShotId,
+                tokenCandidates,
+                tokenMatches: tokenMatches.map(a => a.id),
+                shotAssetsMetaIndexKeys: Object.keys(shotAssetsMetaIndex),
+            });
         }
-        return candidates[0] || null;
-    }, [normalizeAssetUrlToken, shotAssetsMetaIndex]);
+
+        const tokenPicked = pickByType(sortByCreatedDesc(tokenMatches));
+        if (tokenPicked) {
+            if (typeof window !== 'undefined') {
+                console.log('[分镜预览][resolveShotAssetByUrl] tokenPicked', tokenPicked.id, tokenPicked);
+            }
+            return tokenPicked;
+        }
+
+        const shotRows = sortByCreatedDesc(
+            (Array.isArray(shotAssetsMetaRows) ? shotAssetsMetaRows : []).filter((asset) => {
+                const meta = (asset?.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
+                const metaShotId = String(meta?.shot_id || asset?.shot_id || '').trim();
+                return !stableShotId || !metaShotId || metaShotId === stableShotId;
+            })
+        );
+        if (typeof window !== 'undefined') {
+            console.log('[分镜预览][resolveShotAssetByUrl] shotRows', shotRows.map(a => a.id));
+        }
+        if (!shotRows.length) return null;
+
+        const classifyFrame = (asset) => {
+            const meta = (asset?.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
+            return String(meta?.frame_type || meta?.asset_type || '').trim().toLowerCase();
+        };
+
+        if (stableModalType === 'start') {
+            const rows = shotRows.filter((asset) => {
+                const assetType = String(asset?.type || '').trim().toLowerCase();
+                const frameType = classifyFrame(asset);
+                if (assetType !== 'image') return false;
+                return frameType.includes('start') || frameType.includes('keyframe') || frameType.includes('joint_diptych') || frameType === '';
+            });
+            if (typeof window !== 'undefined') {
+                console.log('[分镜预览][resolveShotAssetByUrl] start rows', rows.map(a => a.id));
+            }
+            return pickByType(rows);
+        }
+
+        if (stableModalType === 'end') {
+            const rows = shotRows.filter((asset) => {
+                const assetType = String(asset?.type || '').trim().toLowerCase();
+                const frameType = classifyFrame(asset);
+                if (assetType !== 'image') return false;
+                return frameType.includes('end');
+            });
+            if (typeof window !== 'undefined') {
+                console.log('[分镜预览][resolveShotAssetByUrl] end rows', rows.map(a => a.id));
+            }
+            return pickByType(rows);
+        }
+
+        if (stableModalType === 'video') {
+            const rows = shotRows.filter((asset) => {
+                const assetType = String(asset?.type || '').trim().toLowerCase();
+                const frameType = classifyFrame(asset);
+                return assetType === 'video' || frameType.includes('video');
+            });
+            if (typeof window !== 'undefined') {
+                console.log('[分镜预览][resolveShotAssetByUrl] video rows', rows.map(a => a.id));
+            }
+            return pickByType(rows);
+        }
+
+        return pickByType(shotRows);
+    }, [buildAssetUrlTokens, editingShot?.id, shotAssetsMetaIndex, shotAssetsMetaRows]);
 
     const buildShotAssetDetail = useCallback((asset, fallbackType = 'image', fallbackUrl = '') => {
         const meta = (asset?.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
         const { width, height, resolution } = parseResolution(meta);
         const aspectRatio = String(meta.aspect_ratio || meta.aspectRatio || '').trim() || deriveAspectRatio(width, height);
+        const resolvedUrl = String(asset?.url || fallbackUrl || '').trim();
+        const fallbackName = resolvedUrl ? String(resolvedUrl).split('/').pop() : '';
+        const displayName = String(
+            asset?.name
+            || asset?.asset_name
+            || meta?.asset_name
+            || meta?.display_name
+            || meta?.name
+            || meta?.title
+            || meta?.original_filename
+            || meta?.filename
+            || asset?.filename
+            || fallbackName
+            || ''
+        ).trim();
+        if (typeof window !== 'undefined') {
+            console.log('[分镜预览][buildShotAssetDetail]', {
+                assetId: asset?.id,
+                displayName,
+                url: resolvedUrl,
+                meta,
+            });
+        }
         const fileSize =
             String(meta.file_size_display || '').trim()
             || String(meta.size_display || '').trim()
@@ -2385,7 +2532,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         return {
             type: String(asset?.type || fallbackType || '').trim().toLowerCase(),
-            url: String(asset?.url || fallbackUrl || '').trim(),
+            url: resolvedUrl,
+            displayName,
             filename: String(asset?.filename || '').trim(),
             createdAt: asset?.created_at ? new Date(asset.created_at).toLocaleString() : '',
             resolution,
@@ -2404,6 +2552,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     useEffect(() => {
         if (!editingShot?.id) {
             setShotAssetsMetaIndex({});
+            setShotAssetsMetaRows([]);
             setShotAssetsMetaLoading(false);
             return;
         }
@@ -2418,16 +2567,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 if (!active) return;
 
                 const nextIndex = {};
-                (Array.isArray(data) ? data : []).forEach((asset) => {
-                    const token = normalizeAssetUrlToken(asset?.url);
-                    if (!token) return;
-                    if (!Array.isArray(nextIndex[token])) nextIndex[token] = [];
-                    nextIndex[token].push(asset);
+                const stableRows = Array.isArray(data) ? data : [];
+                stableRows.forEach((asset) => {
+                    const tokens = buildAssetUrlTokens(asset?.url);
+                    tokens.forEach((token) => {
+                        if (!token) return;
+                        if (!Array.isArray(nextIndex[token])) nextIndex[token] = [];
+                        nextIndex[token].push(asset);
+                    });
                 });
                 setShotAssetsMetaIndex(nextIndex);
+                setShotAssetsMetaRows(stableRows);
             } catch (e) {
                 console.error('Failed to load shot assets metadata', e);
-                if (active) setShotAssetsMetaIndex({});
+                if (active) {
+                    setShotAssetsMetaIndex({});
+                    setShotAssetsMetaRows([]);
+                }
             } finally {
                 if (active) setShotAssetsMetaLoading(false);
             }
@@ -2437,7 +2593,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return () => {
             active = false;
         };
-    }, [editingShot?.id, normalizeAssetUrlToken, projectId, shotAssetsRefreshKey]);
+    }, [buildAssetUrlTokens, editingShot?.id, projectId, shotAssetsRefreshKey]);
 
     const overwriteShotField = useCallback((field, value, extra = {}) => {
         const nextValue = String(value ?? '');
@@ -2625,7 +2781,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return prependEntityGlobalStyleToPromptHead(text, options);
     }, [prependEntityGlobalStyleToPromptHead]);
 
+    const closeMediaPicker = useCallback(() => {
+        setPickerConfig((prev) => {
+            if (!prev?.isOpen && !prev?.callback && !prev?.context) return prev;
+            return { isOpen: false, callback: null, context: null };
+        });
+        pickerCallbackRef.current = null;
+    }, []);
+
     const openMediaPicker = (callback, context = {}) => {
+        if (typeof window !== 'undefined') {
+            console.log('[分镜][openMediaPicker] context', context);
+        }
+        pickerCallbackRef.current = callback;
         setPickerConfig({ isOpen: true, callback, context });
     };
 
@@ -3779,12 +3947,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
          }
     };
 
-    const handleMediaSelect = (url, type, selectedItems) => {
-        if (pickerConfig.callback) {
-            pickerConfig.callback(url, type, selectedItems);
+    const handleMediaSelect = useCallback((url, type, selectedItems) => {
+        if (typeof pickerCallbackRef.current === 'function') {
+            pickerCallbackRef.current(url, type, selectedItems);
         }
-        setPickerConfig({ isOpen: false, callback: null });
-    };
+        closeMediaPicker();
+    }, [closeMediaPicker]);
 
     const refreshShots = useCallback(async () => {
         if (!selectedSceneId || !activeEpisode?.id) return;
@@ -7749,7 +7917,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
              {viewMedia && <MediaDetailModal media={viewMedia} onClose={() => setViewMedia(null)} />}
              <MediaPickerModal 
                 isOpen={pickerConfig.isOpen} 
-                onClose={() => setPickerConfig({ ...pickerConfig, isOpen: false })} 
+                     onClose={closeMediaPicker} 
                 onSelect={handleMediaSelect} 
                 projectId={projectId}
                 context={pickerConfig.context}
@@ -8198,7 +8366,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     onClick={() => openMediaPicker((url) => {
                                                         const changes = { video_url: url };
                                                         onUpdateShot(editingShot.id, changes);
-                                                    }, { type: 'video' })}
+                                                    }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video' })}
                                                     className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
                                                     title={t('选择或上传视频', 'Select or Upload Video')}
                                                 >
@@ -8335,7 +8503,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 await onUpdateShot(editingShot.id, changes);
                                                                 setEditingShot(prev => ({...prev, ...changes}));
                                                                 onLog?.('Video changed', 'success');
-                                                            }, { type: 'video' });
+                                                            }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video' });
                                                         }}
                                                         className="p-1.5 bg-black/60 hover:bg-sky-500/80 text-white rounded-md transition-all shadow"
                                                         title={t('选择或上传视频以替换或回填', 'Select or Upload Video')}
@@ -8791,8 +8959,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     detailType = 'image';
                                                 }
 
-                                                const linkedAsset = resolveShotAssetByUrl(detailUrl, detailType);
+                                                const linkedAsset = resolveShotAssetByUrl(detailUrl, detailType, modalType);
                                                 const linkedAssetDetail = buildShotAssetDetail(linkedAsset, detailType, detailUrl);
+                                                const detailPreviewUrl = String(linkedAssetDetail?.url || detailUrl || '').trim();
                                                 const linkedAssetMeta = linkedAssetDetail.rawMeta;
                                                 const persistedStartMeta = (tech.start_frame_metadata && typeof tech.start_frame_metadata === 'object') ? tech.start_frame_metadata : null;
                                                 const persistedEndMeta = (tech.end_frame_metadata && typeof tech.end_frame_metadata === 'object') ? tech.end_frame_metadata : null;
@@ -9142,9 +9311,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             </div>
                                                                         </div>
                                                                     )}
-                                                                    {editingShot.image_url ? <SafeImage src={editingShot.image_url} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    {detailPreviewUrl ? <SafeImage src={detailPreviewUrl} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
+                                                                    { label: t('素材名', 'Asset Name'), value: linkedAssetDetail.displayName || '-' },
                                                                     { label: t('图片 URL', 'Image URL'), value: editingShot.image_url || '-', breakAll: true },
                                                                     { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0) },
                                                                 ])}
@@ -9249,9 +9419,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             </div>
                                                                         </div>
                                                                     )}
-                                                                    {endFrameUrl ? <SafeImage src={endFrameUrl} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    {detailPreviewUrl ? <SafeImage src={detailPreviewUrl} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                 </div>
                                                                 {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
+                                                                    { label: t('素材名', 'Asset Name'), value: linkedAssetDetail.displayName || '-' },
                                                                     { label: t('结束帧 URL', 'End Frame URL'), value: endFrameUrl || '-', breakAll: true },
                                                                     { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0) },
                                                                 ])}
@@ -9383,7 +9554,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     )}
                                                                     {editingShot.video_url ? (
                                                                         <ManagedVideoPlayer
-                                                                            src={editingShot.video_url}
+                                                                            src={detailPreviewUrl || editingShot.video_url}
                                                                             poster={resolveShotVideoPosterUrl(editingShot)}
                                                                             className="max-w-full max-h-full object-contain"
                                                                             wrapperClassName="w-full h-full"
@@ -9393,6 +9564,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         />
                                                                     ) : <Video className="w-8 h-8 opacity-30" />}
                                                                 </div>
+                                                                <div className="text-xs text-muted-foreground break-all">{t('素材名', 'Asset Name')}: {linkedAssetDetail.displayName || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('配音 URL', 'Voice URL')}: {String(tech.voiceover_url || '') || '-'}</div>
                                                                 <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3">

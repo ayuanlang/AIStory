@@ -2,7 +2,6 @@
 import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { MediaPickerModal, AssetHoverMetaOverlay } from './MediaModals';
-import AiEntityCreateDialog from './AiEntityCreateDialog';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
 import ReactMarkdown from 'react-markdown';
@@ -18,7 +17,6 @@ import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
 } from '../editorHelpers';
 
-import { generateEntityFromText, generateEntityFromImage, generateEntityDerived } from '../../../services/api';
 import { 
     fetchProject, 
     updateProject,
@@ -288,7 +286,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const SUBJECT_BATCH_PARALLEL_LIMIT = userBatchParallelLimit;
     const isMountedRef = useRef(false);
     const [subTab, setSubTab] = useState('character');
-    const [createMode, setCreateMode] = useState('manual');
     const [entityListLoading, setEntityListLoading] = useState(false);
     const [entities, setEntities] = useState([]);
     const [allEntities, setAllEntities] = useState([]); // Store ALL entities for cross-reference
@@ -397,7 +394,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [subjectGenerationHistoryLoading, setSubjectGenerationHistoryLoading] = useState(false);
     const [subjectGenerationHistoryDeletingId, setSubjectGenerationHistoryDeletingId] = useState('');
     const [showAiEntityCreateModal, setShowAiEntityCreateModal] = useState(false);
-    const [isGeneratingRow, setIsGeneratingRow] = useState(false);
     const [isAiEntityCreating, setIsAiEntityCreating] = useState(false);
     const [aiEntityCreateReport, setAiEntityCreateReport] = useState(null);
     const [aiReuseEntityTypeFilter, setAiReuseEntityTypeFilter] = useState('all');
@@ -548,33 +544,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 const keyB = normalizeImportEntityKey(entityType, nameEn);
                 if ((keyA && existingNameKeySet.has(keyA)) || (keyB && existingNameKeySet.has(keyB))) {
                     const reusedEntity = (keyA && existingEntityMap.get(keyA)) || (keyB && existingEntityMap.get(keyB)) || null;
-                    // If matched entity belongs to this episode or is project-global without episodes, skip.
-                    // But if it belongs to a previous/different episode, we CLONE it instead of skipping so Sync works!
-                    if (reusedEntity && currentEpisode?.id && reusedEntity.episode_id !== currentEpisode.id) {
-                        row.old_id = reusedEntity.id;
-                        row.description_cn = row.description_cn || reusedEntity.description_cn || reusedEntity.description || '';
-                        row.base_name_en = row.base_name_en || reusedEntity.base_name_en || reusedEntity.name_en || '';
-                        row.role = row.role || reusedEntity.role || '';
-                        row.archetype = row.archetype || reusedEntity.archetype || reusedEntity.action_characteristics || '';
-                        row.gender = row.gender || reusedEntity.gender || '';
-                        row.appearance_cn = row.appearance_cn || reusedEntity.appearance_cn || '';
-                        row.clothing = row.clothing || reusedEntity.clothing || '';
-                        row.atmosphere = row.atmosphere || reusedEntity.atmosphere || '';
-                        row.visual_params = row.visual_params || reusedEntity.visual_params || '';
-                        row.narrative_description = row.narrative_description || reusedEntity.narrative_description || '';
-                        // proceed to create
-                    } else {
-                        skippedSubjectItems.push({
-                            type: entityType,
-                            name: name || nameEn,
-                            reason: 'exists',
-                            reusedEntityId: reusedEntity?.id || null,
-                            reusedEntityName: reusedEntity?.name || reusedEntity?.name_en || null,
-                            reusedImageUrl: reusedEntity?.image_url || null,
-                            reusedDependencyPolicy: 'current_project_asset_or_latest_episode',
-                        });
-                        continue;
-                    }
+                    skippedSubjectItems.push({
+                        type: entityType,
+                        name: name || nameEn,
+                        reason: 'exists',
+                        reusedEntityId: reusedEntity?.id || null,
+                        reusedEntityName: reusedEntity?.name || reusedEntity?.name_en || null,
+                        reusedImageUrl: reusedEntity?.image_url || null,
+                        reusedDependencyPolicy: 'current_project_asset_or_latest_episode',
+                    });
+                    continue;
                 }
 
                 const payloadRow = {
@@ -595,7 +574,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     narrative_description: String(row?.narrative_description || '').trim() || undefined,
                     custom_attributes: {
                         source: 'subject_library_manual_entity_design',
-                        ...(row?.id || row?.old_id ? { cloned_from_entity_id: parseInt(row.id || row.old_id) || undefined } : {})
                     },
                 };
 
@@ -2850,7 +2828,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     };
 
     const handleCreate = async () => {
-        setCreateMode('manual');
         // Create a temporary "New Entity" state to open the modal in "Create Mode"
         // We use a special ID 'new' to signal that this is not yet in DB
         setViewingEntity({
@@ -4123,48 +4100,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         };
     }, [entities, subTab]);
 
-    const handleGenerateEntityFromText = async (textDesc) => {
-        try {
-            setIsGeneratingRow(true);
-            await generateEntityFromText(projectId, textDesc);
-            await loadAssets();
-            setShowAiEntityCreateModal(false);
-        } catch (e) {
-            console.error(e);
-            alert("生成失败: " + String(e));
-        } finally {
-            setIsGeneratingRow(false);
-        }
-    };
-
-    const handleGenerateEntityFromImage = async (imageFile) => {
-        try {
-            setIsGeneratingRow(true);
-            await generateEntityFromImage(projectId, imageFile);
-            await loadAssets();
-            setShowAiEntityCreateModal(false);
-        } catch (e) {
-            console.error(e);
-            alert("生成失败: " + String(e));
-        } finally {
-            setIsGeneratingRow(false);
-        }
-    };
-
-    const handleGenerateDerivedEntity = async (baseEntityId, textDesc) => {
-        try {
-            setIsGeneratingRow(true);
-            await generateEntityDerived(projectId, baseEntityId, textDesc);
-            await loadAssets();
-            setShowAiEntityCreateModal(false);
-        } catch (e) {
-            console.error(e);
-            alert("生成失败: " + String(e));
-        } finally {
-            setIsGeneratingRow(false);
-        }
-    };
-
     return (
         <div className="p-6 h-full flex flex-col w-full relative">
             {subjectNotification && (
@@ -4334,16 +4269,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         const isBatchPending = !trackedJob && isBatchGeneratingEntities && !entity.image_url;
                         const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
                         const hasRunningSubjectImageJob = Boolean(trackedJob) || isBatchPending;
-                        let attrs = {};
-                        try {
-                            attrs = entity.custom_attributes
-                                ? (typeof entity.custom_attributes === 'string'
-                                    ? JSON.parse(entity.custom_attributes)
-                                    : entity.custom_attributes)
-                                : {};
-                        } catch {
-                            attrs = {};
-                        }
                         return (
                         <div
                             key={entity.id}
@@ -4455,22 +4380,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     <Wand2 size={16} />
                                 </button>
                                 <button
-                                    onClick={(e) => { e.stopPropagation(); handleLoadHistory(entity.id); }}
-                                    className="p-2 bg-blue-500/80 hover:bg-blue-600 rounded-full text-white backdrop-blur-md"
-                                    title={t('历史记录', 'History')}
-                                >
-                                    <History size={16} />
-                                </button>
-                                {attrs?.cloned_from_entity_id && (
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); handleSyncFromOld(attrs?.cloned_from_entity_id, entity.id); }}
-                                        className="p-2 bg-yellow-500/80 hover:bg-yellow-600 rounded-full text-white backdrop-blur-md"
-                                        title={t('从源实体同步', 'Sync from Source')}
-                                    >
-                                        <RefreshCw size={16} />
-                                    </button>
-                                )}
-                                <button
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         void handleRemoveEntityImage(entity);
@@ -4566,15 +4475,199 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
             <AnimatePresence>
                 {showAiEntityCreateModal && (
-                    <AiEntityCreateDialog
-                        isOpen={showAiEntityCreateModal}
-                        onClose={() => setShowAiEntityCreateModal(false)}
-                        onGenerateText={handleGenerateEntityFromText}
-                        onGenerateImage={handleGenerateEntityFromImage}
-                        onGenerateDerived={handleGenerateDerivedEntity}
-                        entities={allEntities}
-                        isGeneratingRow={isGeneratingRow}
-                    />
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6" onClick={() => setShowAiEntityCreateModal(false)}>
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.96 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#171717] shadow-2xl overflow-hidden"
+                        >
+                            <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between">
+                                <div>
+                                    <div className="text-lg font-bold text-white">{t('AI 新增实体', 'AI Add Entity')}</div>
+                                    <div className="text-xs text-white/60 mt-1">{t('按 subjects index 格式构造输入，调用 entity_design.md 并自动导入。', 'Build subjects-index input, run entity_design.md, and auto-import entities.')}</div>
+                                </div>
+                                <button onClick={() => setShowAiEntityCreateModal(false)} className="p-2 rounded-full hover:bg-white/10 text-white/70 hover:text-white">
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div className="p-6 space-y-4 max-h-[72vh] overflow-y-auto">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <div className="text-xs text-white/70 mb-1">{t('实体类型', 'Entity Type')}</div>
+                                        <select
+                                            value={aiEntityCreateForm.type}
+                                            onChange={(e) => setAiEntityCreateForm((prev) => ({ ...prev, type: normalizeAiEntityType(e.target.value) }))}
+                                            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
+                                        >
+                                            <option value="character">{t('角色', 'Character')}</option>
+                                            <option value="prop">{t('道具', 'Prop')}</option>
+                                            <option value="environment">{t('环境', 'Environment')}</option>
+                                            <option value="poster">{t('海报', 'Poster')}</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex items-end">
+                                        <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} label={t('分析模型: ', 'Analysis Model: ')} />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <div className="text-xs text-white/70 mb-1">{t('实体名称', 'Entity Name')}</div>
+                                        <input
+                                            value={aiEntityCreateForm.name}
+                                            onChange={(e) => setAiEntityCreateForm((prev) => ({ ...prev, name: e.target.value }))}
+                                            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
+                                            placeholder={t('例如：林岚 / 旧式手枪 / 雨夜天台', 'e.g. Lin Lan / Vintage Pistol / Rainy Rooftop')}
+                                        />
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-white/70 mb-1">{t('英文名（可选）', 'English Name (optional)')}</div>
+                                        <input
+                                            value={aiEntityCreateForm.nameEn}
+                                            onChange={(e) => setAiEntityCreateForm((prev) => ({ ...prev, nameEn: e.target.value }))}
+                                            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
+                                            placeholder={t('例如：Lin Lan', 'e.g. Lin Lan')}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <div className="text-xs text-white/70 mb-1">{t('属性描述', 'Attribute Description')}</div>
+                                    <textarea
+                                        value={aiEntityCreateForm.attributes}
+                                        onChange={(e) => setAiEntityCreateForm((prev) => ({ ...prev, attributes: e.target.value }))}
+                                        rows={6}
+                                        className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white resize-y"
+                                        placeholder={getAiEntityTypePromptHint(aiEntityCreateForm.type)}
+                                    />
+                                    <div className="text-[11px] text-white/45 mt-1">{getAiEntityTypePromptHint(aiEntityCreateForm.type)}</div>
+                                </div>
+
+                                <div className="rounded-md border border-white/10 bg-black/20 p-3">
+                                    <div className="text-xs text-white/80 mb-2">{t('先上传参考资产图（可选）', 'Upload reference asset image first (optional)')}</div>
+                                    <label className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-md border border-sky-300/30 bg-sky-500/20 hover:bg-sky-500/30 text-sky-100 cursor-pointer">
+                                        {isAiUploadAnalyzing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                                        {isAiUploadAnalyzing ? t('上传并反推中...', 'Uploading and reverse-analyzing...') : t('上传并自动资产反推', 'Upload and auto reverse-analysis')}
+                                        <input
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0] || null;
+                                                void handleAiEntityAssetUploadAndAnalyze(file);
+                                                e.target.value = '';
+                                            }}
+                                        />
+                                    </label>
+                                    {(aiUploadedAsset?.url || aiUploadedAssetAnalysis) && (
+                                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <div className="rounded border border-white/10 bg-black/30 p-2">
+                                                <div className="text-[11px] text-white/55 mb-1">{t('上传资产预览', 'Uploaded Asset Preview')}</div>
+                                                {aiUploadedAsset?.url ? (
+                                                    <SafeImage src={aiUploadedAsset.url} alt="uploaded-asset" className="w-full h-32 object-cover rounded" />
+                                                ) : (
+                                                    <div className="w-full h-32 rounded bg-white/5" />
+                                                )}
+                                            </div>
+                                            <div className="rounded border border-white/10 bg-black/30 p-2">
+                                                <div className="text-[11px] text-white/55 mb-1">{t('资产反推结果', 'Asset Reverse-analysis')}</div>
+                                                <div className="text-[11px] text-white/75 whitespace-pre-wrap max-h-32 overflow-y-auto">{aiUploadedAssetAnalysis || t('暂无', 'Empty')}</div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <div className="text-xs text-white/70 mb-2">{t('可复用的现有实体（可多选，留空表示无）', 'Reusable existing entities (multi-select, optional)')}</div>
+                                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                        {normalizeAiEntityType(aiEntityCreateForm.type) !== 'poster' && (
+                                            <div className="text-[11px] text-amber-200/90 mr-2">{t('非海报仅可依赖同类型实体', 'Non-poster can only depend on same-type entities')}</div>
+                                        )}
+                                        {[
+                                            { key: 'all', label: t('全部', 'All') },
+                                            { key: 'character', label: t('角色', 'Character') },
+                                            { key: 'prop', label: t('道具', 'Prop') },
+                                            { key: 'environment', label: t('环境', 'Environment') },
+                                            { key: 'poster', label: t('海报', 'Poster') },
+                                        ].map((item) => (
+                                            (() => {
+                                                const targetType = normalizeAiEntityType(aiEntityCreateForm.type);
+                                                const disabled = targetType !== 'poster' && item.key !== targetType;
+                                                return (
+                                            <button
+                                                key={item.key}
+                                                type="button"
+                                                onClick={() => {
+                                                    if (disabled) return;
+                                                    setAiReuseEntityTypeFilter(item.key);
+                                                }}
+                                                disabled={disabled}
+                                                className={`px-2.5 py-1 text-[11px] rounded border ${aiReuseEntityTypeFilter === item.key ? 'bg-primary/20 border-primary/40 text-primary' : 'bg-white/5 border-white/15 text-white/75 hover:bg-white/10'} ${disabled ? 'opacity-40 cursor-not-allowed hover:bg-white/5' : ''}`}
+                                            >
+                                                {item.label}
+                                            </button>
+                                                );
+                                            })()
+                                        ))}
+                                    </div>
+                                    <div className="max-h-64 overflow-y-auto rounded-md border border-white/10 bg-black/20 p-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                        {(aiReusableEntities || []).map((entity) => {
+                                            const stableId = String(entity?.id || '');
+                                            const checked = aiEntityCreateForm.reuseEntityIds.includes(stableId);
+                                            return (
+                                                <label key={stableId} className="flex items-center gap-2 text-xs text-white/80 px-2 py-1 rounded hover:bg-white/5 cursor-pointer border border-white/10 bg-black/20">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onChange={(e) => {
+                                                            const nextIds = e.target.checked
+                                                                ? [...aiEntityCreateForm.reuseEntityIds, stableId]
+                                                                : aiEntityCreateForm.reuseEntityIds.filter((id) => id !== stableId);
+                                                            setAiEntityCreateForm((prev) => ({ ...prev, reuseEntityIds: nextIds }));
+                                                        }}
+                                                    />
+                                                    <div className="w-10 h-10 rounded overflow-hidden shrink-0 bg-white/5">
+                                                        {entity?.image_url ? (
+                                                            <SafeImage src={entity.image_url} alt={entity.name || stableId} className="w-full h-full object-cover" />
+                                                        ) : (
+                                                            <div className="w-full h-full flex items-center justify-center text-white/25"><Users size={14} /></div>
+                                                        )}
+                                                    </div>
+                                                    <span className="truncate">[{entity.type}] {entity.name || entity.name_en || stableId}</span>
+                                                </label>
+                                            );
+                                        })}
+                                        {(!aiReusableEntities || aiReusableEntities.length === 0) && (
+                                            <div className="text-xs text-white/45 p-2">{t('当前筛选下没有可复用实体。', 'No reusable entities under current type filter.')}</div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {aiEntityCreateReport && (
+                                    <div className="text-xs whitespace-pre-wrap rounded-md border border-white/10 bg-black/20 px-3 py-2 text-white/80">{aiEntityCreateReport}</div>
+                                )}
+                            </div>
+
+                            <div className="px-6 py-4 border-t border-white/10 flex items-center justify-end gap-2">
+                                <button
+                                    onClick={() => setShowAiEntityCreateModal(false)}
+                                    className="px-3 py-2 text-xs font-bold rounded-md border border-white/15 text-white/80 hover:bg-white/10"
+                                >
+                                    {t('取消', 'Cancel')}
+                                </button>
+                                <button
+                                    onClick={handleSubmitAiEntityCreate}
+                                    disabled={isAiEntityCreating}
+                                    className="px-3 py-2 text-xs font-bold rounded-md border border-emerald-300/30 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 disabled:opacity-60"
+                                >
+                                    {isAiEntityCreating ? t('提交中...', 'Submitting...') : t('提交并导入实体', 'Submit and Import Entities')}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
                 )}
             </AnimatePresence>
 
@@ -4738,8 +4831,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         <div className="space-y-6">
                                     {/* Action Buttons */}
                                     <div className="flex gap-2">
-                                        {(typeof viewingEntity.custom_attributes === 'string' ? JSON.parse(viewingEntity.custom_attributes) : (viewingEntity.custom_attributes || {})).cloned_from_entity_id && (
-                                            <button onClick={() => handleSyncFromOld((typeof viewingEntity.custom_attributes === 'string' ? JSON.parse(viewingEntity.custom_attributes) : (viewingEntity.custom_attributes || {})).cloned_from_entity_id, viewingEntity.id)} className="px-3 py-1.5 bg-yellow-500/20 text-yellow-300 text-xs font-bold rounded-lg border border-yellow-500/30 hover:bg-yellow-500/30 flex items-center justify-center gap-1 transition-colors">
+                                        {viewingEntity.old_id && (
+                                            <button onClick={() => handleSyncFromOld(viewingEntity.old_id, viewingEntity.id)} className="px-3 py-1.5 bg-yellow-500/20 text-yellow-300 text-xs font-bold rounded-lg border border-yellow-500/30 hover:bg-yellow-500/30 flex items-center justify-center gap-1 transition-colors">
                                                 <RefreshCw size={14} />
                                                 {t('从源实体同步', 'Sync from Source')}
                                             </button>

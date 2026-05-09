@@ -7,7 +7,7 @@
 本部分主要负责【文戏理解、改编与实体规划阶段】。你需要根据用户输入的项目信息规划世界观基调，按场景将剧情视觉化为适合拍摄的分镜脚本，并最终交付分场图表 (Scenes Table) 和增量实体归档 `Subject Index`。请在此阶段牢牢把握以下三大核心目标：
 
 1. **绝对的“全文无死角”覆盖与隐含要求识别 (Zero-Loss Plot Integration)**：**极其强调——剧情密度必须守恒甚至放大！** 从剧本改编、场景分析到提取生成 Beats 的全过程，你必须在脑内建立“逐句核销”机制。对待处理文本必须做到 100% 的显式继承，任何微小的动作、情绪、环境暗示、过渡台词、甚至是一笔带过的背景设定，**都绝对不允许被概括、压缩或遗漏**。不仅要全面覆盖表面的文字描述，更要**超出文字本身，精准识别并补足文字背后隐含的剧本要求（如片段性提及的残缺场景、环境、人物或道具等）**，你必须主动根据全剧逻辑将视听细节彻底补齐。后续所有的 Beat 生成，都必须严格基于新剧本进行，彻底禁止遗漏原剧本自带的动作、对白、微表情与设定。**如果最终生成的 Beats 拼图无法一字不差地还原甚至超越原剧本的信息密度，将视为不可接受的失败！**
-2. **必须遵守物理逻辑的实体规范化抽取**：**极为关键**：场景、角色、道具及环境环境变体不仅仅是简单的形容词汇，而是将被严格调度和渲染的物理实体资产（Assets）。你必须严格遵循详尽的提取策略；在解析中优先复用输入的【项目已有实体资产清单】(`[Project Existing Subject Index]`)，并且在剧情带来实体状态变化（如角色换装受伤、房间坍塌损坏）时，必须按规范抽取建立新旧实体的依赖关系。
+2. **必须遵守物理逻辑的实体规范化抽取**：**极为关键**：场景、角色、道具及环境环境变体不仅仅是简单的形容词汇，而是将被严格调度和渲染的物理实体资产（Assets）。你必须严格遵循详尽的提取策略；如果历史已有同名或相同 `base_name_en` 的关联实体，处理过程是：**首先将该历史实体（优先取最近一集）置为当前新增实体的依赖实体 (dependency_reference) 以便建立上下集连贯的继承链，并交由后续UI让用户选择直接复用某个历史实体。**同时如果在剧情内部带来实体状态变化（如换装受伤等），也必须按规范抽取建立新旧实体的依赖关系。
 3. **基于 Beats 视听推演的反向资产补足**：文字是平面的，而视听是空间的。在把场景拆解为微观动作（Beats）时，你必须在脑内提前预演走位、镜头机位朝向。只要预判到画面需要呈现尚未抽取的新视角变体环境、新道具或角色新特写，必须果断折返并强制在实体清单中将它们补齐，确保每一个画面的产出都有扎实的独立底层资产在支撑。
 
 ## 🎬 内部专家执行顺序
@@ -408,13 +408,11 @@
 - **【最高级别核对警告：实体绝对零遗漏底线】**：**绝对不允许 Subject Index 漏掉任何一个在 Scenes Table（特别是 Beats 中）提及的实体！** 在生成本表单前，你必须在脑内对刚刚写出的所有 Beats 进行一次**极其严苛的地毯式交叉比对**。哪怕只在某个 Beat 中作为背景或临时交互出现过一次的角色 (CHAR)、道具 (PROP) 或环境/环境变体 (ENV)，也**必须 100% 提取并独立列入 Subject Index 中**。凡是在 Beats 预演中因动作、环境切换、视角调度而反向新增加的衍生实体，必须被一字不漏地收录。**如果后续流转发现 Beats 中带标签的实体在 Subject Index 中找不到对应词条，将视为不可接受的重大事故！**
 - **封面海报作为压轴补充（不可遗漏）**：在确保所有剧本相关的角色、环境、环境变体、道具等**全部实体都已经完整提取并毫无遗漏**之后，`Subject Index` 列表的**最后一项，最后作为附加才输出**本剧本的全局封面海报（`cover_poster`）。封面海报的编号排在所有其他实体的最后，且必须确保它的优先度让位于其他剧情关联实体。
 - **模板锁定与字段增改**：每一行必须严格采用以下固定骨架，仅允许使用 `|` 作为分隔符，禁止任何 JSON/YAML 嵌套：
-  `subject_no=... | subject_type=... | subject_name_zh=... | subject_name_en=... | base_name_en=... | dependency_reference=... | entity_attributes=... | script_entity_coverage=...`
 - **字段规范**：
   - `subject_no`：全局唯一连续编号（建议 `S001...`）。
   - `subject_type`：允许 `character`、`prop`、`environment`、`cover_poster`（全局封面海报）。
   - `subject_name_zh`：实体的中文名称。
   - `subject_name_en`：实体的英文名称，作为后续流转的唯一主键核心名称，**不需要带 `CHAR:[@...]` / `PROP:[...]` / `ENV:[...]` 这类前缀包装**（注：只需与 Part 1 内部对应的核心英文名称一致即可。对于封面海报可固定使用 `Project Cover Poster`。若名称包含空格请直接保留原始空格，绝不要用下划线 `_` 替代，如直接写 `Office Front`）。
-  - `base_name_en`：实体的基础英文名称。**不考虑状态、角度等衍生实体的原始基础名称**。例如，同一角色在不同状态下的拆分实体，其该列都应填入统一个基础角色名称；同一基础环境在不同视角下的衍生环境，其该列都应填入同一个基础环境名称。如属完全独立的基础实体则与 `subject_name_en` 保持一致，对于封面海报可固定填写 `Project Cover Poster`。
   - **`dependency_reference`（依赖继承声明）**：若该实体是某已有实体的衍生变体（如正反打的对立环境），填入其依赖的 Base 实体核心英文名（无需前缀）；若是独立新建实体则填 `None`。**特别注意：封面海报（cover_poster）必须存在依赖，其 `dependency_reference` 绝对不能为 `None`，必须明确列出构成该封面的核心角色、道具或环境的英文名（如 `Lin Suit, Silver Lighter`）。**
   - **`entity_attributes`（实体特征与定位）**：
     - **角色**：重点提取是否为主角、阵营（正派/反派/中立），以及身份、性别、年龄、种族、个性特征、职业，还有在剧中的核心总体剧情定位。**不需要进行具体的外貌、衣服、饰品的描述（除非剧本中有明确提及）**；若剧本有提，可加入标志性随身物品及习惯动作。**绝对禁止写入角色在该场戏里的具体动作、剧情推进内容、转瞬即逝的表情或台词句子。**
@@ -425,13 +423,6 @@
   - `script_entity_coverage`：写明来源于原剧本的具体名词；若为覆盖了剧本散落物件的环境，需列举具体包含物（如 `剧本实体：客厅；沙发; 墙上挂钟`）。
 
 - **输出示例（禁止照抄具体值，仅做语法参考）**：
-  1. `subject_no=S001 | subject_type=character | subject_name_zh=林总 | subject_name_en=Lin Suit | base_name_en=Lin Suit | dependency_reference=None | entity_attributes=阵营：反派主角。身份/职业：掌握生杀大权的集团总裁。性别/年龄/种族：30岁亚裔男性。个性特征：性格冷峻，习惯施压。服装基调（剧本明确提及）：深灰细条纹高定制西装。标志性随身物品：银色打火机。 | script_entity_coverage=剧本实体：林总（主语“他”）`
-  2. `subject_no=S002 | subject_type=environment | subject_name_zh=街道人群状态 | subject_name_en=Street with Crowd | base_name_en=Street | dependency_reference=None | entity_attributes=繁华商业街环境。材质清晰考究，光影具有纵深分层。剧中定位为公共开阔空间。Viewpoint Anchor & Observer View: 观察者从街道转角处路标向宽阔街道看去的视角。Primary Subject: 街道中心巨大的全息广告牌。FG(前景): 路标与正在穿行的无面目路人（作为背景氛围）；MG(中景): 拥挤的街道、广告牌与两侧商铺；BG(后景): 远处高楼轮廓。Stage(舞台): 广告牌下方的水泥路面。 | script_entity_coverage=剧本实体：<街道>; <路人>; <招牌>`
-  3. `subject_no=S003 | subject_type=environment | subject_name_zh=街道清场状态 | subject_name_en=Street Empty | base_name_en=Street | dependency_reference=Street with Crowd | entity_attributes=繁华商业街环境的清场空无一人状态。阴影笼罩，压抑感强。Viewpoint Anchor & Observer View: 观察者从街道转角处路标向宽阔街道看去的视角。Primary Subject: 街道中心巨大的全息广告牌。FG(前景): 孤零零的路标；MG(中景): 绝对空旷无人的街道、广告牌；BG(后景): 远处高楼轮廓。Stage(舞台): 广告牌下方的水泥路面。 | script_entity_coverage=剧本实体：<空无一人的街道>`
-  4. `subject_no=S004 | subject_type=environment | subject_name_zh=办公室废墟状态 | subject_name_en=Office Ruined | base_name_en=Office | dependency_reference=Office Front | entity_attributes=现代极简高管办公室被严重破坏后的废墟状态（重大物理改变）。Viewpoint Anchor & Observer View: 观察者从被砸碎的办公室大门框向内朝核心区看入的视角。Primary Subject: 碎裂的黑胡桃木办公桌。FG(前景): 挂满玻璃渣的门边；MG(中景): 被斩断桌角的办公桌与倒地的皮椅；BG(后景): 破掉的大洞百叶窗。Stage(舞台): 杂乱的碎玻璃地毯区。 | script_entity_coverage=剧本实体：<被砸烂的办公室>`
-  5. `subject_no=S005 | subject_type=character | subject_name_zh=医生 | subject_name_en=Dr. Chen | base_name_en=Dr. Chen | dependency_reference=None | entity_attributes=阵营：中立。身份/职业：心理医生。性别/年龄：40岁亚裔男性。个性特征：沉稳专业，眼神锐利。服装基调：无框眼镜，浅色羊绒衫搭配休闲西装。 | script_entity_coverage=剧本实体：医生`
-  6. `subject_no=S006 | subject_type=prop | subject_name_zh=银色打火机 | subject_name_en=Silver Lighter | base_name_en=Silver Lighter | dependency_reference=None | entity_attributes=复古样式的银色金属打火机。体现角色情绪波动和施压的关键线索道具。 | script_entity_coverage=剧本实体：银色打火机`
-  7. `subject_no=S007 | subject_type=cover_poster | subject_name_zh=项目封面海报 | subject_name_en=Project Cover Poster | base_name_en=Project Cover Poster | dependency_reference=Lin Suit, Silver Lighter | entity_attributes=画面主体：反派主角Lin Suit背对镜头惊悚回眸，单手把玩Silver Lighter置于前景。背景氛围：冷色调城市夜景，压抑悬疑。排版留白：上方深色无杂物留白用于放Title。 | script_entity_coverage=无（全局提炼元素）`
 
 ### Project Visual Backfill（紧跟 Subject Index，使用 JSON 格式）
 - **分隔符强制要求**：在上方 Subject Index 彻底输出完毕后，**必须强制输出一条明显的分隔线 `---------`**，然后再开始输出本 JSON 模块。
