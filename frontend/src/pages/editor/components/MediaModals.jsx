@@ -1,5 +1,4 @@
-﻿
-import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
+﻿import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
@@ -321,11 +320,35 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [assetTypeFilter, setAssetTypeFilter] = useState('image');
     const [secondaryFilterKind, setSecondaryFilterKind] = useState('all'); // all | entity | shot
     const [secondaryFilterValue, setSecondaryFilterValue] = useState('');
+    const [subCategoryFilter, setSubCategoryFilter] = useState('all'); // all | character | prop | environment | shot_start | shot_video
     const [secondaryAutoFollow, setSecondaryAutoFollow] = useState(false);
     const [nameFilter, setNameFilter] = useState('');
     const [selectedAssetId, setSelectedAssetId] = useState('');
     const [selectedMulti, setSelectedMulti] = useState(new Set());
     const [availableShots, setAvailableShots] = useState([]);
+
+    const contextAllowMultiSelect = useMemo(() => {
+        const raw = context?.allowMultiSelect;
+        if (typeof raw === 'string') {
+            return raw === '1' || raw.toLowerCase() === 'true';
+        }
+        return Boolean(raw);
+    }, [context?.allowMultiSelect]);
+
+    const contextDesiredAssetType = useMemo(() => {
+        const raw = String(context?.desiredAssetType || context?.assetType || context?.type || '').trim().toLowerCase();
+        if (raw.includes('video')) return 'video';
+        if (raw.includes('image')) return 'image';
+        return 'all';
+    }, [context?.assetType, context?.desiredAssetType, context?.type]);
+
+    const contextLockAssetType = useMemo(() => {
+        const raw = context?.lockAssetType;
+        if (typeof raw === 'string') {
+            return raw === '1' || raw.toLowerCase() === 'true';
+        }
+        return Boolean(raw);
+    }, [context?.lockAssetType]);
 
     const contextShotId = useMemo(() => String(context?.shotId ?? context?.shot_id ?? '').trim(), [context?.shotId, context?.shot_id]);
     const contextEntityId = useMemo(() => String(context?.entityId ?? context?.entity_id ?? '').trim(), [context?.entityId, context?.entity_id]);
@@ -340,6 +363,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     }, [contextEntityId, contextShotId]);
 
     const inferPreferredAssetType = useCallback(() => {
+        if (contextDesiredAssetType !== 'all') return contextDesiredAssetType;
         const stableType = String(context?.type || '').trim().toLowerCase();
         const stableFrameType = contextFrameType;
         if (stableFrameType.includes('video')) return 'video';
@@ -347,7 +371,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (stableType.includes('image')) return 'image';
         if (stableFrameType) return 'image';
         return 'image';
-    }, [context?.type, contextFrameType]);
+    }, [context?.type, contextDesiredAssetType, contextFrameType]);
 
     const resolveAssetEpisodeId = useCallback((asset) => {
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
@@ -397,6 +421,15 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
         return String(meta?.frame_type || meta?.asset_type || '').trim().toLowerCase();
     }, []);
+
+    const resolveAssetEntityType = useCallback((asset) => {
+        const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+        const entityId = String(meta?.entity_id ?? asset?.entity_id ?? '').trim();
+        const entityRecord = entityId && Array.isArray(entities)
+            ? entities.find((item) => String(item?.id || '') === entityId)
+            : null;
+        return String(meta?.entity_type || entityRecord?.type || '').trim().toLowerCase();
+    }, [entities]);
 
     const resolveContextualAssetDisplayName = useCallback((asset) => {
         const meta = (asset?.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
@@ -452,6 +485,27 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         return baseName;
     }, [contextEntityId, contextShotId, entities, resolveAssetDisplayName, resolveAssetEntityId, resolveAssetFrameType, resolveAssetShotId, t]);
 
+    const resolveAssetContextLabel = useCallback((asset) => {
+        const meta = (asset?.meta_info && typeof asset.meta_info === 'object') ? asset.meta_info : {};
+        const shotNumber = String(meta?.shot_number || '').trim();
+        const shotName = String(meta?.shot_name || '').trim();
+        const shotId = String(resolveAssetShotId(asset) || '').trim();
+        if (shotNumber) return `${t('分镜', 'Shot')} ${shotNumber}`;
+        if (shotName) return `${t('分镜', 'Shot')} ${shotName}`;
+        if (shotId) return `${t('分镜', 'Shot')} #${shotId}`;
+
+        const entityId = String(resolveAssetEntityId(asset) || '').trim();
+        const entityNameFromMeta = String(meta?.entity_name || '').trim();
+        const entityRecord = entityId && Array.isArray(entities)
+            ? entities.find((item) => String(item?.id || '') === entityId)
+            : null;
+        const entityName = entityNameFromMeta || String(entityRecord?.name || '').trim();
+        if (entityName) return entityName;
+        if (entityId) return `${t('实体', 'Entity')} #${entityId}`;
+
+        return t('未绑定分镜/实体', 'Unbound Shot/Entity');
+    }, [entities, resolveAssetEntityId, resolveAssetShotId, t]);
+
     useEffect(() => {
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
@@ -465,13 +519,18 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
              } else {
                  setSecondaryFilterKind('all');
                  setSecondaryFilterValue('');
+                 setSubCategoryFilter('all');
                  setSecondaryAutoFollow(false);
              }
              setNameFilter('');
              setSelectedAssetId('');
              setSelectedMulti(new Set());
+
+             if (contextLockAssetType && contextDesiredAssetType !== 'all') {
+                 setAssetTypeFilter(contextDesiredAssetType);
+             }
         }
-    }, [contextualSecondary, episodeId, inferPreferredAssetType, isOpen]);
+    }, [contextDesiredAssetType, contextLockAssetType, contextualSecondary, episodeId, inferPreferredAssetType, isOpen]);
 
         useEffect(() => {
                  if (episodeId && availableShots.length === 0) {
@@ -493,7 +552,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             setSelectedAssetId('');
             setSelectedMulti(new Set());
         }
-    }, [isOpen, tab, showHistoricalProjectAssets, projectId, episodeId]);
+    }, [contextEntityId, contextShotId, episodeId, isOpen, projectId, showHistoricalProjectAssets, tab]);
 
     const episodeOptions = useMemo(() => {
         const grouped = new Map();
@@ -590,10 +649,41 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const filteredAssets = useMemo(() => {
         let filtered = [...levelOneAssets];
 
+        const isShotBoundAsset = (asset) => {
+            const shotId = String(resolveAssetShotId(asset) || '').trim();
+            if (shotId) return true;
+            const frameType = String(resolveAssetFrameType(asset) || '').trim().toLowerCase();
+            return frameType.includes('start')
+                || frameType.includes('end')
+                || frameType.includes('keyframe')
+                || frameType.includes('video')
+                || frameType.includes('shot');
+        };
+
         if (secondaryFilterKind === 'entity' && secondaryFilterValue) {
             filtered = filtered.filter((asset) => String(resolveAssetEntityId(asset)) === String(secondaryFilterValue));
-        } else if (secondaryFilterKind === 'shot' && secondaryFilterValue) {
-            filtered = filtered.filter((asset) => String(resolveAssetShotId(asset)) === String(secondaryFilterValue));
+        } else if (secondaryFilterKind === 'shot') {
+            filtered = filtered.filter(isShotBoundAsset);
+            if (secondaryFilterValue) {
+                filtered = filtered.filter((asset) => String(resolveAssetShotId(asset)) === String(secondaryFilterValue));
+            }
+        }
+
+        if (secondaryFilterKind === 'entity' && subCategoryFilter !== 'all') {
+            filtered = filtered.filter((asset) => resolveAssetEntityType(asset) === subCategoryFilter);
+        } else if (secondaryFilterKind === 'shot') {
+            if (subCategoryFilter === 'shot_start') {
+                filtered = filtered.filter((asset) => {
+                    const frameType = resolveAssetFrameType(asset);
+                    return frameType.includes('start') || frameType.includes('keyframe');
+                });
+            } else if (subCategoryFilter === 'shot_video') {
+                filtered = filtered.filter((asset) => {
+                    const frameType = resolveAssetFrameType(asset);
+                    const stableType = String(asset?.type || '').trim().toLowerCase();
+                    return stableType === 'video' || frameType.includes('video');
+                });
+            }
         }
 
         const stableContextEntityId = contextEntityId;
@@ -644,7 +734,23 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             return r - l;
         });
         return filtered;
-    }, [assetTypeFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, nameFilter, resolveAssetEntityId, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryFilterKind, secondaryFilterValue]);
+    }, [assetTypeFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, nameFilter, resolveAssetEntityId, resolveAssetEntityType, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryFilterKind, secondaryFilterValue, subCategoryFilter]);
+
+    useEffect(() => {
+        if (secondaryFilterKind !== 'entity' && secondaryFilterKind !== 'shot') {
+            if (subCategoryFilter !== 'all') setSubCategoryFilter('all');
+            return;
+        }
+
+        if (secondaryFilterKind === 'entity') {
+            const allowed = new Set(['all', 'character', 'prop', 'environment']);
+            if (!allowed.has(subCategoryFilter)) setSubCategoryFilter('all');
+            return;
+        }
+
+        const allowed = new Set(['all', 'shot_start', 'shot_video']);
+        if (!allowed.has(subCategoryFilter)) setSubCategoryFilter('all');
+    }, [secondaryFilterKind, subCategoryFilter]);
 
     useEffect(() => {
         if (secondaryAutoFollow) return;
@@ -682,6 +788,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     useEffect(() => {
         if (!isOpen || tab !== 'assets') return;
+        if (!contextAllowMultiSelect) {
+            setSelectedMulti((prev) => (prev.size > 0 ? new Set() : prev));
+            return;
+        }
         const visibleIds = new Set(filteredAssets.map((item) => String(item.id)));
         setSelectedMulti((prev) => {
             if (!prev || prev.size === 0) return prev;
@@ -689,11 +799,18 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             prev.forEach((id) => {
                 if (visibleIds.has(String(id))) next.add(id);
             });
+            if (next.size === prev.size) {
+                let unchanged = true;
+                prev.forEach((id) => {
+                    if (!next.has(String(id))) unchanged = false;
+                });
+                if (unchanged) return prev;
+            }
             return next;
         });
-    }, [filteredAssets, isOpen, tab]);
+    }, [contextAllowMultiSelect, filteredAssets, isOpen, tab]);
 
-    const loadAssets = async () => {
+    const loadAssets = useCallback(async () => {
                 if (typeof window !== 'undefined') {
                     console.log('[素材选择][loadAssets] params', {
                         projectId,
@@ -730,13 +847,29 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             let data = scopedData;
             const usedScopedQuery = Boolean(contextEntityId || contextShotId);
             if (usedScopedQuery && (!Array.isArray(scopedData) || scopedData.length === 0)) {
+                const fallbackSteps = [];
+                if (contextEntityId && contextShotId) {
+                    fallbackSteps.push({ ...baseParams, shot_id: contextShotId });
+                    fallbackSteps.push({ ...baseParams, entity_id: contextEntityId });
+                }
+                fallbackSteps.push(baseParams);
+
+                for (const params of fallbackSteps) {
+                    const next = await fetchAssets(params);
+                    if (Array.isArray(next) && next.length > 0) {
+                        data = next;
+                        break;
+                    }
+                    data = next;
+                }
+
                 if (typeof window !== 'undefined') {
-                    console.warn('[素材选择][loadAssets] scoped query empty, fallback to base query', {
+                    console.info('[素材选择][loadAssets] scoped query empty, used progressive fallback', {
                         scopedParams,
-                        baseParams,
+                        fallbackCount: fallbackSteps.length,
+                        finalCount: Array.isArray(data) ? data.length : 0,
                     });
                 }
-                data = await fetchAssets(baseParams);
             }
 
             const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
@@ -760,7 +893,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         } finally {
             setLoading(false);
         }
-    };
+    }, [contextEntityId, contextShotId, episodeId, projectId, showHistoricalProjectAssets]);
 
     const handleMarkAssetCurrent = useCallback(async (asset) => {
         const assetId = Number(asset?.id || 0);
@@ -812,7 +945,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     return (
         <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-             <div className="bg-[#1e1e1e] border border-white/10 rounded-xl w-full max-w-2xl h-[600px] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+             <div className="bg-[#1e1e1e] border border-white/10 rounded-xl w-full max-w-4xl h-[82vh] max-h-[760px] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
                 <div className="flex justify-between items-center p-4 border-b border-white/10 bg-black/20">
                     <h3 className="font-bold text-md">{t('选择媒体', 'Select Media')}</h3>
                     <button onClick={onClose} className="text-white/50 hover:text-white"><X size={20} /></button>
@@ -848,19 +981,6 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             ))}
                         </select>
 
-                        <select 
-                            value={assetTypeFilter}
-                            onChange={(e) => {
-                                setAssetTypeFilter(e.target.value);
-                                setSelectedAssetId('');
-                            }}
-                            className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
-                        >
-                            <option value="all">{t('全部类型', 'All Types')}</option>
-                            <option value="image">{t('仅图片', 'Images Only')}</option>
-                            <option value="video">{t('仅视频', 'Videos Only')}</option>
-                        </select>
-
                         <select
                             value={secondaryFilterKind}
                             onChange={(e) => {
@@ -871,9 +991,9 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
                         >
-                            <option value="all">{t('二级筛选：全部', 'Level 2: All')}</option>
-                            <option value="entity">{t('二级筛选：实体', 'Level 2: Entity')}</option>
-                            <option value="shot">{t('二级筛选：分镜', 'Level 2: Shot')}</option>
+                            <option value="all">{t('全部', 'All')}</option>
+                            <option value="entity">{t('实体', 'Entity')}</option>
+                            <option value="shot">{t('分镜', 'Shot')}</option>
                         </select>
 
                         <select
@@ -892,26 +1012,32 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             ))}
                         </select>
 
-                        {contextualSecondary && (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    if (secondaryAutoFollow) {
-                                        setSecondaryAutoFollow(false);
-                                        return;
-                                    }
-                                    setSecondaryAutoFollow(true);
-                                    setSecondaryFilterKind(contextualSecondary.kind);
-                                    setSecondaryFilterValue(contextualSecondary.value);
-                                    setSelectedAssetId('');
-                                }}
-                                className={`text-xs px-2.5 py-1 rounded border transition-colors ${secondaryAutoFollow ? 'border-emerald-400/50 bg-emerald-500/10 text-emerald-100' : 'border-white/10 bg-[#151515] text-white/75 hover:bg-white/5'}`}
-                            >
-                                {secondaryAutoFollow
-                                    ? t('二级筛选跟随中', 'Level 2 Following Context')
-                                    : t('恢复二级跟随', 'Restore Level 2 Follow')}
-                            </button>
-                        )}
+                        <select
+                            value={subCategoryFilter}
+                            onChange={(e) => {
+                                setSubCategoryFilter(e.target.value);
+                                setSelectedAssetId('');
+                            }}
+                            className="min-w-[140px] bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
+                            disabled={secondaryFilterKind === 'all'}
+                        >
+                            {secondaryFilterKind === 'entity' ? (
+                                <>
+                                    <option value="all">{t('全部细类', 'All Subtypes')}</option>
+                                    <option value="character">{t('角色', 'Character')}</option>
+                                    <option value="prop">{t('道具', 'Prop')}</option>
+                                    <option value="environment">{t('环境', 'Environment')}</option>
+                                </>
+                            ) : secondaryFilterKind === 'shot' ? (
+                                <>
+                                    <option value="all">{t('全部细类', 'All Subtypes')}</option>
+                                    <option value="shot_start">{t('起始帧', 'Start Frame')}</option>
+                                    <option value="shot_video">{t('视频', 'Video')}</option>
+                                </>
+                            ) : (
+                                <option value="all">{t('全部细类', 'All Subtypes')}</option>
+                            )}
+                        </select>
 
                         <input
                             value={nameFilter}
@@ -920,19 +1046,9 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                 setSelectedAssetId('');
                             }}
                             className="min-w-[180px] flex-1 bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
-                            placeholder={t('三级筛选：按名称搜索', 'Level 3: Search by name')}
+                            placeholder={t('按名称搜索', 'Search by name')}
                         />
 
-                        {projectId && (
-                            <button
-                                type="button"
-                                onClick={() => setShowHistoricalProjectAssets((prev) => !prev)}
-                                className={`text-xs px-2.5 py-1 rounded border transition-colors ${showHistoricalProjectAssets ? 'border-amber-400/40 bg-amber-500/10 text-amber-100' : 'border-white/10 bg-[#151515] text-white/75 hover:bg-white/5'}`}
-                            >
-                                {showHistoricalProjectAssets ? t('显示历史分集', 'Showing History Episodes') : t('仅当前项目资产', 'Current Project Assets Only')}
-                            </button>
-                        )}
-                        
                         <div className="ml-auto text-[10px] text-muted-foreground">
                             {filteredAssets.length} {t('条结果', 'results')} · {selectedMulti.size} {t('已选', 'selected')}
                         </div>
@@ -942,8 +1058,8 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-[#151515]">
                     {tab === 'assets' && (
                         loading ? <div className="flex items-center justify-center h-full"><RefreshCw className="animate-spin text-muted-foreground"/></div> :
-                        <div className="h-full">
-                            {filteredAssets.length === 0 || !selectedAsset ? (
+                        <div className="h-full min-h-0">
+                            {filteredAssets.length === 0 ? (
                                 <div className="h-full flex items-center justify-center text-center text-muted-foreground">
                                     <div>
                                         <p>{t('未找到素材', 'No assets found')}</p>
@@ -951,77 +1067,53 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                     </div>
                                 </div>
                             ) : (
-                                <div className="h-full flex flex-col gap-4">
-                                    <div className="rounded-lg border border-white/10 bg-black/20 p-2 max-h-[150px] overflow-y-auto custom-scrollbar">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                                <div className="h-full min-h-0 rounded-lg border border-white/10 bg-black/20 p-2 overflow-y-auto custom-scrollbar">
+                                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
                                             {filteredAssets.map((asset) => {
                                                 const checked = selectedMulti.has(String(asset.id));
+                                                const isSelected = String(selectedAssetId) === String(asset.id);
+                                                const isVideo = String(asset?.type || '').toLowerCase() === 'video';
                                                 return (
-                                                    <label key={asset.id} className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer border ${checked ? 'border-primary/60 bg-primary/10' : 'border-white/5 hover:border-white/20'}`}>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={checked}
-                                                            onChange={(e) => {
-                                                                const stableId = String(asset.id);
+                                                    <button
+                                                        key={asset.id}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const stableId = String(asset.id);
+                                                            setSelectedAsset(asset);
+                                                            setSelectedAssetId(stableId);
+                                                            if (contextAllowMultiSelect) {
                                                                 setSelectedMulti((prev) => {
                                                                     const next = new Set(prev);
-                                                                    if (e.target.checked) {
-                                                                        next.add(stableId);
-                                                                    } else {
-                                                                        next.delete(stableId);
-                                                                    }
+                                                                    if (next.has(stableId)) next.delete(stableId);
+                                                                    else next.add(stableId);
                                                                     return next;
                                                                 });
-                                                                setSelectedAsset(asset);
-                                                                setSelectedAssetId(stableId);
-                                                            }}
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => {
-                                                                setSelectedAsset(asset);
-                                                                setSelectedAssetId(String(asset.id));
-                                                            }}
-                                                            className="text-left truncate text-xs text-white/90"
-                                                        >
-                                                            {resolveContextualAssetDisplayName(asset)}
-                                                        </button>
-                                                    </label>
+                                                                return;
+                                                            }
+                                                            setSelectedMulti(new Set());
+                                                        }}
+                                                        className={`relative rounded overflow-hidden border text-left transition-all ${checked || isSelected ? 'border-primary/60 ring-1 ring-primary/30' : 'border-white/10 hover:border-white/30'}`}
+                                                        title={resolveAssetContextLabel(asset)}
+                                                    >
+                                                        <div className="aspect-square bg-black/40 flex items-center justify-center">
+                                                            {isVideo ? (
+                                                                <div className="w-full h-full flex items-center justify-center bg-black/50">
+                                                                    <Video className="w-7 h-7 text-white/65" />
+                                                                </div>
+                                                            ) : (
+                                                                <SafeImage src={asset.url} className="w-full h-full object-cover" alt={resolveAssetContextLabel(asset)} />
+                                                            )}
+                                                        </div>
+                                                        <div className="px-1.5 py-1 text-[10px] text-white/85 truncate bg-black/55">
+                                                            {resolveAssetContextLabel(asset)}
+                                                        </div>
+                                                        {(checked || isSelected) && (
+                                                            <div className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-primary" />
+                                                        )}
+                                                    </button>
                                                 );
                                             })}
                                         </div>
-                                    </div>
-                                    <div className="rounded-lg border border-white/10 bg-black/30 p-3 min-h-[260px] flex items-center justify-center">
-                                        {selectedAsset.type === 'video' ? (
-                                            <InViewVideo
-                                                src={selectedAsset.url}
-                                                controls
-                                                className="max-h-[320px] max-w-full rounded"
-                                                visibleDelayMs={280}
-                                                fallback={<Video className="w-8 h-8 opacity-30" />}
-                                            />
-                                        ) : (
-                                            <SafeImage src={selectedAsset.url} className="max-h-[320px] max-w-full object-contain rounded" alt="asset-preview" />
-                                        )}
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-white/80">
-                                        <div className="rounded border border-white/10 bg-black/20 p-3">
-                                            <div className="text-[10px] uppercase text-white/50 mb-1">{t('名称', 'Name')}</div>
-                                            <div>{resolveContextualAssetDisplayName(selectedAsset) || t('未命名', 'Untitled')}</div>
-                                        </div>
-                                        <div className="rounded border border-white/10 bg-black/20 p-3">
-                                            <div className="text-[10px] uppercase text-white/50 mb-1">{t('分集', 'Episode')}</div>
-                                            <div>{resolveAssetEpisodeLabel(selectedAsset)}</div>
-                                        </div>
-                                        <div className="rounded border border-white/10 bg-black/20 p-3">
-                                            <div className="text-[10px] uppercase text-white/50 mb-1">{t('类型', 'Type')}</div>
-                                            <div>{selectedAsset.type === 'video' ? t('视频', 'Video') : t('图片', 'Image')}</div>
-                                        </div>
-                                        <div className="rounded border border-white/10 bg-black/20 p-3">
-                                            <div className="text-[10px] uppercase text-white/50 mb-1">{t('创建时间', 'Created')}</div>
-                                            <div>{selectedAsset?.created_at ? new Date(selectedAsset.created_at).toLocaleString() : '-'}</div>
-                                        </div>
-                                    </div>
                                 </div>
                             )}
                         </div>
@@ -1077,15 +1169,17 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 {tab === 'assets' && (
                     <div className="flex border-t border-white/10 p-3 bg-black/40 justify-between items-center shrink-0">
                         <div className="text-sm font-medium text-white/80">
-                            {selectedMulti.size > 0
+                            {contextAllowMultiSelect && selectedMulti.size > 0
                                 ? `${selectedMulti.size} ${t('个资产已选中', 'assets selected')}`
                                 : (selectedAsset ? (resolveContextualAssetDisplayName(selectedAsset) || t('已选中目标资产', 'Selected Target Asset')) : t('未选择资产', 'No asset selected'))}
                         </div>
                         <button
-                            disabled={!selectedAsset && selectedMulti.size === 0}
+                            disabled={!selectedAsset && (!contextAllowMultiSelect || selectedMulti.size === 0)}
                             onClick={async () => {
-                                const selectedItems = filteredAssets.filter((asset) => selectedMulti.has(String(asset.id)));
-                                if (selectedItems.length > 0) {
+                                const selectedItems = contextAllowMultiSelect
+                                    ? filteredAssets.filter((asset) => selectedMulti.has(String(asset.id)))
+                                    : [];
+                                if (contextAllowMultiSelect && selectedItems.length > 0) {
                                     if (projectId) {
                                         await Promise.all(selectedItems.map((asset) => handleMarkAssetCurrent(asset).catch(() => null)));
                                     }
@@ -1098,7 +1192,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             }}
                             className="bg-primary text-black text-sm font-bold px-6 py-2 rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {selectedMulti.size > 0 ? t('选择已勾选资产', 'Select Checked Assets') : t('选择目标资产', 'Select Target Asset')}
+                            {contextAllowMultiSelect && selectedMulti.size > 0 ? t('选择已勾选资产', 'Select Checked Assets') : t('选择目标资产', 'Select Target Asset')}
                         </button>
                     </div>
                 )}
