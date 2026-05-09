@@ -86,9 +86,13 @@ const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = 
 
     const handleAddRef = () => {
         if (onPickMedia) {
-            onPickMedia((url) => {
-                setExtraRefs(prev => [...prev, url]);
-            });
+            onPickMedia((url, type, selectedItems) => {
+                const picked = (selectedItems && selectedItems.length > 0)
+                    ? selectedItems.map((item) => item?.url).filter(Boolean)
+                    : (url ? [url] : []);
+                if (picked.length === 0) return;
+                setExtraRefs(prev => [...prev, ...picked]);
+            }, { desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true });
         }
     };
 

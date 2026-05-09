@@ -8008,7 +8008,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             // Auto-save user selection to ensure it counts as "latest selected"
                                                             await onUpdateShot(editingShot.id, newData);
                                                             onLog?.('Start Frame Image set', 'success');
-                                                        }, { shotId: editingShot.id, shotFrameType: 'start' });
+                                                        }, { shotId: editingShot.id, shotFrameType: 'start', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: false });
                                                     }}
                                                     disabled={isShotFrameActionLocked('start')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -8128,6 +8128,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
+                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }}
                                             storageKey="ref_image_urls"
                                             strictPromptOnly={true}
                                             onFindPrevFrame={() => {
@@ -8181,7 +8182,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             tech.end_frame_url = url;
                                                             const updates = { technical_notes: JSON.stringify(tech) };
                                                             await persistEditingShotUpdates(updates);
-                                                        }, { shotId: editingShot.id, shotFrameType: 'end' });
+                                                        }, { shotId: editingShot.id, shotFrameType: 'end', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: false });
                                                     }}
                                                     disabled={isShotFrameActionLocked('end')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -8341,6 +8342,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
+                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }}
                                             storageKey="end_ref_image_urls"
                                             strictPromptOnly={true}
                                         />
@@ -8366,7 +8368,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     onClick={() => openMediaPicker((url) => {
                                                         const changes = { video_url: url };
                                                         onUpdateShot(editingShot.id, changes);
-                                                    }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video' })}
+                                                    }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video', desiredAssetType: 'video', lockAssetType: true, allowMultiSelect: false })}
                                                     className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
                                                     title={t('选择或上传视频', 'Select or Upload Video')}
                                                 >
@@ -8503,7 +8505,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 await onUpdateShot(editingShot.id, changes);
                                                                 setEditingShot(prev => ({...prev, ...changes}));
                                                                 onLog?.('Video changed', 'success');
-                                                            }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video' });
+                                                            }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video', desiredAssetType: 'video', lockAssetType: true, allowMultiSelect: false });
                                                         }}
                                                         className="p-1.5 bg-black/60 hover:bg-sky-500/80 text-white rounded-md transition-all shadow"
                                                         title={t('选择或上传视频以替换或回填', 'Select or Upload Video')}
@@ -8575,6 +8577,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
+                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }}
                                             storageKey="video_ref_image_urls"
                                             strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}
                                         />
@@ -8700,12 +8703,21 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     {/* Quick Set Button Overlay */}
                                                     <div className="absolute bottom-1 right-1 opacity-0 group-hover/image:opacity-100 transition-opacity">
                                                         <button 
-                                                            onClick={() => openMediaPicker((url) => {
+                                                            onClick={() => openMediaPicker((url, type, selectedItems) => {
+                                                                const pickedUrls = (selectedItems && selectedItems.length > 0)
+                                                                    ? selectedItems.map((item) => item?.url).filter(Boolean)
+                                                                    : (url ? [url] : []);
+                                                                if (pickedUrls.length === 0) return;
+
                                                                 const updated = [...localKeyframes];
-                                                                updated[idx].url = url;
+                                                                pickedUrls.forEach((pickedUrl, offset) => {
+                                                                    const targetIndex = idx + offset;
+                                                                    if (!updated[targetIndex]) return;
+                                                                    updated[targetIndex].url = pickedUrl;
+                                                                });
                                                                 setLocalKeyframes(updated);
                                                                 reconstructKeyframes(updated);
-                                                            })}
+                                                            }, { shotId: editingShot?.id, shotFrameType: 'keyframe', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true })}
                                                             className="bg-black/60 hover:bg-white/20 text-white text-[9px] px-1.5 py-0.5 rounded flex items-center gap-1 backdrop-blur-sm"
                                                         >
                                                             <Upload className="w-2.5 h-2.5"/> Set
@@ -9395,7 +9407,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         }}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -9509,7 +9521,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         onPromptUpdate={handleManualEndFrameInputChange}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -9719,7 +9731,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>

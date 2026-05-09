@@ -156,7 +156,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
-export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images", promptText = "", onPickMedia = null, useSequenceLogic = false, storageKey = "ref_image_urls", additionalAutoRefs = [], strictPromptOnly = false, onFindPrevFrame = null, uiLang = 'zh', isPortrait = false }) => {
+export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images", promptText = "", onPickMedia = null, pickContext = {}, useSequenceLogic = false, storageKey = "ref_image_urls", additionalAutoRefs = [], strictPromptOnly = false, onFindPrevFrame = null, uiLang = 'zh', isPortrait = false }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [selectedImage, setSelectedImage] = useState(null);
     const tech = JSON.parse(shot.technical_notes || '{}');
@@ -527,7 +527,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                                 } else {
                                     handleAdd(url);
                                 }
-                            }, { shotId: shot?.id })}
+                            }, { shotId: shot?.id, desiredAssetType: 'image', allowMultiSelect: true, ...pickContext })}
                             className={`shrink-0 ${isPortrait ? 'w-full py-4' : 'w-[50px] aspect-video'} bg-white/5 hover:bg-white/10 border border-white/10 border-dashed rounded flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-white transition-colors`}
                             title={t('从素材中选择', 'Pick from Assets')}
                         >
