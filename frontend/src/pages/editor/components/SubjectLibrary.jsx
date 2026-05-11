@@ -2261,10 +2261,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
             setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
             if (onLog) onLog("Subject updated from analysis.", "success");
+            return updated;
         } catch (e) {
             console.error(e);
             alert("Analysis failed: " + formatEntityAnalysisError(e));
             if (onLog) onLog("Analysis failed.", "error");
+            return null;
         } finally {
             setIsAnalyzingEntity(false);
         }
@@ -3410,12 +3412,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const selectedUrl = String(asset?.url || '').trim();
         if (!selectedUrl) return;
 
-        const updatedEntity = await updateEntityImage(selectedUrl, false);
+        const updatedEntity = await updateEntityImage(selectedUrl, false, null, {
+            skipAnalyze: imageSelectAction === 'rewrite_and_regenerate',
+        });
         if (!updatedEntity) return;
 
         if (imageSelectAction === 'sync_prompt') {
             setShowImageModal(false);
-            await handleAnalyzeEntity(updatedEntity);
             return;
         }
 
@@ -3426,7 +3429,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
 
         setShowImageModal(false);
-        await handleAnalyzeEntity(updatedEntity);
     };
 
     const handleUpload = async (e) => {
@@ -3438,7 +3440,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             const updatedEntity = await updateEntityImage(asset.url, false);
             if (updatedEntity) {
                 setShowImageModal(false);
-                await handleAnalyzeEntity(updatedEntity);
             }
         } catch (e) {
             console.error(e);
@@ -3643,7 +3644,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     };
 
-    const updateEntityImage = async (url, closeModal = true, entityOverride = null) => {
+    const updateEntityImage = async (url, closeModal = true, entityOverride = null, options = {}) => {
         const targetEntity = entityOverride || selectedEntity;
         if (!targetEntity) return null;
         if (isSubjectImageActionLocked(targetEntity)) {
@@ -3664,6 +3665,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             if (closeModal) {
                 setShowImageModal(false);
             }
+
+            if (options?.skipAnalyze !== true) {
+                const analyzedEntity = await handleAnalyzeEntity(updatedEntity);
+                return analyzedEntity || updatedEntity;
+            }
+
             return updatedEntity;
         } catch (e) {
             console.error(e);
