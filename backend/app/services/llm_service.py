@@ -1,5 +1,3 @@
-
-
 import requests
 import httpx
 import json
@@ -581,11 +579,11 @@ class LLMService:
             return text
 
         cleaned = text
-        # Strip closed <think>...</think> blocks
+        # Strip closed <think>...</think> blocks.
         cleaned = re.sub(r"<think\b[^>]*>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
-        # Strip orphan </think> tags
-        cleaned = re.sub(r"</think>", "", cleaned, flags=re.IGNORECASE)
-        # Strip unclosed <think> blocks — consume content up to JSON ({) or markdown (```) boundary, or end of string
+        # Strip orphan think tags without removing normal text characters.
+        cleaned = re.sub(r"</?think\b[^>]*>", "", cleaned, flags=re.IGNORECASE)
+        # Strip unclosed <think... blocks — consume content up to JSON ({) or markdown (```), or end of string.
         cleaned = re.sub(r"<think\b[^>]*>(?:(?!\{|```)[\s\S])*", "", cleaned, flags=re.IGNORECASE)
 
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -2216,46 +2214,63 @@ class LLMService:
         messages: List[Dict],
         extra_config: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
-        """Collect streamed OpenAI-compatible output and expose generic text response fields."""
-        content_parts: List[str] = []
+        """Collect OpenAI-compatible output without streaming and expose generic text response fields."""
+        raw_content = ""
         usage: Dict[str, Any] = {}
         finish_reason = "stop"
 
-        from contextlib import aclosing
         try:
-            async with aclosing(self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config)) as _stream:
-                async for event in _stream:
-                    if event.get("type") == "token":
-                        content_parts.append(event.get("content", ""))
-                    elif event.get("type") == "done":
-                        if event.get("usage"):
-                            usage = event["usage"]
-                        if event.get("finish_reason"):
-                            finish_reason = event["finish_reason"]
+            # Replace streaming logic with a single non-streaming request
+            response = await self._raw_llm_request(base_url, api_key, model, messages, extra_config)
+            logger.info(
+                "[COLLECT] upstream response type=%s",
+                type(response).__name__,
+            )
+            if isinstance(response, str):
+                raw_content = response
+                logger.info(
+                    "[COLLECT] upstream string len=%d snippet=%r",
+                    len(raw_content),
+                    _strip_base64_from_log(raw_content[:120]),
+                )
+            elif isinstance(response, dict):
+                # Backward compatibility: tolerate legacy streaming-like event payloads.
+                logger.info(
+                    "[COLLECT] upstream dict keys=%s has_usage=%s finish_reason=%s type_field=%s",
+                    list(response.keys())[:12],
+                    bool(response.get("usage")),
+                    response.get("finish_reason"),
+                    response.get("type"),
+                )
+                if isinstance(response.get("raw_content"), str):
+                    raw_content = response.get("raw_content") or ""
+                elif isinstance(response.get("content"), str):
+                    raw_content = response.get("content") or ""
+                if response.get("type") == "token":
+                    raw_content = f"{raw_content}{response.get('content', '')}"
+                if response.get("usage"):
+                    usage = response["usage"]
+                if response.get("finish_reason"):
+                    finish_reason = response["finish_reason"]
+            else:
+                logger.warning("Unexpected response type: %s", type(response))
         except Exception as _collect_exc:
-            # If stream raised (e.g. incomplete chunked read not handled upstream), use whatever was collected.
             logger.warning(
-                "[_collect_openai_compatible_text_response] stream raised; using partial content parts=%d err=%s",
-                len(content_parts), _collect_exc,
+                "[_collect_openai_compatible_text_response] request failed; using partial content parts=%d err=%s",
+                1 if raw_content else 0, _collect_exc,
             )
             finish_reason = "incomplete"
 
-        raw_content = "".join(content_parts)
         content = self._sanitize_response_content(raw_content)
         logger.info(
-            "[STREAM_COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s snippet=%r",
-            len(content_parts), len(raw_content), len(content or ""), finish_reason, (content or "")[:120],
+            "[COLLECT] raw_len=%d content_len=%d finish_reason=%s snippet=%r",
+            len(raw_content), len(content or ""), finish_reason, (content or "")[:120],
         )
         return {
             "raw_content": raw_content,
             "content": content,
             "usage": usage,
             "finish_reason": finish_reason,
-            "token_limit_hints": [],
-            "extraction_diagnostics": {
-                "stream_aggregated": True,
-                "provider": (extra_config or {}).get("__provider") or self._infer_provider(base_url, model),
-            },
         }
 
     async def _call_openai_compatible(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -2525,6 +2540,13 @@ class LLMService:
                 url = f"{url}/chat/completions"
             url_source = "base_url"
 
+        if configured_endpoint and resolved_category == "LLM" and not use_claude_api and provider not in {"kie", "n1n"}:
+            endpoint_lower = configured_endpoint.lower()
+            if "/chat/completions" in endpoint_lower:
+                url_source = "config.endpoint"
+            else:
+                url_source = "config.endpoint"
+
         logger.info(
             "LLM route target (full): provider=%s model=%s use_claude_api=%s category=%s url_source=%s url=%s",
             provider,
@@ -2555,6 +2577,7 @@ class LLMService:
             payload = {
                 "model": model,
                 "input": self._build_n1n_responses_input(messages),
+                # n1n responses can return non-SSE JSON; force JSON mode for stable parsing.
                 "stream": False,
             }
             payload.update(self._extract_n1n_responses_options(extra_config or {}))
@@ -2988,6 +3011,8 @@ class LLMService:
 
         if configured_endpoint and not configured_endpoint.startswith("http"):
             configured_endpoint = f"{base_url.rstrip('/')}/{configured_endpoint.lstrip('/')}"
+            # De-duplicate /v1/v1/ that can occur when base_url already ends with /v1
+            # and the endpoint_hint also starts with /v1/ (e.g. apiyi2 base_url normalization)
             import re as _re
             configured_endpoint = _re.sub(r'(/v1)/v1(?=/|$)', r'\1', configured_endpoint)
 
@@ -3168,25 +3193,35 @@ class LLMService:
                         "[STREAM_RESPONSE_TYPE] provider=%s model=%s status=%s content_type=%r payload_stream=%s",
                         provider, model, response.status_code, content_type, payload.get("stream"),
                     )
-                    if "application/json" in content_type and "event-stream" not in content_type:
+                    if "event-stream" not in content_type:
                         logger.warning(
-                            "[STREAM_FALLBACK_JSON] provider=%s model=%s returned JSON instead of SSE; treating as full response",
-                            provider, model,
+                            "[STREAM_FALLBACK_NON_SSE] provider=%s model=%s returned non-SSE content_type=%r; treating as full response",
+                            provider, model, content_type,
                         )
                         body_bytes = await response.aread()
+                        body_text = body_bytes.decode("utf-8", errors="replace")
                         try:
                             import json as _json
                             full_json = _json.loads(body_bytes)
                         except Exception:
-                            logger.error(f"Failed to parse JSON response on stream endpoint: {body_bytes[:200]}")
                             full_json = {}
-                        text = self._extract_text_from_response(full_json)
+                        text = self._extract_text_from_response(full_json) if full_json else ""
+                        if not text:
+                            text = body_text.strip()
+                        if not text:
+                            logger.warning(
+                                "[STREAM_FALLBACK_NON_SSE_EMPTY] provider=%s model=%s content_type=%r body_prefix=%r",
+                                provider,
+                                model,
+                                content_type,
+                                body_text[:200],
+                            )
                         if text:
                             yield {"type": "token", "content": text}
-                        usage_res = full_json.get("usage", {})
+                        usage_res = full_json.get("usage", {}) if full_json else {}
                         if use_claude_api and not usage_res:
-                            usage_res = full_json.get("usage", {})
-                        finish_res = self._extract_finish_reason_from_response(full_json) or "stop"
+                            usage_res = full_json.get("usage", {}) if full_json else {}
+                        finish_res = (self._extract_finish_reason_from_response(full_json) if full_json else None) or "stop"
                         yield {"type": "done", "usage": usage_res, "finish_reason": finish_res}
                         return
 
@@ -3196,24 +3231,24 @@ class LLMService:
 
                     from contextlib import aclosing
                     async with aclosing(response.aiter_lines()) as _stream:
-                        async for raw_line in _stream:
-                            line = raw_line.strip()
-                            if not line:
-                                # Send heartbeat if no data for a while (keeps SSE alive)
-                                now = _asyncio.get_event_loop().time()
-                                if now - _last_yield_time > _heartbeat_interval:
-                                    yield {"type": "heartbeat", "content": ""}
-                                    _last_yield_time = now
-                                continue
-                            if not line.startswith("data:"):
-                                continue
-                            data_str = line[5:].strip()
+                        pending_data_lines: List[str] = []
+
+                        def _process_sse_data_payload(data_str: str) -> Tuple[List[Dict[str, Any]], bool, bool]:
+                            """Process one SSE data payload string.
+
+                            Returns (events, should_stop, parsed_ok).
+                            """
+                            nonlocal usage, finish_reason, token_batch_buf, _last_yield_time
+
+                            if not data_str:
+                                return [], False, True
                             if data_str == "[DONE]":
-                                break
+                                return [], True, True
+
                             try:
                                 chunk = json.loads(data_str)
                             except json.JSONDecodeError:
-                                continue
+                                return [], False, False
 
                             # Capture usage if the provider includes it in a chunk
                             if chunk.get("usage"):
@@ -3226,18 +3261,85 @@ class LLMService:
                             content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
                             if chunk_finish_reason:
                                 finish_reason = chunk_finish_reason
+                            events: List[Dict[str, Any]] = []
                             if content:
                                 if use_claude_api:
                                     token_batch_buf += content
                                     if len(token_batch_buf) >= 32 or "\n" in token_batch_buf:
                                         logger.debug("[STREAM_TOKEN][claude_batch] provider=%s len=%d snippet=%r", provider, len(token_batch_buf), token_batch_buf[:80])
-                                        yield {"type": "token", "content": token_batch_buf}
+                                        events.append({"type": "token", "content": token_batch_buf})
                                         token_batch_buf = ""
                                         _last_yield_time = _asyncio.get_event_loop().time()
                                 else:
                                     logger.debug("[STREAM_TOKEN] provider=%s len=%d snippet=%r", provider, len(content), content[:80])
-                                    yield {"type": "token", "content": content}
+                                    events.append({"type": "token", "content": content})
                                     _last_yield_time = _asyncio.get_event_loop().time()
+                            return events, False, True
+
+                        def _flush_pending_event() -> Tuple[List[Dict[str, Any]], bool]:
+                            """Parse one buffered SSE event assembled from pending lines."""
+                            if not pending_data_lines:
+                                return [], False
+                            data_str = "\n".join(pending_data_lines).strip()
+                            pending_data_lines.clear()
+                            events, should_stop, _parsed_ok = _process_sse_data_payload(data_str)
+                            return events, should_stop
+
+                        async for raw_line in _stream:
+                            line = (raw_line or "").strip()
+                            if not line:
+                                # Empty line denotes one completed SSE event.
+                                events, should_stop = _flush_pending_event()
+                                for _event in events:
+                                    yield _event
+                                if should_stop:
+                                    break
+
+                                # Send heartbeat if no data for a while (keeps SSE alive)
+                                now = _asyncio.get_event_loop().time()
+                                if now - _last_yield_time > _heartbeat_interval:
+                                    yield {"type": "heartbeat", "content": ""}
+                                    _last_yield_time = now
+                                continue
+                            if line.startswith(":"):
+                                # SSE comment/keepalive line
+                                continue
+                            if line.startswith("event:"):
+                                # We only need the data payload for OpenAI-compatible chunks.
+                                continue
+                            if not line.startswith("data:"):
+                                continue
+
+                            current_payload = line[5:].strip()
+
+                            # Fast path: many gateways emit one complete JSON chunk per data line.
+                            # Parse eagerly to support streams that omit blank-line event separators.
+                            if not pending_data_lines:
+                                events, should_stop, parsed_ok = _process_sse_data_payload(current_payload)
+                                if parsed_ok:
+                                    for _event in events:
+                                        yield _event
+                                    if should_stop:
+                                        break
+                                    continue
+
+                            # Fallback: buffer multiline payloads and flush on blank line or when parseable.
+                            pending_data_lines.append(current_payload)
+                            buffered_payload = "\n".join(pending_data_lines).strip()
+                            events, should_stop, parsed_ok = _process_sse_data_payload(buffered_payload)
+                            if parsed_ok:
+                                pending_data_lines.clear()
+                                for _event in events:
+                                    yield _event
+                                if should_stop:
+                                    break
+
+                        # Flush trailing event if stream closed without final blank line.
+                        events, should_stop = _flush_pending_event()
+                        for _event in events:
+                            yield _event
+                        if should_stop:
+                            return
 
         except httpx.ConnectError as exc:
             human_summary = self._build_human_readable_transport_error_summary(
@@ -3547,6 +3649,12 @@ class LLMService:
         """generate_content with active-config×2 retry + 3 fallback candidates."""
         from app.services.agent_service import agent_service
 
+        def _is_empty_success(result_dict: Dict[str, Any]) -> bool:
+            if not isinstance(result_dict, dict):
+                return True
+            content_text = str(result_dict.get("content") or "").strip()
+            return content_text == ""
+
         active_setting_id = (config.get("config") or {}).get("__resolved_setting_id")
         if user_id is None:
             user_id = (config.get("config") or {}).get("__resolved_user_id") or 1
@@ -3556,8 +3664,10 @@ class LLMService:
         for attempt in range(1, 3):
             result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
             content = str(result.get("content") or "")
-            if not content.startswith("Error:"):
+            if not content.startswith("Error:") and not _is_empty_success(result):
                 return self._attach_routing_metadata(result, config)
+            if not content.startswith("Error:") and _is_empty_success(result):
+                content = "Error: Empty LLM response"
             last_err = content
             if self._is_runtime_shutdown_text(content):
                 logger.warning(
@@ -3588,8 +3698,10 @@ class LLMService:
             )
             result = await self.generate_content(user_prompt, system_prompt, fb_cfg, image_urls, video_urls)
             content = str(result.get("content") or "")
-            if not content.startswith("Error:"):
+            if not content.startswith("Error:") and not _is_empty_success(result):
                 return self._attach_routing_metadata(result, fb_cfg)
+            if not content.startswith("Error:") and _is_empty_success(result):
+                content = "Error: Empty LLM response"
             last_err = content
             if self._is_runtime_shutdown_text(content):
                 logger.warning(

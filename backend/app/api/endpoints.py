@@ -1250,7 +1250,7 @@ def _persist_remote_image_result(
     try:
         response = requests.get(
             raw,
-            stream=True,
+            stream=False,
             timeout=120,
             allow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"},

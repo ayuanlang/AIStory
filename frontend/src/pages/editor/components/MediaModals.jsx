@@ -583,6 +583,9 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             filtered = filtered.filter((asset) => String(asset?.type || '').trim().toLowerCase() === assetTypeFilter);
         }
 
+        if (typeof window !== 'undefined') {
+            console.log('[素材选择][levelOneAssets]', filtered);
+        }
         return filtered;
     }, [allCleanData, assetTypeFilter, episodeFilter, episodeId, resolveAssetEpisodeId]);
 
@@ -597,9 +600,13 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             const entityName = String(meta?.entity_name || entityRecord?.name || '').trim() || `${t('实体', 'Entity')} #${eid}`;
             grouped.set(eid, entityName);
         });
-        return Array.from(grouped.entries())
+        const options = Array.from(grouped.entries())
             .map(([id, label]) => ({ id, label }))
             .sort((a, b) => String(a.label).localeCompare(String(b.label), undefined, { numeric: true }));
+        if (typeof window !== 'undefined') {
+            console.log('[素材选择][secondaryEntityOptions]', options);
+        }
+        return options;
     }, [entities, levelOneAssets, resolveAssetEntityId, t]);
 
     const secondaryShotOptions = useMemo(() => {
@@ -618,9 +625,13 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             }
             grouped.set(sid, label);
         });
-        return Array.from(grouped.entries())
+        const options = Array.from(grouped.entries())
             .map(([id, label]) => ({ id, label }))
             .sort((a, b) => String(a.label).localeCompare(String(b.label), undefined, { numeric: true }));
+        if (typeof window !== 'undefined') {
+            console.log('[素材选择][secondaryShotOptions]', options);
+        }
+        return options;
     }, [availableShots, levelOneAssets, resolveAssetShotId, t]);
 
     useEffect(() => {
@@ -887,6 +898,9 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 return true;
             });
 
+            if (typeof window !== 'undefined') {
+                console.log('[素材选择][cleanData]', cleanData);
+            }
             setAllCleanData(cleanData); // Save clean version to memory
         } catch (error) {
             console.error(error);
