@@ -5302,7 +5302,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         is_entity_design_phase = (effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"])
         
         # Execute the LLM loop generically for all modes
-        loop1_res = await _run_loop(messages)
+        try:
+            loop1_res = await _run_loop(messages)
+        except getattr(llm_service, "AmbiguousLLMTransportError", Exception) as e:
+            if type(e).__name__ == "AmbiguousLLMTransportError":
+                logger.error(f"[analyze_scene] {e}")
+                raise HTTPException(status_code=504, detail=str(e))
+            raise
         result_content_1 = loop1_res.get("result_content", "")
         
         # In phase 1, attach script_hash for future reference if needed

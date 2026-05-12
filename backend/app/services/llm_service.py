@@ -2291,6 +2291,8 @@ class LLMService:
                     finish_reason = response["finish_reason"]
             else:
                 logger.warning("Unexpected response type: %s", type(response))
+        except AmbiguousLLMTransportError:
+            raise
         except Exception as _collect_exc:
             logger.warning(
                 "[_collect_openai_compatible_text_response] request failed; using partial content parts=%d err=%s",
