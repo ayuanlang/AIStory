@@ -15,6 +15,7 @@
 
 - **[Node 1] World Bible (世界观与基础信息初始化)**
    - **确立视觉与改编基调对标**：吸收项目信息，指定1~2部最契合的标杆电影控制基调。不仅提炼色彩、质感、光影等全局视觉参数，还要确立叙事节奏、剧作结构方向（特别是开场抓力结构的构建）与戏剧张力等在剧本改编上的对标参考，并要求在随后的“剧本改编补充说明”中显式描述对标落实情况。
+  - **基础定位约束全局风格提取（新增强制）**：若上游 `Project Context` 中存在 `Type`、`Genre`、`Base Positioning`、受众定位、平台定位或其他基础项目定位信息，则这些字段必须先于自由风格化判断，作为 `Global_Style`、`tone`、`lighting` 以及对标影片选择的最高约束。`Global_Style` 不是自由发挥的审美标签，而是“基础定位约束下的视觉总基线”；严禁脱离基础定位单独抽取出相反的风格气质。
 - **[Node 2] 编剧视角 - 剧本改编与视觉化转译**
    - **核心戏剧视觉化**：彻底拒绝形容词，将原剧本的所有抽象描写、心理状态转译为客观可见的物理镜头动作与环境互动。
    - **结构与间隙补足**：强制补充开场抓力结构、过渡桥接、闪回过渡以及特殊设备交互细节，形成完整紧凑的视觉推演链。
@@ -434,19 +435,22 @@
 ### Project Visual Backfill（紧跟 Subject Index，使用 JSON 格式）
 - **分隔符强制要求**：在上方 Subject Index 彻底输出完毕后，**必须强制输出一条明显的分隔线 `---------`**，然后再开始输出本 JSON 模块。
 - **定位说明**：作为世界观沉淀实体，不需描述具体的角色或物件，而是提炼全剧总体的视觉基调参数（如全局色彩基调、整体质感、年代特征、镜头/光影风格等），并需特别提供一句话说明（不超过50字）借鉴了哪些对标参考影片的具体视听内容。该模块必须以标准的 JSON 格式单独输出，不再混入 `Subject Index` 行内。
+- **基础定位驱动规则（新增强制）**：提取 `project_visual_backfill` 时，必须优先读取并显式吸收 `Project Context.Type`、`Genre`、`Base Positioning`、时代、地域、受众定位与项目调性。`Global_Style` 必须是这些基础定位约束之后的总结性提炼，不能只写空泛的“电影感 / 高级感 / 戏剧化 / 氛围感”。如果 `Base Positioning` 已经指出如“都市轻喜剧 / 情感治愈 / 现实主义 / 仙侠传奇 / 悬疑惊悚”等方向，则 `Global_Style`、`tone`、`lighting` 与 `borrowed_films` 的选择都必须与之同体系一致，禁止逆定位抽取。
+- **逆定位禁止规则（新增强制）**：若基础定位偏喜剧、轻松、治愈、浪漫、青春或生活流，`Global_Style` 不得默认提炼成阴郁黑色电影、重度压抑惊悚、病态冷峻等相反体系；若基础定位偏恐怖、惊悚、悬疑压迫，则才允许把低照度、高反差、不安色温作为总基线。写实项目应优先提炼真实、克制、可信的材质与光学逻辑；仙侠/幻想项目应优先提炼飘逸、灵性、超现实秩序感，而不是一律落到现代都市写实风。
 - **JSON 格式要求**：键值对必须包含 `"Global_Style"`, `"borrowed_films"`, `"borrowed_films_note"`, `"tone"`, `"lighting"` 等。
+- **字段联动要求（新增强制）**：`Global_Style` 负责概括“基础定位约束下的总视觉体系”；`tone` 负责提炼该定位下的情绪关键词；`lighting` 负责提炼该定位下的主要布光倾向；`borrowed_films` 只可选择与该基础定位同体系、可作为参考的影片。四者必须互相印证，不得出现 `Base Positioning` 是轻喜剧、`Global_Style` 却写成 noir thriller、`lighting` 却写成 heavy low-key horror lighting 这类相互冲突的组合。
 - **输出示例（禁止照抄具体值，仅做语法参考）**：
 ```json
 {
   "project_visual_backfill": {
-    "Global_Style": "写实颗粒感电影质感，强调严肃氛围与场景考究",
+    "Global_Style": "当代真人写实质感，偏温润通透的都市情感治愈风格",
     "borrowed_films": [
-      "Sicario",
-      "Se7en"
+      "Little Forest",
+      "Our Little Sister"
     ],
-    "borrowed_films_note": "主要借鉴冷峻克制的低调打光与压抑调查氛围。",
-    "tone": "tense, restrained, investigative",
-    "lighting": "low-key with cool-warm shadow contrasts"
+    "borrowed_films_note": "主要借鉴自然日光、生活流空间呼吸感与温和克制的情绪观察。",
+    "tone": "gentle, intimate, restrained",
+    "lighting": "soft motivated daylight with warm practical fill"
   }
 }
 ```

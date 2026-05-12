@@ -65,6 +65,12 @@ export const PROJECT_EP_BASE_POSITIONING_OPTIONS = [
 
     "都市情感 / Urban Romance",
 
+    "都市轻喜剧 / Urban Light Comedy",
+
+    "情感治愈 / Emotional Healing Drama",
+
+    "浪漫爱情 / Romance",
+
     "科幻冒险 / Sci-Fi Adventure",
 
     "悬疑惊悚 / Mystery / Thriller",
@@ -72,6 +78,8 @@ export const PROJECT_EP_BASE_POSITIONING_OPTIONS = [
     "古装武侠 / Period / Wuxia",
 
     "仙侠修真 / Xianxia",
+
+    "东方奇幻 / Eastern Fantasy",
 
     "穿越 / Transmigration",
 
@@ -82,6 +90,8 @@ export const PROJECT_EP_BASE_POSITIONING_OPTIONS = [
     "校园青春 / High School / Youth",
 
     "赛博朋克 / Cyberpunk",
+
+    "现实主义 / Realism",
 
     "恐怖 / Horror",
 
@@ -239,25 +249,41 @@ export const PROJECT_EP_QUALITY_OPTIONS = [
 
 export const PROJECT_SCENE_ANALYSIS_ERA_OPTIONS = [
 
-    "当代",
+    "上古 / Antiquity",
 
-    "近未来",
-
-    "民国近代",
+    "先秦 / Pre-Qin",
 
     "古代",
 
     "秦朝 / Qin",
 
+    "汉朝 / Han",
+
+    "三国 / Three Kingdoms",
+
+    "魏晋 / Wei-Jin",
+
+    "南北朝 / Northern and Southern Dynasties",
+
+    "隋朝 / Sui",
+
     "唐朝 / Tang",
 
     "宋朝 / Song",
 
-    "元 / Yuan",
+    "元朝 / Yuan",
 
     "明朝 / Ming",
 
     "清朝 / Qing",
+
+    "民国 / Republican China",
+
+    "解放初期 / Early PRC",
+
+    "当代",
+
+    "近未来",
 
     "架空时代",
 
@@ -393,13 +419,13 @@ export const PROJECT_SCENE_ANALYSIS_CONTINUITY_OPTIONS = [
 
 export const PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS = [
 
-    "普通可播",
+    "全年龄通用可播 / General Audience",
 
-    "严格平台合规",
+    "平台严格合规可播 / Strict Platform Compliance",
 
-    "青少年向",
+    "青少年友好可播 / Youth Friendly",
 
-    "成人向但非露骨",
+    "成人题材但非露骨可播 / Mature but Non-Explicit",
 
 ];
 
@@ -525,11 +551,23 @@ const PROJECT_EP_BASE_POSITIONING_LEGACY_MAP = {
 
     "Urban Romance": "都市情感 / Urban Romance",
 
+    "Urban Light Comedy": "都市轻喜剧 / Urban Light Comedy",
+
+    "Emotional Healing Drama": "情感治愈 / Emotional Healing Drama",
+
+    "Romance": "浪漫爱情 / Romance",
+
     "Sci-Fi Adventure": "科幻冒险 / Sci-Fi Adventure",
 
     "Mystery / Thriller": "悬疑惊悚 / Mystery / Thriller",
 
     "Period / Wuxia": "古装武侠 / Period / Wuxia",
+
+    "Xianxia": "仙侠修真 / Xianxia",
+
+    "Eastern Fantasy": "东方奇幻 / Eastern Fantasy",
+
+    "Transmigration": "穿越 / Transmigration",
 
     "Fantasy Epic": "奇幻史诗 / Fantasy Epic",
 
@@ -538,6 +576,8 @@ const PROJECT_EP_BASE_POSITIONING_LEGACY_MAP = {
     "High School / Youth": "校园青春 / High School / Youth",
 
     "Cyberpunk": "赛博朋克 / Cyberpunk",
+
+    "Realism": "现实主义 / Realism",
 
     "Horror": "恐怖 / Horror",
 
@@ -551,11 +591,23 @@ const PROJECT_EP_BASE_POSITIONING_LEGACY_MAP = {
 
     "都市情感": "都市情感 / Urban Romance",
 
+    "都市轻喜剧": "都市轻喜剧 / Urban Light Comedy",
+
+    "情感治愈": "情感治愈 / Emotional Healing Drama",
+
+    "浪漫爱情": "浪漫爱情 / Romance",
+
     "科幻冒险": "科幻冒险 / Sci-Fi Adventure",
 
     "悬疑惊悚": "悬疑惊悚 / Mystery / Thriller",
 
     "古装武侠": "古装武侠 / Period / Wuxia",
+
+    "仙侠修真": "仙侠修真 / Xianxia",
+
+    "东方奇幻": "东方奇幻 / Eastern Fantasy",
+
+    "穿越": "穿越 / Transmigration",
 
     "奇幻史诗": "奇幻史诗 / Fantasy Epic",
 
@@ -564,6 +616,8 @@ const PROJECT_EP_BASE_POSITIONING_LEGACY_MAP = {
     "校园青春": "校园青春 / High School / Youth",
 
     "赛博朋克": "赛博朋克 / Cyberpunk",
+
+    "现实主义": "现实主义 / Realism",
 
     "恐怖": "恐怖 / Horror",
 
@@ -729,6 +783,120 @@ const PROJECT_EP_QUALITY_LEGACY_MAP = {
 
 
 
+const PROJECT_SCENE_ANALYSIS_ERA_LEGACY_MAP = {
+
+    "上古": "上古 / Antiquity",
+
+    "Antiquity": "上古 / Antiquity",
+
+    "先秦": "先秦 / Pre-Qin",
+
+    "Pre-Qin": "先秦 / Pre-Qin",
+
+    "秦": "秦朝 / Qin",
+
+    "秦朝": "秦朝 / Qin",
+
+    "Qin": "秦朝 / Qin",
+
+    "汉": "汉朝 / Han",
+
+    "汉朝": "汉朝 / Han",
+
+    "Han": "汉朝 / Han",
+
+    "三国": "三国 / Three Kingdoms",
+
+    "Three Kingdoms": "三国 / Three Kingdoms",
+
+    "魏晋": "魏晋 / Wei-Jin",
+
+    "Wei-Jin": "魏晋 / Wei-Jin",
+
+    "南北朝": "南北朝 / Northern and Southern Dynasties",
+
+    "Northern and Southern Dynasties": "南北朝 / Northern and Southern Dynasties",
+
+    "隋": "隋朝 / Sui",
+
+    "隋朝": "隋朝 / Sui",
+
+    "Sui": "隋朝 / Sui",
+
+    "唐": "唐朝 / Tang",
+
+    "唐朝": "唐朝 / Tang",
+
+    "Tang": "唐朝 / Tang",
+
+    "宋": "宋朝 / Song",
+
+    "宋朝": "宋朝 / Song",
+
+    "Song": "宋朝 / Song",
+
+    "元": "元朝 / Yuan",
+
+    "元朝": "元朝 / Yuan",
+
+    "Yuan": "元朝 / Yuan",
+
+    "明": "明朝 / Ming",
+
+    "明朝": "明朝 / Ming",
+
+    "Ming": "明朝 / Ming",
+
+    "清": "清朝 / Qing",
+
+    "清朝": "清朝 / Qing",
+
+    "Qing": "清朝 / Qing",
+
+    "民国": "民国 / Republican China",
+
+    "民国近代": "民国 / Republican China",
+
+    "Republican China": "民国 / Republican China",
+
+    "解放初期": "解放初期 / Early PRC",
+
+    "Early PRC": "解放初期 / Early PRC",
+
+};
+
+
+
+const PROJECT_SCENE_ANALYSIS_SAFETY_LEGACY_MAP = {
+
+    "普通可播": "全年龄通用可播 / General Audience",
+
+    "全年龄通用可播": "全年龄通用可播 / General Audience",
+
+    "General Audience": "全年龄通用可播 / General Audience",
+
+    "严格平台合规": "平台严格合规可播 / Strict Platform Compliance",
+
+    "平台严格合规可播": "平台严格合规可播 / Strict Platform Compliance",
+
+    "Strict Platform Compliance": "平台严格合规可播 / Strict Platform Compliance",
+
+    "青少年向": "青少年友好可播 / Youth Friendly",
+
+    "青少年友好可播": "青少年友好可播 / Youth Friendly",
+
+    "Youth Friendly": "青少年友好可播 / Youth Friendly",
+
+    "成人向但非露骨": "成人题材但非露骨可播 / Mature but Non-Explicit",
+
+    "成人题材但非露骨可播": "成人题材但非露骨可播 / Mature but Non-Explicit",
+
+    "Mature but Non-Explicit": "成人题材但非露骨可播 / Mature but Non-Explicit",
+
+};
+
+
+
 export const normalizeProjectEpisodeType = (value) => {
 
     const raw = String(value || '').trim();
@@ -822,6 +990,34 @@ export const normalizeProjectEpisodeQuality = (value) => {
     if (PROJECT_EP_QUALITY_OPTIONS.includes(raw)) return raw;
 
     return PROJECT_EP_QUALITY_LEGACY_MAP[raw] || raw;
+
+};
+
+
+
+export const normalizeProjectSceneAnalysisEra = (value) => {
+
+    const raw = String(value || '').trim();
+
+    if (!raw) return raw;
+
+    if (PROJECT_SCENE_ANALYSIS_ERA_OPTIONS.includes(raw)) return raw;
+
+    return PROJECT_SCENE_ANALYSIS_ERA_LEGACY_MAP[raw] || raw;
+
+};
+
+
+
+export const normalizeProjectSceneAnalysisSafety = (value) => {
+
+    const raw = String(value || '').trim();
+
+    if (!raw) return raw;
+
+    if (PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS.includes(raw)) return raw;
+
+    return PROJECT_SCENE_ANALYSIS_SAFETY_LEGACY_MAP[raw] || raw;
 
 };
 export const PROJECT_EP_LENS_PREFERENCE_OPTIONS = ['默认 / Default', '长镜头 / Long Take', '短镜头 / Short Take', '特写偏好 / Close-up Preference', '全景偏好 / Wide-shot Preference'];

@@ -145,6 +145,8 @@ import {
     normalizeProjectEpisodeType,
     normalizeProjectEpisodeLanguage,
     normalizeProjectEpisodeBasePositioning,
+    normalizeProjectSceneAnalysisEra,
+    normalizeProjectSceneAnalysisSafety,
     normalizeProjectEpisodeGlobalStyle,
     normalizeProjectEpisodeTone,
     normalizeProjectEpisodeLighting,
@@ -901,6 +903,8 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                      merged.type = normalizeProjectEpisodeType(merged.type);
                      merged.language = normalizeProjectEpisodeLanguage(merged.language);
                      merged.base_positioning = normalizeProjectEpisodeBasePositioning(merged.base_positioning);
+                     merged.era = normalizeProjectSceneAnalysisEra(merged.era);
+                     merged.broadcast_safety_level = normalizeProjectSceneAnalysisSafety(merged.broadcast_safety_level);
                      merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
                      merged.tone = normalizeProjectEpisodeTone(merged.tone);
                      merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);

@@ -96,6 +96,9 @@ import {
     PROJECT_SCENE_ANALYSIS_DEFAULTS,
     PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS,
     PROJECT_EP_CREATIVITY_OPTIONS,
+    normalizeProjectEpisodeBasePositioning,
+    normalizeProjectSceneAnalysisEra,
+    normalizeProjectSceneAnalysisSafety,
 } from './editor/projectOptionConfig';
 
 const cinematicImages = [
@@ -238,7 +241,13 @@ const normalizeProjectCreateOptions = (payload) => {
     const type = uniqueNonEmptyStrings(safe.type);
     const countryRegion = uniqueNonEmptyStrings(safe.country_region);
     const language = uniqueNonEmptyStrings(safe.language);
-    const basePositioning = uniqueNonEmptyStrings(safe.base_positioning);
+    const basePositioning = uniqueNonEmptyStrings([
+        ...(Array.isArray(safe.base_positioning) ? safe.base_positioning : []),
+        ...PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning,
+    ]);
+    const normalizedBasePositioning = uniqueNonEmptyStrings(
+        basePositioning.map(normalizeProjectEpisodeBasePositioning).filter(Boolean)
+    );
     const aspectRatio = uniqueNonEmptyStrings(safe.aspect_ratio);
     const imageSize = uniqueNonEmptyStrings([
         ...(Array.isArray(safe.image_size) ? safe.image_size : []),
@@ -246,9 +255,21 @@ const normalizeProjectCreateOptions = (payload) => {
     ]);
 
 
-    const era = uniqueNonEmptyStrings(safe.era);
+    const era = uniqueNonEmptyStrings([
+        ...(Array.isArray(safe.era) ? safe.era : []),
+        ...PROJECT_CREATE_DEFAULT_OPTIONS.era,
+    ]);
+    const normalizedEra = uniqueNonEmptyStrings(
+        era.map(normalizeProjectSceneAnalysisEra).filter(Boolean)
+    );
     const lensPreference = uniqueNonEmptyStrings(safe.lens_preference);
-    const broadcastSafetyLevel = uniqueNonEmptyStrings(safe.broadcast_safety_level);
+    const broadcastSafetyLevel = uniqueNonEmptyStrings([
+        ...(Array.isArray(safe.broadcast_safety_level) ? safe.broadcast_safety_level : []),
+        ...PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level,
+    ]);
+    const normalizedBroadcastSafetyLevel = uniqueNonEmptyStrings(
+        broadcastSafetyLevel.map(normalizeProjectSceneAnalysisSafety).filter(Boolean)
+    );
     const videoGenerationPreference = uniqueNonEmptyStrings(safe.video_generation_preference);
     const creativity = uniqueNonEmptyStrings(safe.creativity);
     const resolution = uniqueNonEmptyStrings(safe.resolution);
@@ -260,12 +281,12 @@ const normalizeProjectCreateOptions = (payload) => {
         type: type.length ? type : [...PROJECT_CREATE_DEFAULT_OPTIONS.type],
         country_region: countryRegion.length ? countryRegion : [...PROJECT_CREATE_DEFAULT_OPTIONS.country_region],
         language: language.length ? language : [...PROJECT_CREATE_DEFAULT_OPTIONS.language],
-        base_positioning: basePositioning.length ? basePositioning : [...PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning],
+        base_positioning: normalizedBasePositioning.length ? normalizedBasePositioning : [...PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning],
         aspect_ratio: aspectRatio.length ? aspectRatio : [...PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio],
         image_size: imageSize.length ? imageSize : [...PROJECT_CREATE_DEFAULT_OPTIONS.image_size],
-        era: era.length ? era : [...PROJECT_CREATE_DEFAULT_OPTIONS.era],
+        era: normalizedEra.length ? normalizedEra : [...PROJECT_CREATE_DEFAULT_OPTIONS.era],
         lens_preference: lensPreference.length ? lensPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference],
-        broadcast_safety_level: broadcastSafetyLevel.length ? broadcastSafetyLevel : [...PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level],
+        broadcast_safety_level: normalizedBroadcastSafetyLevel.length ? normalizedBroadcastSafetyLevel : [...PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level],
         video_generation_preference: videoGenerationPreference.length ? videoGenerationPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference],
         creativity: creativity.length ? creativity : [...PROJECT_CREATE_DEFAULT_OPTIONS.creativity],
         resolution: resolution.length ? resolution : [...PROJECT_CREATE_DEFAULT_OPTIONS.resolution],
@@ -1923,7 +1944,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                             </datalist>
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('播出安全级', 'Broadcast Safety Level')}</label>
+                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('播出安全等级', 'Broadcast Safety Level')}</label>
                                                 <input list="list-newBroadcastSafetyLevel" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newBroadcastSafetyLevel} onChange={(e) => setNewBroadcastSafetyLevel(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
                                                             <datalist id="list-newBroadcastSafetyLevel">
                                                                 {projectCreateOptions.broadcast_safety_level.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}

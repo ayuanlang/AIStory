@@ -726,21 +726,24 @@
 - 该对象用于回填项目信息中的视觉字段，必须包含且仅包含以下键：
   - `Global_Style`（字符串）
   - `borrowed_films`（字符串数组）
+  - `borrowed_films_note`（字符串）
   - `tone`（字符串）
   - `lighting`（字符串）
 - 若剧本无法可靠推断某字段，仍需保留键并给空值（空字符串或空数组），禁止省略键。
 - 该对象值必须与本次分析语义一致，不得与 Part 1/Part 2 互相冲突。
 - `Global_Style` 强制回写 `Project Context.Type + Base Positioning`（Mandatory）：若输入项目信息中存在 `Type` 与/或 `Base Positioning`，`Global_Style` 必须显式吸收它们，不能只给抽象氛围词。必须写清项目属于何种视觉体系，并结合 `Base Positioning` 给出整体风格基线；若项目未明确具体分支，就保持风格统一且中性，不得自行偷跑预设分支。
 - `Global_Style` 与 subjects 一致性硬规则（Mandatory）：沿用总则第 18-19 条与 Part 2 共同复核规则；此处只要求 `project_visual_backfill` 与之保持完全一致。
+- `borrowed_films_note` 必须用一句短说明概括借鉴的是哪些具体视听做法，且必须与 `Global_Style`、`tone`、`lighting` 同体系一致。
 - `borrowed_films` 中每一项必须是可读的影片名，不要拼接解释文本。
 
 ```json
 {
   "project_visual_backfill": {
-    "Global_Style": "Cinematic realism with restrained noir contrast",
-    "borrowed_films": ["Sicario", "Blade Runner 2049"],
-    "tone": "tense, restrained, melancholic",
-    "lighting": "low-key motivated practical lighting with cool shadows"
+    "Global_Style": "Contemporary live-action realism with warm, breathable urban healing-drama styling",
+    "borrowed_films": ["Little Forest", "Our Little Sister"],
+    "borrowed_films_note": "Borrow the natural daylight softness, lived-in spatial breathing room, and restrained emotional observation.",
+    "tone": "gentle, intimate, restrained",
+    "lighting": "soft motivated daylight with warm practical fill"
   }
 }
 ```
