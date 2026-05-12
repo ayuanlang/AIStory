@@ -399,6 +399,23 @@ const UserAdmin = () => {
         end_time: ''
     });
     const [runtimeLogContent, setRuntimeLogContent] = useState('');
+    const [llmLogs, setLlmLogs] = useState([]);
+    const [isLlmLogsLoading, setIsLlmLogsLoading] = useState(false);
+    const [llmLogsError, setLlmLogsError] = useState('');
+    const [selectedLlmLog, setSelectedLlmLog] = useState(null);
+
+    const fetchLlmLogs = async () => {
+        setIsLlmLogsLoading(true);
+        setLlmLogsError('');
+        try {
+            const logs = await getLlmCallLogs({ limit: 100 });
+            setLlmLogs(logs || []);
+        } catch (e) {
+            setLlmLogsError(e.response?.data?.detail || e.message);
+        } finally {
+            setIsLlmLogsLoading(false);
+        }
+    };
     const [isRuntimeLogsLoading, setIsRuntimeLogsLoading] = useState(false);
     const [runtimeLogsError, setRuntimeLogsError] = useState('');
     const runtimeLogPreRef = React.useRef(null);
@@ -933,6 +950,9 @@ const UserAdmin = () => {
     }, [activeTab]);
 
     useEffect(() => {
+        if (activeTab === 'llm_logs') {
+            fetchLlmLogs();
+        }
         if (activeTab === 'runtime_logs') {
             fetchRuntimeLogs();
         }
@@ -9221,6 +9241,61 @@ const UserAdmin = () => {
                                 </div>
                             )}
 
+                      {/* LLM CALL LOGS */}
+                      {activeTab === 'llm_logs' && (
+                          <div className="space-y-4">
+                              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                  <h3 className="text-lg font-bold">{t('LLM 调用日志', 'LLM Call Logs')}</h3>
+                                  <div className="flex gap-2">
+                                      <button className="px-3 py-1 flex items-center gap-1 bg-primary text-white rounded hover:bg-primary/90" onClick={() => fetchLlmLogs()}>
+                                          <RefreshCw className="w-4 h-4" /> {t('刷新', 'Refresh')}
+                                      </button>
+                                  </div>
+                              </div>
+                              {isLlmLogsLoading ? (
+                                  <div className="flex justify-center p-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>
+                              ) : llmLogsError ? (
+                                  <div className="p-4 text-red-400 bg-red-400/10 rounded-xl">{llmLogsError}</div>
+                              ) : (
+                                  <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden overflow-x-auto">
+                                      <table className="w-full text-sm text-left">
+                                          <thead className="text-xs uppercase bg-black/40 text-gray-400">
+                                              <tr>
+                                                  <th className="px-4 py-3">ID</th>
+                                                  <th className="px-4 py-3">Time</th>
+                                                  <th className="px-4 py-3">Provider</th>
+                                                  <th className="px-4 py-3">Model</th>
+                                                  <th className="px-4 py-3">Tag</th>
+                                                  <th className="px-4 py-3">Latency</th>
+                                                  <th className="px-4 py-3">API URL</th>
+                                                  <th className="px-4 py-3">Details</th>
+                                              </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-white/5">
+                                              {llmLogs.map(log => (
+                                                  <tr key={log.id} className="hover:bg-white/5">
+                                                      <td className="px-4 py-3 opacity-60">#{log.id}</td>
+                                                      <td className="px-4 py-3 whitespace-nowrap">{new Date(log.timestamp + 'Z').toLocaleString()}</td>
+                                                      <td className="px-4 py-3 whitespace-nowrap">{log.provider}</td>
+                                                      <td className="px-4 py-3 whitespace-nowrap">{log.model}</td>
+                                                      <td className="px-4 py-3 whitespace-nowrap">{log.tag}</td>
+                                                      <td className="px-4 py-3 whitespace-nowrap">{log.latency_ms ? `${log.latency_ms}ms` : '-'}</td>
+                                                      <td className="px-4 py-3 whitespace-nowrap">{log.api_url ? log.api_url : '-'}</td>
+                                                      <td className="px-4 py-3">
+                                                          <button className="text-primary hover:underline text-xs" onClick={() => setSelectedLlmLog(log)}>{t('查看', 'View')}</button>
+                                                      </td>
+                                                  </tr>
+                                              ))}
+                                              {llmLogs.length === 0 && (
+                                                  <tr><td colSpan="8" className="px-4 py-8 text-center text-gray-500">{t('暂无日志', 'No logs found')}</td></tr>
+                                              )}
+                                          </tbody>
+                                      </table>
+                                  </div>
+                              )}
+                          </div>
+                      )}
+
                       {/* RUNTIME LOGS TAB */}
                       {activeTab === 'runtime_logs' && (
                         <div className="space-y-4">
@@ -9815,6 +9890,44 @@ const UserAdmin = () => {
                         <div className="mt-6 flex justify-end gap-2">
                             <button onClick={() => setUserEditModal(null)} className="px-4 py-2 hover:bg-gray-800 rounded">{t('取消', 'Cancel')}</button>
                             <button onClick={handleSaveUserModal} disabled={isSavingUserEditModal} className="px-4 py-2 bg-primary hover:bg-primary/90 text-white font-bold rounded disabled:opacity-50">{isSavingUserEditModal ? t('保存中...', 'Saving...') : t('保存', 'Save')}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {/* LLM Log Detail Modal */}
+            {selectedLlmLog && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                    <div className="bg-gray-900 border border-white/10 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[85vh]">
+                        <div className="flex justify-between items-center p-4 border-b border-white/10">
+                            <h3 className="text-lg font-bold">{t('LLM 调用日志详情', 'LLM Call Log Details')} #{selectedLlmLog.id}</h3>
+                            <button onClick={() => setSelectedLlmLog(null)} className="text-gray-400 hover:text-white"><X className="w-5 h-5" /></button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="bg-white/5 p-3 rounded-xl"><div className="text-gray-500 text-xs">Provider</div><div>{selectedLlmLog.provider}</div></div>
+                                <div className="bg-white/5 p-3 rounded-xl"><div className="text-gray-500 text-xs">Model</div><div>{selectedLlmLog.model}</div></div>
+                                <div className="bg-white/5 p-3 rounded-xl"><div className="text-gray-500 text-xs">Tag</div><div>{selectedLlmLog.tag}</div></div>
+                                <div className="bg-white/5 p-3 rounded-xl"><div className="text-gray-500 text-xs">Latency</div><div>{selectedLlmLog.latency_ms ? `${selectedLlmLog.latency_ms}ms` : '-'}</div></div>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="text-gray-500 text-xs">API URL</div>
+                                <div className="bg-white/5 p-3 rounded-xl break-all">{selectedLlmLog.api_url || '-'}</div>
+                            </div>
+                            {selectedLlmLog.error_msg && (
+                                <div className="space-y-1">
+                                    <div className="text-red-400 text-xs">Error Message</div>
+                                    <div className="bg-red-500/10 text-red-200 border border-red-500/20 p-3 rounded-xl whitespace-pre-wrap break-words">{selectedLlmLog.error_msg}</div>
+                                </div>
+                            )}
+                            <div className="space-y-1">
+                                <div className="text-gray-500 text-xs">Payload JSON</div>
+                                <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{selectedLlmLog.payload_json}</pre>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="text-gray-500 text-xs">Response JSON</div>
+                                <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{selectedLlmLog.response_json}</pre>
+                            </div>
                         </div>
                     </div>
                 </div>

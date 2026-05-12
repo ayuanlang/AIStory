@@ -6,6 +6,7 @@ import { useLog } from '../../../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
+import LLMResultPanel from './LLMResultPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
 import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -6245,6 +6246,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
+    const phase1AnalysisReport = useMemo(() => {
+        if (!analysisUiReport) return null;
+        if (analysisFlowStatus?.phase === 'analysis' || analysisFlowStatus?.phase === 'scene') {
+            return { status: 'running' };
+        }
+        if (analysisFlowStatus?.phase === 'failed') return { status: 'error', error: analysisFlowStatus.message || analysisUiReport.error };
+        if (analysisUiReport.status === 'completed' || analysisFlowStatus?.phase === 'asset_generation' || analysisFlowStatus?.phase === 'supplement') {
+            return { status: 'completed' };
+        }
+        return { status: analysisUiReport.status, error: analysisUiReport.error, warning: analysisUiReport.warning };
+    }, [analysisUiReport, analysisFlowStatus]);
+
+    const phase2AnalysisReport = useMemo(() => {
+        if (!analysisUiReport) return null;
+        if (analysisFlowStatus?.phase === 'asset_generation' || analysisFlowStatus?.phase === 'supplement') {
+            return { status: 'running' };
+        }
+        if (analysisFlowStatus?.phase === 'failed') return { status: 'error', error: analysisFlowStatus.message || analysisUiReport.error };
+        if (analysisUiReport.status === 'completed' && analysisFlowStatus?.phase === 'completed') {
+            return { status: 'completed' };
+        }
+        if (analysisFlowStatus?.phase === 'analysis' || analysisFlowStatus?.phase === 'scene') return null;
+        return { status: analysisUiReport.status, error: analysisUiReport.error, warning: analysisUiReport.warning };
+    }, [analysisUiReport, analysisFlowStatus]);
+
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
     return (
@@ -6588,6 +6614,76 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </table>
                         </div>
                     )}
+                </div>
+
+                <div className="flex gap-4 min-h-[250px] shrink-0 border-t border-white/10 pt-4 px-6 pb-6">
+                    {/* Phase 1 Panel */}
+                    <div className="flex-1 overflow-hidden">
+                        <LLMResultPanel
+                            title={t('第一阶段解构', 'Phase 1: Analysis')}
+                            t={t}
+                            report={phase1AnalysisReport}
+                            rawText={llmRawResultContent}
+                            onRawTextChange={handleLlmRawContentChange}
+                            onRawTextBlur={handleSaveLlmRawContent}
+                            placeholder={t('第一阶段解构原文本数据...', 'Phase 1 raw text...')}
+                        />
+                    </div>
+                    {/* Phase 2 Panel */}
+                    <div className="flex-1 overflow-hidden">
+                        <LLMResultPanel
+                            title={t('第二阶段解构（出图资产）', 'Phase 2: Assets')}
+                            t={t}
+                            report={phase2AnalysisReport}
+                            rawText={llmAssetRawResultContent}
+                            onRawTextChange={setLlmAssetRawResultContent}
+                            placeholder={t('第二阶段解构原文本数据...', 'Phase 2 raw text...')}
+                            extraContent={
+                                <div className="rounded-lg border border-white/10 bg-black/20 p-4 mt-2">
+                                    <div className="font-bold text-white/90 text-sm mb-3">
+                                        解析 {t('Subject Index', 'Phase 2 Subject Index')}
+                                    </div>
+                                    <div className="space-y-3">
+                                        <textarea 
+                                            className="w-full h-32 p-3 bg-black/30 border border-white/10 rounded-md text-white/80 font-mono text-xs resize-none focus:outline-none"
+                                            value={subjectIndexText}
+                                            onChange={(e) => setSubjectIndexText(e.target.value)}
+                                            readOnly={!isEditingSubjectIndex}
+                                            placeholder={t('粘贴提取的 Subject Index...', 'Paste Index...')}
+                                        />
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={() => setIsEditingSubjectIndex(!isEditingSubjectIndex)}
+                                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-500/20 text-blue-300"
+                                            >
+                                                {isEditingSubjectIndex ? t('完成', 'Done') : t('编辑', 'Edit')}
+                                            </button>
+                                            {isEditingSubjectIndex && (
+                                                <button
+                                                    onClick={async () => {
+                                                        try {
+                                                            await updateEpisode(activeEpisode.id, { ai_scene_analysis_subject_index: subjectIndexText });
+                                                            setIsEditingSubjectIndex(false);
+                                                        } catch (e) {}
+                                                    }}
+                                                    className="px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-500/20 text-emerald-300"
+                                                >
+                                                    {t('保存', 'Save')}
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={handleRetryPhase2}
+                                                disabled={isAnalyzing}
+                                                className="px-3 py-1.5 font-bold rounded-lg text-[11px] bg-amber-500 text-black ml-auto"
+                                            >
+                                                {t('基于当前 Index 重新执行第二阶段', 'Run Phase 2 on Index')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        />
+                    </div>
                 </div>
 
                 {isSuperuser && (
