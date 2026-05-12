@@ -5462,8 +5462,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         blocking_subject_warnings: List[str] = []
         if not is_entity_design_phase:
             has_subject_index = bool(
-                re.search(r"(?i)subject\s*index", str(result_content or ""))
-                or re.search(r"(?i)subject_no", str(result_content or ""))
+                re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", str(result_content or ""))
+                or re.search(r"(?i)(?:subject_no|subject_type)", str(result_content or ""))
             )
             if not has_subject_index:
                 blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
