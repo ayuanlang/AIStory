@@ -3100,8 +3100,7 @@ class LLMService:
             payload = {
                 "model": model,
                 "input": self._build_n1n_responses_input(messages),
-                # n1n responses can return non-SSE JSON; force JSON mode for stable parsing.
-                "stream": False,
+                "stream": (extra_config or {}).get("stream", True),
             }
             payload.update(self._extract_n1n_responses_options(extra_config or {}))
         elif provider == "kie" and resolved_category == "LLM" and kie_transport_kind == "responses":
@@ -3109,8 +3108,7 @@ class LLMService:
             payload = {
                 "model": resolved_model,
                 "input": response_input,
-                # KIE responses endpoint is more reliable in non-stream JSON mode.
-                "stream": False,
+                "stream": (extra_config or {}).get("stream", True),
             }
             if instructions:
                 payload["instructions"] = instructions
