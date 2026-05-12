@@ -546,7 +546,11 @@ const AssetsLibrary = () => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
     const { addLog } = useLog();
+    
     const [assets, setAssets] = useState([]);
+    const [isSourceIds, setIsSourceIds] = useState(new Set());
+    const [isDependentIds, setIsDependentIds] = useState(new Set());
+
     const [isSourceIds, setIsSourceIds] = useState(new Set());
     const [isDependentIds, setIsDependentIds] = useState(new Set());
     const [filter, setFilter] = useState('all'); // all, image, video

@@ -2891,6 +2891,15 @@ export const getAdminRuntimeLogFiles = async () => {
     return response.data;
 }
 
+export const getLlmCallLogs = async (params = {}) => {
+    const { limit = 100, offset = 0, provider, tag } = params;
+    let url = `/llm_logs?limit=${limit}&offset=${offset}`;
+    if (provider) url += `&provider=${encodeURIComponent(provider)}`;
+    if (tag) url += `&tag=${encodeURIComponent(tag)}`;
+    const response = await api.get(url);
+    return response.data;
+}
+
 export const getAdminRuntimeLogView = async (params = {}) => {
     const response = await api.get('/admin/runtime-logs/view', { params });
     return response.data;

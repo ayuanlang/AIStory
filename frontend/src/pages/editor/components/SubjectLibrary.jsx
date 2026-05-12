@@ -2853,6 +2853,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     const handleCreate = async () => {
         setCreateMode('manual');
+        setCreateMode('manual');
         // Create a temporary "New Entity" state to open the modal in "Create Mode"
         // We use a special ID 'new' to signal that this is not yet in DB
         setViewingEntity({

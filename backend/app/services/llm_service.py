@@ -2251,59 +2251,39 @@ class LLMService:
         messages: List[Dict],
         extra_config: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
-        """Collect OpenAI-compatible output without streaming and expose generic text response fields."""
+        """Collect OpenAI-compatible output with streaming to expose generic text response fields and bypass gateway timeouts."""
         raw_content = ""
         usage: Dict[str, Any] = {}
         finish_reason = "stop"
+        parts_count = 0
 
         try:
-            # Replace streaming logic with a single non-streaming request
-            response = await self._raw_llm_request(base_url, api_key, model, messages, extra_config)
-            logger.info(
-                "[COLLECT] upstream response type=%s",
-                type(response).__name__,
-            )
-            if isinstance(response, str):
-                raw_content = response
-                logger.info(
-                    "[COLLECT] upstream string len=%d snippet=%r",
-                    len(raw_content),
-                    _strip_base64_from_log(raw_content[:120]),
-                )
-            elif isinstance(response, dict):
-                # Backward compatibility: tolerate legacy streaming-like event payloads.
-                logger.info(
-                    "[COLLECT] upstream dict keys=%s has_usage=%s finish_reason=%s type_field=%s",
-                    list(response.keys())[:12],
-                    bool(response.get("usage")),
-                    response.get("finish_reason"),
-                    response.get("type"),
-                )
-                if isinstance(response.get("raw_content"), str):
-                    raw_content = response.get("raw_content") or ""
-                elif isinstance(response.get("content"), str):
-                    raw_content = response.get("content") or ""
-                if response.get("type") == "token":
-                    raw_content = f"{raw_content}{response.get('content', '')}"
-                if response.get("usage"):
-                    usage = response["usage"]
-                if response.get("finish_reason"):
-                    finish_reason = response["finish_reason"]
-            else:
-                logger.warning("Unexpected response type: %s", type(response))
+            extra_config_stream = dict(extra_config or {})
+            extra_config_stream["stream"] = True
+
+            async for chunk in self._raw_llm_request_stream(base_url, api_key, model, messages, extra_config_stream):
+                parts_count += 1
+                if chunk.get("type") == "token":
+                    raw_content += str(chunk.get("content", ""))
+                elif chunk.get("type") == "done":
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
+                    if chunk.get("finish_reason"):
+                        finish_reason = chunk["finish_reason"]
+
         except AmbiguousLLMTransportError:
             raise
         except Exception as _collect_exc:
             logger.warning(
-                "[_collect_openai_compatible_text_response] request failed; using partial content parts=%d err=%s",
-                1 if raw_content else 0, _collect_exc,
+                "[_collect_openai_compatible_text_response] request failed; partial content parts=%d err=%s",
+                parts_count, _collect_exc,
             )
             finish_reason = "incomplete"
 
         content = self._sanitize_response_content(raw_content)
         logger.info(
-            "[COLLECT] raw_len=%d content_len=%d finish_reason=%s snippet=%r",
-            len(raw_content), len(content or ""), finish_reason, (content or "")[:120],
+            "[COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s snippet=%r",
+            parts_count, len(raw_content), len(content or ""), finish_reason, (content or "")[:120],
         )
         return {
             "raw_content": raw_content,

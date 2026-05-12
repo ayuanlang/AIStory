@@ -18,3 +18,18 @@ class SystemLogOut(SystemLogBase):
 
     class Config:
         from_attributes = True
+
+class LLMCallLogOut(BaseModel):
+    id: int
+    tag: Optional[str]
+    provider: Optional[str]
+    model: Optional[str]
+    api_url: Optional[str]
+    payload_json: Optional[str]
+    response_json: Optional[str]
+    error_msg: Optional[str]
+    latency_ms: Optional[int]
+    timestamp: str
+
+    class Config:
+        from_attributes = True
