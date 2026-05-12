@@ -5506,6 +5506,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 { startedAt, baselineText: baselineAnalysisText }
             );
             const analyzedText = extractAnalysisTextFromResult(result);
+            setLlmRawResultContent(analyzedText || "");
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
+            lastLoadedAnalysisRef.current = analyzedText || "";
             if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
                 throw new Error("出现供应商政策不允许内容");
             }
@@ -5942,6 +5945,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 { startedAt, baselineText: baselineAnalysisText }
             );
             const analyzedText = extractAnalysisTextFromResult(result);
+            setLlmRawResultContent(analyzedText || "");
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
+            lastLoadedAnalysisRef.current = analyzedText || "";
             if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
                 throw new Error("出现供应商政策不允许内容");
             }
