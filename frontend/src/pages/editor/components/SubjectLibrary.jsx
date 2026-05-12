@@ -4444,11 +4444,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             )}
                             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
 
-                            <div className={`absolute right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 ${hasRunningSubjectImageJob ? 'top-12' : 'top-2'}`}>
+                            <div className={`absolute right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 flex-wrap justify-end p-1 max-w-[80%] ${hasRunningSubjectImageJob ? 'top-12' : 'top-2'}`}>
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); handleOpenImageModal(entity, 'library'); }}
                                     disabled={imageActionLocked}
-                                    className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={imageActionLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片（素材库/上传）', 'Change Image (Library/Upload)')}
                                 >
                                     <ImageIcon size={16} />
@@ -4456,22 +4456,30 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); setViewingEntity(entity); setViewingEntityTab('generate'); handleGenerate(entity, null, getEntityPromptByLang(entity, effectivePromptSubmitLang)); }}
                                     disabled={imageActionLocked}
-                                    className="p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={t('生成 AI 图片', 'Generate AI Image')}
                                 >
                                     <Wand2 size={16} />
                                 </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); handleLoadHistory(entity.id); }}
-                                    className="p-2 bg-blue-500/80 hover:bg-blue-600 rounded-full text-white backdrop-blur-md"
+                                    className="p-1.5 bg-blue-500/80 hover:bg-blue-600 rounded-full text-white backdrop-blur-md"
                                     title={t('历史记录', 'History')}
                                 >
                                     <History size={16} />
                                 </button>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleAnalyzeEntity(entity); }}
+                                    disabled={isAnalyzingEntity || imageActionLocked || !entity.image_url}
+                                    className="p-1.5 bg-sky-500/80 hover:bg-sky-500 text-white rounded-full backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={t('仅分析图片并重写Prompt', 'Analyze Image & Rewrite Prompt Only')}
+                                >
+                                    {isAnalyzingEntity ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                                </button>
                                 {attrs?.cloned_from_entity_id && (
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleSyncFromOld(attrs?.cloned_from_entity_id, entity.id); }}
-                                        className="p-2 bg-yellow-500/80 hover:bg-yellow-600 rounded-full text-white backdrop-blur-md"
+                                        className="p-1.5 bg-yellow-500/80 hover:bg-yellow-600 rounded-full text-white backdrop-blur-md"
                                         title={t('从源实体同步', 'Sync from Source')}
                                     >
                                         <RefreshCw size={16} />
@@ -4483,7 +4491,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         void handleRemoveEntityImage(entity);
                                     }}
                                     disabled={imageActionLocked || !entity.image_url}
-                                    className="p-2 bg-amber-500/80 hover:bg-amber-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="p-1.5 bg-amber-500/80 hover:bg-amber-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={imageActionLocked ? t('图片任务运行中，不能移除图片', 'Image job is running; image removal is disabled') : t('移除图片关联', 'Remove image association')}
                                 >
                                     <Unlink size={16} />
@@ -4491,14 +4499,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); handleReconstructEntityAsset(entity); }}
                                     disabled={isReconstructingEntity || imageActionLocked || !entity.image_url}
-                                    className="p-2 bg-indigo-500/80 hover:bg-indigo-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="p-1.5 bg-indigo-500/80 hover:bg-indigo-500 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={t('现有资产重构（分析图片并重生成）', 'Refactor Existing Asset (analyze + regenerate)')}
                                 >
-                                    {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                                    {isReconstructingEntity ? <RefreshCw className="animate-spin" size={16} /> : <Wand2 size={16} />}
                                 </button>
                                 <button 
                                     onClick={(e) => handleDeleteEntity(e, entity)}
-                                    className="p-2 bg-red-500/80 hover:bg-red-600 rounded-full text-white backdrop-blur-md"
+                                    className="p-1.5 bg-red-500/80 hover:bg-red-600 rounded-full text-white backdrop-blur-md"
                                     title={t('删除实体', 'Delete Entity')}
                                 >
                                     <Trash2 size={16} />
@@ -4754,6 +4762,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         <button onClick={() => handleLoadHistory(viewingEntity.id)} className="px-3 py-1.5 bg-blue-500/20 text-blue-300 text-xs font-bold rounded-lg border border-blue-500/30 hover:bg-blue-500/30 flex items-center justify-center gap-1 transition-colors">
                                             <History size={14} />
                                             {t('历史记录', 'History')}
+                                        </button>
+                                        <button 
+                                            onClick={() => handleAnalyzeEntity(viewingEntity)} 
+                                            disabled={isAnalyzingEntity || viewingEntityImageLocked || !viewingEntity.image_url}
+                                            className="px-3 py-1.5 bg-indigo-500/20 text-indigo-300 text-xs font-bold rounded-lg border border-indigo-500/30 hover:bg-indigo-500/30 flex items-center justify-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {isAnalyzingEntity ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                                            {t('独立分析图片', 'Analyze Image')}
                                         </button>
                                     </div>
                                     {/* Role & Archetype Tags */}

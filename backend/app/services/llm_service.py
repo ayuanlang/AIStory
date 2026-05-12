@@ -326,7 +326,44 @@ class LLMService:
         raise AmbiguousLLMTransportError(message)
 
     def _safe_log_json(self, tag: str, payload: Dict[str, Any]) -> None:
-        # Disabled by design: stop persisting raw/returned LLM payload logs.
+        try:
+            from app.db.session import SessionLocal
+            from app.models.all_models import LLMCallLog
+            
+            provider = payload.get("provider", "")
+            model = payload.get("model", "")
+            if not model:
+                model = payload.get("request", {}).get("model", "")
+            api_url = payload.get("request", {}).get("url", "")
+            
+            # Request vs Response mapping
+            payload_json = json.dumps(_strip_base64_from_log(payload.get("request", {})), ensure_ascii=False) if "request" in payload else None
+            response_json = json.dumps(_strip_base64_from_log(payload.get("response", {})), ensure_ascii=False) if "response" in payload else None
+            error_msg = payload.get("error") if "error" in payload else None
+            if not error_msg and "str_error" in payload:
+                error_msg = payload.get("str_error")
+                
+            latency_ms = payload.get("latency_ms")
+            
+            if not payload_json and not response_json and not error_msg:
+                # If everything is empty, dump the whole payload
+                response_json = json.dumps(_strip_base64_from_log(payload), ensure_ascii=False)
+
+            with SessionLocal() as db:
+                log_entry = LLMCallLog(
+                    tag=tag,
+                    provider=provider,
+                    model=model,
+                    api_url=api_url,
+                    payload_json=payload_json,
+                    response_json=response_json,
+                    error_msg=str(error_msg) if error_msg else None,
+                    latency_ms=latency_ms
+                )
+                db.add(log_entry)
+                db.commit()
+        except Exception as e:
+            logger.error(f"Failed to save LLMCallLog to DB: {e}")
         return None
 
     def log_audit(self, tag: str, payload: Dict[str, Any]) -> None:

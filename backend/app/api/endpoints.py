@@ -5292,7 +5292,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if ep_cache and script_hash:
                 exist_res = ep_cache.ai_scene_analysis_result or ""
                 if f"<!-- script_hash: {script_hash} -->" in exist_res:
-                    if "### Subject Index" in exist_res and "```json" not in exist_res.lower() and '"characters": [' not in exist_res:
+                    if re.search(r"(?i)subject\s*index", exist_res) and "```json" not in exist_res.lower() and '"characters": [' not in exist_res:
                         skip_step1 = True
                         cached_result_1 = exist_res
 
@@ -5462,8 +5462,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         blocking_subject_warnings: List[str] = []
         if not is_entity_design_phase:
             has_subject_index = bool(
-                re.search(r"(?im)^\s*(?:#{1,6}\s*)?subject\s*index\b", str(result_content or ""))
-                or re.search(r"(?im)\bsubject_no\s*=", str(result_content or ""))
+                re.search(r"(?i)subject\s*index", str(result_content or ""))
+                or re.search(r"(?i)subject_no", str(result_content or ""))
             )
             if not has_subject_index:
                 blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")

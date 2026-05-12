@@ -237,8 +237,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             extractedText = dashMatch[1].trim();
             hasStructuredSubjectIndex = true;
         } else {
-            // Match any level of # heading for Subject Index (single, double, or triple)
-            const match = authoritativeSubjectText.match(/#{1,3}\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
+            // Match any level of # heading for Subject Index, handling possible markdown asterisks
+            const match = authoritativeSubjectText.match(/#{1,6}\s*(?:\*\*)?\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i);
             if (match) {
                 extractedText = match[0];
                 hasStructuredSubjectIndex = true;

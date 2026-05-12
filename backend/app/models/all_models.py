@@ -131,6 +131,20 @@ class SystemLog(Base):
     user = relationship("User", back_populates="system_logs")
 
 
+class LLMCallLog(Base):
+    __tablename__ = "llm_call_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    tag = Column(String, index=True, nullable=True)
+    provider = Column(String, index=True, nullable=True)
+    model = Column(String, index=True, nullable=True)
+    api_url = Column(String, nullable=True)
+    payload_json = Column(Text, nullable=True)
+    response_json = Column(Text, nullable=True)
+    error_msg = Column(Text, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    timestamp = Column(String, default=now_bj_iso)
+
+
 class Project(Base):
     __tablename__ = "projects"
     id = Column(Integer, primary_key=True, index=True)
