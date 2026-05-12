@@ -12725,7 +12725,10 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         dedup_keys.add(dedup_key)
 
         try:
-            parsed = json.loads(candidate)
+            # Fix trailing commas before loads
+            import re
+            cleaned_candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
+            parsed = json.loads(cleaned_candidate, strict=False)
         except Exception:
             continue
 

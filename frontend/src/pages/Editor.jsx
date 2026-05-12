@@ -578,7 +578,7 @@ const Editor = ({
                 i++;
                 while (i < text.length) {
                     if (text[i] === '"' && text[i-1] !== '\\') break;
-                    if (text[i] === '\n') break;
+                    // Remove the break on newline so that JSON with physical newlines can be extracted
                     i++;
                 }
             } else if (char === '{') {
