@@ -1104,10 +1104,13 @@ Negative prompt constraints: {neg_prompt}"""
 
         def _repl(match):
             name = match.group(1)
+            # Allow @Image{N} mentions to pass through
+            if name.startswith("Image") and name[5:].isdigit():
+                return match.group(0)
             if name in valid_element_names:
                 return match.group(0)
             return name
-            
+
         return re.sub(r'@([\w\u4e00-\u9fa5A-Za-z0-9_]+)', _repl, text)
 
     def _sanitize_sora_prompt_mentions(self, prompt: Any) -> str:
@@ -1116,7 +1119,7 @@ Negative prompt constraints: {neg_prompt}"""
             return ""
 
         # Sora family may interpret @mentions as user cameo references and reject
-        cleaned = re.sub(r"@(?=[A-Za-z0-9_\u4e00-\u9fff])", "", text)
+        cleaned = re.sub(r"@(?!(?:Image\d+\b))(?=[A-Za-z0-9_\u4e00-\u9fff])", "", text)
         cleaned = re.sub(r"\bCHAR\s*:\s*\[\s*", "CHAR:[", cleaned, flags=re.IGNORECASE)
         return cleaned
 
