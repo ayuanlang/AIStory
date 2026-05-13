@@ -68,7 +68,7 @@
       "title": "Continuity Priority",
       "source_keys": ["continuity_priority", "continuity", "continuity_mode"],
       "slot_token": "[[SHOT_GENERATION_CONTINUITY_RULES]]",
-      "prompt_template": "Continuity priority is {value}. Weight identity carry-over, environment geography, object persistence, transient accessory continuity, lighting continuity, and start-to-end state closure according to this priority setting, even when a more flamboyant shot alternative is available."
+      "prompt_template": "Continuity priority is {value}. Weight identity carry-over, environment geography, object persistence, transient accessory continuity, lighting continuity, and start-to-end state closure according to this priority setting, even when a more flamboyant shot alternative is available. Adjacent shots must pass two continuity lines at the same time: first, previous-shot video prompt tail to next-shot video prompt opening; second, previous-shot start frame through camera/action evolution to end frame, then into the next-shot start frame. Preserve blocking, facing direction, eyelines, object hold state, motion direction, transition logic, lighting anchors, and compositional center across both lines unless a clearly described on-screen action causes the change."
     }
   ],
   "combo_rules": [

@@ -467,6 +467,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [videoStatuses, setVideoStatuses] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
+    const [injectRefPrefix, setInjectRefPrefix] = useState(false);
     const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
     const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
@@ -6490,11 +6491,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const endIdx = resolvedUniqueRefs.indexOf(resolvedEndUrl) + 1;
 
                 if (startIdx > 0 && endIdx > 0) {
-                    finalPrompt = `首帧为图片${startIdx}, ` + finalPrompt + `, 尾帧定格为图片${endIdx}`;
+                    finalPrompt = `@Image${startIdx} 作为第一帧, ` + finalPrompt + `, @Image${endIdx} 作为最后一帧`;
                 } else if (startIdx > 0) {
-                    finalPrompt = `首帧为图片${startIdx}, ` + finalPrompt;
+                    finalPrompt = `@Image${startIdx} 作为第一帧, ` + finalPrompt;
                 } else if (endIdx > 0) {
-                    finalPrompt = finalPrompt + `, 尾帧定格为图片${endIdx}`;
+                    finalPrompt = finalPrompt + `, @Image${endIdx} 作为最后一帧`;
                 }
             }
 
@@ -6512,6 +6513,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     project_id: projectId,
                     shot_id: targetShotId,
                     draft_mode: isDraftMode,
+                    inject_ref_prefix: injectRefPrefix,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
                     ref_mode: effectiveVideoMode,
@@ -7745,6 +7747,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         <input type="checkbox" className="hidden" checked={isDraftMode} onChange={(e) => setIsDraftMode(e.target.checked)} />
                         <span className={isDraftMode ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('草稿(480p)', 'Draft(480p)')}</span>
                     </label>
+
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('生成视频时，强制将参考图片以“图N”的形式注入提示词。', 'Inject ref images as “Pic N” into video prompt')}>
+                        <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${injectRefPrefix ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
+                            {injectRefPrefix && <Check className="w-2.5 h-2.5 text-white" />}
+                        </div>
+                        <input type="checkbox" className="hidden" checked={injectRefPrefix} onChange={(e) => setInjectRefPrefix(e.target.checked)} />
+                        <span className={injectRefPrefix ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('注入图', 'Inject Refs')}</span>
+                    </label>
+
                      {/* Settings Button Moved to Edit Shot View */}
                 </div>
             </div>
@@ -8410,6 +8421,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         {isDraftMode && <Check className="w-2 h-2 text-white" />}
                                                     </div>
                                                     <span className={isDraftMode ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('草稿', 'Draft')}</span>
+                                                </label>
+
+                                                <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-2">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        className="hidden"
+                                                        checked={injectRefPrefix}
+                                                        onChange={(e) => setInjectRefPrefix(e.target.checked)}
+                                                    />
+                                                    <div className={`w-2.5 h-2.5 rounded-sm border flex items-center justify-center transition-colors ${injectRefPrefix ? 'bg-primary border-primary' : 'border-white/30 hover:border-white/50 bg-black/20'}`}>
+                                                        {injectRefPrefix && <Check className="w-2 h-2 text-white" />}
+                                                    </div>
+                                                    <span className={injectRefPrefix ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('注入图', 'Inject Refs')}</span>
                                                 </label>
 
                                                 <button 

@@ -2893,7 +2893,7 @@ export const getAdminRuntimeLogFiles = async () => {
 
 export const getLlmCallLogs = async (params = {}) => {
     const { limit = 100, offset = 0, provider, tag } = params;
-    let url = `/llm_logs?limit=${limit}&offset=${offset}`;
+    let url = `/admin/llm_logs?limit=${limit}&offset=${offset}`;
     if (provider) url += `&provider=${encodeURIComponent(provider)}`;
     if (tag) url += `&tag=${encodeURIComponent(tag)}`;
     const response = await api.get(url);

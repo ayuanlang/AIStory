@@ -12726,7 +12726,6 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
 
         try:
             # Fix trailing commas before loads
-            import re
             cleaned_candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
             parsed = json.loads(cleaned_candidate, strict=False)
         except Exception:
@@ -21234,6 +21233,7 @@ class VideoGenerationRequest(BaseModel):
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
     seed: Optional[int] = None
+    inject_ref_prefix: Optional[bool] = False
 
 
 class VoiceGenerationRequest(BaseModel):
@@ -26786,6 +26786,9 @@ async def _run_generate_video(
             req.keyframes,
             req.ref_video_urls,
             entity_lookup=entity_lookup if is_reference_image_mode else None,
+            inject_ref_prefix=getattr(req, "inject_ref_prefix", False),
+            provider=resolved_video_provider,
+            model=resolved_video_model,
         )
 
         try:
@@ -27491,6 +27494,9 @@ async def submit_generate_video_endpoint(
                 submit_keyframes,
                 submit_ref_video_urls,
                 entity_lookup=submit_entity_lookup,
+                inject_ref_prefix=req_payload.get("inject_ref_prefix", False),
+                provider=req_payload.get("provider", ""),
+                model=req_payload.get("model", ""),
             )
     except Exception as e:
         logger.warning("[VideoSubmit] prompt mapping pre-process skipped: %s", e)
@@ -29548,7 +29554,13 @@ def _append_video_api_ref_mapping(
     keyframes: Optional[List[str]] = None,
     reference_video_urls: Optional[List[str]] = None,
     entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+    inject_ref_prefix: bool = False,
+    provider: str = "",
+    model: str = "",
 ) -> str:
+    if "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower():
+        inject_ref_prefix = True
+
     text = str(prompt or "").strip()
     if not text:
         return text
@@ -29618,6 +29630,9 @@ def _append_video_api_ref_mapping(
         flags=re.IGNORECASE | re.MULTILINE,
     )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    if not inject_ref_prefix:
+        return text
 
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
     if not ordered_refs and not isinstance(reference_video_urls, list):
@@ -29741,7 +29756,7 @@ def _append_video_api_ref_mapping(
 
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:
-        prefix = f"参考图{mapped_idx}的"
+        prefix = f"@Image{mapped_idx} "
         if prefix in updated_text and entity_name in updated_text:
             continue
 
@@ -29958,12 +29973,23 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             ordered_video_refs.append(str(normalized_last_frame_url).strip())
         ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
 
+        system_api_id_val = system_api_id
+        if not system_api_id_val and getattr(episode, "system_api_id", None):
+            system_api_id_val = episode.system_api_id
+            
+        is_seedance_batch = False
+        if system_api_id_val:
+            pre_api_cfg = _fetch_system_api_config(item_db, system_api_id_val, "video")
+            if "seedance" in str(pre_api_cfg.get("provider") or "").lower() or "seedance" in str(pre_api_cfg.get("model") or "").lower():
+                is_seedance_batch = True
+
         video_prompt = _append_video_api_ref_mapping(
             video_prompt,
             ordered_video_refs,
             normalized_refs,
             normalized_last_frame_url,
             None,
+            provider="seedance" if is_seedance_batch else None,
             entity_lookup=entity_lookup,
         )
 
@@ -29978,6 +30004,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 normalized_refs,
                 normalized_last_frame_url,
                 None,
+                provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
                 entity_lookup=entity_lookup,
             )
             tech["video_prompt_cn"] = video_prompt_cn
@@ -30680,6 +30707,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             normalized_last_frame_url,
                             None,
                             entity_lookup=entity_lookup,
+                            inject_ref_prefix=getattr(req, "inject_ref_prefix", False) if hasattr(req, "inject_ref_prefix") else False,
                         )
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
@@ -30694,6 +30722,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 normalized_last_frame_url,
                                 None,
                                 entity_lookup=entity_lookup,
+                                inject_ref_prefix=getattr(req, "inject_ref_prefix", False) if hasattr(req, "inject_ref_prefix") else False,
                             )
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
@@ -32600,3 +32629,23 @@ async def api_generate_entity_from_derive(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM derive generation failed: {e}")
+
+from app.models.all_models import LLMCallLog
+@router.get('/admin/llm_logs')
+def get_llm_logs(
+    limit: int = 100, 
+    offset: int = 0, 
+    provider: str = None, 
+    tag: str = None, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superusers can view LLM Call Logs")
+    query = db.query(LLMCallLog).order_by(LLMCallLog.timestamp.desc())
+    if provider:
+        query = query.filter(LLMCallLog.provider == provider)
+    if tag:
+        query = query.filter(LLMCallLog.tag == tag)
+    logs = query.offset(offset).limit(limit).all()
+    return logs
