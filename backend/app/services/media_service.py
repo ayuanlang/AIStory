@@ -6667,10 +6667,12 @@ Negative prompt constraints: {neg_prompt}"""
             if isinstance(audio_refs, str): audio_refs = [audio_refs]
             payload["audioUrls"] = audio_refs[:3]
             
-            payload["duration"] = normalized_video_duration
+            payload["duration"] = str(normalized_video_duration) if normalized_video_duration else "5"
             _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
-            _set_if_present(payload, "ratio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
+            _set_if_present(payload, "ratio", "adaptive" if not explicit_aspect_ratio else str(explicit_aspect_ratio).strip())
             _set_if_present(payload, "realPersonMode", True)
+            payload["conversionSlots"] = ["all"]
+            payload["returnLastFrame"] = False
             
             _set_audio_flags(payload)
         elif "start-end-to-video" in endpoint_lower or "start-to-end" in endpoint_lower:

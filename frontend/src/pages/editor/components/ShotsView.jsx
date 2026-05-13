@@ -467,7 +467,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [videoStatuses, setVideoStatuses] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
-    const [injectRefPrefix, setInjectRefPrefix] = useState(false);
+    const [usePrevVideo, setUsePrevVideo] = useState(false);
     const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
     const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
@@ -6381,6 +6381,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ? normalizeMediaRefList(tech.video_ref_image_urls)
                 : buildAutoVideoRefList(shotSnapshot, tech, effectiveVideoMode, promptEntityRefs);
 
+            
+            if (usePrevVideo) {
+                const currentIdx = shots.findIndex(s => s.id === targetShotId);
+                if (currentIdx > 0) {
+                    const prevShot = shots[currentIdx - 1];
+                    const prevVideoUrl = prevShot?.video_url;
+                    if (prevVideoUrl && !uniqueRefs.includes(prevVideoUrl)) {
+                        uniqueRefs.push(prevVideoUrl);
+                    }
+                }
+            }
+
             const splitReferenceMediaUrls = (urls) => {
                 const imageRefs = [];
                 const videoRefs = [];
@@ -6513,7 +6525,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     project_id: projectId,
                     shot_id: targetShotId,
                     draft_mode: isDraftMode,
-                    inject_ref_prefix: injectRefPrefix,
+                    use_prev_video: usePrevVideo,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
                     ref_mode: effectiveVideoMode,
@@ -7749,11 +7761,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     </label>
 
                     <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('生成视频时，强制将参考图片以“图N”的形式注入提示词。', 'Inject ref images as “Pic N” into video prompt')}>
-                        <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${injectRefPrefix ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
-                            {injectRefPrefix && <Check className="w-2.5 h-2.5 text-white" />}
+                        <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${usePrevVideo ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
+                            {usePrevVideo && <Check className="w-2.5 h-2.5 text-white" />}
                         </div>
-                        <input type="checkbox" className="hidden" checked={injectRefPrefix} onChange={(e) => setInjectRefPrefix(e.target.checked)} />
-                        <span className={injectRefPrefix ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('注入图', 'Inject Refs')}</span>
+                        <input type="checkbox" className="hidden" checked={usePrevVideo} onChange={(e) => setUsePrevVideo(e.target.checked)} />
+                        <span className={usePrevVideo ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('上镜视频', 'Prev Video')}</span>
                     </label>
 
                      {/* Settings Button Moved to Edit Shot View */}
@@ -8427,13 +8439,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     <input 
                                                         type="checkbox" 
                                                         className="hidden"
-                                                        checked={injectRefPrefix}
-                                                        onChange={(e) => setInjectRefPrefix(e.target.checked)}
+                                                        checked={usePrevVideo}
+                                                        onChange={(e) => setUsePrevVideo(e.target.checked)}
                                                     />
-                                                    <div className={`w-2.5 h-2.5 rounded-sm border flex items-center justify-center transition-colors ${injectRefPrefix ? 'bg-primary border-primary' : 'border-white/30 hover:border-white/50 bg-black/20'}`}>
-                                                        {injectRefPrefix && <Check className="w-2 h-2 text-white" />}
+                                                    <div className={`w-2.5 h-2.5 rounded-sm border flex items-center justify-center transition-colors ${usePrevVideo ? 'bg-primary border-primary' : 'border-white/30 hover:border-white/50 bg-black/20'}`}>
+                                                        {usePrevVideo && <Check className="w-2 h-2 text-white" />}
                                                     </div>
-                                                    <span className={injectRefPrefix ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('注入图', 'Inject Refs')}</span>
+                                                    <span className={usePrevVideo ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('上镜视频', 'Prev Video')}</span>
                                                 </label>
 
                                                 <button 
@@ -9755,7 +9767,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} additionalAutoRefs={usePrevVideo ? [(shots.findIndex(s => s.id === editingShot?.id) > 0 ? shots[shots.findIndex(s => s.id === editingShot?.id) - 1] : null)?.video_url].filter(Boolean) : []} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>

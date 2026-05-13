@@ -3418,6 +3418,7 @@ class LLMService:
                 "error_kind": "incomplete_chunked_read",
                 "error_text": str(exc),
                 "token_batch_buf_len": len(token_batch_buf),
+                "response": {"partial_content": token_batch_buf},
                 "resolved_source": (extra_config or {}).get("__resolved_source"),
                 "resolved_setting_id": (extra_config or {}).get("__resolved_setting_id"),
                 "stream": True,

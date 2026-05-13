@@ -5094,7 +5094,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
 
         logger.info(f"Analyzing scene for user {current_user_id} with model {config.get('model')}")
-        # Auto-continue if provider truncates (finish_reason=length).
+        # Auto-continue if provider truncates or the stream drops after yielding partial content.
         # Important: keep continuation prompts small (do NOT send the entire prior output back)
         # to avoid blowing up prompt size / hitting context window.
         # Token cap is controlled by provider/model config; local continuation only keeps a high safety ceiling.
@@ -5196,6 +5196,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 })
 
                 accumulated = "".join(result_parts_loop)
+                
+                if part_finish == "error":
+                    break
+                    
                 if len(accumulated) >= _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP:
                     output_char_cap_reached_loop = True
                     finish_reason_loop = part_finish or finish_reason_loop or "safety_output_cap"
@@ -5212,8 +5216,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 section_meta = _detect_scene_output_sections(accumulated)
                 missing_sections = [str(x) for x in (section_meta.get("missing_sections") or []) if str(x)]
                 continue_due_to_length = _is_length_finish_reason(part_finish)
+                continue_due_to_incomplete = (
+                    str(part_finish or "").strip().lower().replace("-", "_") == "incomplete"
+                    and bool(accumulated.strip())
+                    and seg_idx < max_segments
+                )
                 continue_due_to_structure = (
                     not continue_due_to_length
+                    and not continue_due_to_incomplete
                     and bool(missing_sections)
                     and seg_idx < max_segments
                     and continuation_by_structure_loop < 3
@@ -5221,7 +5231,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 )
 
                 # Stop if not truncated.
-                if not continue_due_to_length and not continue_due_to_structure:
+                if not continue_due_to_length and not continue_due_to_incomplete and not continue_due_to_structure:
                     break
 
                 # Stop if provider returned nothing new.
@@ -5238,6 +5248,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                         missing_sections=", ".join(missing_sections),
                         suffix=suffix,
                     )
+                elif continue_due_to_incomplete:
+                    continuation_reason = "incomplete_stream"
+                    continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
                 else:
                     continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
 
@@ -5260,7 +5273,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     {"role": "user", "content": continuation_instruction},
                 ]
 
-            if finish_reason_loop is not None and _is_length_finish_reason(finish_reason_loop) and len(segments_meta_loop) >= max_segments:
+            finish_reason_loop_norm = str(finish_reason_loop or "").strip().lower().replace("-", "_")
+            if finish_reason_loop_norm and (finish_reason_loop_norm == "incomplete" or _is_length_finish_reason(finish_reason_loop_norm)) and len(segments_meta_loop) >= max_segments:
                 continuation_stopped_by_max_segments_loop = True
 
             return {
@@ -5387,6 +5401,24 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "raw_total_chars": raw_total_chars,
             "dedup_total_chars": dedup_total_chars,
         })
+
+        if finish_reason in ("incomplete", "error"):
+            logger.error(f"[analyze_scene] LLM returned finish_reason={finish_reason}; rejecting partial output.")
+            
+            # 记录断开的内容哪怕它不完整，以防止丢失上游(可能已扣费)的部分生成结果
+            # 这会将部分结果保存到 DB 的 llm_call_logs 表中
+            llm_service._safe_log_json("LLM_STREAM_INCOMPLETE_REJECTED", {
+                "provider": (config or {}).get("provider", ""),
+                "model": (config or {}).get("model", ""),
+                "episode_id": getattr(request, "episode_id", None),
+                "error": f"LLM connection dropped prematurely (reason: {finish_reason}).",
+                "response": {
+                    "partial_content_len": len(result_content or ""),
+                    "partial_content": result_content
+                }
+            })
+            
+            raise HTTPException(status_code=502, detail=f"LLM connection dropped prematurely (reason: {finish_reason}). Please retry.")
 
         # Persist raw LLM output as soon as it is available so phase-1/phase-2
         # source text is retained even if later validation or billing fails.
@@ -21233,7 +21265,7 @@ class VideoGenerationRequest(BaseModel):
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
     seed: Optional[int] = None
-    inject_ref_prefix: Optional[bool] = False
+    use_prev_video: Optional[bool] = False
 
 
 class VoiceGenerationRequest(BaseModel):
@@ -26786,7 +26818,7 @@ async def _run_generate_video(
             req.keyframes,
             req.ref_video_urls,
             entity_lookup=entity_lookup if is_reference_image_mode else None,
-            inject_ref_prefix=getattr(req, "inject_ref_prefix", False),
+            use_prev_video=getattr(req, "use_prev_video", False),
             provider=resolved_video_provider,
             model=resolved_video_model,
         )
@@ -27494,7 +27526,7 @@ async def submit_generate_video_endpoint(
                 submit_keyframes,
                 submit_ref_video_urls,
                 entity_lookup=submit_entity_lookup,
-                inject_ref_prefix=req_payload.get("inject_ref_prefix", False),
+                use_prev_video=req_payload.get("use_prev_video", False),
                 provider=req_payload.get("provider", ""),
                 model=req_payload.get("model", ""),
             )
@@ -29554,12 +29586,14 @@ def _append_video_api_ref_mapping(
     keyframes: Optional[List[str]] = None,
     reference_video_urls: Optional[List[str]] = None,
     entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
-    inject_ref_prefix: bool = False,
+    use_prev_video: bool = False,
     provider: str = "",
     model: str = "",
 ) -> str:
-    if "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower():
-        inject_ref_prefix = True
+    is_seedance = "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower()
+    original_use_prev_video = use_prev_video
+    if is_seedance:
+        use_prev_video = True
 
     text = str(prompt or "").strip()
     if not text:
@@ -29631,7 +29665,7 @@ def _append_video_api_ref_mapping(
     )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
-    if not inject_ref_prefix:
+    if not use_prev_video:
         return text
 
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
@@ -29774,7 +29808,8 @@ def _append_video_api_ref_mapping(
                     return token
                 return f"{prefix}{token}"
 
-            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, count=1, flags=re.IGNORECASE)
+            # Replace ALL occurrences instead of just 1
+            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
             if count > 0:
                 updated_text = replaced_text
                 replaced = True
@@ -29783,7 +29818,7 @@ def _append_video_api_ref_mapping(
         if replaced:
             continue
 
-        # Fallback: prepend marker directly before the first plain entity mention.
+        # Fallback: prepend marker directly before plain entity mentions.
         plain_pattern = rf"(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])"
 
         def _prepend_marker(match: re.Match[str]) -> str:
@@ -29792,9 +29827,28 @@ def _append_video_api_ref_mapping(
                 return token
             return f"{prefix}{token}"
 
-        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, count=1, flags=re.IGNORECASE)
+        # Replace ALL occurrences instead of just 1
+        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
         if count > 0:
             updated_text = replaced_text
+
+    if reference_video_urls and is_seedance:
+        if original_use_prev_video:
+            vid_tag = "@Video 1"
+            vid_tag_nospace = "@Video1"
+            if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
+                updated_text = f"延长\n\n{vid_tag}\n，一镜到底运镜。\n\n{updated_text.strip()}"
+        
+        added_videos = False
+        for idx in range(1, len(reference_video_urls) + 1):
+            vid_tag = f"@Video {idx}"
+            vid_tag_nospace = f"@Video{idx}"
+            if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
+                if not added_videos:
+                    updated_text = f"{updated_text.strip()}，参考视频是 {vid_tag}"
+                    added_videos = True
+                else:
+                    updated_text = f"{updated_text.strip()} {vid_tag}"
 
     return updated_text
 
@@ -30707,7 +30761,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             normalized_last_frame_url,
                             None,
                             entity_lookup=entity_lookup,
-                            inject_ref_prefix=getattr(req, "inject_ref_prefix", False) if hasattr(req, "inject_ref_prefix") else False,
+                            use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
                         )
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
@@ -30722,7 +30776,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 normalized_last_frame_url,
                                 None,
                                 entity_lookup=entity_lookup,
-                                inject_ref_prefix=getattr(req, "inject_ref_prefix", False) if hasattr(req, "inject_ref_prefix") else False,
+                                use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
                             )
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})

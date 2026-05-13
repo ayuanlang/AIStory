@@ -257,16 +257,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
 
             // --- GLOBAL INJECTION RULES (Apply only in Auto Mode to allow manual overrides) ---
             
-            // 1. Inject Additional Auto Refs (e.g. Previous Shot End Frame for Start Refs)
-            if (additionalAutoRefs && additionalAutoRefs.length > 0) {
-                // Iterate in reverse to keep order when unshifting
-                for (let i = additionalAutoRefs.length - 1; i >= 0; i--) {
-                    const ref = additionalAutoRefs[i];
-                    if (!activeRefs.includes(ref)) {
-                        activeRefs.unshift(ref);
-                    }
-                }
-            }
+
         }
         
         // 2. Special Logic for End Refs: Always include Start Frame (Global Injection to ensure Realtime Updates)
@@ -321,8 +312,18 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                 // OR we just rely on the fact that if it's "Start Frame", it should always be there for End Gen context.
              }
         }
-        // Deduplicate
-        activeRefs = [...new Set(activeRefs)];
+    // --- GLOBAL INJECTION FOR ALL MODES (E.g. Prev Shot Video, Global Context) ---
+    if (additionalAutoRefs && additionalAutoRefs.length > 0) {
+        for (let i = additionalAutoRefs.length - 1; i >= 0; i--) {
+            const ref = additionalAutoRefs[i];
+            if (!activeRefs.includes(ref)) {
+                activeRefs.unshift(ref);
+            }
+        }
+    }
+    
+    // Deduplicate
+    activeRefs = [...new Set(activeRefs)];
     }
     
     // Filter matches that are NOT already active to display as suggestions (Standard Mode Only)
@@ -493,7 +494,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                     {/* 1. Active Refs (Selected) */}
                     {activeRefs.map((url, idx) => (
                         <div key={url + idx} className={`relative group shrink-0 ${isPortrait ? 'w-full aspect-[4/3]' : 'w-[140px] aspect-video'} bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in`} onClick={() => setSelectedImage(url)}>
-                            {(url.toLowerCase().endsWith('.mp4') || url.toLowerCase().endsWith('.webm')) ? (
+                            {(url.split('?')[0].toLowerCase().endsWith('.mp4') || url.split('?')[0].toLowerCase().endsWith('.webm')) ? (
                                 <LazyHoverVideo
                                     src={url}
                                     className="w-full h-full flex items-center justify-center"
