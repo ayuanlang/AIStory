@@ -22449,6 +22449,12 @@ def _find_existing_asset_for_registration(
     idempotency_key: Optional[str] = None,
     meta_info: Optional[Dict[str, Any]] = None,
 ) -> Optional[Asset]:
+    # Flush session to see commits from other background threads/callbacks
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        
     normalized_key = _normalize_asset_idempotency_key(idempotency_key)
     normalized_meta = dict(meta_info) if isinstance(meta_info, dict) else {}
     normalized_url = str(url or "").strip()

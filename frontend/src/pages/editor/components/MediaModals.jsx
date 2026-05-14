@@ -782,10 +782,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 });
             } else if (subCategoryFilter === 'shot_video') {
                 filtered = filtered.filter((asset) => {
-                    const frameType = resolveAssetFrameType(asset);
-                    const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
-                    const stableType = String(asset?.type || meta?.type || '').trim().toLowerCase();
-                    return stableType === 'video' || frameType.includes('video');
+                    return isAssetVideoLike(asset);
                 });
                 logAssetPickerDebug('level2:subcategory-shot_video', {
                     summary: summarizeAssetsForDebug(filtered),
@@ -1165,7 +1162,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                             {filteredAssets.map((asset) => {
                                                 const checked = selectedMulti.has(String(asset.id));
                                                 const isSelected = String(selectedAssetId) === String(asset.id);
-                                                const isVideo = String(asset?.type || '').toLowerCase() === 'video';
+                                                const isVideo = isAssetVideoLike(asset);
                                                 return (
                                                     <button
                                                         key={asset.id}

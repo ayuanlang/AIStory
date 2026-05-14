@@ -1805,6 +1805,13 @@ class LLMService:
              return {"content": content, "usage": usage}
         except Exception as e:
              logger.error(f"OpenAI Vision call failed: {e}")
+             self._safe_log_json("LLM_RESPONSE_ERROR", {
+                 "provider": "openai",
+                 "model": model,
+                 "request": {"url": base_url, "messages": messages},
+                 "error": str(e),
+                 "human_summary": str(e)
+             })
              return {"content": f"Error: {e}", "usage": {}}
 
     async def _call_intent_with_failover(
@@ -2496,6 +2503,12 @@ class LLMService:
         except Exception as e:
              logger.error(f"Generate Content Error: {e}")
              provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
+             self._safe_log_json("LLM_RESPONSE_ERROR", {
+                 "provider": provider,
+                 "model": model,
+                 "error": str(e),
+                 "human_summary": self._vendor_failed_message(provider, e)
+             })
              return {"content": f"Error: {self._vendor_failed_message(provider, e)}", "usage": {}, "finish_reason": None}
 
     async def _raw_llm_request(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> str:
