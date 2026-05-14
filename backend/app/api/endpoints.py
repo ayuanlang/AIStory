@@ -29891,6 +29891,12 @@ def _append_video_api_ref_mapping(
         if count > 0:
             updated_text = replaced_text
 
+    if ordered_refs:
+        for idx in range(1, len(ordered_refs) + 1):
+            img_tag = f"@Image{idx}"
+            if not re.search(r'@[Ii]mage\s*' + str(idx), updated_text):
+                updated_text = f"{img_tag} {updated_text.strip()}"
+
     if reference_video_urls:
         added_videos = False
         for idx in range(1, len(reference_video_urls) + 1):
