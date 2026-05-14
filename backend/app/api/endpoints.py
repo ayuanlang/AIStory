@@ -2378,33 +2378,37 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             if value not in (None, ""):
                 req_context[key] = value
 
+        # Auto-infer asset_type if not provided (shot=start_frame, entity=subject)
+        if not str(req_context.get("asset_type") or "").strip():
+            if req_context.get("shot_id"):
+                req_context["asset_type"] = "start_frame"
+            elif req_context.get("entity_id") or req_context.get("entity_name") or req_context.get("subject_name"):
+                req_context["asset_type"] = "subject"
+
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         logger.info(
-            "[ImageJobPersist] start | job_id=%s user_id=%s entity_id=%s entity_name=%s shot_id=%s raw_url=%s metadata_keys=%s",
+            "[ImageJobPersist] start | job_id=%s user_id=%s entity_id=%s entity_name=%s shot_id=%s asset_type=%s raw_url=%s metadata_keys=%s",
             job_id,
             getattr(current_user, "id", None),
             req_context.get("entity_id"),
             req_context.get("entity_name") or req_context.get("subject_name"),
             req_context.get("shot_id"),
+            req_context.get("asset_type"),
             raw_url,
             sorted(list(metadata.keys())) if isinstance(metadata, dict) else [],
         )
         normalized_url, normalized_meta = _persist_data_uri_image_result(current_user, raw_url, metadata)
         normalized_url, normalized_meta = _persist_remote_image_result(current_user, normalized_url, normalized_meta)
         logger.info(
-            "[ImageJobPersist] normalized | job_id=%s user_id=%s entity_id=%s shot_id=%s normalized_url=%s oss=%s",
+            "[ImageJobPersist] normalized | job_id=%s user_id=%s entity_id=%s shot_id=%s asset_type=%s normalized_url=%s oss=%s",
             job_id,
             getattr(current_user, "id", None),
             req_context.get("entity_id"),
             req_context.get("shot_id"),
+            req_context.get("asset_type"),
             normalized_url,
             bool((normalized_meta or {}).get("oss")) if isinstance(normalized_meta, dict) else False,
         )
-        if normalized_meta is None:
-            normalized_meta = {}
-        normalized_meta["idempotency_key"] = job_id
-
-
         if normalized_meta is None:
             normalized_meta = {}
         normalized_meta["idempotency_key"] = job_id
@@ -2683,11 +2687,15 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         for key in (
             "prompt", "negative_prompt", "provider", "model", "aspect_ratio",
             "duration", "project_id", "episode_id", "scene_id", "shot_id",
-            "shot_number", "shot_name", "asset_type", "seed", "subject_id"
+            "shot_number", "shot_name", "asset_type", "seed", "subject_id",
+            "entity_id", "entity_name", "subject_name", "subject_type", "entity_type",
+            "ref_image_url", "ref_video_urls", "last_frame_url", "keyframes", "ref_mode"
         ):
             value = job.get(key)
             if value is not None and value != "":
                 req_context[key] = value
+        if not str(req_context.get("asset_type") or "").strip():
+            req_context["asset_type"] = "video"
 
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         
@@ -2703,8 +2711,18 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         if normalized_meta is not None:
             finalized_result["metadata"] = normalized_meta
 
-        # Try to bind if relevant and not ephemeral
+        # Register/bind on finalize so callback-only video paths are visible in asset library.
         if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
+            try:
+                _register_asset_helper(
+                    db,
+                    current_user.id,
+                    normalized_url,
+                    req_context,
+                    normalized_meta,
+                )
+            except Exception as reg_exc:
+                logger.warning(f"[_finalize_video_job_result_persistence] _register_asset_helper failed: {reg_exc}")
             try:
                 _bind_generated_media_to_shot(
                     db,
@@ -22433,7 +22451,9 @@ def _find_existing_asset_for_registration(
 ) -> Optional[Asset]:
     normalized_key = _normalize_asset_idempotency_key(idempotency_key)
     normalized_meta = dict(meta_info) if isinstance(meta_info, dict) else {}
+    normalized_url = str(url or "").strip()
 
+    # Priority 1: Search by idempotency_key (most reliable for deduplication)
     if normalized_key:
         keyed_candidates = (
             db.query(Asset)
@@ -22448,7 +22468,7 @@ def _find_existing_asset_for_registration(
                 continue
             return candidate
 
-    normalized_url = str(url or "").strip()
+    # Priority 2: Search by URL (if URL matches, treat as duplicate even if meta_info differs slightly)
     if not normalized_url:
         return None
 
@@ -22459,11 +22479,20 @@ def _find_existing_asset_for_registration(
         .limit(50)
         .all()
     )
-    if url_candidates:
-        for candidate in url_candidates:
-            if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
-                return candidate
-    return None
+    if not url_candidates:
+        return None
+
+    # If URL matches, return the most recent asset instead of requiring strict meta_info match
+    # This prevents duplicate registration of the same file with different meta_info contexts
+    most_recent = url_candidates[0]
+    
+    # But still try to find one with matching meta if available
+    for candidate in url_candidates:
+        if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
+            return candidate
+    
+    # Fall back to most recent if no perfect match
+    return most_recent
 
 
 def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta_info: Dict[str, Any]) -> Optional[str]:
@@ -22799,8 +22828,24 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
             is_image_inferred = is_image
             is_video_inferred = is_video
             is_audio_inferred = is_audio
-            if not is_image and not is_video and not is_audio:
-                # Fallback based on metadata provider/model if possible
+            
+            # Priority 1: Use explicit asset_type if provided
+            explicit_asset_type = str(meta.get("asset_type") or "").strip().lower()
+            if explicit_asset_type == "video":
+                is_video_inferred = True
+                is_image_inferred = False
+                is_audio_inferred = False
+            elif explicit_asset_type == "audio":
+                is_audio_inferred = True
+                is_video_inferred = False
+                is_image_inferred = False
+            elif explicit_asset_type in ("image", "subject", "start_frame", "end_frame", "keyframe"):
+                is_image_inferred = True
+                is_video_inferred = False
+                is_audio_inferred = False
+            
+            # Priority 2: Fallback based on metadata provider/model if type still uncertain
+            if not is_image_inferred and not is_video_inferred and not is_audio_inferred:
                 provider_str = str(meta.get("provider", "")).lower()
                 model_str = str(meta.get("model", "")).lower()
                 if "video" in model_str or "video" in provider_str or any(k in provider_str for k in ("luma", "runway", "kling", "minimax")):
@@ -26971,7 +27016,68 @@ async def _run_generate_video(
             media_type="video",
         )
 
-        # Register Asset - For videos, wait until finalize persistence OR callback
+        # Keep video path aligned with image path: persist/register/bind immediately
+        # for direct generate flow (non-submit or submit paths that already have final URL).
+        try:
+            final_result_url = str((result or {}).get("url") or "").strip()
+            if final_result_url:
+                persist_context: Dict[str, Any] = {
+                    "prompt": req.prompt,
+                    "negative_prompt": req.negative_prompt,
+                    "provider": req.provider,
+                    "model": req.model,
+                    "aspect_ratio": aspect_ratio,
+                    "duration": req.duration,
+                    "project_id": resolved_project_id,
+                    "episode_id": resolved_episode_id,
+                    "shot_id": resolved_shot_id,
+                    "shot_number": getattr(req, "shot_number", None),
+                    "shot_name": getattr(req, "shot_name", None),
+                    "asset_type": "video",
+                    "seed": explicit_seed or project_seed,
+                    "ref_image_url": getattr(req, "ref_image_url", None),
+                    "ref_video_urls": getattr(req, "ref_video_urls", None),
+                    "last_frame_url": getattr(req, "last_frame_url", None),
+                    "keyframes": getattr(req, "keyframes", None),
+                    "ref_mode": normalized_ref_mode,
+                }
+                persist_context = {k: v for k, v in persist_context.items() if v not in (None, "")}
+
+                final_meta_for_persist = dict(final_meta if isinstance(final_meta, dict) else {})
+                callback_job_id = _extract_generation_job_id_from_ticket("video", provider_callback_ticket or "")
+                if callback_job_id:
+                    final_meta_for_persist["idempotency_key"] = callback_job_id
+
+                persisted_url, persisted_meta = _persist_remote_image_result(current_user, final_result_url, final_meta_for_persist)
+                if persisted_meta is None:
+                    persisted_meta = final_meta_for_persist
+
+                stable_video_url = str(persisted_url or final_result_url or "").strip()
+                if stable_video_url:
+                    result["url"] = stable_video_url
+                if isinstance(persisted_meta, dict):
+                    result["metadata"] = persisted_meta
+
+                if stable_video_url and not _is_ephemeral_provider_media_url(stable_video_url):
+                    _register_asset_helper(
+                        db,
+                        current_user.id,
+                        stable_video_url,
+                        persist_context,
+                        persisted_meta,
+                    )
+                    _bind_generated_media_to_shot(
+                        db,
+                        current_user,
+                        persist_context,
+                        stable_video_url,
+                        oss_uploaded_success=bool((persisted_meta or {}).get("oss")) if isinstance(persisted_meta, dict) else None,
+                        media_metadata=persisted_meta if isinstance(persisted_meta, dict) else None,
+                    )
+        except Exception as persist_exc:
+            logger.warning("[GenerateVideo] persistence/register/bind skipped due to error: %s", persist_exc)
+
+        # Video asset registration is handled above (direct path) and in callback finalize path.
 
         if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}
@@ -27575,6 +27681,11 @@ async def submit_generate_video_endpoint(
         shot_number=req_payload.get("shot_number"),
         shot_name=req_payload.get("shot_name"),
         asset_type=req_payload.get("asset_type"),
+        ref_mode=req_payload.get("ref_mode"),
+        ref_image_url=req_payload.get("ref_image_url"),
+        ref_video_urls=req_payload.get("ref_video_urls"),
+        last_frame_url=req_payload.get("last_frame_url"),
+        keyframes=req_payload.get("keyframes"),
         provider_callback_ticket=provider_callback_ticket,
         created_at=now,
         started_at=None,
@@ -29732,8 +29843,8 @@ def _append_video_api_ref_mapping(
 
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:
-        prefix = f"参考图{mapped_idx}的"
-        if prefix in updated_text and entity_name in updated_text:
+        prefix = f"@Image{mapped_idx} "
+        if prefix.lower() in updated_text.lower() and entity_name.lower() in updated_text.lower():
             continue
 
         escaped_entity = re.escape(entity_name)
@@ -29750,7 +29861,7 @@ def _append_video_api_ref_mapping(
                     return token
                 return f"{prefix}{token}"
 
-            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, count=1, flags=re.IGNORECASE)
+            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
             if count > 0:
                 updated_text = replaced_text
                 replaced = True
@@ -29768,9 +29879,20 @@ def _append_video_api_ref_mapping(
                 return token
             return f"{prefix}{token}"
 
-        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, count=1, flags=re.IGNORECASE)
+        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
         if count > 0:
             updated_text = replaced_text
+
+    if reference_video_urls:
+        added_videos = False
+        for idx in range(1, len(reference_video_urls) + 1):
+            vid_tag = f"@Video{idx}"
+            if not re.search(r'@[Vv]ideo\s*' + str(idx) + r'|@[Vv]edie\s*' + str(idx) + r'|@[Vv]edio\s*' + str(idx), updated_text):
+                if not added_videos:
+                    updated_text = f"{vid_tag} {updated_text.strip()}"
+                    added_videos = True
+                else:
+                    updated_text = f"{vid_tag} {updated_text.strip()}"
 
     return updated_text
 
