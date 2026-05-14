@@ -29895,7 +29895,10 @@ def _append_video_api_ref_mapping(
             vid_tag = f"@Video{idx}"
             if not re.search(r'@[Vv]ideo\s*' + str(idx) + r'|@[Vv]edie\s*' + str(idx) + r'|@[Vv]edio\s*' + str(idx), updated_text):
                 if not added_videos:
-                    updated_text = f"{vid_tag} {updated_text.strip()}"
+                    if idx == 1:
+                        updated_text = f"延长{vid_tag}视频，一镜到底运镜，{updated_text.strip()}"
+                    else:
+                        updated_text = f"{vid_tag} {updated_text.strip()}"
                     added_videos = True
                 else:
                     updated_text = f"{vid_tag} {updated_text.strip()}"
