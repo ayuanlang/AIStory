@@ -10888,28 +10888,30 @@ Negative prompt constraints: {neg_prompt}"""
                 
             seedance_refs = [x for x in dict.fromkeys(seedance_refs) if x]
             
-            # Setup image refs (which act as first frame if empty, or general references)
-            if seedance_refs:
-                if len(seedance_refs) > 1:
-                    payload_input["reference_image_urls"] = seedance_refs
-                    payload_input.pop("first_frame_url", None)
-                    payload_input.pop("last_frame_url", None)
-                else:
-                    payload_input["first_frame_url"] = seedance_refs[0]
-            
-            # Append reference_video_urls natively if passed from unified tool_conf
             ref_videos = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls")
-            if isinstance(ref_videos, list) and len(ref_videos) > 0:
-                valid_videos = [str(v) for v in ref_videos if str(v).strip()]
-                if valid_videos:
-                    payload_input["reference_video_urls"] = valid_videos
-                    # Mutually exclusive with first/last frames
-                    if "first_frame_url" in payload_input:
-                        first_frame = payload_input.pop("first_frame_url")
-                        existing_refs = payload_input.get("reference_image_urls", [])
-                        payload_input["reference_image_urls"] = [first_frame] + existing_refs
-                    payload_input.pop("last_frame_url", None)
+            has_ref_videos = isinstance(ref_videos, list) and any(str(v).strip() for v in ref_videos)
 
+            if has_ref_videos:
+                # Video extension: discard the fallback first frame (seedance_refs[0]) to preserve @Image mapping offsets
+                if len(seedance_refs) > 1:
+                    payload_input["reference_image_urls"] = seedance_refs[1:]
+                
+                payload_input.pop("first_frame_url", None)
+                payload_input.pop("last_frame_url", None)
+                
+                valid_videos = [str(v).strip() for v in ref_videos if str(v).strip()]
+                payload_input["reference_video_urls"] = valid_videos
+            else:
+                # Normal image-to-video
+                if seedance_refs:
+                    if len(seedance_refs) > 1:
+                        # Treat first frame as reference image along with others to avoid 422 mutually exclusive error
+                        payload_input["reference_image_urls"] = seedance_refs
+                        payload_input.pop("first_frame_url", None)
+                        payload_input.pop("last_frame_url", None)
+                    else:
+                        payload_input["first_frame_url"] = seedance_refs[0]
+            
             # Follow official Seedance shape and avoid ambiguous legacy aliases.
             payload_input.pop("image_urls", None)
             payload_input.pop("image_url", None)
