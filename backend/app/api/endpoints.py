@@ -29809,26 +29809,6 @@ def _append_video_api_ref_mapping(
         for m in re.finditer(r'@Image(\d+)', prefix_str):
             used_indexes.add(int(m.group(1)))
 
-    paired_names = {name for _, name, _ in pairs}
-    next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
-
-    if next_ref_indexes:
-        fallback_mentions = _collect_prompt_entity_mentions(text)
-        unmapped_mentions = [item for item in fallback_mentions if item[1] not in paired_names]
-        
-        if unmapped_mentions:
-            images_per_mention = max(1, len(next_ref_indexes) // len(unmapped_mentions))
-            for i, (_, entity_name) in enumerate(unmapped_mentions):
-                if i == len(unmapped_mentions) - 1:
-                    assigned_indexes = next_ref_indexes
-                else:
-                    assigned_indexes = next_ref_indexes[:images_per_mention]
-                    next_ref_indexes = next_ref_indexes[images_per_mention:]
-                
-                if assigned_indexes:
-                    tag_str = " ".join([f"@Image{idx}" for idx in assigned_indexes])
-                    pairs.append((tag_str, entity_name, ""))
-
     if not pairs and not reference_video_urls:
         return text
 
@@ -29873,12 +29853,6 @@ def _append_video_api_ref_mapping(
         replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
         if count > 0:
             updated_text = replaced_text
-
-    if ordered_refs:
-        for idx in range(1, len(ordered_refs) + 1):
-            img_tag = f"@Image{idx}"
-            if not re.search(r'@[Ii]mage\s*' + str(idx), updated_text):
-                updated_text = f"{img_tag} {updated_text.strip()}"
 
     if reference_video_urls:
         added_videos = False
