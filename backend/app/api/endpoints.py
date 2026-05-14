@@ -29842,7 +29842,7 @@ def _append_video_api_ref_mapping(
         ):
             pairs.append((mapped_idx, entity_name, ""))
 
-    if not pairs:
+    if not pairs and not reference_video_urls:
         return text
 
     pairs.sort(key=lambda x: x[0])
