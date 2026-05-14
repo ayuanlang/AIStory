@@ -316,7 +316,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
     const [showHistoricalProjectAssets, setShowHistoricalProjectAssets] = useState(true);
 
-    const [episodeFilter, setEpisodeFilter] = useState(episodeId ? 'current' : 'all');
+    const [episodeFilter, setEpisodeFilter] = useState('all');
     const [assetTypeFilter, setAssetTypeFilter] = useState('all');
     const [secondaryFilterKind, setSecondaryFilterKind] = useState('all'); // all | entity | shot
     const [secondaryFilterValue, setSecondaryFilterValue] = useState('');
@@ -427,14 +427,6 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const contextShotId = useMemo(() => String(context?.shotId ?? context?.shot_id ?? '').trim(), [context?.shotId, context?.shot_id]);
     const contextEntityId = useMemo(() => String(context?.entityId ?? context?.entity_id ?? '').trim(), [context?.entityId, context?.entity_id]);
     const contextFrameType = useMemo(() => String(context?.shotFrameType ?? context?.shot_frame_type ?? context?.frame_type ?? context?.type ?? '').trim().toLowerCase(), [context?.frame_type, context?.shotFrameType, context?.shot_frame_type, context?.type]);
-
-    const contextualSecondary = useMemo(() => {
-        const stableShotId = contextShotId;
-        const stableEntityId = contextEntityId;
-        if (stableShotId) return { kind: 'shot', value: stableShotId };
-        if (stableEntityId) return { kind: 'entity', value: stableEntityId };
-        return null;
-    }, [contextEntityId, contextShotId]);
 
     const inferPreferredAssetType = useCallback(() => {
         if (contextDesiredAssetType !== 'all') return contextDesiredAssetType;
@@ -584,27 +576,17 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
              setShowHistoricalProjectAssets(true);
-             setEpisodeFilter(episodeId ? 'current' : 'all');
-             setAssetTypeFilter(inferPreferredAssetType());
-             if (contextualSecondary) {
-                 setSecondaryFilterKind(contextualSecondary.kind);
-                 setSecondaryFilterValue(contextualSecondary.value);
-                 setSecondaryAutoFollow(true);
-             } else {
-                 setSecondaryFilterKind('all');
-                 setSecondaryFilterValue('');
-                 setSubCategoryFilter('all');
-                 setSecondaryAutoFollow(false);
-             }
+             setEpisodeFilter('all');
+             setAssetTypeFilter('all');
+             setSecondaryFilterKind('all');
+             setSecondaryFilterValue('');
+             setSubCategoryFilter('all');
+             setSecondaryAutoFollow(false);
              setNameFilter('');
              setSelectedAssetId('');
              setSelectedMulti(new Set());
-
-             if (contextLockAssetType && contextDesiredAssetType !== 'all') {
-                 setAssetTypeFilter(contextDesiredAssetType);
-             }
         }
-    }, [contextDesiredAssetType, contextLockAssetType, contextualSecondary, episodeId, inferPreferredAssetType, isOpen]);
+    }, [episodeId, isOpen]);
 
         useEffect(() => {
                  if (episodeId && availableShots.length === 0) {
@@ -628,7 +610,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             setSelectedAssetId('');
             setSelectedMulti(new Set());
         }
-    }, [contextEntityId, contextShotId, episodeFilter, episodeId, isOpen, projectId, showHistoricalProjectAssets, tab]);
+    }, [episodeFilter, episodeId, isOpen, projectId, showHistoricalProjectAssets, tab]);
 
     const episodeOptions = useMemo(() => {
         const grouped = new Map();
@@ -731,29 +713,6 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         return options;
     }, [availableShots, levelOneAssets, resolveAssetShotId, t]);
 
-    useEffect(() => {
-        if (!isOpen || !secondaryAutoFollow || !contextualSecondary) return;
-
-        const nextKind = contextualSecondary.kind;
-        let nextValue = contextualSecondary.value;
-
-        // 自动跟随时，如果上下文值不在当前可选项中，降级为该类型下“全部”，避免空结果和状态抖动。
-        if (nextKind === 'entity') {
-            const exists = secondaryEntityOptions.some((item) => String(item.id) === String(nextValue));
-            if (!exists) nextValue = '';
-        } else if (nextKind === 'shot') {
-            const exists = secondaryShotOptions.some((item) => String(item.id) === String(nextValue));
-            if (!exists) nextValue = '';
-        }
-
-        if (secondaryFilterKind !== nextKind) {
-            setSecondaryFilterKind(nextKind);
-        }
-        if (secondaryFilterValue !== nextValue) {
-            setSecondaryFilterValue(nextValue);
-        }
-    }, [contextualSecondary, isOpen, secondaryAutoFollow, secondaryEntityOptions, secondaryFilterKind, secondaryFilterValue, secondaryShotOptions]);
-
     const filteredAssets = useMemo(() => {
         let filtered = [...levelOneAssets];
 
@@ -794,18 +753,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 });
             }
         } else if (secondaryFilterKind === 'shot') {
-            // Progressive narrowing: if older assets miss shot/frame tags, do not collapse to an empty list.
-            const shotBoundOnly = filtered.filter(isShotBoundAsset);
-            logAssetPickerDebug('level2:shot-bound-candidates', {
-                all: summarizeAssetsForDebug(filtered),
-                shotBoundOnly: summarizeAssetsForDebug(shotBoundOnly),
-            });
-            if (shotBoundOnly.length > 0) {
-                filtered = shotBoundOnly;
-                logAssetPickerDebug('level2:shot-bound-applied', {
-                    summary: summarizeAssetsForDebug(filtered),
-                });
-            }
+            // Only narrow by exact shot when user explicitly chooses a shot value.
             if (secondaryFilterValue) {
                 const exactShotOnly = filtered.filter((asset) => String(resolveAssetShotId(asset)) === String(secondaryFilterValue));
                 logAssetPickerDebug('level2:shot-exact-candidates', {
@@ -845,61 +793,6 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             }
         }
 
-        const stableContextEntityId = contextEntityId;
-        const stableContextShotId = contextShotId;
-        const stableContextFrameType = contextFrameType;
-
-        const applyPreferScopedFilter = (items, predicate) => {
-            const scoped = items.filter(predicate);
-            return scoped.length ? scoped : items;
-        };
-
-        if (stableContextEntityId) {
-            filtered = applyPreferScopedFilter(filtered, (asset) => resolveAssetEntityId(asset) === stableContextEntityId);
-            logAssetPickerDebug('level2:context-entity', {
-                value: stableContextEntityId,
-                summary: summarizeAssetsForDebug(filtered),
-            });
-        }
-
-        if (stableContextShotId) {
-            filtered = applyPreferScopedFilter(filtered, (asset) => resolveAssetShotId(asset) === stableContextShotId);
-            logAssetPickerDebug('level2:context-shot', {
-                value: stableContextShotId,
-                summary: summarizeAssetsForDebug(filtered),
-            });
-        }
-
-        if (stableContextFrameType.includes('start')) {
-            filtered = applyPreferScopedFilter(filtered, (asset) => {
-                const frameType = resolveAssetFrameType(asset);
-                const stableType = String(asset?.type || '').trim().toLowerCase();
-                return stableType === 'image' && (frameType.includes('start') || frameType === '' || frameType.includes('keyframe'));
-            });
-            logAssetPickerDebug('level2:context-frame-start', {
-                summary: summarizeAssetsForDebug(filtered),
-            });
-        } else if (stableContextFrameType.includes('end')) {
-            filtered = applyPreferScopedFilter(filtered, (asset) => {
-                const frameType = resolveAssetFrameType(asset);
-                const stableType = String(asset?.type || '').trim().toLowerCase();
-                return stableType === 'image' && frameType.includes('end');
-            });
-            logAssetPickerDebug('level2:context-frame-end', {
-                summary: summarizeAssetsForDebug(filtered),
-            });
-        } else if (stableContextFrameType.includes('video')) {
-            filtered = applyPreferScopedFilter(filtered, (asset) => {
-                const frameType = resolveAssetFrameType(asset);
-                const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
-                const stableType = String(asset?.type || meta?.type || '').trim().toLowerCase();
-                return stableType === 'video' || frameType.includes('video');
-            });
-            logAssetPickerDebug('level2:context-frame-video', {
-                summary: summarizeAssetsForDebug(filtered),
-            });
-        }
-
         const stableNameFilter = String(nameFilter || '').trim().toLowerCase();
         if (stableNameFilter) {
             filtered = filtered.filter((asset) => String(resolveContextualAssetDisplayName(asset) || '').toLowerCase().includes(stableNameFilter));
@@ -918,7 +811,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             summary: summarizeAssetsForDebug(filtered),
         });
         return filtered;
-    }, [assetTypeFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, logAssetPickerDebug, nameFilter, resolveAssetEntityId, resolveAssetEntityType, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryFilterKind, secondaryFilterValue, subCategoryFilter, summarizeAssetsForDebug]);
+    }, [assetTypeFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, logAssetPickerDebug, nameFilter, resolveAssetEntityType, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryFilterKind, secondaryFilterValue, subCategoryFilter, summarizeAssetsForDebug]);
 
     useEffect(() => {
         if (secondaryFilterKind !== 'entity' && secondaryFilterKind !== 'shot') {
@@ -1022,12 +915,6 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 baseParams.episode_id = selectedEpisodeStable;
             }
             const scopedParams = { ...baseParams };
-            if (contextEntityId) {
-                scopedParams.entity_id = contextEntityId;
-            }
-            if (contextShotId) {
-                scopedParams.shot_id = contextShotId;
-            }
 
             const shouldFilterReferencedOnly = Boolean(projectId) && !showHistoricalProjectAssets;
             const [scopedData, refsPayload] = await Promise.all([
@@ -1041,39 +928,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 summary: summarizeAssetsForDebug(scopedData),
             });
 
-            let data = scopedData;
-            const usedScopedQuery = Boolean(contextEntityId || contextShotId);
-            if (usedScopedQuery && (!Array.isArray(scopedData) || scopedData.length === 0)) {
-                const fallbackSteps = [];
-                if (contextEntityId && contextShotId) {
-                    fallbackSteps.push({ ...baseParams, shot_id: contextShotId });
-                    fallbackSteps.push({ ...baseParams, entity_id: contextEntityId });
-                }
-                fallbackSteps.push(baseParams);
-
-                for (const params of fallbackSteps) {
-                    const next = await fetchAssets(params);
-                    if (Array.isArray(next) && next.length > 0) {
-                        data = next;
-                        break;
-                    }
-                    data = next;
-                }
-
-                if (typeof window !== 'undefined') {
-                    console.info('[素材选择][loadAssets] scoped query empty, used progressive fallback', {
-                        scopedParams,
-                        fallbackCount: fallbackSteps.length,
-                        finalCount: Array.isArray(data) ? data.length : 0,
-                    });
-                }
-
-                logAssetPickerDebug('load:progressive-fallback-final', {
-                    scopedParams,
-                    fallbackCount: fallbackSteps.length,
-                    summary: summarizeAssetsForDebug(data),
-                });
-            }
+            const data = scopedData;
 
             const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
             const hasReferencedHints = referencedSet.size > 0;
@@ -1118,7 +973,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 setLoading(false);
             }
         }
-    }, [contextEntityId, contextShotId, episodeFilter, episodeId, logAssetPickerDebug, projectId, showHistoricalProjectAssets, summarizeAssetsForDebug]);
+    }, [episodeFilter, episodeId, logAssetPickerDebug, projectId, showHistoricalProjectAssets, summarizeAssetsForDebug]);
 
     const handleMarkAssetCurrent = useCallback(async (asset) => {
         const assetId = Number(asset?.id || 0);

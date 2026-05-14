@@ -11646,8 +11646,14 @@ Negative prompt constraints: {neg_prompt}"""
             return patched
 
         def _post_submit(submit_payload: Dict[str, Any]):
+            import json
             log_payload = _strip_base64_from_log(submit_payload)
             kie_tag = "audio" if gen_type == "audio" else ("video" if gen_type == "video" else "image")
+            try:
+                dumped = json.dumps(log_payload, ensure_ascii=False)
+            except:
+                dumped = str(log_payload)
+            logger.info(f"====== PRE_SUBMIT DUMP [{kie_tag}] ======\nURL: {submit_url}\nModel: {submit_payload.get('model')}\nPayload: {dumped}\n====== END PRE_SUBMIT DUMP ======")
             _debug_log(f"[KIE_{kie_tag}] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
             
             logger.info("KIE performing HTTP Request | Method: POST | URL: %s | Payload_model: %s", submit_url, submit_payload.get('model'))
