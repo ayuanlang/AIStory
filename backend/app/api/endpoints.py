@@ -21172,7 +21172,9 @@ class GenerationRequest(BaseModel):
     background: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
     image_urls: Optional[List[str]] = None
+    entity_url_map: Optional[Dict[str, str]] = None
     imageUrls: Optional[List[str]] = None
+    entity_url_map: Optional[Dict[str, str]] = None
     project_id: Optional[int] = None
     episode_id: Optional[int] = None
     scene_id: Optional[int] = None
@@ -27586,6 +27588,15 @@ async def submit_generate_video_endpoint(
                             resolved_project_id = _to_positive_int_or_none(getattr(submit_episode, "project_id", None))
 
             submit_entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else None
+            
+            # Apply temporary URL map overrides from frontend request
+            if submit_entity_lookup and getattr(req, "entity_url_map", None):
+                for k, v in req.entity_url_map.items():
+                    k_str = str(k).strip()
+                    for norm_name, row in submit_entity_lookup.items():
+                        if str(row.get("entity_id", "")) == k_str or norm_name == _normalize_entity_anchor_token(k_str):
+                            row["image_url"] = str(v).strip()
+
             req_payload["prompt"] = _append_video_api_ref_mapping(
                 submit_prompt,
                 submit_refs,
