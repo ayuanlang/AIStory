@@ -29806,46 +29806,17 @@ def _append_video_api_ref_mapping(
                 pairs.append((mapped_idx, char_name, anchor_text))
     pairs.sort(key=lambda x: x[0])
 
-    if not pairs:
-        pure_multi_entity_ref_mode = (
-            len(start_urls) >= 2
-            and not end_url
-            and not keyframe_urls
-            and not reference_video_urls
-        )
-        if not pure_multi_entity_ref_mode:
-            if not reference_video_urls:
-                return text
-        else:
-            fallback_mentions = _collect_prompt_entity_mentions(text)
-            if not fallback_mentions:
-                if not reference_video_urls:
-                    return text
-            else:
-                used_indexes: set[int] = set()
-                next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
-                for (_, entity_name), mapped_idx in zip(fallback_mentions, next_ref_indexes):
-                    pairs.append((mapped_idx, entity_name, ""))
+    # Fallback mapping: assign any unused image indices to mentioned entities that weren't mapped via entity_lookup
+    used_indexes = {idx for idx, _, _ in pairs}
+    paired_names = {name for _, name, _ in pairs}
+    next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
 
-    elif (
-        len(start_urls) >= 2
-        and not end_url
-        and not keyframe_urls
-        and not reference_video_urls
-        and len(pairs) < len(ordered_refs)
-    ):
+    if next_ref_indexes:
         fallback_mentions = _collect_prompt_entity_mentions(text)
-        paired_names = {name for _, name, _ in pairs}
-        used_indexes = {idx for idx, _, _ in pairs}
-        next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
-        for (_, entity_name), mapped_idx in zip(
-            [item for item in fallback_mentions if item[1] not in paired_names],
-            next_ref_indexes,
-        ):
+        unmapped_mentions = [item for item in fallback_mentions if item[1] not in paired_names]
+        # Map in order of appearance in prompt
+        for (_, entity_name), mapped_idx in zip(unmapped_mentions, next_ref_indexes):
             pairs.append((mapped_idx, entity_name, ""))
-
-    if not pairs and not reference_video_urls:
-        return text
 
     pairs.sort(key=lambda x: x[0])
 
