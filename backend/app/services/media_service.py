@@ -10886,42 +10886,22 @@ Negative prompt constraints: {neg_prompt}"""
             seedance_refs = [x for x in dict.fromkeys(seedance_refs) if x]
             
             # Setup image refs (which act as first frame if empty, or general references)
-            raw_ref_mode = str(
-                tool_conf.get("ref_mode")
-                or tool_conf.get("video_ref_mode")
-                or tool_conf.get("video_mode")
-                or tool_conf.get("video_mode_unified")
-                or ""
-            ).strip().lower()
-            
-            is_entity_refs = raw_ref_mode in {"refs_video", "entity_refs", "reference", "reference_images", "reference_image"}
-            ref_videos = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls")
-            
-            if not is_entity_refs and raw_ref_mode not in {"start_end", "start-end", "start+end", "first_last", "first_last_frame", "first_and_last", "end", "last", "last_frame", "start", "first", "first_frame", "auto"}:
-                if len(seedance_refs) > 1 or (isinstance(ref_videos, list) and len(ref_videos) > 0):
-                    is_entity_refs = True
-
-            if is_entity_refs:
-                if seedance_refs:
-                    payload_input["reference_image_urls"] = seedance_refs
-                if "first_frame_url" in payload_input:
-                    payload_input.pop("first_frame_url")
-                if "last_frame_url" in payload_input:
-                    payload_input.pop("last_frame_url")
-            else:
-                if seedance_refs:
-                    payload_input["first_frame_url"] = seedance_refs[0]
-                if "reference_image_urls" in payload_input:
-                    payload_input.pop("reference_image_urls")
+            if seedance_refs:
+                payload_input["first_frame_url"] = seedance_refs[0]
+                if len(seedance_refs) > 1:
+                    payload_input["reference_image_urls"] = seedance_refs[1:]
             
             # Append reference_video_urls natively if passed from unified tool_conf
+            ref_videos = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls")
             if isinstance(ref_videos, list) and len(ref_videos) > 0:
                 valid_videos = [str(v) for v in ref_videos if str(v).strip()]
                 if valid_videos:
                     payload_input["reference_video_urls"] = valid_videos
                     # Mutually exclusive with first/last frames
                     if "first_frame_url" in payload_input:
-                        payload_input.pop("first_frame_url")
+                        first_frame = payload_input.pop("first_frame_url")
+                        existing_refs = payload_input.get("reference_image_urls", [])
+                        payload_input["reference_image_urls"] = [first_frame] + existing_refs
                     if "last_frame_url" in payload_input:
                         payload_input.pop("last_frame_url")
 
