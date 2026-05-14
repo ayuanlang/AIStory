@@ -29814,16 +29814,18 @@ def _append_video_api_ref_mapping(
             and not reference_video_urls
         )
         if not pure_multi_entity_ref_mode:
-            return text
-
-        fallback_mentions = _collect_prompt_entity_mentions(text)
-        if not fallback_mentions:
-            return text
-
-        used_indexes: set[int] = set()
-        next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
-        for (_, entity_name), mapped_idx in zip(fallback_mentions, next_ref_indexes):
-            pairs.append((mapped_idx, entity_name, ""))
+            if not reference_video_urls:
+                return text
+        else:
+            fallback_mentions = _collect_prompt_entity_mentions(text)
+            if not fallback_mentions:
+                if not reference_video_urls:
+                    return text
+            else:
+                used_indexes: set[int] = set()
+                next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
+                for (_, entity_name), mapped_idx in zip(fallback_mentions, next_ref_indexes):
+                    pairs.append((mapped_idx, entity_name, ""))
 
     elif (
         len(start_urls) >= 2
