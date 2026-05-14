@@ -153,7 +153,7 @@ import {
 import { processPrompt } from '../../../lib/promptUtils';
 import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../../../lib/entityToken';
 import SettingsPage from '../../Settings';
-import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
+import { confirmUiMessage, promptUiMessage, notifyUiMessage } from '../../../lib/uiMessage';
 
 // Character Canon (Authoritative) generator (shared)
 
@@ -469,6 +469,63 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [isDraftMode, setIsDraftMode] = useState(false);
     const [usePrevVideo, setUsePrevVideo] = useState(false);
     const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
+
+    const _getInMemorySortedShots = () => {
+        return [...(shots || [])].sort((a, b) => {
+            const ep = String(activeEpisode?.episode_number || activeEpisode?.id || '').trim();
+            // Try to find scene code format from scenes if needed, or fallback.
+            const scA = String(a?.scene_code || a?.scene_id || '').trim();
+            const shA = String(a?.shot_id || a?.shot_number || a?.id || '').trim();
+            const scB = String(b?.scene_code || b?.scene_id || '').trim();
+            const shB = String(b?.shot_id || b?.shot_number || b?.id || '').trim();
+            const keyA = `${ep}_${scA}_${shA}`;
+            const keyB = `${ep}_${scB}_${shB}`;
+            return keyA.localeCompare(keyB, undefined, { numeric: true, sensitivity: 'base' });
+        });
+    };
+
+    const handleToggleUsePrevVideo = (checked, targetShotId = null) => {
+        if (checked) {
+            const sortedArray = _getInMemorySortedShots();
+            let currentIdx = -1;
+            if (targetShotId) {
+                currentIdx = sortedArray.findIndex(s => String(s.id) === String(targetShotId));
+            } else if (editingShot) {
+                currentIdx = sortedArray.findIndex(s => String(s.id) === String(editingShot.id));
+            }
+
+            if (currentIdx === 0) {
+                notifyUiMessage(t('这是第一镜，没有上个分镜！', 'This is the first shot, no previous shot available!'), 'warning');
+                return;
+            } else if (currentIdx > 0) {
+                const prevShot = sortedArray[currentIdx - 1];
+                if (!prevShot?.video_url) {
+                    notifyUiMessage(t('上个分镜还没有生成视频！', 'The previous shot has no video available yet!'), 'warning');
+                    return;
+                }
+            } else if (selectedShotIds.length > 0) {
+                let valid = false;
+                for (const sid of selectedShotIds) {
+                    const idx = shots.findIndex(s => String(s.id) === String(sid));
+                    if (idx > 0 && shots[idx - 1]?.video_url) {
+                        valid = true;
+                        break;
+                    }
+                }
+                if (!valid) {
+                    notifyUiMessage(t('选中的分镜中没有前置分镜包含视频内容！', 'None of the selected shots have a previous shot with a video!'), 'warning');
+                    return;
+                }
+            } else if (shots.length > 0 && currentIdx === -1) {
+                 // Global context without selected shots
+                 notifyUiMessage(t('请先选择或编辑一个分镜！', 'Please select or edit a shot first!'), 'warning');
+                 // Let it pass or block? We can just let it check but warn.
+                 // Actually they might just check it BEFORE selecting shots. So don't block.
+            }
+        }
+        setUsePrevVideo(checked);
+    };
+
     const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [stoppingVideoByShot, setStoppingVideoByShot] = useState({});
@@ -5850,10 +5907,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     };
 
     const findPrevShotEndFrameUrl = (shotId) => {
-        const currentIdx = shots.findIndex(s => s.id === shotId);
+        const sortedArray = _getInMemorySortedShots();
+        const currentIdx = sortedArray.findIndex(s => s.id === shotId);
         if (currentIdx <= 0) return null;
         try {
-            const prevShot = shots[currentIdx - 1];
+            const prevShot = sortedArray[currentIdx - 1];
             const prevTech = JSON.parse(prevShot.technical_notes || '{}');
             return prevTech.end_frame_url || null;
         } catch (e) {
@@ -6383,9 +6441,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             
             if (usePrevVideo) {
-                const currentIdx = shots.findIndex(s => s.id === targetShotId);
+                const sortedArray = _getInMemorySortedShots();
+                const currentIdx = sortedArray.findIndex(s => String(s.id) === String(targetShotId));
                 if (currentIdx > 0) {
-                    const prevShot = shots[currentIdx - 1];
+                    const prevShot = sortedArray[currentIdx - 1];
                     const prevVideoUrl = prevShot?.video_url;
                     if (prevVideoUrl && !uniqueRefs.includes(prevVideoUrl)) {
                         uniqueRefs.push(prevVideoUrl);
@@ -7764,7 +7823,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${usePrevVideo ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
                             {usePrevVideo && <Check className="w-2.5 h-2.5 text-white" />}
                         </div>
-                        <input type="checkbox" className="hidden" checked={usePrevVideo} onChange={(e) => setUsePrevVideo(e.target.checked)} />
+                        <input type="checkbox" className="hidden" checked={usePrevVideo} onChange={(e) => handleToggleUsePrevVideo(e.target.checked)} />
                         <span className={usePrevVideo ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('上镜视频', 'Prev Video')}</span>
                     </label>
 
@@ -8440,7 +8499,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         type="checkbox" 
                                                         className="hidden"
                                                         checked={usePrevVideo}
-                                                        onChange={(e) => setUsePrevVideo(e.target.checked)}
+                                                        onChange={(e) => handleToggleUsePrevVideo(e.target.checked, editingShot?.id)}
                                                     />
                                                     <div className={`w-2.5 h-2.5 rounded-sm border flex items-center justify-center transition-colors ${usePrevVideo ? 'bg-primary border-primary' : 'border-white/30 hover:border-white/50 bg-black/20'}`}>
                                                         {usePrevVideo && <Check className="w-2 h-2 text-white" />}
@@ -8614,6 +8673,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
                                             pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }}
+                                            additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []}
                                             storageKey="video_ref_image_urls"
                                             strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}
                                         />
@@ -9767,7 +9827,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} additionalAutoRefs={usePrevVideo ? [(shots.findIndex(s => s.id === editingShot?.id) > 0 ? shots[shots.findIndex(s => s.id === editingShot?.id) - 1] : null)?.video_url].filter(Boolean) : []} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>

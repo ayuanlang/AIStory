@@ -1,0 +1,2371 @@
+def _handle_kie_generation(
+        self,
+        gen_type,
+        prompt,
+        config,
+        ref_image=None,
+        last_frame_url=None,
+        duration=5,
+        aspect_ratio=None,
+        negative_prompt: Optional[str] = None,
+        image_size: Optional[str] = None,
+    ):
+        api_key = (config.get("api_key") or "").strip()
+        if not api_key:
+            return {"error": "Missing KIE API key", "submit_failed": True}
+
+        model = (config.get("model") or "").strip() or ("flux-kontext-pro" if gen_type == "image" else "veo-3-1-fast")
+        model_alias = {
+            "veo-3-1-fast": "veo-3-1-fast",
+            "veo3-fast": "veo-3-1-fast",
+            "veo-3-fast": "veo-3-1-fast",
+            "veo3": "veo3",
+            "veo-3": "veo3",
+            "veo": "veo3",
+            "veo-3.1": "veo3",
+            "veo3.1": "veo3",
+
+            "klingv2.5": "kling-v2.5",
+            "klingv2.1": "kling-v2.1",
+            "kling3": "kling-3.0/video",
+            "kling3.0": "kling-3.0/video",
+            "kling-3.0": "kling-3.0/video",
+            "kling-3-0": "kling-3.0/video",
+            "kling-3.0/video": "kling-3.0/video",
+            "kling/2.6-text-to-video": "kling-2.6/text-to-video",
+            "kling/2.6-image-to-video": "kling-2.6/image-to-video",
+            "kling/2.6-motion-control": "kling-2.6/motion-control",
+            "kling/v25-turbo-text-to-video-pro": "kling/v2-5-turbo-text-to-video-pro",
+            "kling/v25-turbo-image-to-video-pro": "kling/v2-5-turbo-image-to-video-pro",
+
+            "grok-imagine": "grok-imagine/text-to-image",
+            "grok-imagine-t2i": "grok-imagine/text-to-image",
+            "grok-imagine-i2i": "grok-imagine/image-to-image",
+            "qwen-image": "qwen/text-to-image",
+            "qwen-i2i": "qwen/image-to-image",
+            "qwen-edit": "qwen/image-edit",
+            "imagen4-fast": "google/imagen4-fast",
+            "imagen4-ultra": "google/imagen4-ultra",
+            "imagen4": "google/imagen4",
+            "nano-banana": "google/nano-banana",
+            "nano-banana-edit": "google/nano-banana-edit",
+            "nanobanana2": "google/nanobanana2",
+            "seedream4.5": "seedream/4.5-text-to-image",
+            "seedream4.5-edit": "seedream/4.5-edit",
+            "seedream5-lite": "seedream/5-lite-text-to-image",
+            "seedream5-lite-i2i": "seedream/5-lite-image-to-image",
+            "seedream/5-lite-text-to-image": "seedream/5-lite-text-to-image",
+            "seedream/5-lite-image-to-image": "seedream/5-lite-image-to-image",
+            "flux2-pro": "flux-2/pro-text-to-image",
+            "flux2-pro-i2i": "flux-2/pro-image-to-image",
+            "flux2-flex": "flux-2/flex-text-to-image",
+            "flux2-flex-i2i": "flux-2/flex-image-to-image",
+            "gpt-image-1.5": "gpt-image/1.5-text-to-image",
+            "gpt-image-1.5-i2i": "gpt-image/1.5-image-to-image",
+            "gpt-image/1-5-text-to-image": "gpt-image/1.5-text-to-image",
+            "gpt-image/1-5-image-to-image": "gpt-image/1.5-image-to-image",
+
+            "sora2": "sora-2-text-to-video",
+            "sora2-t2v": "sora-2-text-to-video",
+            "sora2-i2v": "sora-2-image-to-video",
+            "sora2-pro": "sora-2-pro-text-to-video",
+            "sora2-pro-i2v": "sora-2-pro-image-to-video",
+            "bytedance-v1-pro": "bytedance/v1-pro-text-to-video",
+            "bytedance-v1-pro-i2v": "bytedance/v1-pro-image-to-video",
+            "bytedance-v1-pro-fast-i2v": "bytedance/v1-pro-fast-image-to-video",
+            "bytedance-v1-lite": "bytedance/v1-lite-text-to-video",
+            "bytedance-v1-lite-i2v": "bytedance/v1-lite-image-to-video",
+            "hailuo": "hailuo/02-text-to-video-pro",
+            "hailuo-pro-i2v": "hailuo/02-image-to-video-pro",
+            "hailuo-standard": "hailuo/02-text-to-video-standard",
+            "hailuo-standard-i2v": "hailuo/02-image-to-video-standard",
+            "hailuo-2.3-pro": "hailuo/2-3-image-to-video-pro",
+            "hailuo-2.3-standard": "hailuo/2-3-image-to-video-standard",
+            "wan-turbo": "wan/2-6-text-to-video",
+            "wan-i2v": "wan/2-6-image-to-video",
+            "wan-v2v": "wan/2-6-video-to-video",
+            "wan-a14b-t2v": "wan/2-2-a14b-text-to-video-turbo",
+            "wan-a14b-i2v": "wan/2-2-a14b-image-to-video-turbo",
+            "wan-a14b-s2v": "wan/2-2-a14b-speech-to-video-turbo",
+            "wan-flash-i2v": "wan/2-6-flash-image-to-video",
+            "wan-flash-v2v": "wan/2-6-flash-video-to-video",
+            "grok-imagine-video": "grok-imagine/text-to-video",
+        }
+        if gen_type in {"video", "image"}:
+            remapped_model = model_alias.get(str(model or "").strip().lower())
+            if remapped_model:
+                logger.warning(
+                    "KIE legacy model remapped | from=%s to=%s",
+                    model,
+                    remapped_model,
+                )
+                model = remapped_model
+
+        # ── Modality-aware model switching for KIE video ──
+        # When a reference image is provided, auto-switch text-to-video models to
+        # their image-to-video counterpart so the image is actually used as input.
+        if gen_type == "video" and ref_image:
+            has_ref = bool(ref_image if not isinstance(ref_image, list) else any(ref_image))
+            if has_ref:
+                _t2v_to_i2v_map = {
+                    "sora-2-text-to-video":                  "sora-2-image-to-video",
+                    "sora-2-pro-text-to-video":              "sora-2-pro-image-to-video",
+                    "bytedance/v1-pro-text-to-video":        "bytedance/v1-pro-image-to-video",
+                    "bytedance/v1-lite-text-to-video":       "bytedance/v1-lite-image-to-video",
+                    "hailuo/02-text-to-video-pro":           "hailuo/02-image-to-video-pro",
+                    "hailuo/02-text-to-video-standard":      "hailuo/02-image-to-video-standard",
+                    "wan/2-6-text-to-video":                 "wan/2-6-image-to-video",
+                    "wan/2-2-a14b-text-to-video-turbo":      "wan/2-2-a14b-image-to-video-turbo",
+                    "kling-2.6/text-to-video":               "kling-2.6/image-to-video",
+                    "kling/v2-5-turbo-text-to-video-pro":    "kling/v2-5-turbo-image-to-video-pro",
+                    "kling/v2-1-master-text-to-video":       "kling/v2-1-master-image-to-video",
+                    "grok-imagine/text-to-video":            "grok-imagine/image-to-video",
+                }
+                i2v_model = _t2v_to_i2v_map.get(str(model or "").strip().lower())
+                if i2v_model:
+                    logger.info(
+                        "KIE modality switch t2v→i2v | from=%s to=%s reason=reference_image_provided",
+                        model,
+                        i2v_model,
+                    )
+                    model = i2v_model
+
+        # ── Modality-aware model switching for KIE image ──
+        # When a reference image is provided, auto-switch text-to-image models to
+        # their image-to-image counterpart.
+        if gen_type == "image" and ref_image:
+            has_ref = bool(ref_image if not isinstance(ref_image, list) else any(ref_image))
+            if has_ref:
+                _t2i_to_i2i_map = {
+                    "grok-imagine/text-to-image":     "grok-imagine/image-to-image",
+                    "qwen/text-to-image":             "qwen/image-to-image",
+                    "seedream/4.5-text-to-image":     "seedream/4.5-edit",
+                    "seedream/5-lite-text-to-image":  "seedream/5-lite-image-to-image",
+                    "flux-2/pro-text-to-image":       "flux-2/pro-image-to-image",
+                    "flux-2/flex-text-to-image":      "flux-2/flex-image-to-image",
+                    "gpt-image/1.5-text-to-image":    "gpt-image/1.5-image-to-image",
+                    "gpt-image/1-5-text-to-image":    "gpt-image/1.5-image-to-image",
+                }
+                i2i_model = _t2i_to_i2i_map.get(str(model or "").strip().lower())
+                if i2i_model:
+                    logger.info(
+                        "KIE modality switch t2i→i2i | from=%s to=%s reason=reference_image_provided",
+                        model,
+                        i2i_model,
+                    )
+                    model = i2i_model
+
+        tool_conf = config.get("config", {}) or {}
+        subject_type_hint = str(tool_conf.get("__subject_type") or "").strip().lower() or None
+        subject_name_hint = str(
+            tool_conf.get("__subject_name")
+            or tool_conf.get("subject_name")
+            or tool_conf.get("entity_name")
+            or tool_conf.get("name")
+            or ""
+        ).strip() or None
+        prompt = self._sanitize_kie_placeholder_prompt(prompt, subject_type_hint, subject_name_hint)
+        prompt = self._merge_negative_prompt(prompt, negative_prompt)
+
+        # Fix 422: "kling_elements is required when prompt contains role references like @element_dog"
+        # KIE validates all video API calls using its unified proxy struct which treats `@` as kling elements.
+        prompt = self._sanitize_kie_prompt_mentions(prompt, tool_conf)
+        raw_multi_prompt = tool_conf.get("multi_prompt")
+        if isinstance(raw_multi_prompt, list):
+            for mp in raw_multi_prompt:
+                if isinstance(mp, dict) and isinstance(mp.get("prompt"), str):
+                    mp["prompt"] = self._sanitize_kie_prompt_mentions(mp["prompt"], tool_conf)
+
+        resolved_setting_id = None
+        try:
+            resolved_setting_id = int((tool_conf or {}).get("__resolved_setting_id") or 0)
+        except Exception:
+            resolved_setting_id = None
+        runtime_enum_catalog = self._load_system_api_runtime_enum_catalog(resolved_setting_id)
+
+        model_lower = str(model or "").strip().lower()
+        use_veo_api = bool(gen_type == "video" and model_lower.startswith("veo"))
+        use_runway_api = bool(gen_type == "video" and "runway" in model_lower)
+        use_4o_image_api = bool(gen_type == "image" and ("gpt4o-image" in model_lower or "4o-image" in model_lower))
+        use_flux_kontext_api = bool(gen_type == "image" and ("flux-kontext" in model_lower or "flux/kontext" in model_lower))
+        use_suno_api = bool(gen_type == "audio" and "suno" in model_lower)
+        is_sora2_video_model = bool(gen_type == "video" and model_lower.startswith("sora-2"))
+        is_kling_3_video = bool(gen_type == "video" and ("kling-3.0" in model_lower or model_lower == "kling3"))
+        is_kling_26_i2v_model = bool(gen_type == "video" and model_lower == "kling-2.6/image-to-video")
+        is_seedance_video_model = bool(gen_type == "video" and model_lower.startswith("bytedance/seedance"))
+        # KIE market video endpoints require duration as string for compatibility across models.
+        duration_string_required_model = bool(gen_type == "video")
+
+        base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
+        if "/api/v1/jobs" in base_url:
+            base_url = base_url.split("/api/v1/jobs")[0]
+            
+        for suffix in ["/api/v1/veo", "/api/v1/runway", "/api/v1/flux/kontext", "/api/v1/gpt4o-image", "/api/v1/generate"]:
+            if base_url.endswith(suffix):
+                base_url = base_url[:-len(suffix)]
+
+        submit_url = (tool_conf.get("endpoint") or f"{base_url}/api/v1/jobs/createTask").strip()
+        query_url = (tool_conf.get("query_endpoint") or f"{base_url}/api/v1/jobs/recordInfo").strip()
+        if use_veo_api:
+            submit_url = (tool_conf.get("veo_endpoint") or f"{base_url}/api/v1/veo/generate").strip()
+            query_url = (tool_conf.get("veo_query_endpoint") or f"{base_url}/api/v1/veo/record-info").strip()
+        elif use_runway_api:
+            submit_url = (tool_conf.get("runway_endpoint") or f"{base_url}/api/v1/runway/generate").strip()
+            query_url = (tool_conf.get("runway_query_endpoint") or f"{base_url}/api/v1/runway/record-detail").strip()
+        elif use_4o_image_api:
+            submit_url = (tool_conf.get("gpt4o_image_endpoint") or f"{base_url}/api/v1/gpt4o-image/generate").strip()
+            query_url = (tool_conf.get("gpt4o_image_query_endpoint") or f"{base_url}/api/v1/gpt4o-image/record-info").strip()
+        elif use_flux_kontext_api:
+            submit_url = (tool_conf.get("flux_kontext_endpoint") or f"{base_url}/api/v1/flux/kontext/generate").strip()
+            query_url = (tool_conf.get("flux_kontext_query_endpoint") or f"{base_url}/api/v1/flux/kontext/record-info").strip()
+        elif use_suno_api:
+            submit_url = (tool_conf.get("suno_endpoint") or f"{base_url}/api/v1/generate").strip()
+            query_url = (tool_conf.get("suno_query_endpoint") or f"{base_url}/api/v1/record-info").strip()  # Needs verification
+
+        route_mode = "market"
+        if use_veo_api: route_mode = "veo"
+        elif use_runway_api: route_mode = "runway"
+        elif use_4o_image_api: route_mode = "4o_image"
+        elif use_flux_kontext_api: route_mode = "flux_kontext"
+        elif use_suno_api: route_mode = "suno"
+        
+        logger.info(
+            "KIE route selected | mode=%s model=%s submit_url=%s query_url=%s",
+            route_mode,
+            model,
+            submit_url,
+            query_url,
+        )
+
+        payload_input: Dict[str, Any] = {
+            "prompt": prompt,
+        }
+
+        if is_sora2_video_model:
+            sora_mention_cfg = self._resolve_sora_mention_config(tool_conf if isinstance(tool_conf, dict) else {})
+            if sora_mention_cfg.get("auto_use_sora_mention"):
+                logger.info(
+                    "Sora mention mode enabled | model=%s auto_upload_character=%s",
+                    model,
+                    bool(sora_mention_cfg.get("auto_upload_character")),
+                )
+            else:
+                sanitized_prompt = self._sanitize_sora_prompt_mentions(prompt)
+                if sanitized_prompt and sanitized_prompt != str(prompt or ""):
+                    payload_input["prompt"] = sanitized_prompt
+                    logger.warning(
+                        "Sora prompt mention sanitizer applied | model=%s removed_at_mentions=%s",
+                        model,
+                        str(prompt or "").count("@"),
+                    )
+
+        requested_mode = str(tool_conf.get("mode") or "").strip().lower()
+        mode_source_hint = str(tool_conf.get("__mode_source") or "").strip().lower()
+
+        if not requested_mode:
+            mode_binding_raw = (
+                tool_conf.get("model_mode_defaults")
+                or tool_conf.get("mode_by_model")
+                or tool_conf.get("default_mode_by_model")
+                or tool_conf.get("model_mode_bindings")
+            )
+            if isinstance(mode_binding_raw, dict):
+                lookup_keys = [
+                    str(model or "").strip(),
+                    str(model or "").strip().lower(),
+                    str(initial_submitted_model or "").strip(),
+                    str(initial_submitted_model or "").strip().lower(),
+                ]
+                for lookup_key in lookup_keys:
+                    if not lookup_key:
+                        continue
+                    bound_mode = mode_binding_raw.get(lookup_key)
+                    if bound_mode is None:
+                        continue
+                    candidate_mode = str(bound_mode).strip().lower()
+                    if candidate_mode:
+                        requested_mode = candidate_mode
+                        mode_source_hint = "settings_model_binding"
+                        break
+
+        allowed_modes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("mode") or [] if str(item or "").strip()]
+        if requested_mode and allowed_modes:
+            mapped_mode = self._map_mode_to_allowed(requested_mode, runtime_enum_catalog.get("mode"))
+            mapped_mode_lower = str(mapped_mode or "").strip().lower()
+            if mapped_mode_lower and mapped_mode_lower != requested_mode:
+                fallback_mode = mapped_mode_lower
+                logger.warning(
+                    "KIE mode enum remap | model=%s requested=%s allowed=%s mapped=%s",
+                    model,
+                    requested_mode,
+                    allowed_modes,
+                    fallback_mode,
+                )
+                requested_mode = fallback_mode
+                mode_source_hint = "enum_fallback"
+            elif requested_mode not in allowed_modes:
+                fallback_mode = allowed_modes[0]
+                logger.warning(
+                    "KIE mode enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                    model,
+                    requested_mode,
+                    allowed_modes,
+                    fallback_mode,
+                )
+                requested_mode = fallback_mode
+                mode_source_hint = "enum_fallback"
+
+        if requested_mode:
+            payload_input["mode"] = requested_mode
+
+        if gen_type == "audio":
+            forced_submit_text = str(tool_conf.get("__voice_submit_text") or "").strip()
+            strict_text_only = bool(tool_conf.get("__voice_strict_text_only"))
+            effective_submit_text = forced_submit_text or str(prompt or "").strip()
+            timestamps_supported = self._get_runtime_capability_flag(
+                config,
+                "supports_timestamps",
+                "timestamps_supported",
+            )
+            previous_text_supported = self._get_runtime_capability_flag(
+                config,
+                "supports_previous_text",
+                "previous_text_supported",
+                "supports_context_text",
+                "context_text_supported",
+            )
+            allowed_voice_values = runtime_enum_catalog.get("voice") or self._get_runtime_capability_list(
+                config,
+                "voice_values",
+                "voices",
+                "allowed_voices",
+                "supported_voices",
+            )
+            allowed_language_values = runtime_enum_catalog.get("language_code") or self._get_runtime_capability_list(
+                config,
+                "language_code_values",
+                "language_values",
+                "languages",
+                "allowed_languages",
+                "supported_languages",
+            )
+            stability_min = self._get_runtime_capability_number(config, "stability_min")
+            stability_max = self._get_runtime_capability_number(config, "stability_max")
+            similarity_min = self._get_runtime_capability_number(config, "similarity_boost_min")
+            similarity_max = self._get_runtime_capability_number(config, "similarity_boost_max")
+            style_min = self._get_runtime_capability_number(config, "style_min")
+            style_max = self._get_runtime_capability_number(config, "style_max")
+            speed_min = self._get_runtime_capability_number(config, "speed_min")
+            speed_max = self._get_runtime_capability_number(config, "speed_max")
+            next_text_supported = self._get_runtime_capability_flag(
+                config,
+                "supports_next_text",
+                "next_text_supported",
+                "supports_context_text",
+                "context_text_supported",
+            )
+
+            payload_input["prompt"] = effective_submit_text
+            payload_input["text"] = effective_submit_text
+
+            # Keep backward compatibility for legacy non-strict flows only.
+            if not strict_text_only and tool_conf.get("text") is not None and str(tool_conf.get("text") or "").strip():
+                payload_input["text"] = str(tool_conf.get("text") or "").strip()
+            if not strict_text_only and tool_conf.get("prompt") is not None and str(tool_conf.get("prompt") or "").strip():
+                payload_input["prompt"] = str(tool_conf.get("prompt") or "").strip()
+
+            for key in ["voice", "language_code", "previous_text", "next_text"]:
+                if key == "previous_text" and previous_text_supported is False:
+                    continue
+                if key == "next_text" and next_text_supported is False:
+                    continue
+                if tool_conf.get(key) is not None and str(tool_conf.get(key)).strip() != "":
+                    payload_input[key] = tool_conf.get(key)
+
+            # Compatibility alias: if caller passes "language", map to docs field "language_code".
+            if tool_conf.get("language") is not None and str(tool_conf.get("language")).strip() != "":
+                payload_input["language_code"] = str(tool_conf.get("language")).strip()
+
+            mapped_voice = self._map_text_value_to_allowed(payload_input.get("voice"), allowed_voice_values)
+            if mapped_voice:
+                payload_input["voice"] = mapped_voice
+
+            mapped_language = self._map_text_value_to_allowed(payload_input.get("language_code"), allowed_language_values)
+            if mapped_language:
+                payload_input["language_code"] = mapped_language
+
+            def _set_float(key: str, min_val: float, max_val: float):
+                raw = tool_conf.get(key)
+                if raw is None or str(raw).strip() == "":
+                    return
+                try:
+                    value = float(raw)
+                    value = max(min_val, min(max_val, value))
+                    payload_input[key] = value
+                except Exception:
+                    pass
+
+            _set_float("stability", stability_min if stability_min is not None else 0.0, stability_max if stability_max is not None else 1.0)
+            _set_float("similarity_boost", similarity_min if similarity_min is not None else 0.0, similarity_max if similarity_max is not None else 1.0)
+            _set_float("style", style_min if style_min is not None else 0.0, style_max if style_max is not None else 1.0)
+            _set_float("speed", speed_min if speed_min is not None else 0.7, speed_max if speed_max is not None else 1.2)
+
+            if timestamps_supported is not False and tool_conf.get("timestamps") is not None:
+                payload_input["timestamps"] = bool(tool_conf.get("timestamps"))
+
+        raw_ar = str(aspect_ratio or "").strip()
+        normalized_ar = self._normalize_aspect_ratio_value(aspect_ratio)
+        if use_veo_api and raw_ar.lower() in {"auto", "adaptive"}:
+            normalized_ar = "Auto"
+        allowed_aspect_ratios = [str(item or "").strip() for item in runtime_enum_catalog.get("aspect_ratio") or [] if str(item or "").strip()]
+        if normalized_ar and allowed_aspect_ratios:
+            mapped_ar = self._map_aspect_ratio_to_allowed(normalized_ar, runtime_enum_catalog.get("aspect_ratio"))
+            if mapped_ar and str(mapped_ar).strip() and str(mapped_ar).strip().lower() != str(normalized_ar).strip().lower():
+                logger.warning(
+                    "KIE aspect_ratio enum remap | model=%s requested=%s allowed=%s mapped=%s",
+                    model,
+                    normalized_ar,
+                    allowed_aspect_ratios,
+                    mapped_ar,
+                )
+                normalized_ar = str(mapped_ar).strip()
+            elif not mapped_ar:
+                fallback_ar = allowed_aspect_ratios[0]
+                logger.warning(
+                    "KIE aspect_ratio enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                    model,
+                    normalized_ar,
+                    allowed_aspect_ratios,
+                    fallback_ar,
+                )
+                normalized_ar = fallback_ar
+        if normalized_ar:
+            payload_input["aspect_ratio"] = normalized_ar
+
+        is_gpt_image_15_i2i = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower() in {"gpt-image/1.5-image-to-image", "gpt-image/1-5-image-to-image"}
+        )
+        is_gpt_image_2 = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower().replace("/", "-").startswith("gpt-image-2")
+        )
+        is_seedream_5_lite_i2i = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower() in {"seedream/5-lite-image-to-image"}
+        )
+        is_grok_imagine_i2i = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower() in {"grok-imagine/image-to-image"}
+        )
+
+        if gen_type == "image":
+            # z-image family requires aspect_ratio in input (per KIE API examples).
+            # Keep a safe default to avoid "This field is required" errors when ratio
+            # is not provided by upstream context.
+            is_z_image_model = str(model_lower or "").startswith("z-image")
+            if is_z_image_model:
+                payload_input["aspect_ratio"] = str(payload_input.get("aspect_ratio") or "1:1").strip() or "1:1"
+                payload_input.pop("image_size", None)
+            elif is_gpt_image_2:
+                ar_val = str(payload_input.pop("aspect_ratio", "")).strip()
+                if ar_val == "16:9": res_str = "1280x720"
+                elif ar_val == "9:16": res_str = "720x1280"
+                elif ar_val == "4:3": res_str = "1024x768"
+                elif ar_val == "3:4": res_str = "768x1024"
+                elif ar_val == "21:9": res_str = "1536x640" 
+                else: res_str = "1024x1024"
+                payload_input["size"] = res_str
+                payload_input.pop("image_size", None)
+            elif is_gpt_image_15_i2i:
+                # KIE 1.5 Image-To-Image contract:
+                # model=gpt-image/1.5-image-to-image, input.input_urls, input.aspect_ratio, input.quality
+                allowed_ar = {"1:1", "2:3", "3:2"}
+                ar_val = str(payload_input.get("aspect_ratio") or "").strip()
+                if ar_val not in allowed_ar:
+                    ar_val = "3:2"
+                payload_input["aspect_ratio"] = ar_val
+
+                quality_val = str(tool_conf.get("quality") or payload_input.get("quality") or "").strip().lower()
+                if quality_val not in {"medium", "high"}:
+                    quality_val = "medium"
+                payload_input["quality"] = quality_val
+
+                payload_input.pop("image_size", None)
+            elif is_seedream_5_lite_i2i:
+                # KIE Seedream 5-lite I2I contract:
+                # model=seedream/5-lite-image-to-image, input.image_urls, input.aspect_ratio, input.quality
+                allowed_ar = {"1:1", "4:3", "3:4", "16:9", "9:16", "2:3", "3:2", "21:9"}
+                ar_val = str(payload_input.get("aspect_ratio") or "").strip()
+                if ar_val not in allowed_ar:
+                    ar_val = "1:1"
+                payload_input["aspect_ratio"] = ar_val
+
+                quality_val = str(tool_conf.get("quality") or payload_input.get("quality") or "").strip().lower()
+                if quality_val not in {"basic", "high"}:
+                    quality_val = "basic"
+                payload_input["quality"] = quality_val
+
+                payload_input.pop("image_size", None)
+            else:
+                # Other KIE market image models may still expect image_size-style input.
+                # Use resolution tier only when an actual size tier is available.
+                kie_image_size = self._normalize_image_size_value(
+                    image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
+                )
+                allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
+                if kie_image_size and allowed_image_sizes:
+                    mapped_image_size = self._map_image_size_to_allowed(kie_image_size, runtime_enum_catalog.get("image_size"))
+                    if mapped_image_size and str(mapped_image_size).strip().lower() != str(kie_image_size).strip().lower():
+                        logger.warning(
+                            "KIE image_size enum remap | model=%s requested=%s allowed=%s mapped=%s",
+                            model,
+                            kie_image_size,
+                            allowed_image_sizes,
+                            mapped_image_size,
+                        )
+                        kie_image_size = str(mapped_image_size).strip().lower()
+                    elif mapped_image_size:
+                        kie_image_size = str(mapped_image_size).strip().lower()
+                    else:
+                        fallback_image_size = allowed_image_sizes[0]
+                        logger.warning(
+                            "KIE image_size enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                            model,
+                            kie_image_size,
+                            allowed_image_sizes,
+                            fallback_image_size,
+                        )
+                        kie_image_size = fallback_image_size
+                if kie_image_size:
+                    payload_input["image_size"] = kie_image_size
+                else:
+                    payload_input.pop("image_size", None)
+        elif gen_type == "video":
+            duration_value = 5
+            try:
+                duration_value = int(float(duration if duration is not None else 5))
+            except Exception:
+                duration_value = 5
+            allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+            if duration_value <= 0:
+                normalized_allowed = self._normalize_duration_enum_values(allowed_durations)
+                duration_value = int(normalized_allowed[0]) if normalized_allowed else 5
+            if isinstance(allowed_durations, list) and allowed_durations:
+                mapped_duration = self._map_duration_nearest(
+                    duration_value,
+                    allowed_durations,
+                    prefer_higher_on_tie=is_seedance_video_model,
+                )
+                if mapped_duration is not None:
+                    duration_value = int(mapped_duration)
+
+            max_duration = runtime_enum_catalog.get("max_duration")
+            try:
+                if max_duration is not None:
+                    duration_value = min(int(duration_value), int(max_duration))
+            except Exception:
+                pass
+            duration_normalized = int(max(1, duration_value))
+            payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
+
+            # Propagate project/request-level sound setting to all video models.
+            # Previously only kling 2.6 explicitly consumed this flag.
+            sound_raw = tool_conf.get("sound")
+            if sound_raw is not None:
+                if isinstance(sound_raw, bool):
+                    payload_input["sound"] = sound_raw
+                else:
+                    payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+            if is_kling_26_i2v_model:
+                kling_allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                kling_allowed_durations = self._normalize_duration_enum_values(kling_allowed_durations)
+                # KIE Kling 2.6 i2v rejects non-enum durations; use a safe fallback
+                # when runtime enum catalog is missing or incomplete.
+                if not kling_allowed_durations:
+                    kling_allowed_durations = [5, 10]
+                mapped_duration = self._map_duration_nearest(duration_value, kling_allowed_durations)
+                if mapped_duration is not None:
+                    duration_value = int(mapped_duration)
+                payload_input["duration"] = str(int(duration_value))
+
+                sound_raw = tool_conf.get("sound")
+                if sound_raw is None:
+                    payload_input["sound"] = True
+                elif isinstance(sound_raw, bool):
+                    payload_input["sound"] = sound_raw
+                else:
+                    payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+            # --- Inject quality/output_format for KIE video ---
+            # quality
+            requested_quality = str(tool_conf.get("quality") or "").strip().lower()
+            allowed_qualities = [str(item or "").strip().lower() for item in (runtime_enum_catalog.get("quality") or []) if str(item or "").strip()]
+            if requested_quality and allowed_qualities:
+                if requested_quality not in allowed_qualities:
+                    fallback_quality = allowed_qualities[0]
+                    logger.warning(
+                        "KIE quality enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                        model,
+                        requested_quality,
+                        allowed_qualities,
+                        fallback_quality,
+                    )
+                    requested_quality = fallback_quality
+                payload_input["quality"] = requested_quality
+            elif requested_quality:
+                payload_input["quality"] = requested_quality
+
+            # output_format
+            requested_output_format = str(tool_conf.get("output_format") or tool_conf.get("outputFormat") or "").strip().lower()
+            allowed_output_formats = [str(item or "").strip().lower() for item in (runtime_enum_catalog.get("output_format") or []) if str(item or "").strip()]
+            if requested_output_format and allowed_output_formats:
+                if requested_output_format not in allowed_output_formats:
+                    fallback_output_format = allowed_output_formats[0]
+                    logger.warning(
+                        "KIE output_format enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                        model,
+                        requested_output_format,
+                        allowed_output_formats,
+                        fallback_output_format,
+                    )
+                    requested_output_format = fallback_output_format
+                payload_input["output_format"] = requested_output_format
+            elif requested_output_format:
+                payload_input["output_format"] = requested_output_format
+        if gen_type == "audio":
+            payload_input.pop("duration", None)
+
+        resolved_refs: List[str] = []
+        if ref_image:
+            ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
+            for ref in ref_list:
+                if use_veo_api:
+                    resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
+                else:
+                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, True)
+                if resolved:
+                    resolved_refs.append(resolved)
+
+        # Fallback: some callers pass reference images through provider_options only.
+        if not resolved_refs:
+            option_refs = (
+                tool_conf.get("filesUrl")
+                or tool_conf.get("files_url")
+                or tool_conf.get("fileUrl")
+                or tool_conf.get("file_url")
+                or tool_conf.get("input_urls")
+                or tool_conf.get("image_urls")
+                or tool_conf.get("imageUrls")
+                or []
+            )
+            if isinstance(option_refs, str):
+                option_refs = [option_refs]
+            for ref in option_refs if isinstance(option_refs, list) else []:
+                if use_veo_api:
+                    resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
+                else:
+                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, True)
+                if resolved:
+                    resolved_refs.append(resolved)
+
+        if resolved_refs:
+            preuploaded_refs: List[str] = []
+            for idx, ref in enumerate(resolved_refs):
+                hosted_ref = await asyncio.to_thread(
+                    self._upload_kie_ref_to_hosted_url,
+                    ref,
+                    api_key=api_key,
+                    upload_path="market-inputs",
+                    file_name_prefix=f"kie-ref-{idx + 1}",
+                )
+                if not hosted_ref:
+                    return {
+                        "error": "KIE pre-upload failed",
+                        "details": "Failed to upload reference file before KIE submission",
+                        "submit_failed": True,
+                        "runtime_model": model,
+                    }
+                preuploaded_refs.append(hosted_ref)
+            resolved_refs = preuploaded_refs
+
+        is_sora2_i2v_model = bool(gen_type == "video" and str(model_lower or "").strip().startswith("sora-2") and "image-to-video" in str(model_lower or "").strip())
+
+        if is_sora2_i2v_model and resolved_refs:
+            converted_refs: List[str] = []
+            for idx, ref in enumerate(resolved_refs):
+                ref_text = str(ref or "").strip()
+                if not ref_text:
+                    continue
+                if ref_text.startswith("http"):
+                    converted_refs.append(ref_text)
+                    continue
+                if not ref_text.startswith("data:"):
+                    converted_refs.append(ref_text)
+                    continue
+
+                normalized_ref = ref_text
+                mime = self._extract_data_uri_mime(ref_text)
+                if not any(token in mime for token in ("jpeg", "jpg", "png", "webp")):
+                    normalized_candidate = self._normalize_data_uri_image_for_kie(ref_text, target_format="JPEG")
+                    if normalized_candidate:
+                        normalized_ref = normalized_candidate
+                        mime = self._extract_data_uri_mime(normalized_candidate)
+
+                ext = ".jpg"
+                if "png" in mime:
+                    ext = ".png"
+                elif "webp" in mime:
+                    ext = ".webp"
+                uploaded_ref = await asyncio.to_thread(
+                    self._upload_kie_data_uri,
+                    normalized_ref,
+                    api_key=api_key,
+                    file_name=f"sora2-input-{uuid.uuid4().hex[:10]}-{idx + 1}{ext}",
+                    upload_path="sora2-inputs",
+                )
+                if uploaded_ref:
+                    converted_refs.append(uploaded_ref)
+                else:
+                    converted_refs.append(normalized_ref)
+
+            if converted_refs:
+                resolved_refs = converted_refs
+
+            single_ref = tool_conf.get("image_url") or tool_conf.get("imageUrl")
+            if single_ref and not resolved_refs:
+                if use_veo_api:
+                    resolved = await asyncio.to_thread(self._process_veo_image, single_ref, normalized_ar or "16:9")
+                else:
+                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, single_ref, True)
+                if resolved:
+                    resolved_refs.append(resolved)
+
+        if resolved_refs:
+            if is_gpt_image_15_i2i:
+                payload_input["input_urls"] = resolved_refs
+                payload_input.pop("image_urls", None)
+                payload_input.pop("image_url", None)
+            elif is_seedream_5_lite_i2i:
+                payload_input["image_urls"] = resolved_refs
+                payload_input.pop("image_url", None)
+            else:
+                payload_input["image_urls"] = resolved_refs
+                payload_input["image_url"] = resolved_refs[0]
+
+        if is_sora2_i2v_model:
+            sora_refs = payload_input.get("image_urls")
+            if not isinstance(sora_refs, list) or not sora_refs:
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "sora-2-image-to-video requires input.image_urls (at least one public image URL)",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+
+            if any(str(item or "").strip().startswith("data:") for item in sora_refs):
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "sora-2-image-to-video requires public image_urls (data URI is not supported)",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+
+            payload_input.pop("image_url", None)
+            payload_input.pop("last_frame_url", None)
+            payload_input.pop("duration", None)
+
+            sora_ar = str(payload_input.get("aspect_ratio") or normalized_ar or "").strip().lower()
+            if sora_ar in {"9:16", "portrait"}:
+                payload_input["aspect_ratio"] = "portrait"
+            else:
+                payload_input["aspect_ratio"] = "landscape"
+
+            n_frames_value = str(tool_conf.get("n_frames") or payload_input.get("n_frames") or "").strip()
+            if n_frames_value not in {"10", "15"}:
+                n_frames_value = "15" if int(duration_value) >= 15 else "10"
+            payload_input["n_frames"] = n_frames_value
+
+            payload_input["remove_watermark"] = True
+
+            upload_method_value = str(tool_conf.get("upload_method") or payload_input.get("upload_method") or "s3").strip().lower()
+            if upload_method_value not in {"s3", "oss"}:
+                upload_method_value = "s3"
+            payload_input["upload_method"] = upload_method_value
+
+        if is_kling_26_i2v_model:
+            kling_refs = payload_input.get("image_urls")
+            if not isinstance(kling_refs, list) or not kling_refs:
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "kling-2.6/image-to-video requires input.image_urls (at least one image URL)",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+
+        if is_gpt_image_15_i2i and not isinstance(payload_input.get("input_urls"), list):
+            return {
+                "error": "KIE submission validation failed",
+                "details": "gpt-image/1.5-image-to-image requires input.input_urls (at least one image URL)",
+                "submit_failed": True,
+                "runtime_model": model,
+            }
+        if is_seedream_5_lite_i2i and not isinstance(payload_input.get("image_urls"), list):
+            return {
+                "error": "KIE submission validation failed",
+                "details": "seedream/5-lite-image-to-image requires input.image_urls (at least one image URL)",
+                "submit_failed": True,
+                "runtime_model": model,
+            }
+        if is_grok_imagine_i2i:
+            grok_refs = payload_input.get("image_urls")
+            if not isinstance(grok_refs, list) or not [str(item).strip() for item in grok_refs if str(item).strip()]:
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "grok-imagine/image-to-image requires input.image_urls (at least one image URL)",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+
+        if last_frame_url and not is_sora2_i2v_model:
+            if use_veo_api:
+                last_ref = await self._process_veo_image_async(last_frame_url, normalized_ar or "16:9")
+            else:
+                last_ref = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
+
+            hosted_last_ref = await self._upload_kie_ref_to_hosted_url_async(
+                last_ref,
+                api_key=api_key,
+                upload_path="market-inputs",
+                file_name_prefix="kie-last-frame",
+            )
+            if not hosted_last_ref:
+                return {
+                    "error": "KIE pre-upload failed",
+                    "details": "Failed to upload last_frame_url before KIE submission",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+            payload_input["last_frame_url"] = hosted_last_ref
+
+        if is_seedance_video_model:
+            seedance_refs: List[str] = []
+            if isinstance(payload_input.get("input_urls"), list):
+                seedance_refs.extend([str(x).strip() for x in payload_input.get("input_urls") or [] if str(x).strip()])
+            if isinstance(payload_input.get("image_urls"), list):
+                seedance_refs.extend([str(x).strip() for x in payload_input.get("image_urls") or [] if str(x).strip()])
+            single_ref = str(payload_input.get("image_url") or "").strip()
+            if single_ref:
+                seedance_refs.append(single_ref)
+            last_ref = str(payload_input.get("last_frame_url") or "").strip()
+            if last_ref:
+                seedance_refs.append(last_ref)
+
+            seedance_refs = [x for x in dict.fromkeys(seedance_refs) if x]
+            if seedance_refs:
+                payload_input["input_urls"] = seedance_refs
+
+            # Follow official Seedance shape and avoid ambiguous legacy aliases.
+            payload_input.pop("image_urls", None)
+            payload_input.pop("image_url", None)
+            payload_input.pop("last_frame_url", None)
+
+            # Prefer explicit Seedance flags when provided.
+            if "fixed_lens" in tool_conf:
+                payload_input["fixed_lens"] = bool(tool_conf.get("fixed_lens"))
+
+            if "sound" in payload_input:
+                payload_input["generate_audio"] = bool(payload_input.get("sound"))
+            elif "generate_audio" in tool_conf:
+                payload_input["generate_audio"] = bool(tool_conf.get("generate_audio"))
+
+        if not use_veo_api and gen_type == "video":
+            model_lower = str(model or "").strip().lower()
+
+            if model_lower in {"hailuo/2-3-image-to-video-standard", "hailuo/2-3-image-to-video-pro"}:
+                # KIE Hailuo 2.3 i2v contract:
+                # - duration: "6" or "10"
+                # - resolution: "768P" or "1080P"
+                # - 1080P does not support 10s
+                req_duration_text = str(
+                    payload_input.get("duration")
+                    or tool_conf.get("duration")
+                    or duration
+                    or ""
+                ).strip()
+                try:
+                    req_duration_val = float(req_duration_text) if req_duration_text else 6.0
+                except Exception:
+                    req_duration_val = 6.0
+
+                raw_resolution = str(
+                    payload_input.get("resolution")
+                    or tool_conf.get("resolution")
+                    or "768P"
+                ).strip().upper()
+
+                req_res_val = 768.0
+                if raw_resolution in {"768P", "1080P"}:
+                    req_res_val = float(int(raw_resolution.replace("P", "")))
+                else:
+                    try:
+                        digits = ''.join(ch for ch in raw_resolution if ch.isdigit())
+                        req_res_val = float(int(digits)) if digits else 768.0
+                    except Exception:
+                        req_res_val = 768.0
+
+                # Choose the closest valid pair to the requested duration/resolution.
+                valid_pairs = [(6, 768), (10, 768), (6, 1080)]
+                best_duration, best_resolution = min(
+                    valid_pairs,
+                    key=lambda pair: (
+                        abs(float(pair[0]) - float(req_duration_val))
+                        + abs(float(pair[1]) - float(req_res_val)) / 100.0,
+                        abs(float(pair[0]) - float(req_duration_val)),
+                        abs(float(pair[1]) - float(req_res_val)),
+                    ),
+                )
+
+                payload_input["duration"] = str(int(best_duration))
+                payload_input["resolution"] = f"{int(best_resolution)}P"
+
+                # Keep only documented hailuo 2.3 i2v fields to avoid 422 Invalid parameter.
+                payload_input.pop("aspect_ratio", None)
+                payload_input.pop("image_urls", None)
+                payload_input.pop("last_frame_url", None)
+
+                # image_url is required by this endpoint.
+                primary_image_url = str(payload_input.get("image_url") or "").strip()
+                if not primary_image_url:
+                    fallback_ref = resolved_refs[0] if resolved_refs else None
+                    if fallback_ref:
+                        payload_input["image_url"] = str(fallback_ref)
+
+                if not str(payload_input.get("image_url") or "").strip():
+                    return {
+                        "error": "KIE submission validation failed",
+                        "details": "image_url is required for hailuo 2.3 image-to-video",
+                        "submit_failed": True,
+                        "runtime_model": model,
+                    }
+
+                # Hailuo 2.3 i2v rejects some data-uri formats; normalize and prefer hosted URL.
+                hailuo_image_url = str(payload_input.get("image_url") or "").strip()
+                if hailuo_image_url.startswith("data:"):
+                    hailuo_mime = self._extract_data_uri_mime(hailuo_image_url)
+                    if "jpeg" not in hailuo_mime and "jpg" not in hailuo_mime and "png" not in hailuo_mime:
+                        normalized_data_uri = self._normalize_data_uri_image_for_kie(hailuo_image_url, target_format="JPEG")
+                        if normalized_data_uri:
+                            hailuo_image_url = normalized_data_uri
+
+                    hailuo_ext = ".jpg"
+                    if "png" in self._extract_data_uri_mime(hailuo_image_url):
+                        hailuo_ext = ".png"
+
+                    uploaded_hailuo_url = self._upload_kie_data_uri(
+                        hailuo_image_url,
+                        api_key=api_key,
+                        file_name=f"hailuo-{uuid.uuid4().hex[:10]}{hailuo_ext}",
+                        upload_path="hailuo-inputs",
+                    )
+                    if uploaded_hailuo_url:
+                        payload_input["image_url"] = uploaded_hailuo_url
+                        logger.info("KIE Hailuo 2.3 image_url uploaded | hosted=true")
+                    else:
+                        payload_input["image_url"] = hailuo_image_url
+                        logger.warning("KIE Hailuo 2.3 image_url upload failed; using data URI fallback")
+
+            if model_lower == "bytedance/v1-pro-text-to-video":
+                payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")
+                payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))
+            elif model_lower == "bytedance/v1-lite-text-to-video":
+                payload_input.setdefault("aspect_ratio", normalized_ar or "16:9")
+                payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))
+            elif model_lower == "wan/2-6-text-to-video":
+                payload_input["duration"] = "10" if str(payload_input.get("duration")) not in {"5", "10", "15"} else str(payload_input.get("duration"))
+                payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "1080p"))
+            elif model_lower == "sora-2-text-to-video":
+                if "n_frames" not in payload_input:
+                    payload_input["n_frames"] = "10"
+                if "aspect_ratio" not in payload_input:
+                    payload_input["aspect_ratio"] = "portrait" if normalized_ar == "9:16" else "landscape"
+            elif model_lower == "hailuo/02-text-to-video-pro":
+                if "prompt_optimizer" not in payload_input:
+                    payload_input["prompt_optimizer"] = bool(tool_conf.get("prompt_optimizer", True))
+
+        internal_callback_url = str(tool_conf.get("_provider_callback_url") or "").strip()
+        raw_callback_url = str(
+            internal_callback_url
+            or tool_conf.get("webHook")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or os.getenv("KIE_CALLBACK_URL")
+            or os.getenv("AISTORY_KIE_CALLBACK_URL")
+            or ""
+        ).strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"kie-{gen_type}"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callBackUrl", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+
+        if callback_url and callback_url != raw_callback_url:
+            logger.info(
+                "KIE callback auto-assigned | model=%s gen_type=%s ticket=%s callback_url=%s raw_callback=%s",
+                model,
+                gen_type,
+                callback_ticket,
+                callback_url,
+                raw_callback_url or None,
+            )
+        elif callback_url == "-1":
+            logger.info(
+                "KIE callback disabled | model=%s gen_type=%s raw_callback=%s public_hint=%s",
+                model,
+                gen_type,
+                raw_callback_url or None,
+                self._is_public_deployment_hint(),
+            )
+        if use_veo_api:
+            raw_model = str(model or "").strip()
+            # According to KIE API, REFERENCE_2_VIDEO only works with "veo3_fast"
+            veo_model = "veo3_fast"
+
+            if raw_model != veo_model:
+                logger.warning("KIE Veo model canonicalized | from=%s to=%s", raw_model, veo_model)
+
+            veo_image_urls = list(resolved_refs)
+            last_frame_resolved = payload_input.get("last_frame_url") or payload_input.get("lastFrameUrl")
+            if last_frame_resolved:
+                last_frame_text = str(last_frame_resolved).strip()
+                if last_frame_text and last_frame_text not in veo_image_urls:
+                    veo_image_urls.append(last_frame_text)
+
+            generation_type = "TEXT_2_VIDEO"
+            if veo_image_urls:
+                if "fast" in str(veo_model).lower():
+                    generation_type = "REFERENCE_2_VIDEO"
+                    veo_image_urls = veo_image_urls[:3]
+                elif len(veo_image_urls) >= 2:
+                    generation_type = "FIRST_AND_LAST_FRAMES_2_VIDEO"
+                    veo_image_urls = veo_image_urls[:2]
+                else:
+                    # Non-fast Veo variants generally require at least first+last frames.
+                    # Keep this call valid by falling back to pure text mode when only one frame is provided.
+                    generation_type = "TEXT_2_VIDEO"
+                    veo_image_urls = []
+
+            if generation_type == "REFERENCE_2_VIDEO" and "fast" not in str(veo_model).lower():
+                logger.warning(
+                    "KIE Veo generationType adjusted | from=REFERENCE_2_VIDEO to=FIRST_AND_LAST_FRAMES_2_VIDEO reason=model_not_fast model=%s",
+                    veo_model,
+                )
+                generation_type = "FIRST_AND_LAST_FRAMES_2_VIDEO"
+                veo_image_urls = veo_image_urls[:2]
+
+            # Prefer hosted URLs via KIE File Upload API to avoid base64 body limits on Veo submit endpoint.
+            converted_image_urls: List[str] = []
+            for idx, ref in enumerate(veo_image_urls):
+                ref_text = str(ref or "").strip()
+                if not ref_text:
+                    continue
+                if ref_text.startswith("http"):
+                    converted_image_urls.append(ref_text)
+                    continue
+                if not ref_text.startswith("data:"):
+                    converted_image_urls.append(ref_text)
+                    continue
+
+                mime = self._extract_data_uri_mime(ref_text)
+                ext = ".jpg"
+                if "png" in mime:
+                    ext = ".png"
+                elif "webp" in mime:
+                    ext = ".webp"
+
+                generated_name = f"veo-{uuid.uuid4().hex[:10]}-{idx + 1}{ext}"
+                uploaded_url = self._upload_kie_data_uri(
+                    ref_text,
+                    api_key=api_key,
+                    file_name=generated_name,
+                    upload_path="veo-inputs",
+                )
+                if uploaded_url:
+                    converted_image_urls.append(uploaded_url)
+                else:
+                    # Keep data URI as fallback when upload endpoint is unavailable.
+                    converted_image_urls.append(ref_text)
+
+            if converted_image_urls:
+                veo_image_urls = converted_image_urls
+
+            payload: Dict[str, Any] = {
+                "prompt": prompt,
+                "model": veo_model,
+                "generationType": generation_type,
+            }
+
+            if generation_type == "REFERENCE_2_VIDEO":
+                if normalized_ar not in {"16:9", "9:16"}:
+                    logger.warning(
+                        "KIE Veo aspect ratio adjusted | from=%s to=16:9 reason=reference_mode_requires_16_9_or_9_16",
+                        normalized_ar,
+                    )
+                    normalized_ar = "16:9"
+
+            if normalized_ar:
+                payload["aspect_ratio"] = normalized_ar
+            if duration:
+                try:
+                    payload["duration"] = int(duration)
+                except Exception:
+                    pass
+            if veo_image_urls:
+                payload["imageUrls"] = veo_image_urls
+
+            seeds_value = tool_conf.get("seeds")
+            try:
+                if seeds_value is not None and str(seeds_value).strip() != "":
+                    seeds_int = int(seeds_value)
+                    if 10000 <= seeds_int <= 99999:
+                        payload["seeds"] = seeds_int
+            except Exception:
+                pass
+
+            if "enableTranslation" in tool_conf:
+                payload["enableTranslation"] = bool(tool_conf.get("enableTranslation"))
+
+            payload["watermark"] = False
+
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            logger.info(
+                "KIE Veo submit payload | endpoint=%s model=%s generationType=%s aspect_ratio=%s duration=%s image_count=%s callback_enabled=%s seeds=%s enableTranslation=%s watermark=%s",
+                submit_url,
+                payload.get("model"),
+                payload.get("generationType"),
+                payload.get("aspect_ratio"),
+                payload.get("duration"),
+                len(payload.get("imageUrls") or []),
+                bool(payload.get("callBackUrl")),
+                payload.get("seeds"),
+                payload.get("enableTranslation"),
+                bool(payload.get("watermark")),
+            )
+            try:
+                image_sizes = [self._data_uri_image_size_bytes(item) or 0 for item in (payload.get("imageUrls") or [])]
+                hosted_count = sum(1 for item in (payload.get("imageUrls") or []) if str(item or "").startswith("http"))
+                logger.info(
+                    "KIE Veo image payload bytes | per_image=%s total=%s hosted_count=%s",
+                    image_sizes,
+                    sum(image_sizes),
+                    hosted_count,
+                )
+            except Exception:
+                pass
+        elif use_runway_api:
+            # Handle Runway payload (generate-ai-video or aleph)
+            payload = {
+                "prompt": prompt,
+                "duration": "10" if str(duration) in {"10"} else "5",
+                "quality": "480p" if tool_conf.get("draft") or tool_conf.get("draft_mode") else ("1080p" if "1080" in str(tool_conf.get("resolution") or "") else "720p"),
+                "aspectRatio": normalized_ar if normalized_ar in {"16:9", "4:3", "1:1", "3:4", "9:16"} else "16:9",
+                "waterMark": "",
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+            if resolved_refs:
+                payload["imageUrl"] = resolved_refs[0]
+            
+            logger.info("KIE Runway submit payload | endpoint=%s", submit_url)
+        elif use_4o_image_api:
+            # Handle 4o image payload
+            allowed_4o_sizes = {"1:1", "3:2", "2:3"}
+            size_candidate = str(tool_conf.get("size") or payload_input.get("aspect_ratio") or "").strip()
+            if size_candidate not in allowed_4o_sizes:
+                size_candidate = "1:1"
+
+            prompt_candidate = str(prompt or "").strip()
+            fallback_model_value = str(tool_conf.get("fallbackModel") or "FLUX_MAX").strip().upper()
+            if fallback_model_value not in {"GPT_IMAGE_1", "FLUX_MAX"}:
+                fallback_model_value = "FLUX_MAX"
+
+            payload = {
+                "size": size_candidate,
+                "isEnhance": bool(tool_conf.get("isEnhance")),
+                "uploadCn": bool(tool_conf.get("uploadCn")),
+                "enableFallback": bool(tool_conf.get("enableFallback")),
+                "fallbackModel": fallback_model_value,
+            }
+
+            if prompt_candidate:
+                payload["prompt"] = prompt_candidate
+
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            if resolved_refs:
+                payload["filesUrl"] = resolved_refs[:5]
+
+            file_url_candidate = str(tool_conf.get("fileUrl") or tool_conf.get("file_url") or "").strip()
+            if file_url_candidate and "filesUrl" not in payload:
+                payload["fileUrl"] = file_url_candidate
+
+            mask_url_candidate = str(tool_conf.get("maskUrl") or tool_conf.get("mask_url") or "").strip()
+            if mask_url_candidate and len(payload.get("filesUrl") or []) <= 1:
+                payload["maskUrl"] = mask_url_candidate
+
+            if not str(payload.get("prompt") or "").strip() and not (payload.get("filesUrl") or payload.get("fileUrl")):
+                return {
+                    "error": "KIE submission validation failed",
+                    "details": "gpt4o-image requires prompt or filesUrl/fileUrl",
+                    "submit_failed": True,
+                    "runtime_model": model,
+                }
+            
+            logger.info("KIE 4o Image submit payload | endpoint=%s", submit_url)
+        elif use_flux_kontext_api:
+            # Handle Flux Kontext payload
+            payload = {
+                "prompt": prompt,
+                "model": "flux-kontext-max" if "max" in model_lower else "flux-kontext-pro",
+                "aspectRatio": normalized_ar if normalized_ar in {"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"} else "16:9",
+                "outputFormat": tool_conf.get("outputFormat", "jpeg"),
+                "promptUpsampling": bool(tool_conf.get("promptUpsampling")),
+                "safetyTolerance": int(tool_conf.get("safetyTolerance", 2)),
+                "enableTranslation": bool(tool_conf.get("enableTranslation", True)),
+                "uploadCn": bool(tool_conf.get("uploadCn")),
+                "watermark": False,
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+            if resolved_refs:
+                payload["inputImage"] = resolved_refs[0]
+            
+            logger.info("KIE Flux Kontext submit payload | endpoint=%s model=%s", submit_url, payload["model"])
+        elif use_suno_api:
+            payload = {
+                "prompt": prompt,
+                "model": "V5" if "v5" in model_lower else ("V4_5" if "v4.5" in model_lower or "4.5" in model_lower else "V4"),
+                "customMode": bool(tool_conf.get("customMode", False)),
+                "instrumental": bool(tool_conf.get("instrumental", False)),
+            }
+            if payload["customMode"]:
+                payload["style"] = tool_conf.get("style", "Pop")
+                payload["title"] = tool_conf.get("title", "AI Generated Track")
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+        elif is_kling_3_video:
+            kling_model = "kling-3.0/video"
+
+            def _normalize_bool(raw: Any, default: bool) -> bool:
+                if raw is None:
+                    return default
+                if isinstance(raw, bool):
+                    return raw
+                text = str(raw).strip().lower()
+                if text in {"1", "true", "yes", "y", "on"}:
+                    return True
+                if text in {"0", "false", "no", "n", "off"}:
+                    return False
+                return default
+
+            kling_mode = str(tool_conf.get("mode") or tool_conf.get("kling_mode") or "pro").strip().lower()
+            if kling_mode not in {"std", "pro"}:
+                kling_mode = "pro"
+
+            multi_shots = _normalize_bool(tool_conf.get("multi_shots"), False)
+            # KIE Kling 3.0 requires input.sound and defaults to enabled.
+            sound_enabled = _normalize_bool(tool_conf.get("sound"), True)
+            if multi_shots and not sound_enabled:
+                logger.info(
+                    "KIE Kling3 sound overridden to true because multi_shots=true requires sound=true"
+                )
+                sound_enabled = True
+
+            duration_int = 5
+            try:
+                duration_int = int(float(duration if duration is not None else 5))
+            except Exception:
+                duration_int = 5
+            duration_int = max(3, min(15, duration_int))
+
+            kling_input: Dict[str, Any] = {
+                "prompt": prompt,
+                "sound": sound_enabled,
+                "duration": str(duration_int),
+                "mode": kling_mode,
+                "multi_shots": multi_shots,
+            }
+
+            if normalized_ar in {"16:9", "9:16", "1:1"}:
+                kling_input["aspect_ratio"] = normalized_ar
+
+            configured_image_urls = tool_conf.get("image_urls")
+            kling_image_urls: List[str] = []
+            if isinstance(configured_image_urls, list):
+                kling_image_urls = [str(item).strip() for item in configured_image_urls if str(item).strip()]
+            if not kling_image_urls:
+                kling_image_urls = list(resolved_refs)
+                last_frame_resolved = payload_input.get("last_frame_url") or payload_input.get("lastFrameUrl")
+                if last_frame_resolved:
+                    last_frame_text = str(last_frame_resolved).strip()
+                    if last_frame_text and last_frame_text not in kling_image_urls:
+                        kling_image_urls.append(last_frame_text)
+
+            if multi_shots and len(kling_image_urls) > 1:
+                logger.info(
+                    "KIE Kling3 image_urls truncated for multi-shot | provided=%s kept=1",
+                    len(kling_image_urls),
+                )
+                kling_image_urls = kling_image_urls[:1]
+
+            if kling_image_urls:
+                kling_input["image_urls"] = kling_image_urls
+
+            raw_multi_prompt = tool_conf.get("multi_prompt")
+            normalized_multi_prompt: List[Dict[str, Any]] = []
+            if isinstance(raw_multi_prompt, list):
+                for item in raw_multi_prompt:
+                    if not isinstance(item, dict):
+                        continue
+                    shot_prompt = str(item.get("prompt") or "").strip()
+                    if not shot_prompt:
+                        continue
+                    try:
+                        shot_duration = int(item.get("duration"))
+                    except Exception:
+                        shot_duration = 3
+                    shot_duration = max(1, min(12, shot_duration))
+                    normalized_multi_prompt.append({"prompt": shot_prompt, "duration": shot_duration})
+                    if len(normalized_multi_prompt) >= 5:
+                        break
+
+            if multi_shots:
+                if not normalized_multi_prompt:
+                    normalized_multi_prompt = [{"prompt": prompt, "duration": max(1, min(12, duration_int))}]
+                kling_input["multi_prompt"] = normalized_multi_prompt
+            elif normalized_multi_prompt:
+                kling_input["multi_prompt"] = normalized_multi_prompt
+
+            raw_kling_elements = tool_conf.get("kling_elements")
+            normalized_elements: List[Dict[str, Any]] = []
+            seen_element_names: set[str] = set()
+            max_kling_elements = 3
+            if isinstance(raw_kling_elements, list):
+                for element in raw_kling_elements:
+                    if len(normalized_elements) >= max_kling_elements:
+                        break
+                    if not isinstance(element, dict):
+                        continue
+                    name = str(element.get("name") or "").strip()
+                    description = str(element.get("description") or "").strip()
+                    if not name or not description:
+                        continue
+
+                    normalized_name = name.lower()
+                    if normalized_name in seen_element_names:
+                        continue
+
+                    normalized_element: Dict[str, Any] = {
+                        "name": name,
+                        "description": description,
+                    }
+
+                    image_inputs = element.get("element_input_urls")
+                    if isinstance(image_inputs, list):
+                        urls = [str(item).strip() for item in image_inputs if str(item).strip()]
+                        if urls:
+                            # KIE API requires between 2 and 4 images
+                            if len(urls) == 1:
+                                urls.append(urls[0])
+                            elif len(urls) > 4:
+                                urls = urls[:4]
+                            normalized_element["element_input_urls"] = urls
+
+                    video_inputs = element.get("element_input_video_urls")
+                    if isinstance(video_inputs, list):
+                        urls = [str(item).strip() for item in video_inputs if str(item).strip()]
+                        if urls:
+                            normalized_element["element_input_video_urls"] = urls
+
+                    normalized_elements.append(normalized_element)
+                    seen_element_names.add(normalized_name)
+
+            if isinstance(raw_kling_elements, list) and len(raw_kling_elements) > len(normalized_elements):
+                logger.info(
+                    "KIE Kling3 elements truncated/deduped before submit | raw=%s normalized=%s max=%s",
+                    len(raw_kling_elements),
+                    len(normalized_elements),
+                    max_kling_elements,
+                )
+
+            if normalized_elements:
+                kling_input["kling_elements"] = normalized_elements
+                logger.info(
+                    "KIE Kling3 final elements detail | elements=%s",
+                    [
+                        {
+                            "name": str(item.get("name") or "").strip(),
+                            "image_url_count": len(item.get("element_input_urls") or []) if isinstance(item.get("element_input_urls"), list) else 0,
+                            "video_url_count": len(item.get("element_input_video_urls") or []) if isinstance(item.get("element_input_video_urls"), list) else 0,
+                        }
+                        for item in normalized_elements
+                        if isinstance(item, dict)
+                    ],
+                )
+
+            payload = {
+                "model": kling_model,
+                "input": kling_input,
+            }
+
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            logger.info(
+                "KIE Kling3 submit payload | endpoint=%s model=%s mode=%s multi_shots=%s duration=%s aspect_ratio=%s image_count=%s multi_prompt_count=%s elements_count=%s sound=%s callback_enabled=%s",
+                submit_url,
+                payload.get("model"),
+                kling_input.get("mode"),
+                kling_input.get("multi_shots"),
+                kling_input.get("duration"),
+                kling_input.get("aspect_ratio"),
+                len(kling_input.get("image_urls") or []),
+                len(kling_input.get("multi_prompt") or []),
+                len(kling_input.get("kling_elements") or []),
+                kling_input.get("sound"),
+                bool(payload.get("callBackUrl")),
+            )
+        else:
+            payload = {
+                "model": model,
+                "input": payload_input,
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+        # Final enum guard: enforce payload input values against system_api dictionary catalog.
+        payload_input_obj = payload.get("input") if isinstance(payload, dict) else None
+        if isinstance(payload_input_obj, dict) and runtime_enum_catalog:
+            allowed_modes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("mode") or [] if str(item or "").strip()]
+            current_mode = str(payload_input_obj.get("mode") or "").strip().lower()
+            if current_mode and allowed_modes:
+                mapped_mode = self._map_mode_to_allowed(current_mode, runtime_enum_catalog.get("mode"))
+                if mapped_mode:
+                    payload_input_obj["mode"] = str(mapped_mode).strip().lower()
+
+            allowed_aspect_ratios = [str(item or "").strip() for item in runtime_enum_catalog.get("aspect_ratio") or [] if str(item or "").strip()]
+            current_ar = str(payload_input_obj.get("aspect_ratio") or "").strip()
+            if current_ar and allowed_aspect_ratios:
+                mapped_ar = self._map_aspect_ratio_to_allowed(current_ar, runtime_enum_catalog.get("aspect_ratio"))
+                if mapped_ar:
+                    payload_input_obj["aspect_ratio"] = str(mapped_ar).strip()
+
+            allowed_image_sizes = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("image_size") or [] if str(item or "").strip()]
+            current_image_size = str(payload_input_obj.get("image_size") or "").strip().lower()
+            if current_image_size and allowed_image_sizes:
+                mapped_image_size = self._map_image_size_to_allowed(current_image_size, runtime_enum_catalog.get("image_size"))
+                if mapped_image_size:
+                    payload_input_obj["image_size"] = str(mapped_image_size).strip().lower()
+
+            allowed_resolutions = [str(item or "").strip().lower() for item in runtime_enum_catalog.get("resolution") or [] if str(item or "").strip()]
+            current_resolution = str(payload_input_obj.get("resolution") or "").strip()
+            if current_resolution and allowed_resolutions:
+                mapped_resolution = self._map_resolution_to_allowed(current_resolution, runtime_enum_catalog.get("resolution"))
+                if mapped_resolution:
+                    payload_input_obj["resolution"] = str(mapped_resolution).strip()
+
+            # Hailuo 2.3 i2v requires uppercase-P literals (768P / 1080P).
+            if str(model_lower or "") in {"hailuo/2-3-image-to-video-standard", "hailuo/2-3-image-to-video-pro"}:
+                normalized_resolution = str(payload_input_obj.get("resolution") or "").strip()
+                if normalized_resolution:
+                    digits = ''.join(ch for ch in normalized_resolution if ch.isdigit())
+                    if digits in {"768", "1080"}:
+                        payload_input_obj["resolution"] = f"{digits}P"
+
+            current_duration_text = str(payload_input_obj.get("duration") or "").strip()
+            if current_duration_text:
+                try:
+                    current_duration_int = int(float(current_duration_text))
+                    allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                    if isinstance(allowed_durations, list) and allowed_durations:
+                        mapped_duration = self._map_duration_nearest(
+                            current_duration_int,
+                            allowed_durations,
+                            prefer_higher_on_tie=is_seedance_video_model,
+                        )
+                        if mapped_duration is not None:
+                            current_duration_int = int(mapped_duration)
+                    max_duration = runtime_enum_catalog.get("max_duration")
+                    if max_duration is not None:
+                        current_duration_int = min(int(current_duration_int), int(max_duration))
+                    normalized_duration_int = int(max(1, int(current_duration_int)))
+                    payload_input_obj["duration"] = str(normalized_duration_int) if duration_string_required_model else normalized_duration_int
+                except Exception:
+                    pass
+
+            sound_supported = runtime_enum_catalog.get("sound_supported")
+            if sound_supported is False and "sound" in payload_input_obj:
+                payload_input_obj["sound"] = False
+
+            multi_shots_supported = runtime_enum_catalog.get("multi_shots_supported")
+            if multi_shots_supported is False and "multi_shots" in payload_input_obj:
+                payload_input_obj["multi_shots"] = False
+
+            if tool_conf.get("draft") or tool_conf.get("draft_mode"):
+                payload_input_obj["resolution"] = "480p"
+
+            payload["input"] = payload_input_obj
+
+        if isinstance(payload, dict):
+            payload = self._enforce_no_watermark_payload(payload)
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        def _is_unsupported_model_message(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
+            return (
+                "model name you specified is not supported" in text
+                or "model is not supported" in text
+                or "unsupported model" in text
+            )
+
+        def _is_kie_image_size_error(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
+            return "images size exceeds limit" in text or "image size exceeds limit" in text
+
+        def _is_kie_invalid_voice_error(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
+            return (
+                "voice is not within the range of allowed options" in text
+                or "voice is not within the range" in text
+                or "invalid voice" in text
+            )
+
+        def _is_veo_fast_model_name(current_model: Any) -> bool:
+            return "fast" in str(current_model or "").strip().lower()
+
+        def _build_veo_retry_models(initial_model: Any) -> List[str]:
+            initial = str(initial_model or "").strip()
+            initial_lower = initial.lower()
+            fast_candidates = ["veo3_fast", "veo-3-fast", "veo3-fast", "veo_3_fast", "veo31_fast"]
+            quality_candidates = ["veo3", "veo-3", "veo", "veo_3", "veo31"]
+
+            ordered: List[str] = [initial] if initial else []
+            if _is_veo_fast_model_name(initial):
+                ordered.extend(fast_candidates)
+                ordered.extend(quality_candidates)
+            elif initial_lower in {"veo3", "veo-3", "veo", "veo3.1", "veo-3.1"}:
+                ordered.extend(quality_candidates)
+                ordered.extend(fast_candidates)
+            else:
+                ordered.extend(fast_candidates)
+                ordered.extend(quality_candidates)
+
+            deduped: List[str] = []
+            seen = set()
+            for item in ordered:
+                key = str(item or "").strip().lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(str(item).strip())
+            return deduped
+
+        def _adapt_veo_payload_for_model(base_payload: Dict[str, Any], target_model: str) -> Dict[str, Any]:
+            patched = dict(base_payload or {})
+            patched["model"] = target_model
+            current_generation_type = str(patched.get("generationType") or "").strip().upper()
+            if current_generation_type == "REFERENCE_2_VIDEO" and not _is_veo_fast_model_name(target_model):
+                patched["generationType"] = "FIRST_AND_LAST_FRAMES_2_VIDEO"
+                if isinstance(patched.get("imageUrls"), list):
+                    patched["imageUrls"] = patched.get("imageUrls")[:2]
+            return patched
+
+        def _post_submit(submit_payload: Dict[str, Any]):
+            log_payload = _strip_base64_from_log(submit_payload)
+            kie_tag = "audio" if gen_type == "audio" else ("video" if gen_type == "video" else "image")
+            _debug_log(f"[KIE_{kie_tag}] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
+            
+            logger.info("KIE performing HTTP Request | Method: POST | URL: %s | Payload_model: %s", submit_url, submit_payload.get('model'))
+            return requests.post(submit_url, json=submit_payload, headers=headers, timeout=(30, 300), verify=False)
+
+        def _kie_response_details(response: requests.Response) -> Dict[str, Any]:
+            raw_text = ""
+            try:
+                raw_text = str(response.text or "")
+            except Exception:
+                raw_text = ""
+
+            parsed_json: Any = None
+            try:
+                parsed_json = response.json()
+            except Exception:
+                parsed_json = None
+
+            return {
+                "status_code": int(getattr(response, "status_code", 0) or 0),
+                "response_json": parsed_json,
+                "response_text": raw_text[:8000],
+            }
+
+        def _truncate_kie_log_value(value: Any, limit: int = 1500) -> str:
+            try:
+                text = json.dumps(_strip_base64_from_log(value), ensure_ascii=False)
+            except Exception:
+                text = str(_strip_base64_from_log(value))
+            text = str(text or "")
+            if len(text) <= limit:
+                return text
+            return f"{text[:limit]}..."
+
+        def _summarize_kie_input_for_log(payload_input_obj: Any) -> Dict[str, Any]:
+            input_obj = payload_input_obj if isinstance(payload_input_obj, dict) else {}
+            summary: Dict[str, Any] = {
+                "mode": str(input_obj.get("mode") or "").strip() or None,
+                "aspect_ratio": str(input_obj.get("aspect_ratio") or "").strip() or None,
+                "duration": input_obj.get("duration"),
+                "quality": str(input_obj.get("quality") or "").strip() or None,
+                "image_url": bool(str(input_obj.get("image_url") or "").strip()),
+                "last_frame_url": bool(str(input_obj.get("last_frame_url") or "").strip()),
+                "image_urls": len(input_obj.get("image_urls") or []) if isinstance(input_obj.get("image_urls"), list) else 0,
+                "input_urls": len(input_obj.get("input_urls") or []) if isinstance(input_obj.get("input_urls"), list) else 0,
+                "generate_audio": input_obj.get("generate_audio") if "generate_audio" in input_obj else None,
+                "sound": input_obj.get("sound") if "sound" in input_obj else None,
+            }
+            return summary
+
+        submit_payload: Dict[str, Any] = dict(payload or {})
+        submitted_model = submit_payload.get("model") if isinstance(submit_payload, dict) else model
+        initial_submitted_model = str(submitted_model or "").strip()
+        veo_retry_models = _build_veo_retry_models(submitted_model) if use_veo_api else []
+        task_id_callback = tool_conf.get("_provider_task_id_callback")
+        if not callable(task_id_callback):
+            task_id_callback = None
+
+        if gen_type in {"image", "video"}:
+            logger.info(
+                "KIE submit prepared | gen_type=%s endpoint=%s model=%s callback_enabled=%s callback_url=%s input_summary=%s",
+                gen_type,
+                submit_url,
+                submitted_model,
+                bool(callback_url and callback_url != "-1"),
+                callback_url or None,
+                _summarize_kie_input_for_log(submit_payload.get("input") if isinstance(submit_payload, dict) else None),
+            )
+
+        def _rebuild_veo_image_urls_with_limit(limit_bytes: int) -> List[str]:
+            rebuilt_refs: List[str] = []
+            if ref_image:
+                src_list = ref_image if isinstance(ref_image, list) else [ref_image]
+                for src in src_list:
+                    rebuilt = self._process_veo_image(src, normalized_ar or "16:9")
+                    if rebuilt:
+                        hosted_rebuilt = self._upload_kie_ref_to_hosted_url(
+                            rebuilt,
+                            api_key=api_key,
+                            upload_path="veo-inputs",
+                            file_name_prefix="veo-retry",
+                        )
+                        if hosted_rebuilt:
+                            rebuilt_refs.append(hosted_rebuilt)
+            if last_frame_url:
+                rebuilt_last = self._process_veo_image(last_frame_url, normalized_ar or "16:9")
+                if rebuilt_last and rebuilt_last not in rebuilt_refs:
+                    hosted_last = self._upload_kie_ref_to_hosted_url(
+                        rebuilt_last,
+                        api_key=api_key,
+                        upload_path="veo-inputs",
+                        file_name_prefix="veo-retry-last",
+                    )
+                    if hosted_last and hosted_last not in rebuilt_refs:
+                        rebuilt_refs.append(hosted_last)
+            return rebuilt_refs
+
+        async def _retry_veo_on_image_size_limit(current_resp: requests.Response, current_payload: Dict[str, Any]):
+            if not use_veo_api:
+                return current_resp, current_payload
+
+            try:
+                current_data = current_resp.json() if current_resp.status_code == 200 else None
+            except Exception:
+                current_data = None
+
+            current_msg = ""
+            if current_data and isinstance(current_data, dict):
+                current_msg = current_data.get("msg") or current_data.get("message") or ""
+            elif current_resp is not None:
+                current_msg = getattr(current_resp, "text", "") or ""
+
+            if not _is_kie_image_size_error(current_msg):
+                return current_resp, current_payload
+
+            retry_limits = [70 * 1024, 50 * 1024]
+            retry_resp = current_resp
+            retry_payload = dict(current_payload or {})
+            original_env = os.getenv("KIE_VEO_IMAGE_MAX_BYTES")
+            try:
+                for limit in retry_limits:
+                    os.environ["KIE_VEO_IMAGE_MAX_BYTES"] = str(limit)
+                    rebuilt_urls = _rebuild_veo_image_urls_with_limit(limit)
+                    if not rebuilt_urls:
+                        continue
+                    retry_payload["imageUrls"] = rebuilt_urls[:3]
+                    logger.warning(
+                        "KIE Veo image-size retry | limit=%s image_count=%s",
+                        limit,
+                        len(retry_payload.get("imageUrls") or []),
+                    )
+                    retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+                    if retry_resp.status_code != 200:
+                        continue
+                    try:
+                        retry_data = retry_resp.json()
+                    except Exception:
+                        continue
+                    retry_code = retry_data.get("code")
+                    retry_msg = retry_data.get("msg") or retry_data.get("message") or ""
+                    if retry_code in (None, 200, "200") or not _is_kie_image_size_error(retry_msg):
+                        return retry_resp, retry_payload
+                return retry_resp, retry_payload
+            finally:
+                if original_env is None:
+                    os.environ.pop("KIE_VEO_IMAGE_MAX_BYTES", None)
+                else:
+                    os.environ["KIE_VEO_IMAGE_MAX_BYTES"] = original_env
+
+        try:
+            try:
+                resp = await asyncio.to_thread(_post_submit, submit_payload)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as first_err:
+                _debug_log(f"[KIE] Submit connection/timeout error, retrying once: {str(first_err)[:150]}", "warning")
+                await asyncio.sleep(2)
+                resp = await asyncio.to_thread(_post_submit, submit_payload)
+        except requests.exceptions.RequestException as e:
+            return {"error": "KIE request failed", "details": str(e), "submit_failed": True}
+        except Exception as e:
+            return {"error": "KIE request failed", "details": str(e), "submit_failed": True}
+
+        if use_veo_api:
+            resp, submit_payload = await _retry_veo_on_image_size_limit(resp, submit_payload)
+
+        # Veo-specific safety retry for upstream model compatibility drift.
+        if use_veo_api and resp.status_code != 200 and _is_unsupported_model_message(getattr(resp, "text", "")):
+            for alt_model in veo_retry_models:
+                if str(alt_model).strip().lower() == str(submitted_model or "").strip().lower():
+                    continue
+                retry_payload = _adapt_veo_payload_for_model(submit_payload, alt_model)
+                logger.warning(
+                    "KIE Veo model fallback retry | from=%s to=%s reason=unsupported_model_status_%s",
+                    submitted_model,
+                    alt_model,
+                    resp.status_code,
+                )
+                try:
+                    retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+                    if retry_resp.status_code == 200:
+                        resp = retry_resp
+                        submit_payload = retry_payload
+                        submitted_model = alt_model
+                        break
+                except Exception:
+                    continue
+
+        if resp.status_code != 200:
+            return {
+                "error": f"KIE submission failed {resp.status_code}",
+                "details": _kie_response_details(resp),
+                "submit_failed": True,
+                "runtime_model": submitted_model,
+            }
+
+        try:
+            data = resp.json()
+        except Exception:
+            return {"error": "Invalid KIE response", "details": resp.text[:1000], "submit_failed": True}
+
+        if use_veo_api:
+            code_preview = data.get("code")
+            msg_preview = data.get("msg") or data.get("message") or ""
+            if code_preview not in (None, 200, "200") and _is_unsupported_model_message(msg_preview):
+                for alt_model in veo_retry_models:
+                    if str(alt_model).strip().lower() == str(submitted_model or "").strip().lower():
+                        continue
+                    retry_payload = _adapt_veo_payload_for_model(submit_payload, alt_model)
+                    logger.warning(
+                        "KIE Veo model fallback retry | from=%s to=%s reason=unsupported_model_code_%s",
+                        submitted_model,
+                        alt_model,
+                        code_preview,
+                    )
+                    try:
+                        retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+                        if retry_resp.status_code == 200:
+                            retry_data = retry_resp.json()
+                            retry_code = retry_data.get("code")
+                            if retry_code in (None, 200, "200"):
+                                resp = retry_resp
+                                data = retry_data
+                                submit_payload = retry_payload
+                                submitted_model = alt_model
+                                break
+                    except Exception:
+                        continue
+
+        if gen_type == "audio":
+            code_preview = data.get("code")
+            msg_preview = data.get("msg") or data.get("message") or ""
+            voice_value = None
+            if isinstance(submit_payload.get("input"), dict):
+                voice_value = submit_payload.get("input", {}).get("voice")
+            if code_preview not in (None, 200, "200") and _is_kie_invalid_voice_error(msg_preview) and str(voice_value or "").strip():
+                retry_payload = dict(submit_payload or {})
+                retry_input = dict(retry_payload.get("input") or {})
+                old_voice = retry_input.pop("voice", None)
+                retry_payload["input"] = retry_input
+                logger.warning(
+                    "KIE audio voice fallback retry | model=%s old_voice=%s reason=%s",
+                    submitted_model,
+                    old_voice,
+                    msg_preview,
+                )
+                _debug_log(
+                    f"[KIE_audio] voice invalid fallback retry | model={submitted_model} old_voice={old_voice}"
+                )
+                try:
+                    retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+                    if retry_resp.status_code == 200:
+                        retry_data = retry_resp.json()
+                        retry_code = retry_data.get("code")
+                        if retry_code in (None, 200, "200"):
+                            resp = retry_resp
+                            data = retry_data
+                            submit_payload = retry_payload
+                except Exception as retry_err:
+                    logger.warning("KIE audio voice fallback retry failed: %s", retry_err)
+
+        submitted_mode_value = ""
+        submitted_aspect_ratio_value = ""
+        submitted_quality_value = ""
+        submitted_image_count_value = 0
+        if isinstance(submit_payload, dict):
+            submit_input = submit_payload.get("input") if isinstance(submit_payload.get("input"), dict) else {}
+            submitted_mode_value = str(
+                submit_input.get("mode")
+                or submit_payload.get("mode")
+                or ""
+            ).strip().lower()
+            submitted_aspect_ratio_value = str(submit_input.get("aspect_ratio") or submit_input.get("size") or "").strip()
+            submitted_quality_value = str(submit_input.get("quality") or "").strip().lower()
+            if isinstance(submit_input.get("image_urls"), list):
+                submitted_image_count_value = len(submit_input.get("image_urls") or [])
+            elif isinstance(submit_input.get("input_urls"), list):
+                submitted_image_count_value = len(submit_input.get("input_urls") or [])
+
+        resolved_mode_source = ""
+        if requested_mode:
+            resolved_mode_source = mode_source_hint or "config"
+        elif submitted_mode_value:
+            resolved_mode_source = "model_default"
+
+        base_metadata = {
+            "provider": "kie",
+            "model": submitted_model,
+            "prompt": prompt,
+            "submit_mode": submitted_mode_value or None,
+            "submit_aspect_ratio": submitted_aspect_ratio_value or None,
+            "submit_quality": submitted_quality_value or None,
+            "submit_image_count": int(submitted_image_count_value or 0),
+            "mode_source": resolved_mode_source or None,
+            "standard_resolution_trace": tool_conf.get("__standard_resolution_trace") if isinstance(tool_conf, dict) else None,
+        }
+
+        code = data.get("code")
+        if code not in (None, 200, "200"):
+            details_payload: Any = {
+                "status_code": int(getattr(resp, "status_code", 0) or 0),
+                "code": code,
+                "message": data.get("msg") or data.get("message"),
+                "response_json": data,
+            }
+            return {
+                "error": f"KIE submission failed code={code}",
+                "details": details_payload,
+                "submit_failed": True,
+                "runtime_model": submitted_model,
+            }
+
+        data_block = data.get("data") or {}
+        task_id = (
+            data_block.get("taskId")
+            or data_block.get("task_id")
+            or data_block.get("id")
+            or data.get("taskId")
+            or data.get("task_id")
+            or data.get("id")
+        )
+        if not task_id:
+            return {"error": "No taskId from KIE", "details": data, "submit_failed": True, "runtime_model": submitted_model}
+
+        if callable(task_id_callback):
+            try:
+                callback_result = task_id_callback(str(task_id))
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+            except Exception as callback_err:
+                logger.warning(
+                    "KIE task_id_callback_failed | task_id=%s error=%s",
+                    task_id,
+                    callback_err,
+                )
+
+        if use_veo_api:
+            final_generation_type = str((submit_payload or {}).get("generationType") or "").strip()
+            final_aspect_ratio = str((submit_payload or {}).get("aspect_ratio") or "").strip()
+            final_image_count = len((submit_payload or {}).get("imageUrls") or []) if isinstance((submit_payload or {}).get("imageUrls"), list) else 0
+            logger.info(
+                "KIE Veo final submit resolved | endpoint=%s model=%s generationType=%s aspect_ratio=%s image_count=%s taskId=%s fallback_model_switch=%s",
+                submit_url,
+                submitted_model,
+                final_generation_type,
+                final_aspect_ratio,
+                final_image_count,
+                task_id,
+                bool(str(submitted_model or "").strip().lower() != str(initial_submitted_model or "").strip().lower()),
+            )
+        elif gen_type == "image":
+            final_input = (submit_payload or {}).get("input") if isinstance((submit_payload or {}).get("input"), dict) else {}
+            final_input_count = 0
+            if isinstance(final_input.get("input_urls"), list):
+                final_input_count = len(final_input.get("input_urls") or [])
+            elif isinstance(final_input.get("image_urls"), list):
+                final_input_count = len(final_input.get("image_urls") or [])
+            logger.info(
+                "KIE image final submit resolved | endpoint=%s model=%s aspect_ratio=%s quality=%s input_count=%s taskId=%s",
+                submit_url,
+                submitted_model,
+                str(final_input.get("aspect_ratio") or "").strip(),
+                str(final_input.get("quality") or "").strip(),
+                final_input_count,
+                task_id,
+            )
+        elif is_kling_3_video:
+            final_input = (submit_payload or {}).get("input") if isinstance((submit_payload or {}).get("input"), dict) else {}
+            final_mode = str(final_input.get("mode") or "").strip()
+            final_multi_shots = bool(final_input.get("multi_shots"))
+            final_aspect_ratio = str(final_input.get("aspect_ratio") or "").strip()
+            final_image_count = len(final_input.get("image_urls") or []) if isinstance(final_input.get("image_urls"), list) else 0
+            final_multi_prompt_count = len(final_input.get("multi_prompt") or []) if isinstance(final_input.get("multi_prompt"), list) else 0
+            final_elements_count = len(final_input.get("kling_elements") or []) if isinstance(final_input.get("kling_elements"), list) else 0
+            logger.info(
+                "KIE Kling3 final submit resolved | endpoint=%s model=%s mode=%s multi_shots=%s aspect_ratio=%s image_count=%s multi_prompt_count=%s elements_count=%s taskId=%s",
+                submit_url,
+                submitted_model,
+                final_mode,
+                final_multi_shots,
+                final_aspect_ratio,
+                final_image_count,
+                final_multi_prompt_count,
+                final_elements_count,
+                task_id,
+            )
+        elif gen_type == "video":
+            final_input = (submit_payload or {}).get("input") if isinstance((submit_payload or {}).get("input"), dict) else {}
+            logger.info(
+                "KIE video final submit resolved | endpoint=%s model=%s taskId=%s input_summary=%s",
+                submit_url,
+                submitted_model,
+                task_id,
+                _summarize_kie_input_for_log(final_input),
+            )
+
+        def _is_ok_code(value: Any) -> bool:
+            if value in (None, 200, "200"):
+                return True
+            try:
+                return int(str(value).strip()) == 200
+            except Exception:
+                return False
+
+        def _pick_preferred_kie_media_url(candidates: List[str]) -> Optional[str]:
+            ordered: List[str] = []
+            seen = set()
+            for item in candidates or []:
+                text = str(item or "").strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                ordered.append(text)
+
+            if not ordered:
+                return None
+
+            if gen_type == "video" or gen_type == "audio":
+                for url in ordered:
+                    lower_url = url.lower()
+                    if any(token in lower_url for token in (".mp4", ".mov", ".webm", "video/", ".mp3", "audio/")):
+                        return url
+
+            return ordered[0]
+
+        def _extract_kie_video_urls(value: Any) -> List[str]:
+            video_like_urls: List[str] = []
+
+            def _walk(node: Any):
+                if node is None:
+                    return
+
+                if isinstance(node, str):
+                    raw = node.strip()
+                    if not raw:
+                        return
+                    if raw.startswith("http://") or raw.startswith("https://"):
+                        lowered = raw.lower()
+                        if any(token in lowered for token in (".mp4", ".mov", ".webm", "video/", ".mp3", "audio/")):
+                            video_like_urls.append(raw)
+                        return
+                    if raw.startswith("{") or raw.startswith("["):
+                        try:
+                            parsed = json.loads(raw)
+                            _walk(parsed)
+                        except Exception:
+                            pass
+                    return
+
+                if isinstance(node, list):
+                    for item in node:
+                        _walk(item)
+                    return
+
+                if isinstance(node, dict):
+                    for key, item in node.items():
+                        key_lower = str(key or "").strip().lower()
+                        if key_lower in {
+                            "videourl",
+                            "video_url",
+                            "resultvideourl",
+                            "result_video_url",
+                            "outputvideourl",
+                            "output_video_url",
+                            "audiourl",
+                            "audio_url",
+                        }:
+                            if isinstance(item, str):
+                                text = item.strip()
+                                if text.startswith("http://") or text.startswith("https://"):
+                                    video_like_urls.append(text)
+                            elif isinstance(item, list):
+                                for sub in item:
+                                    if isinstance(sub, str):
+                                        text = sub.strip()
+                                        if text.startswith("http://") or text.startswith("https://"):
+                                            video_like_urls.append(text)
+                            continue
+                        _walk(item)
+
+            _walk(value)
+
+            deduped: List[str] = []
+            seen_urls = set()
+            for url in video_like_urls:
+                stable = str(url or "").strip()
+                if not stable or stable in seen_urls:
+                    continue
+                seen_urls.add(stable)
+                deduped.append(stable)
+            return deduped
+
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        callback_assisted_job = bool(
+            callback_enabled
+            and str(callback_ticket or "").strip().startswith(("image-job-", "video-job-"))
+        )
+        is_public_deploy = bool(
+            str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+            or str(os.getenv("RENDER") or "").strip()
+            or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
+        )
+
+        # Callback-assisted jobs still need long polling fallback when provider callbacks are delayed.
+        kie_min_poll_timeout_seconds = max(
+            120,
+            int(os.getenv("KIE_MIN_POLL_TIMEOUT_SECONDS", "900") or 900),
+        )
+        raw_tool_poll_timeout = tool_conf.get("poll_timeout_seconds")
+        raw_tool_timeout = tool_conf.get("timeout")
+
+        poll_timeout_seconds = max(kie_min_poll_timeout_seconds, DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS)
+        if callback_assisted_job:
+            try:
+                poll_timeout_seconds = max(
+                    kie_min_poll_timeout_seconds,
+                    int(
+                        os.getenv(
+                            "KIE_CALLBACK_ASSISTED_POLL_TIMEOUT_SECONDS",
+                            "900",
+                        )
+                    ),
+                )
+            except Exception:
+                poll_timeout_seconds = kie_min_poll_timeout_seconds
+        try:
+            if tool_conf.get("poll_timeout_seconds") is not None:
+                poll_timeout_seconds = max(kie_min_poll_timeout_seconds, int(tool_conf.get("poll_timeout_seconds")))
+            elif tool_conf.get("timeout") is not None:
+                poll_timeout_seconds = max(kie_min_poll_timeout_seconds, int(tool_conf.get("timeout")))
+        except Exception:
+            poll_timeout_seconds = max(kie_min_poll_timeout_seconds, DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS)
+
+        # Strategy:
+        # - keep callback as the preferred completion path when available
+        # - keep polling responsive enough that local state does not lag far behind provider completion
+        poll_interval_seconds = 5 if callback_assisted_job else 2
+        if callback_enabled and is_public_deploy:
+            poll_interval_seconds = max(poll_interval_seconds, 3)
+        elif callback_enabled:
+            poll_interval_seconds = max(poll_interval_seconds, 2)
+        try:
+            if tool_conf.get("poll_interval_seconds") is not None:
+                poll_interval_seconds = max(2, int(tool_conf.get("poll_interval_seconds")))
+        except Exception:
+            pass
+
+        logger.info(
+            "KIE poll strategy | task_id=%s callback_enabled=%s callback_assisted_job=%s timeout_seconds=%s interval_seconds=%s min_timeout_seconds=%s raw_poll_timeout=%s raw_timeout=%s",
+            task_id,
+            callback_enabled,
+            callback_assisted_job,
+            poll_timeout_seconds,
+            poll_interval_seconds,
+            kie_min_poll_timeout_seconds,
+            raw_tool_poll_timeout,
+            raw_tool_timeout,
+        )
+
+        poll_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+        last_poll_state_marker: Optional[str] = None
+
+        def _poll_status():
+            param_candidates = [
+                {"taskId": task_id},
+                {"task_id": task_id},
+                {"id": task_id},
+            ]
+            endpoint_candidates = [query_url]
+            if "/recordInfo" in query_url:
+                endpoint_candidates.append(query_url.replace("/recordInfo", "/record-info"))
+            elif "/record-info" in query_url:
+                endpoint_candidates.append(query_url.replace("/record-info", "/recordInfo"))
+
+            last_resp = None
+            for endpoint in endpoint_candidates:
+                for params in param_candidates:
+                    try:
+                        resp = requests.get(endpoint, params=params, headers=headers, timeout=45, verify=False)
+                        last_resp = resp
+                        if resp.status_code == 200:
+                            return resp
+                    except Exception:
+                        continue
+
+                # Some KIE routes are POST query APIs in specific deployments.
+                for body in param_candidates:
+                    try:
+                        resp = requests.post(endpoint, json=body, headers=headers, timeout=45, verify=False)
+                        last_resp = resp
+                        if resp.status_code == 200:
+                            return resp
+                    except Exception:
+                        continue
+
+            if last_resp is not None:
+                return last_resp
+            return requests.get(query_url, params={"taskId": task_id}, headers=headers, timeout=45, verify=False)
+
+        for i in range(poll_attempts):
+            await asyncio.sleep(poll_interval_seconds)
+            try:
+                poll_resp = await asyncio.to_thread(_poll_status)
+            except requests.exceptions.Timeout:
+                continue
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
+                continue
+
+            if poll_resp.status_code != 200:
+                if i % 10 == 0:
+                    logger.info("KIE poll non-200 | status=%s task_id=%s", poll_resp.status_code, task_id)
+                continue
+
+            try:
+                poll_data = poll_resp.json()
+            except Exception:
+                continue
+
+            poll_code = poll_data.get("code")
+            if not _is_ok_code(poll_code):
+                continue
+
+            record_raw = poll_data.get("data") or poll_data.get("result") or poll_data
+            if isinstance(record_raw, list):
+                record = record_raw[0] if (record_raw and isinstance(record_raw[0], dict)) else {}
+            elif isinstance(record_raw, dict):
+                record = record_raw
+            else:
+                record = {}
+
+            state = str(record.get("state") or record.get("status") or poll_data.get("state") or poll_data.get("status") or "").strip().lower()
+            success_flag = record.get("successFlag")
+            if success_flag is None:
+                success_flag = record.get("success_flag")
+            if success_flag is None and isinstance(record.get("response"), dict):
+                success_flag = record.get("response", {}).get("successFlag")
+
+            if isinstance(success_flag, str):
+                success_flag = success_flag.strip().lower()
+
+            video_urls = _extract_kie_video_urls(record.get("resultJson"))
+            if not video_urls:
+                video_urls = _extract_kie_video_urls(record)
+            if not video_urls and isinstance(record.get("response"), dict):
+                video_urls = _extract_kie_video_urls(record.get("response"))
+
+            poll_state_marker = f"{state or '<empty>'}|{success_flag}|{len(video_urls)}"
+            if poll_state_marker != last_poll_state_marker:
+                logger.info(
+                    "KIE poll state change | task_id=%s attempt=%s/%s state=%s success_flag=%s media_url_count=%s record_keys=%s",
+                    task_id,
+                    i + 1,
+                    poll_attempts,
+                    state or None,
+                    success_flag,
+                    len(video_urls),
+                    sorted([str(key) for key in record.keys()])[:20] if isinstance(record, dict) else [],
+                )
+                last_poll_state_marker = poll_state_marker
+
+            if state in {"waiting", "queued", "queuing", "processing", "running", "generating", "pending", "submitted", "in_progress", "in-progress"}:
+                continue
+            if success_flag in {0, "0", False, "false", "failed", "error"}:
+                continue
+
+            result_payload = record.get("resultJson")
+            video_urls = _extract_kie_video_urls(result_payload)
+            if not video_urls:
+                video_urls = _extract_kie_video_urls(record)
+            if not video_urls and isinstance(record.get("response"), dict):
+                video_urls = _extract_kie_video_urls(record.get("response"))
+
+            # Upstream may omit/lag status while URLs are already ready.
+            if video_urls and state not in {"fail", "failed", "error", "canceled", "cancelled"}:
+                if gen_type == "video" or gen_type == "audio":
+                    selected_video_url = _pick_preferred_kie_media_url(video_urls)
+                    if selected_video_url:
+                        meta = {"raw": poll_data}
+                        meta.update(base_metadata)
+                        return {"url": selected_video_url, "metadata": meta}
+
+            if state in {"success", "succeeded", "completed", "done", "finish", "finished", "complete", "successed"}:
+
+                if gen_type == "video" or gen_type == "audio":
+                    selected_video_url = _pick_preferred_kie_media_url(video_urls)
+                    if selected_video_url:
+                        meta = {"raw": poll_data}
+                        meta.update(base_metadata)
+                        return {"url": selected_video_url, "metadata": meta}
+
+                urls = self._extract_urls_from_payload(result_payload)
+                if not urls:
+                    urls = self._extract_urls_from_payload(record)
+                selected_url = _pick_preferred_kie_media_url(urls)
+                if not selected_url:
+                    logger.error(
+                        "KIE poll succeeded without media URL | task_id=%s state=%s success_flag=%s raw=%s",
+                        task_id,
+                        state or None,
+                        success_flag,
+                        _truncate_kie_log_value(poll_data),
+                    )
+                    return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
+
+                meta = {"raw": poll_data}
+                meta.update(base_metadata)
+                return {"url": selected_url, "metadata": meta}
+            if success_flag in {1, "1", True, "true", "success", "succeeded"}:
+                video_urls = _extract_kie_video_urls(record.get("resultUrls"))
+                if not video_urls:
+                    video_urls = _extract_kie_video_urls(record)
+                if not video_urls and isinstance(record.get("response"), dict):
+                    video_urls = _extract_kie_video_urls(record.get("response"))
+
+                if gen_type == "video" or gen_type == "audio":
+                    selected_video_url = _pick_preferred_kie_media_url(video_urls)
+                    if selected_video_url:
+                        meta = {"raw": poll_data}
+                        meta.update(base_metadata)
+                        return {"url": selected_video_url, "metadata": meta}
+
+                urls = self._extract_urls_from_payload(record.get("resultUrls"))
+                if not urls:
+                    urls = self._extract_urls_from_payload(record)
+                if not urls and isinstance(record.get("response"), dict):
+                    urls = self._extract_urls_from_payload(record.get("response"))
+                selected_url = _pick_preferred_kie_media_url(urls)
+                if not selected_url:
+                    logger.error(
+                        "KIE poll successFlag without media URL | task_id=%s state=%s success_flag=%s raw=%s",
+                        task_id,
+                        state or None,
+                        success_flag,
+                        _truncate_kie_log_value(poll_data),
+                    )
+                    return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
+                meta = {"raw": poll_data}
+                meta.update(base_metadata)
+                return {"url": selected_url, "metadata": meta}
+
+            if state in {"fail", "failed", "error", "canceled", "cancelled", "abort", "aborted", "timeout"}:
+                logger.error(
+                    "KIE poll terminal failure | task_id=%s state=%s success_flag=%s details=%s raw=%s",
+                    task_id,
+                    state or None,
+                    success_flag,
+                    _truncate_kie_log_value(record.get("failMsg") or record.get("message") or poll_data, limit=800),
+                    _truncate_kie_log_value(poll_data),
+                )
+                return {
+                    "error": "KIE generation failed",
+                    "details": record.get("failMsg") or record.get("message") or poll_data,
+                    "runtime_model": submitted_model,
+                }
+            if success_flag in {2, "2", 3, "3", "2", "3", "cancelled", "canceled"}:
+                logger.error(
+                    "KIE poll terminal failure by success_flag | task_id=%s state=%s success_flag=%s raw=%s",
+                    task_id,
+                    state or None,
+                    success_flag,
+                    _truncate_kie_log_value(poll_data),
+                )
+                return {
+                    "error": "KIE generation failed",
+                    "details": record.get("failMsg") or record.get("message") or poll_data,
+                    "runtime_model": submitted_model,
+                }
+
+        logger.error("KIE polling timeout | task_id=%s attempts=%s interval=%s", task_id, poll_attempts, poll_interval_seconds)
+        return {"error": "Timeout polling KIE task"}
+
+    # -- Helpers --

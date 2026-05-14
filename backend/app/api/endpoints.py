@@ -5094,7 +5094,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
 
         logger.info(f"Analyzing scene for user {current_user_id} with model {config.get('model')}")
-        # Auto-continue if provider truncates or the stream drops after yielding partial content.
+        # Auto-continue if provider truncates (finish_reason=length).
         # Important: keep continuation prompts small (do NOT send the entire prior output back)
         # to avoid blowing up prompt size / hitting context window.
         # Token cap is controlled by provider/model config; local continuation only keeps a high safety ceiling.
@@ -5197,7 +5197,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
                 accumulated = "".join(result_parts_loop)
                 
-                if part_finish == "error":
+                if part_finish in ("incomplete", "error"):
                     break
                     
                 if len(accumulated) >= _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP:
@@ -5216,14 +5216,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 section_meta = _detect_scene_output_sections(accumulated)
                 missing_sections = [str(x) for x in (section_meta.get("missing_sections") or []) if str(x)]
                 continue_due_to_length = _is_length_finish_reason(part_finish)
-                continue_due_to_incomplete = (
-                    str(part_finish or "").strip().lower().replace("-", "_") == "incomplete"
-                    and bool(accumulated.strip())
-                    and seg_idx < max_segments
-                )
                 continue_due_to_structure = (
                     not continue_due_to_length
-                    and not continue_due_to_incomplete
                     and bool(missing_sections)
                     and seg_idx < max_segments
                     and continuation_by_structure_loop < 3
@@ -5231,7 +5225,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 )
 
                 # Stop if not truncated.
-                if not continue_due_to_length and not continue_due_to_incomplete and not continue_due_to_structure:
+                if not continue_due_to_length and not continue_due_to_structure:
                     break
 
                 # Stop if provider returned nothing new.
@@ -5248,9 +5242,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                         missing_sections=", ".join(missing_sections),
                         suffix=suffix,
                     )
-                elif continue_due_to_incomplete:
-                    continuation_reason = "incomplete_stream"
-                    continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
                 else:
                     continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
 
@@ -5273,8 +5264,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     {"role": "user", "content": continuation_instruction},
                 ]
 
-            finish_reason_loop_norm = str(finish_reason_loop or "").strip().lower().replace("-", "_")
-            if finish_reason_loop_norm and (finish_reason_loop_norm == "incomplete" or _is_length_finish_reason(finish_reason_loop_norm)) and len(segments_meta_loop) >= max_segments:
+            if finish_reason_loop is not None and _is_length_finish_reason(finish_reason_loop) and len(segments_meta_loop) >= max_segments:
                 continuation_stopped_by_max_segments_loop = True
 
             return {
@@ -26822,6 +26812,8 @@ async def _run_generate_video(
             provider=resolved_video_provider,
             model=resolved_video_model,
         )
+        
+        logger.info(f"[GenerateVideo] Final injected prompt_text: {prompt_text}")
 
         try:
             db.rollback()
@@ -29665,6 +29657,22 @@ def _append_video_api_ref_mapping(
     )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
+    if reference_video_urls and is_seedance:
+        if original_use_prev_video:
+            vid_tag = "@Video1"
+            if not re.search(r'@[Vv]ideo 1|@[Vv]ideo1|@[Vv]edie1|@[Vv]edio1', text):
+                text = f"延长{vid_tag}视频，一镜到底运镜。 {text.strip()}"
+        
+        added_videos = False
+        for idx in range(1, len(reference_video_urls) + 1):
+            vid_tag = f"@Video{idx}"
+            if not re.search(r'@[Vv]ideo ' + str(idx) + r'|@[Vv]ideo' + str(idx) + r'|@[Vv]edie' + str(idx) + r'|@[Vv]edio' + str(idx), text):
+                if not added_videos:
+                    text = f"{text.strip()}，参考视频是 {vid_tag}"
+                    added_videos = True
+                else:
+                    text = f"{text.strip()} {vid_tag}"
+
     if not use_prev_video:
         return text
 
@@ -29752,7 +29760,6 @@ def _append_video_api_ref_mapping(
             len(start_urls) >= 2
             and not end_url
             and not keyframe_urls
-            and not reference_video_urls
         )
         if not pure_multi_entity_ref_mode:
             return text
@@ -29770,7 +29777,6 @@ def _append_video_api_ref_mapping(
         len(start_urls) >= 2
         and not end_url
         and not keyframe_urls
-        and not reference_video_urls
         and len(pairs) < len(ordered_refs)
     ):
         fallback_mentions = _collect_prompt_entity_mentions(text)
@@ -29787,11 +29793,13 @@ def _append_video_api_ref_mapping(
         return text
 
     pairs.sort(key=lambda x: x[0])
+    
+    logger.info(f"[VideoAPIRefMapping] Mapped entity pairs ready to inject: {pairs}")
 
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:
         prefix = f"@Image{mapped_idx} "
-        if prefix in updated_text and entity_name in updated_text:
+        if prefix.lower() in updated_text.lower() and entity_name.lower() in updated_text.lower():
             continue
 
         escaped_entity = re.escape(entity_name)
@@ -29831,35 +29839,33 @@ def _append_video_api_ref_mapping(
         replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
         if count > 0:
             updated_text = replaced_text
-
-    if reference_video_urls and is_seedance:
-        if original_use_prev_video:
-            vid_tag = "@Video 1"
-            vid_tag_nospace = "@Video1"
-            if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
-                updated_text = f"延长\n\n{vid_tag}\n，一镜到底运镜。\n\n{updated_text.strip()}"
-        
-        added_videos = False
-        for idx in range(1, len(reference_video_urls) + 1):
-            vid_tag = f"@Video {idx}"
-            vid_tag_nospace = f"@Video{idx}"
-            if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
-                if not added_videos:
-                    updated_text = f"{updated_text.strip()}，参考视频是 {vid_tag}"
-                    added_videos = True
-                else:
-                    updated_text = f"{updated_text.strip()} {vid_tag}"
+            
+    logger.info(f"[VideoAPIRefMapping] Processing completed. Final injected prompt: {updated_text}")
 
     return updated_text
 
 
 def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
-    prev_shot = (
-        db.query(Shot)
-        .filter(Shot.episode_id == episode_id, Shot.id < shot_id)
-        .order_by(Shot.id.desc())
-        .first()
-    )
+    all_shots = db.query(Shot).filter(Shot.episode_id == episode_id).all()
+    if not all_shots:
+        return None
+
+    def _sort_key(s):
+        scene_code = str(s.scene_code or "")
+        srt_id = str(s.shot_id or "")
+        scene_parts = tuple(int(x) if x.isdigit() else x for x in re.split(r'(\d+)', scene_code))
+        shot_parts = tuple(int(x) if x.isdigit() else x for x in re.split(r'(\d+)', srt_id))
+        return (scene_parts, shot_parts)
+
+    all_shots.sort(key=_sort_key)
+    
+    prev_shot = None
+    for i, s in enumerate(all_shots):
+        if s.id == shot_id:
+            if i > 0:
+                prev_shot = all_shots[i - 1]
+            break
+
     if not prev_shot:
         return None
     prev_tech = _parse_shot_tech(prev_shot)

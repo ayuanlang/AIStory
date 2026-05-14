@@ -1625,9 +1625,16 @@ const Editor = ({
                                 addLog('Skipped character entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                             }
-                            if (existingEntityMap.has(normalizeEntityKey('character', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('character', entityNameEn)))) {
-                                logSkippedExistingSubject('character', entityName, entityNameEn);
-                                continue;
+                            const existingForName = existingEntityMap.get(normalizeEntityKey('character', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('character', entityNameEn)) : null);
+                            if (existingForName) {
+                                if (String(existingForName.episode_id) === String(activeEpisode?.id)) {
+                                    logSkippedExistingSubject('character', entityName, entityNameEn);
+                                    continue;
+                                } else {
+                                    char.visual_dependencies = Array.isArray(char.visual_dependencies) ? char.visual_dependencies : (typeof char.visual_dependencies === 'string' ? [char.visual_dependencies] : []);
+                                    // Use format expected by the backend/prompts
+                                    char.visual_dependencies.push(`existing_id:${existingForName.id}`);
+                                }
                             }
                             const desc = [
                                 `Name (EN): ${entityNameEn || char.name_en || ''}`,

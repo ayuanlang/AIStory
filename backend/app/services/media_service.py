@@ -1104,14 +1104,15 @@ Negative prompt constraints: {neg_prompt}"""
 
         def _repl(match):
             name = match.group(1)
-            # Allow @Image{N} mentions to pass through
-            if name.startswith("Image") and name[5:].isdigit():
+            lower_name = name.strip().lower()
+            if lower_name.startswith("image") or lower_name.startswith("video") or lower_name.startswith("vedie") or lower_name.startswith("vedio"):
                 return match.group(0)
-            if name in valid_element_names:
+            if name.strip() in valid_element_names or name in valid_element_names:
                 return match.group(0)
             return name
 
-        return re.sub(r'@([\w\u4e00-\u9fa5A-Za-z0-9_]+)', _repl, text)
+        # Updated regex to capture @Video 1 as well
+        return re.sub(r'@([\w\u4e00-\u9fa5A-Za-z0-9_]+\s*\d*)', _repl, text)
 
     def _sanitize_sora_prompt_mentions(self, prompt: Any) -> str:
         text = str(prompt or "")
@@ -1119,7 +1120,7 @@ Negative prompt constraints: {neg_prompt}"""
             return ""
 
         # Sora family may interpret @mentions as user cameo references and reject
-        cleaned = re.sub(r"@(?!(?:Image\d+\b))(?=[A-Za-z0-9_\u4e00-\u9fff])", "", text)
+        cleaned = re.sub(r"@(?!(?:Image|Video|Vedie|Vedio)\s*\d+)(?=[A-Za-z0-9_\u4e00-\u9fff])", "", text, flags=re.IGNORECASE)
         cleaned = re.sub(r"\bCHAR\s*:\s*\[\s*", "CHAR:[", cleaned, flags=re.IGNORECASE)
         return cleaned
 
@@ -10881,18 +10882,29 @@ Negative prompt constraints: {neg_prompt}"""
             single_ref = str(payload_input.get("image_url") or "").strip()
             if single_ref:
                 seedance_refs.append(single_ref)
-            last_ref = str(payload_input.get("last_frame_url") or "").strip()
-            if last_ref:
-                seedance_refs.append(last_ref)
-
+                
             seedance_refs = [x for x in dict.fromkeys(seedance_refs) if x]
+            
+            # Setup image refs (which act as first frame if empty, or general references)
             if seedance_refs:
-                payload_input["input_urls"] = seedance_refs
+                payload_input["first_frame_url"] = seedance_refs[0]
+                if len(seedance_refs) > 1:
+                    payload_input["reference_image_urls"] = seedance_refs[1:]
+            
+            # Append reference_video_urls natively if passed from unified tool_conf
+            ref_videos = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls")
+            if isinstance(ref_videos, list) and len(ref_videos) > 0:
+                valid_videos = [str(v) for v in ref_videos if str(v).strip()]
+                if valid_videos:
+                    payload_input["reference_video_urls"] = valid_videos
+                    # Mutually exclusive with first/last frames
+                    payload_input.pop("first_frame_url", None)
+                    payload_input.pop("last_frame_url", None)
 
             # Follow official Seedance shape and avoid ambiguous legacy aliases.
             payload_input.pop("image_urls", None)
             payload_input.pop("image_url", None)
-            payload_input.pop("last_frame_url", None)
+            payload_input.pop("input_urls", None)
 
             # Prefer explicit Seedance flags when provided.
             if "fixed_lens" in tool_conf:
@@ -11338,6 +11350,12 @@ Negative prompt constraints: {neg_prompt}"""
                     last_frame_text = str(last_frame_resolved).strip()
                     if last_frame_text and last_frame_text not in kling_image_urls:
                         kling_image_urls.append(last_frame_text)
+
+            # Mutually exclusive: If reference_video_urls is set in tool_conf, clear images
+            # User request: Keep reference images even when video is submitted.
+            # ref_videos = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls")
+            # if isinstance(ref_videos, list) and any(str(v).strip() for v in ref_videos):
+            #     kling_image_urls = []
 
             if multi_shots and len(kling_image_urls) > 1:
                 logger.info(

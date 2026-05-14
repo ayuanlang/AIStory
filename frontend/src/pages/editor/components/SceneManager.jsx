@@ -312,6 +312,10 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                 // OR we just rely on the fact that if it's "Start Frame", it should always be there for End Gen context.
              }
         }
+        // Deduplicate
+        activeRefs = [...new Set(activeRefs)];
+    }
+    
     // --- GLOBAL INJECTION FOR ALL MODES (E.g. Prev Shot Video, Global Context) ---
     if (additionalAutoRefs && additionalAutoRefs.length > 0) {
         for (let i = additionalAutoRefs.length - 1; i >= 0; i--) {
@@ -322,10 +326,11 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         }
     }
     
-    // Deduplicate
+    // Deduplicate finally for all modes
     activeRefs = [...new Set(activeRefs)];
-    }
     
+
+
     // Filter matches that are NOT already active to display as suggestions (Standard Mode Only)
     // USER REQUEST: Show detected entities as suggestions even if in Manual Mode, so user can add them.
     // UPDATE: Detected entities are now auto-merged into activeRefs (unless deleted), so availableMatches logic is minimized.
@@ -395,7 +400,20 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                   <div className="bg-[#1a1a1a] border border-white/10 rounded-xl overflow-hidden max-w-5xl w-full max-h-[90vh] flex flex-col lg:flex-row shadow-2xl" onClick={e => e.stopPropagation()}>
                     {/* Image Area */}
                     <div className="flex-1 bg-black/50 flex items-center justify-center p-4 relative group/modal">
-                        <SafeImage src={selectedImage} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
+                        {(selectedImage && (selectedImage.split('?')[0].toLowerCase().endsWith('.mp4') || selectedImage.split('?')[0].toLowerCase().endsWith('.webm'))) ? (
+                            <LazyHoverVideo
+                                src={selectedImage}
+                                className="max-w-full max-h-full aspect-video shadow-lg rounded"
+                                mediaClassName="w-full h-full object-contain"
+                                muted
+                                loop
+                                playsInline
+                                playOnHover
+                                resetOnLeave={false}
+                            />
+                        ) : (
+                            <SafeImage src={selectedImage} className="max-w-full max-h-full object-contain shadow-lg rounded" alt="Detail" />
+                        )}
                         <button 
                             className="absolute top-4 right-4 bg-black/50 text-white p-2 rounded-full hover:bg-white/20 transition-colors z-50"
                             onClick={(e) => { e.stopPropagation(); setSelectedImage(null); }}
