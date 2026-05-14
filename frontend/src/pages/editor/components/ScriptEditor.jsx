@@ -3441,7 +3441,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
           onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
 
         // Try to match the block wrapped by at least 5 dashes: ---------
-        if (extractedSections.hasStructuredSubjectIndex) {
+        if (options?.isRetryPhase2) {
+            onLog?.(`[Asset Gen Tracking] Phase 2 Retry mode. Bypassing Subject Index structural check.`);
+            // When explicitly retrying Phase 2, we assume authoritativeSubjectText/subjectIndexText is already the correct content.
+            // If the parser returned empty because it failed to find a header, use the explicit text instead.
+            if (!subjectIndexText.trim() && explicitText) {
+                subjectIndexText = explicitText;
+            }
+        } else if (extractedSections.hasStructuredSubjectIndex) {
             onLog?.(`[Asset Gen Tracking] Extracted Subject Index (length: ${subjectIndexText.length})`);
         } else {
             onLog?.(`[Asset Gen Tracking] Error: Failed to find Subject Index header or dashes! Aborting asset generation.`, 'error');
@@ -6190,7 +6197,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // It will also bust deduplication cache by using sceneAnalysisMode = "2_pass_generate_assets" internally
             const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(
                 analysisUiReport?.importReport || {},
-                subjectIndexText
+                subjectIndexText,
+                { isRetryPhase2: true }
             );
             
             // Update the UI report with the new asset counts
