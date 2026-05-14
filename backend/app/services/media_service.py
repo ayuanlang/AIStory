@@ -6888,9 +6888,11 @@ Negative prompt constraints: {neg_prompt}"""
                     parts = [{"text": prompt_text}]
                     reference_values = ref_image if isinstance(ref_image, list) else [ref_image]
                     for ref_item in reference_values:
-                        raw_ref = str(ref_item or "").strip()
-                        if not raw_ref: continue
-                        data_uri = await self._get_image_base64_for_api_async(raw_ref, force_data_uri=True)
+                        if ref_item is None:
+                            continue
+                        if isinstance(ref_item, str) and not ref_item.strip():
+                            continue
+                        data_uri = await self._get_image_base64_for_api_async(ref_item, force_data_uri=True)
                         if isinstance(data_uri, str) and data_uri.startswith("data:image/"):
                             idx = data_uri.find(";base64,")
                             if idx > 5:
@@ -8799,10 +8801,11 @@ Negative prompt constraints: {neg_prompt}"""
 
         reference_values = ref_image if isinstance(ref_image, list) else [ref_image]
         for ref_item in reference_values:
-            raw_ref = str(ref_item or "").strip()
-            if not raw_ref:
+            if ref_item is None:
                 continue
-            data_uri = await self._get_image_base64_for_api_async(raw_ref, force_data_uri=True)
+            if isinstance(ref_item, str) and not ref_item.strip():
+                continue
+            data_uri = await self._get_image_base64_for_api_async(ref_item, force_data_uri=True)
             if not isinstance(data_uri, str) or not data_uri.startswith("data:image/"):
                 return {"error": f"{provider_name} Gemini image editing requires resolvable image inputs", "submit_failed": True}
             marker = ";base64,"
@@ -13146,9 +13149,57 @@ Negative prompt constraints: {neg_prompt}"""
         # Helper to get base64 from local or remote
         # NOTE: This only processes ONE image. If list is passed, we take the first.
         # Callers MUST handle lists if they need multiple images.
+        def _extract_ref_candidate(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                candidate = value.strip()
+                return candidate or None
+            if isinstance(value, dict):
+                direct_keys = [
+                    "url",
+                    "image_url",
+                    "imageUrl",
+                    "src",
+                    "path",
+                    "uri",
+                    "href",
+                    "value",
+                ]
+                for key in direct_keys:
+                    raw = value.get(key)
+                    if isinstance(raw, str) and raw.strip():
+                        return raw.strip()
+
+                nested_image = value.get("image")
+                if isinstance(nested_image, dict):
+                    nested_found = _extract_ref_candidate(nested_image)
+                    if nested_found:
+                        return nested_found
+
+                media = value.get("media")
+                if isinstance(media, dict):
+                    nested_found = _extract_ref_candidate(media)
+                    if nested_found:
+                        return nested_found
+                return None
+            if isinstance(value, list):
+                for item in value:
+                    found = _extract_ref_candidate(item)
+                    if found:
+                        return found
+                return None
+            candidate = str(value).strip()
+            return candidate or None
+
         if isinstance(url_or_path, list):
              if not url_or_path: return None
              url_or_path = url_or_path[0]
+
+        extracted_ref = _extract_ref_candidate(url_or_path)
+        if not extracted_ref:
+            return None
+        url_or_path = extracted_ref
 
         try:
             _debug_log(f"[MediaService] Conversion: Processing ref image: {str(url_or_path)[:100]}")

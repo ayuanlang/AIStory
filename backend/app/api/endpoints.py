@@ -1250,7 +1250,7 @@ def _persist_remote_image_result(
     try:
         response = requests.get(
             raw,
-            stream=False,
+            stream=True,
             timeout=120,
             allow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"},
@@ -5196,10 +5196,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 })
 
                 accumulated = "".join(result_parts_loop)
-                
-                if part_finish in ("incomplete", "error"):
-                    break
-                    
                 if len(accumulated) >= _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP:
                     output_char_cap_reached_loop = True
                     finish_reason_loop = part_finish or finish_reason_loop or "safety_output_cap"
@@ -5296,7 +5292,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if ep_cache and script_hash:
                 exist_res = ep_cache.ai_scene_analysis_result or ""
                 if f"<!-- script_hash: {script_hash} -->" in exist_res:
-                    if re.search(r"(?i)subject\s*index", exist_res) and "```json" not in exist_res.lower() and '"characters": [' not in exist_res:
+                    if "### Subject Index" in exist_res and "```json" not in exist_res.lower() and '"characters": [' not in exist_res:
                         skip_step1 = True
                         cached_result_1 = exist_res
 
@@ -5306,13 +5302,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         is_entity_design_phase = (effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"])
         
         # Execute the LLM loop generically for all modes
-        try:
-            loop1_res = await _run_loop(messages)
-        except getattr(llm_service, "AmbiguousLLMTransportError", Exception) as e:
-            if type(e).__name__ == "AmbiguousLLMTransportError":
-                logger.error(f"[analyze_scene] {e}")
-                raise HTTPException(status_code=504, detail=str(e))
-            raise
+        loop1_res = await _run_loop(messages)
         result_content_1 = loop1_res.get("result_content", "")
         
         # In phase 1, attach script_hash for future reference if needed
@@ -5391,24 +5381,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "raw_total_chars": raw_total_chars,
             "dedup_total_chars": dedup_total_chars,
         })
-
-        if finish_reason in ("incomplete", "error"):
-            logger.error(f"[analyze_scene] LLM returned finish_reason={finish_reason}; rejecting partial output.")
-            
-            # 记录断开的内容哪怕它不完整，以防止丢失上游(可能已扣费)的部分生成结果
-            # 这会将部分结果保存到 DB 的 llm_call_logs 表中
-            llm_service._safe_log_json("LLM_STREAM_INCOMPLETE_REJECTED", {
-                "provider": (config or {}).get("provider", ""),
-                "model": (config or {}).get("model", ""),
-                "episode_id": getattr(request, "episode_id", None),
-                "error": f"LLM connection dropped prematurely (reason: {finish_reason}).",
-                "response": {
-                    "partial_content_len": len(result_content or ""),
-                    "partial_content": result_content
-                }
-            })
-            
-            raise HTTPException(status_code=502, detail=f"LLM connection dropped prematurely (reason: {finish_reason}). Please retry.")
 
         # Persist raw LLM output as soon as it is available so phase-1/phase-2
         # source text is retained even if later validation or billing fails.
@@ -5490,8 +5462,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         blocking_subject_warnings: List[str] = []
         if not is_entity_design_phase:
             has_subject_index = bool(
-                re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", str(result_content or ""))
-                or re.search(r"(?i)(?:subject_no|subject_type)", str(result_content or ""))
+                re.search(r"(?im)^\s*(?:#{1,6}\s*)?subject\s*index\b", str(result_content or ""))
+                or re.search(r"(?im)\bsubject_no\s*=", str(result_content or ""))
             )
             if not has_subject_index:
                 blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
@@ -12747,9 +12719,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         dedup_keys.add(dedup_key)
 
         try:
-            # Fix trailing commas before loads
-            cleaned_candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
-            parsed = json.loads(cleaned_candidate, strict=False)
+            parsed = json.loads(candidate)
         except Exception:
             continue
 
@@ -21255,7 +21225,6 @@ class VideoGenerationRequest(BaseModel):
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
     seed: Optional[int] = None
-    use_prev_video: Optional[bool] = False
 
 
 class VoiceGenerationRequest(BaseModel):
@@ -26808,12 +26777,7 @@ async def _run_generate_video(
             req.keyframes,
             req.ref_video_urls,
             entity_lookup=entity_lookup if is_reference_image_mode else None,
-            use_prev_video=getattr(req, "use_prev_video", False),
-            provider=resolved_video_provider,
-            model=resolved_video_model,
         )
-        
-        logger.info(f"[GenerateVideo] Final injected prompt_text: {prompt_text}")
 
         try:
             db.rollback()
@@ -27518,9 +27482,6 @@ async def submit_generate_video_endpoint(
                 submit_keyframes,
                 submit_ref_video_urls,
                 entity_lookup=submit_entity_lookup,
-                use_prev_video=req_payload.get("use_prev_video", False),
-                provider=req_payload.get("provider", ""),
-                model=req_payload.get("model", ""),
             )
     except Exception as e:
         logger.warning("[VideoSubmit] prompt mapping pre-process skipped: %s", e)
@@ -29578,15 +29539,7 @@ def _append_video_api_ref_mapping(
     keyframes: Optional[List[str]] = None,
     reference_video_urls: Optional[List[str]] = None,
     entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
-    use_prev_video: bool = False,
-    provider: str = "",
-    model: str = "",
 ) -> str:
-    is_seedance = "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower()
-    original_use_prev_video = use_prev_video
-    if is_seedance:
-        use_prev_video = True
-
     text = str(prompt or "").strip()
     if not text:
         return text
@@ -29656,25 +29609,6 @@ def _append_video_api_ref_mapping(
         flags=re.IGNORECASE | re.MULTILINE,
     )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
-
-    if reference_video_urls and is_seedance:
-        if original_use_prev_video:
-            vid_tag = "@Video1"
-            if not re.search(r'@[Vv]ideo 1|@[Vv]ideo1|@[Vv]edie1|@[Vv]edio1', text):
-                text = f"延长{vid_tag}视频，一镜到底运镜。 {text.strip()}"
-        
-        added_videos = False
-        for idx in range(1, len(reference_video_urls) + 1):
-            vid_tag = f"@Video{idx}"
-            if not re.search(r'@[Vv]ideo ' + str(idx) + r'|@[Vv]ideo' + str(idx) + r'|@[Vv]edie' + str(idx) + r'|@[Vv]edio' + str(idx), text):
-                if not added_videos:
-                    text = f"{text.strip()}，参考视频是 {vid_tag}"
-                    added_videos = True
-                else:
-                    text = f"{text.strip()} {vid_tag}"
-
-    if not use_prev_video:
-        return text
 
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
     if not ordered_refs and not isinstance(reference_video_urls, list):
@@ -29760,6 +29694,7 @@ def _append_video_api_ref_mapping(
             len(start_urls) >= 2
             and not end_url
             and not keyframe_urls
+            and not reference_video_urls
         )
         if not pure_multi_entity_ref_mode:
             return text
@@ -29777,6 +29712,7 @@ def _append_video_api_ref_mapping(
         len(start_urls) >= 2
         and not end_url
         and not keyframe_urls
+        and not reference_video_urls
         and len(pairs) < len(ordered_refs)
     ):
         fallback_mentions = _collect_prompt_entity_mentions(text)
@@ -29793,13 +29729,11 @@ def _append_video_api_ref_mapping(
         return text
 
     pairs.sort(key=lambda x: x[0])
-    
-    logger.info(f"[VideoAPIRefMapping] Mapped entity pairs ready to inject: {pairs}")
 
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:
-        prefix = f"@Image{mapped_idx} "
-        if prefix.lower() in updated_text.lower() and entity_name.lower() in updated_text.lower():
+        prefix = f"参考图{mapped_idx}的"
+        if prefix in updated_text and entity_name in updated_text:
             continue
 
         escaped_entity = re.escape(entity_name)
@@ -29816,8 +29750,7 @@ def _append_video_api_ref_mapping(
                     return token
                 return f"{prefix}{token}"
 
-            # Replace ALL occurrences instead of just 1
-            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
+            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, count=1, flags=re.IGNORECASE)
             if count > 0:
                 updated_text = replaced_text
                 replaced = True
@@ -29826,7 +29759,7 @@ def _append_video_api_ref_mapping(
         if replaced:
             continue
 
-        # Fallback: prepend marker directly before plain entity mentions.
+        # Fallback: prepend marker directly before the first plain entity mention.
         plain_pattern = rf"(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])"
 
         def _prepend_marker(match: re.Match[str]) -> str:
@@ -29835,37 +29768,20 @@ def _append_video_api_ref_mapping(
                 return token
             return f"{prefix}{token}"
 
-        # Replace ALL occurrences instead of just 1
-        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
+        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, count=1, flags=re.IGNORECASE)
         if count > 0:
             updated_text = replaced_text
-            
-    logger.info(f"[VideoAPIRefMapping] Processing completed. Final injected prompt: {updated_text}")
 
     return updated_text
 
 
 def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
-    all_shots = db.query(Shot).filter(Shot.episode_id == episode_id).all()
-    if not all_shots:
-        return None
-
-    def _sort_key(s):
-        scene_code = str(s.scene_code or "")
-        srt_id = str(s.shot_id or "")
-        scene_parts = tuple(int(x) if x.isdigit() else x for x in re.split(r'(\d+)', scene_code))
-        shot_parts = tuple(int(x) if x.isdigit() else x for x in re.split(r'(\d+)', srt_id))
-        return (scene_parts, shot_parts)
-
-    all_shots.sort(key=_sort_key)
-    
-    prev_shot = None
-    for i, s in enumerate(all_shots):
-        if s.id == shot_id:
-            if i > 0:
-                prev_shot = all_shots[i - 1]
-            break
-
+    prev_shot = (
+        db.query(Shot)
+        .filter(Shot.episode_id == episode_id, Shot.id < shot_id)
+        .order_by(Shot.id.desc())
+        .first()
+    )
     if not prev_shot:
         return None
     prev_tech = _parse_shot_tech(prev_shot)
@@ -30033,23 +29949,12 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             ordered_video_refs.append(str(normalized_last_frame_url).strip())
         ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
 
-        system_api_id_val = system_api_id
-        if not system_api_id_val and getattr(episode, "system_api_id", None):
-            system_api_id_val = episode.system_api_id
-            
-        is_seedance_batch = False
-        if system_api_id_val:
-            pre_api_cfg = _fetch_system_api_config(item_db, system_api_id_val, "video")
-            if "seedance" in str(pre_api_cfg.get("provider") or "").lower() or "seedance" in str(pre_api_cfg.get("model") or "").lower():
-                is_seedance_batch = True
-
         video_prompt = _append_video_api_ref_mapping(
             video_prompt,
             ordered_video_refs,
             normalized_refs,
             normalized_last_frame_url,
             None,
-            provider="seedance" if is_seedance_batch else None,
             entity_lookup=entity_lookup,
         )
 
@@ -30064,7 +29969,6 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 normalized_refs,
                 normalized_last_frame_url,
                 None,
-                provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
                 entity_lookup=entity_lookup,
             )
             tech["video_prompt_cn"] = video_prompt_cn
@@ -30767,7 +30671,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             normalized_last_frame_url,
                             None,
                             entity_lookup=entity_lookup,
-                            use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
                         )
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
@@ -30782,7 +30685,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 normalized_last_frame_url,
                                 None,
                                 entity_lookup=entity_lookup,
-                                use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
                             )
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
@@ -32689,23 +32591,3 @@ async def api_generate_entity_from_derive(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM derive generation failed: {e}")
-
-from app.models.all_models import LLMCallLog
-@router.get('/admin/llm_logs')
-def get_llm_logs(
-    limit: int = 100, 
-    offset: int = 0, 
-    provider: str = None, 
-    tag: str = None, 
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Only superusers can view LLM Call Logs")
-    query = db.query(LLMCallLog).order_by(LLMCallLog.timestamp.desc())
-    if provider:
-        query = query.filter(LLMCallLog.provider == provider)
-    if tag:
-        query = query.filter(LLMCallLog.tag == tag)
-    logs = query.offset(offset).limit(limit).all()
-    return logs

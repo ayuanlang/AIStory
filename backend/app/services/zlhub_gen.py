@@ -586,10 +586,11 @@ class ZlhubMixin:
 
         reference_values = ref_image if isinstance(ref_image, list) else [ref_image]
         for ref_item in reference_values:
-            raw_ref = str(ref_item or "").strip()
-            if not raw_ref:
+            if ref_item is None:
                 continue
-            data_uri = await self._get_image_base64_for_api_async(raw_ref, force_data_uri=True)
+            if isinstance(ref_item, str) and not ref_item.strip():
+                continue
+            data_uri = await self._get_image_base64_for_api_async(ref_item, force_data_uri=True)
             if not isinstance(data_uri, str) or not data_uri.startswith("data:image/"):
                 return {"error": f"{provider_name} Gemini image editing requires resolvable image inputs", "submit_failed": True}
             marker = ";base64,"

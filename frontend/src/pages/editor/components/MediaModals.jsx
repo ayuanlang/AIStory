@@ -314,10 +314,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
-    const [showHistoricalProjectAssets, setShowHistoricalProjectAssets] = useState(false);
+    const [showHistoricalProjectAssets, setShowHistoricalProjectAssets] = useState(true);
 
     const [episodeFilter, setEpisodeFilter] = useState(episodeId ? 'current' : 'all');
-    const [assetTypeFilter, setAssetTypeFilter] = useState('image');
+    const [assetTypeFilter, setAssetTypeFilter] = useState('all');
     const [secondaryFilterKind, setSecondaryFilterKind] = useState('all'); // all | entity | shot
     const [secondaryFilterValue, setSecondaryFilterValue] = useState('');
     const [subCategoryFilter, setSubCategoryFilter] = useState('all'); // all | character | prop | environment | shot_start | shot_video
@@ -326,6 +326,80 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [selectedAssetId, setSelectedAssetId] = useState('');
     const [selectedMulti, setSelectedMulti] = useState(new Set());
     const [availableShots, setAvailableShots] = useState([]);
+    const loadAssetsRequestSeqRef = useRef(0);
+
+    const assetPickerDebugEnabled = useMemo(() => {
+        if (!isOpen || typeof window === 'undefined') return false;
+        const ctxFlag = context?.debugAssetPicker;
+        if (typeof ctxFlag === 'boolean') return ctxFlag;
+        if (typeof ctxFlag === 'string') {
+            const normalized = ctxFlag.trim().toLowerCase();
+            if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') return true;
+            if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') return false;
+        }
+        try {
+            const persisted = String(window.localStorage.getItem('AISTORY_ASSET_PICKER_DEBUG') || '').trim().toLowerCase();
+            return persisted === '1' || persisted === 'true' || persisted === 'yes' || persisted === 'on';
+        } catch (error) {
+            return false;
+        }
+    }, [context?.debugAssetPicker, isOpen]);
+
+    const isAssetVideoLike = useCallback((asset) => {
+        const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+        const stableType = String(asset?.type || meta?.type || '').trim().toLowerCase();
+        const frameType = String(meta?.frame_type || meta?.asset_type || '').trim().toLowerCase();
+        const mimeType = String(meta?.mime_type || meta?.content_type || '').trim().toLowerCase();
+        const url = String(asset?.url || '').trim().toLowerCase();
+        if (stableType === 'video') return true;
+        if (frameType.includes('video')) return true;
+        if (mimeType.startsWith('video/')) return true;
+        return /\.(mp4|mov|mkv|webm|avi|m4v)(\?.*)?$/i.test(url);
+    }, []);
+
+    const summarizeAssetsForDebug = useCallback((rows) => {
+        const items = Array.isArray(rows) ? rows : [];
+        const summary = {
+            total: items.length,
+            videoLike: 0,
+            typeVideo: 0,
+            frameVideo: 0,
+            shotBound: 0,
+            missingType: 0,
+            sampleVideo: [],
+        };
+        items.forEach((asset) => {
+            const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+            const stableType = String(asset?.type || '').trim().toLowerCase();
+            const frameType = String(meta?.frame_type || meta?.asset_type || '').trim().toLowerCase();
+            const shotId = String(meta?.shot_id ?? asset?.shot_id ?? '').trim();
+            if (!stableType) summary.missingType += 1;
+            if (stableType === 'video') summary.typeVideo += 1;
+            if (frameType.includes('video')) summary.frameVideo += 1;
+            if (shotId || frameType.includes('start') || frameType.includes('end') || frameType.includes('keyframe') || frameType.includes('video') || frameType.includes('shot')) {
+                summary.shotBound += 1;
+            }
+            if (isAssetVideoLike(asset)) {
+                summary.videoLike += 1;
+                if (summary.sampleVideo.length < 6) {
+                    summary.sampleVideo.push({
+                        id: asset?.id,
+                        type: stableType || '(empty)',
+                        frameType: frameType || '(empty)',
+                        shotId: shotId || '(empty)',
+                        name: String(asset?.name || meta?.asset_name || meta?.filename || '').trim(),
+                    });
+                }
+            }
+        });
+        return summary;
+    }, [isAssetVideoLike]);
+
+    const logAssetPickerDebug = useCallback((stage, payload) => {
+        if (!assetPickerDebugEnabled || typeof window === 'undefined') return;
+        const safeStage = String(stage || '').trim() || 'unknown';
+        console.log(`[素材选择][debug][${safeStage}]`, payload || {});
+    }, [assetPickerDebugEnabled]);
 
     const contextAllowMultiSelect = useMemo(() => {
         const raw = context?.allowMultiSelect;
@@ -370,7 +444,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (stableType.includes('video')) return 'video';
         if (stableType.includes('image')) return 'image';
         if (stableFrameType) return 'image';
-        return 'image';
+        return 'all';
     }, [context?.type, contextDesiredAssetType, contextFrameType]);
 
     const resolveAssetEpisodeId = useCallback((asset) => {
@@ -509,7 +583,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     useEffect(() => {
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
-             setShowHistoricalProjectAssets(false);
+             setShowHistoricalProjectAssets(true);
              setEpisodeFilter(episodeId ? 'current' : 'all');
              setAssetTypeFilter(inferPreferredAssetType());
              if (contextualSecondary) {
@@ -546,13 +620,15 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (isOpen && tab === 'assets') {
             loadAssets();
         } else if (!isOpen) {
+            loadAssetsRequestSeqRef.current += 1;
             setAllCleanData(null);
+            setLoading(false);
             setSelectedAsset(null);
             setNameFilter('');
             setSelectedAssetId('');
             setSelectedMulti(new Set());
         }
-    }, [contextEntityId, contextShotId, episodeId, isOpen, projectId, showHistoricalProjectAssets, tab]);
+    }, [contextEntityId, contextShotId, episodeFilter, episodeId, isOpen, projectId, showHistoricalProjectAssets, tab]);
 
     const episodeOptions = useMemo(() => {
         const grouped = new Map();
@@ -572,6 +648,15 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         const rows = Array.isArray(allCleanData) ? [...allCleanData] : [];
         let filtered = rows;
 
+        logAssetPickerDebug('level1:before', {
+            filters: {
+                episodeFilter,
+                assetTypeFilter,
+                episodeId: String(episodeId || '').trim(),
+            },
+            summary: summarizeAssetsForDebug(rows),
+        });
+
         const currentEpisodeStable = String(episodeId || '').trim();
         if (episodeFilter === 'current' && currentEpisodeStable) {
             filtered = filtered.filter((asset) => resolveAssetEpisodeId(asset) === currentEpisodeStable);
@@ -579,15 +664,27 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             filtered = filtered.filter((asset) => resolveAssetEpisodeId(asset) === episodeFilter);
         }
 
+        logAssetPickerDebug('level1:after-episode', {
+            summary: summarizeAssetsForDebug(filtered),
+        });
+
         if (assetTypeFilter !== 'all') {
-            filtered = filtered.filter((asset) => String(asset?.type || '').trim().toLowerCase() === assetTypeFilter);
+            filtered = filtered.filter((asset) => {
+                const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+                const stableType = String(asset?.type || meta?.type || '').trim().toLowerCase();
+                return stableType === assetTypeFilter;
+            });
         }
+
+        logAssetPickerDebug('level1:after-type', {
+            summary: summarizeAssetsForDebug(filtered),
+        });
 
         if (typeof window !== 'undefined') {
             console.log('[素材选择][levelOneAssets]', filtered);
         }
         return filtered;
-    }, [allCleanData, assetTypeFilter, episodeFilter, episodeId, resolveAssetEpisodeId]);
+    }, [allCleanData, assetTypeFilter, episodeFilter, episodeId, logAssetPickerDebug, resolveAssetEpisodeId, summarizeAssetsForDebug]);
 
     const secondaryEntityOptions = useMemo(() => {
         const grouped = new Map();
@@ -671,12 +768,56 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 || frameType.includes('shot');
         };
 
-        if (secondaryFilterKind === 'entity' && secondaryFilterValue) {
-            filtered = filtered.filter((asset) => String(resolveAssetEntityId(asset)) === String(secondaryFilterValue));
-        } else if (secondaryFilterKind === 'shot') {
-            filtered = filtered.filter(isShotBoundAsset);
+        logAssetPickerDebug('level2:before-secondary', {
+            filters: {
+                secondaryFilterKind,
+                secondaryFilterValue,
+                subCategoryFilter,
+                contextShotId,
+                contextEntityId,
+                contextFrameType,
+                nameFilter,
+            },
+            summary: summarizeAssetsForDebug(filtered),
+        });
+
+        if (secondaryFilterKind === 'entity') {
+            // Entity scope should not mix in shot assets (start/end/keyframe/video).
+            filtered = filtered.filter((asset) => !isShotBoundAsset(asset));
+            logAssetPickerDebug('level2:entity-scope', {
+                summary: summarizeAssetsForDebug(filtered),
+            });
             if (secondaryFilterValue) {
-                filtered = filtered.filter((asset) => String(resolveAssetShotId(asset)) === String(secondaryFilterValue));
+                filtered = filtered.filter((asset) => String(resolveAssetEntityId(asset)) === String(secondaryFilterValue));
+                logAssetPickerDebug('level2:entity-value', {
+                    summary: summarizeAssetsForDebug(filtered),
+                });
+            }
+        } else if (secondaryFilterKind === 'shot') {
+            // Progressive narrowing: if older assets miss shot/frame tags, do not collapse to an empty list.
+            const shotBoundOnly = filtered.filter(isShotBoundAsset);
+            logAssetPickerDebug('level2:shot-bound-candidates', {
+                all: summarizeAssetsForDebug(filtered),
+                shotBoundOnly: summarizeAssetsForDebug(shotBoundOnly),
+            });
+            if (shotBoundOnly.length > 0) {
+                filtered = shotBoundOnly;
+                logAssetPickerDebug('level2:shot-bound-applied', {
+                    summary: summarizeAssetsForDebug(filtered),
+                });
+            }
+            if (secondaryFilterValue) {
+                const exactShotOnly = filtered.filter((asset) => String(resolveAssetShotId(asset)) === String(secondaryFilterValue));
+                logAssetPickerDebug('level2:shot-exact-candidates', {
+                    value: secondaryFilterValue,
+                    exactShotOnly: summarizeAssetsForDebug(exactShotOnly),
+                });
+                if (exactShotOnly.length > 0) {
+                    filtered = exactShotOnly;
+                    logAssetPickerDebug('level2:shot-exact-applied', {
+                        summary: summarizeAssetsForDebug(filtered),
+                    });
+                }
             }
         }
 
@@ -688,11 +829,18 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                     const frameType = resolveAssetFrameType(asset);
                     return frameType.includes('start') || frameType.includes('keyframe');
                 });
+                logAssetPickerDebug('level2:subcategory-shot_start', {
+                    summary: summarizeAssetsForDebug(filtered),
+                });
             } else if (subCategoryFilter === 'shot_video') {
                 filtered = filtered.filter((asset) => {
                     const frameType = resolveAssetFrameType(asset);
-                    const stableType = String(asset?.type || '').trim().toLowerCase();
+                    const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+                    const stableType = String(asset?.type || meta?.type || '').trim().toLowerCase();
                     return stableType === 'video' || frameType.includes('video');
+                });
+                logAssetPickerDebug('level2:subcategory-shot_video', {
+                    summary: summarizeAssetsForDebug(filtered),
                 });
             }
         }
@@ -708,10 +856,18 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
         if (stableContextEntityId) {
             filtered = applyPreferScopedFilter(filtered, (asset) => resolveAssetEntityId(asset) === stableContextEntityId);
+            logAssetPickerDebug('level2:context-entity', {
+                value: stableContextEntityId,
+                summary: summarizeAssetsForDebug(filtered),
+            });
         }
 
         if (stableContextShotId) {
             filtered = applyPreferScopedFilter(filtered, (asset) => resolveAssetShotId(asset) === stableContextShotId);
+            logAssetPickerDebug('level2:context-shot', {
+                value: stableContextShotId,
+                summary: summarizeAssetsForDebug(filtered),
+            });
         }
 
         if (stableContextFrameType.includes('start')) {
@@ -720,23 +876,37 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 const stableType = String(asset?.type || '').trim().toLowerCase();
                 return stableType === 'image' && (frameType.includes('start') || frameType === '' || frameType.includes('keyframe'));
             });
+            logAssetPickerDebug('level2:context-frame-start', {
+                summary: summarizeAssetsForDebug(filtered),
+            });
         } else if (stableContextFrameType.includes('end')) {
             filtered = applyPreferScopedFilter(filtered, (asset) => {
                 const frameType = resolveAssetFrameType(asset);
                 const stableType = String(asset?.type || '').trim().toLowerCase();
                 return stableType === 'image' && frameType.includes('end');
             });
+            logAssetPickerDebug('level2:context-frame-end', {
+                summary: summarizeAssetsForDebug(filtered),
+            });
         } else if (stableContextFrameType.includes('video')) {
             filtered = applyPreferScopedFilter(filtered, (asset) => {
                 const frameType = resolveAssetFrameType(asset);
-                const stableType = String(asset?.type || '').trim().toLowerCase();
+                const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+                const stableType = String(asset?.type || meta?.type || '').trim().toLowerCase();
                 return stableType === 'video' || frameType.includes('video');
+            });
+            logAssetPickerDebug('level2:context-frame-video', {
+                summary: summarizeAssetsForDebug(filtered),
             });
         }
 
         const stableNameFilter = String(nameFilter || '').trim().toLowerCase();
         if (stableNameFilter) {
             filtered = filtered.filter((asset) => String(resolveContextualAssetDisplayName(asset) || '').toLowerCase().includes(stableNameFilter));
+            logAssetPickerDebug('level2:name-filter', {
+                value: stableNameFilter,
+                summary: summarizeAssetsForDebug(filtered),
+            });
         }
 
         filtered.sort((left, right) => {
@@ -744,8 +914,11 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             const r = new Date(right?.created_at || 0).getTime();
             return r - l;
         });
+        logAssetPickerDebug('level2:final', {
+            summary: summarizeAssetsForDebug(filtered),
+        });
         return filtered;
-    }, [assetTypeFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, nameFilter, resolveAssetEntityId, resolveAssetEntityType, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryFilterKind, secondaryFilterValue, subCategoryFilter]);
+    }, [assetTypeFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, logAssetPickerDebug, nameFilter, resolveAssetEntityId, resolveAssetEntityType, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryFilterKind, secondaryFilterValue, subCategoryFilter, summarizeAssetsForDebug]);
 
     useEffect(() => {
         if (secondaryFilterKind !== 'entity' && secondaryFilterKind !== 'shot') {
@@ -822,8 +995,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     }, [contextAllowMultiSelect, filteredAssets, isOpen, tab]);
 
     const loadAssets = useCallback(async () => {
+        const requestSeq = ++loadAssetsRequestSeqRef.current;
                 if (typeof window !== 'undefined') {
                     console.log('[素材选择][loadAssets] params', {
+                        requestSeq,
                         projectId,
                         episodeId,
                         entityId: contextEntityId,
@@ -837,9 +1012,14 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 baseParams.project_id = projectId;
                 baseParams.current_project_asset = showHistoricalProjectAssets ? 'all' : '1';
             }
-            if (episodeId) {
-                baseParams.episode_id = episodeId;
+
+            const currentEpisodeStable = String(episodeId || '').trim();
+            const selectedEpisodeStable = String(episodeFilter || '').trim();
+            if (selectedEpisodeStable === 'current' && currentEpisodeStable) {
+                baseParams.episode_id = currentEpisodeStable;
                 baseParams.include_project_null_episode = 'true';
+            } else if (selectedEpisodeStable && selectedEpisodeStable !== 'all') {
+                baseParams.episode_id = selectedEpisodeStable;
             }
             const scopedParams = { ...baseParams };
             if (contextEntityId) {
@@ -854,6 +1034,12 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 fetchAssets(scopedParams),
                 shouldFilterReferencedOnly ? fetchUnreferencedAssetIds({ project_id: projectId, episode_id: episodeId || undefined }) : Promise.resolve(null)
             ]);
+
+            logAssetPickerDebug('load:scoped-response', {
+                scopedParams,
+                shouldFilterReferencedOnly,
+                summary: summarizeAssetsForDebug(scopedData),
+            });
 
             let data = scopedData;
             const usedScopedQuery = Boolean(contextEntityId || contextShotId);
@@ -881,6 +1067,12 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         finalCount: Array.isArray(data) ? data.length : 0,
                     });
                 }
+
+                logAssetPickerDebug('load:progressive-fallback-final', {
+                    scopedParams,
+                    fallbackCount: fallbackSteps.length,
+                    summary: summarizeAssetsForDebug(data),
+                });
             }
 
             const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
@@ -898,16 +1090,35 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 return true;
             });
 
+            logAssetPickerDebug('load:clean-data', {
+                requestSeq,
+                shouldFilterReferencedOnly,
+                hasReferencedHints,
+                referencedCount: referencedSet.size,
+                before: summarizeAssetsForDebug(data),
+                after: summarizeAssetsForDebug(cleanData),
+            });
+
             if (typeof window !== 'undefined') {
                 console.log('[素材选择][cleanData]', cleanData);
+            }
+            if (requestSeq !== loadAssetsRequestSeqRef.current) {
+                logAssetPickerDebug('load:stale-response-ignored', {
+                    requestSeq,
+                    latestRequestSeq: loadAssetsRequestSeqRef.current,
+                    summary: summarizeAssetsForDebug(cleanData),
+                });
+                return;
             }
             setAllCleanData(cleanData); // Save clean version to memory
         } catch (error) {
             console.error(error);
         } finally {
-            setLoading(false);
+            if (requestSeq === loadAssetsRequestSeqRef.current) {
+                setLoading(false);
+            }
         }
-    }, [contextEntityId, contextShotId, episodeId, projectId, showHistoricalProjectAssets]);
+    }, [contextEntityId, contextShotId, episodeFilter, episodeId, logAssetPickerDebug, projectId, showHistoricalProjectAssets, summarizeAssetsForDebug]);
 
     const handleMarkAssetCurrent = useCallback(async (asset) => {
         const assetId = Number(asset?.id || 0);
@@ -993,6 +1204,19 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             {episodeOptions.map((option) => (
                                 <option key={option.id} value={option.id}>{option.label}</option>
                             ))}
+                        </select>
+
+                        <select
+                            value={assetTypeFilter}
+                            onChange={(e) => {
+                                setAssetTypeFilter(e.target.value);
+                                setSelectedAssetId('');
+                            }}
+                            className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
+                        >
+                            <option value="all">{t('全部类型', 'All Types')}</option>
+                            <option value="image">{t('图片', 'Image')}</option>
+                            <option value="video">{t('视频', 'Video')}</option>
                         </select>
 
                         <select

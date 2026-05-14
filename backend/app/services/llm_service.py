@@ -339,11 +339,23 @@ class LLMService:
             # Request vs Response mapping
             payload_json = json.dumps(_strip_base64_from_log(payload.get("request", {})), ensure_ascii=False) if "request" in payload else None
             response_json = json.dumps(_strip_base64_from_log(payload.get("response", {})), ensure_ascii=False) if "response" in payload else None
+            
             error_msg = payload.get("error") if "error" in payload else None
             if not error_msg and "str_error" in payload:
                 error_msg = payload.get("str_error")
+            if not error_msg and payload.get("human_summary"):
+                error_msg = payload.get("human_summary")
                 
             latency_ms = payload.get("latency_ms")
+            
+            # If response is empty but there's a response_text or status_code, build a pseudo-response object
+            if not response_json and ("response_text" in payload or "status_code" in payload):
+                pseudo_resp = {}
+                if "status_code" in payload:
+                    pseudo_resp["status_code"] = payload["status_code"]
+                if "response_text" in payload:
+                    pseudo_resp["response_text"] = payload["response_text"]
+                response_json = json.dumps(_strip_base64_from_log(pseudo_resp), ensure_ascii=False)
             
             if not payload_json and not response_json and not error_msg:
                 # If everything is empty, dump the whole payload
@@ -2065,6 +2077,13 @@ class LLMService:
             if str(provider or "").strip().lower() in {"kie", "n1n"} and self._is_ambiguous_submit_transport_error(e):
                 self._raise_ambiguous_submit_error(provider, model, e, base_url)
             logger.error(f"LLM Raw Completion failed: {e}")
+            self._safe_log_json("LLM_RESPONSE_ERROR", {
+                "provider": provider,
+                "model": model,
+                "request": {"url": base_url, "messages": messages, "config": extra_config},
+                "error": str(e),
+                "human_summary": self._vendor_failed_message(provider, e)
+            })
             raise Exception(self._vendor_failed_message(provider, e))
 
     def _to_positive_int(self, value: Any, default: int = 0) -> int:
