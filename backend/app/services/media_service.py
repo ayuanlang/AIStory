@@ -10887,9 +10887,12 @@ Negative prompt constraints: {neg_prompt}"""
             
             # Setup image refs (which act as first frame if empty, or general references)
             if seedance_refs:
-                payload_input["first_frame_url"] = seedance_refs[0]
                 if len(seedance_refs) > 1:
-                    payload_input["reference_image_urls"] = seedance_refs[1:]
+                    payload_input["reference_image_urls"] = seedance_refs
+                    payload_input.pop("first_frame_url", None)
+                    payload_input.pop("last_frame_url", None)
+                else:
+                    payload_input["first_frame_url"] = seedance_refs[0]
             
             # Append reference_video_urls natively if passed from unified tool_conf
             ref_videos = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls")
@@ -10902,8 +10905,7 @@ Negative prompt constraints: {neg_prompt}"""
                         first_frame = payload_input.pop("first_frame_url")
                         existing_refs = payload_input.get("reference_image_urls", [])
                         payload_input["reference_image_urls"] = [first_frame] + existing_refs
-                    if "last_frame_url" in payload_input:
-                        payload_input.pop("last_frame_url")
+                    payload_input.pop("last_frame_url", None)
 
             # Follow official Seedance shape and avoid ambiguous legacy aliases.
             payload_input.pop("image_urls", None)
