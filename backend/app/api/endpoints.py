@@ -26324,7 +26324,7 @@ async def _run_generate_video(
             "supports_audio",
         )
         if sound_capability is False:
-            resolved_sound = False
+            resolved_sound = True
             sound_source = "system_api_capability"
 
         normalized_mode = str(req.mode or "").strip().lower() or None
@@ -26907,9 +26907,9 @@ async def _run_generate_video(
         if resolved_video_image_size:
             video_provider_options["image_size"] = resolved_video_image_size
         if "sound" not in video_provider_options and resolved_sound is not None:
-            video_provider_options["sound"] = bool(resolved_sound)
+            video_provider_options["sound"] = True
         if sound_capability is False:
-            video_provider_options["sound"] = False
+            video_provider_options["sound"] = True
         multi_shots_capability = _read_api_capability_bool(
             pre_api_cfg,
             "multi_shots_supported",
@@ -29765,7 +29765,7 @@ def _append_video_api_ref_mapping(
     video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
     media_slots = image_slots + video_slots
 
-    pairs: List[Tuple[int, str, str]] = []
+    pairs: List[Tuple[str, str, str]] = []
 
     # First, always show explicit start/end images if they are mapped and if desired?
     # Usually this is primarily for mapping entities to reference images for API consumption.
@@ -29800,15 +29800,41 @@ def _append_video_api_ref_mapping(
                 # Use the exact string that appeared in the prompt for accurate replacing
                 char_name = mentioned_entity_map[norm_key]
                 anchor_text = str(row.get("anchor_description") or "").strip()
-                pairs.append((mapped_idx, char_name, anchor_text))
-    pairs.sort(key=lambda x: x[0])
+                pairs.append((f"@Image{mapped_idx}", char_name, anchor_text))
+
+    # Sequential fallback for unmatched images to unmatched entities (e.g. ENV/PROP with multiple images)
+    # This guarantees that Image2, Image3, etc. are injected at the actual positions in the prompt.
+    used_indexes = set()
+    for prefix_str, _, _ in pairs:
+        for m in re.finditer(r'@Image(\d+)', prefix_str):
+            used_indexes.add(int(m.group(1)))
+
+    paired_names = {name for _, name, _ in pairs}
+    next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
+
+    if next_ref_indexes:
+        fallback_mentions = _collect_prompt_entity_mentions(text)
+        unmapped_mentions = [item for item in fallback_mentions if item[1] not in paired_names]
+        
+        if unmapped_mentions:
+            images_per_mention = max(1, len(next_ref_indexes) // len(unmapped_mentions))
+            for i, (_, entity_name) in enumerate(unmapped_mentions):
+                if i == len(unmapped_mentions) - 1:
+                    assigned_indexes = next_ref_indexes
+                else:
+                    assigned_indexes = next_ref_indexes[:images_per_mention]
+                    next_ref_indexes = next_ref_indexes[images_per_mention:]
+                
+                if assigned_indexes:
+                    tag_str = " ".join([f"@Image{idx}" for idx in assigned_indexes])
+                    pairs.append((tag_str, entity_name, ""))
 
     if not pairs and not reference_video_urls:
         return text
 
     updated_text = text
-    for mapped_idx, entity_name, anchor_text in pairs:
-        prefix = f"@Image{mapped_idx} "
+    for prefix_str, entity_name, anchor_text in pairs:
+        prefix = f"{prefix_str} "
         if prefix.lower() in updated_text.lower() and entity_name.lower() in updated_text.lower():
             continue
 
