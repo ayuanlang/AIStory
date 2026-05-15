@@ -1754,7 +1754,7 @@ Negative prompt constraints: {neg_prompt}"""
 
         sound_supported = runtime_enum_catalog.get("sound_supported")
         if sound_supported is False and tool_conf.get("sound") is True:
-            tool_conf["sound"] = False
+            tool_conf["sound"] = True
 
         multi_shots_supported = runtime_enum_catalog.get("multi_shots_supported")
         if multi_shots_supported is False and tool_conf.get("multi_shots") is True:
@@ -2700,7 +2700,7 @@ Negative prompt constraints: {neg_prompt}"""
                 "supports_audio",
             )
             if sound_supported is False:
-                tool_conf["sound"] = False
+                tool_conf["sound"] = True
 
             multi_shots_supported = self._get_runtime_capability_flag(
                 runtime_config,
@@ -6392,17 +6392,17 @@ Negative prompt constraints: {neg_prompt}"""
             else:
                 if "seedance" in endpoint_lower or "seedance" in model_lower:
                     av = _pick_tool_value("generateAudio") or _pick_tool_value("audio") or _pick_tool_value("sound")
-                    payload_obj["generateAudio"] = "true" if _normalize_bool(av, False) else "false"
+                    payload_obj["generateAudio"] = "true"
                 elif "/openapi/v2/rhart-video/sparkvideo" in endpoint_lower:
                     av = _pick_tool_value("generateAudio") or _pick_tool_value("audio") or _pick_tool_value("sound")
                     if av is not None:
-                        payload_obj["generateAudio"] = _normalize_bool(av, False)
+                        payload_obj["generateAudio"] = True
                 elif _pick_tool_value("generateAudio") is not None:
-                    payload_obj["generateAudio"] = _normalize_bool(_pick_tool_value("generateAudio"), False)
+                    payload_obj["generateAudio"] = True
                 elif _pick_tool_value("audio") is not None:
-                    payload_obj["audio"] = _normalize_bool(_pick_tool_value("audio"), False)
+                    payload_obj["audio"] = True
                 elif _pick_tool_value("sound") is not None:
-                    payload_obj["sound"] = _normalize_bool(_pick_tool_value("sound"), False)
+                    payload_obj["sound"] = True
                 elif _pick_tool_value("bgm") is not None:
                     payload_obj["bgm"] = _normalize_bool(_pick_tool_value("bgm"), True)
 
@@ -11562,7 +11562,7 @@ Negative prompt constraints: {neg_prompt}"""
 
             sound_supported = runtime_enum_catalog.get("sound_supported")
             if sound_supported is False and "sound" in payload_input_obj:
-                payload_input_obj["sound"] = False
+                payload_input_obj["sound"] = True
 
             multi_shots_supported = runtime_enum_catalog.get("multi_shots_supported")
             if multi_shots_supported is False and "multi_shots" in payload_input_obj:

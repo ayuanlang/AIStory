@@ -1,0 +1,93 @@
+def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], user_id: int) -> None:
+    db = SessionLocal()
+    cancel_event = _get_shot_media_batch_cancel_event(int(episode_id), create=True)
+    min_prompt_chars = 5
+
+    class _BatchStopRequested(Exception):
+        pass
+
+    async def _run_cancellable(coro: Any) -> Any:
+        task = asyncio.create_task(coro)
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=0.5)
+                if task in done:
+                    return await task
+                if cancel_event and cancel_event.is_set():
+                    task.cancel()
+                    try:
+                        await task
+                    except BaseException:
+                        pass
+                    raise _BatchStopRequested("Stop requested")
+        finally:
+            if not task.done():
+                task.cancel()
+    try:
+        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        user = db.query(User).filter(User.id == user_id).first()
+        if not episode or not user:
+            return
+        user_principal = _snapshot_user_principal(user)
+
+        user_name = str(user_principal.username or f"user_{user_id}")
+        project_id = int(episode.project_id)
+        job_id = f"shot-media-batch:{int(episode_id)}"
+
+        episode_info = _episode_info_from_episode(episode)
+        e_global_info = episode_info.get("e_global_info", {}) if isinstance(episode_info, dict) else {}
+        global_style = str((e_global_info or {}).get("Global_Style") or "").strip()
+        entity_lookup = _build_project_entity_lookup(db, int(episode.project_id))
+
+        mode = str((request_payload or {}).get("mode") or "keyframes").strip().lower()
+        overwrite_existing = bool((request_payload or {}).get("overwrite_existing"))
+        system_api_id = request_payload.get("system_api_id")
+        if system_api_id is not None:
+            try:
+                system_api_id = int(system_api_id)
+            except ValueError:
+                system_api_id = None
+        requested_shot_ids = [int(x) for x in ((request_payload or {}).get("shot_ids") or []) if x]
+        batch_max_concurrency = _resolve_user_batch_parallel_limit(
+            getattr(user_principal, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
+            default=SHOT_MEDIA_BATCH_DEFAULT_CONCURRENCY,
+        )
+
+        shots_query = db.query(Shot).filter(Shot.episode_id == episode_id).order_by(Shot.id.asc())
+        if requested_shot_ids:
+            shots_query = shots_query.filter(Shot.id.in_(requested_shot_ids))
+        target_shots = shots_query.all()
+
+        total = len(target_shots)
+        completed = 0
+        success = 0
+        failed = 0
+        errors: List[str] = []
+        _release_db_connection(db, "shot_media_batch_bootstrap")
+
+        def _read_latest_episode() -> Optional[Episode]:
+            db.expire_all()
+            return (
+                db.query(Episode)
+                .execution_options(populate_existing=True)
+                .filter(Episode.id == episode_id)
+                .first()
+            )
+
+        def _persist_stopped_status() -> None:
+            latest_episode = _read_latest_episode()
+            if not latest_episode:
+                return
+            latest_status = _read_shot_media_batch_status(latest_episode)
+            latest_status["running"] = False
+            latest_status["completed"] = completed
+            latest_status["success"] = success
+            latest_status["failed"] = failed
+            latest_status["errors"] = errors
+            latest_status["stopped_by_user"] = True
+            latest_status["current_asset_type"] = None
+            latest_status["current_asset_label"] = ""
+            latest_status["message"] = "Stopped by user request"
+            latest_status["finished_at"] = now_bj_iso()
+            latest_status["updated_at"] = latest_status["finished_at"]
+            _persist_shot_media_batch_status(db, latest_episode, latest

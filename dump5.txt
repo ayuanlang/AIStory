@@ -1,0 +1,223 @@
+def _append_video_api_ref_mapping(
+    prompt: str,
+    refs: List[str],
+    ref_image_url: Optional[Union[str, List[str]]],
+    last_frame_url: Optional[str],
+    keyframes: Optional[List[str]] = None,
+    reference_video_urls: Optional[List[str]] = None,
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    text = str(prompt or "").strip()
+    if not text:
+        return text
+
+    def _collect_prompt_entity_mentions(source_text: str) -> List[Tuple[str, str]]:
+        mentions: List[Tuple[str, str]] = []
+        seen_entities: set[str] = set()
+        mention_regex = re.compile(
+            r"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?([^\]】]+?)\s*[\]】]|[\[【]\s*@?([^\]】]+?)\s*[\]】]",
+            re.IGNORECASE,
+        )
+
+        for match in mention_regex.finditer(source_text):
+            raw_name = str(match.group(1) or match.group(2) or "").strip()
+            normalized = _normalize_entity_anchor_token(raw_name)
+            if not normalized or normalized in seen_entities:
+                continue
+            row = entity_lookup.get(normalized) if entity_lookup else None
+            if not row:
+                continue
+
+            entity_type = str(row.get("entity_type") or "").strip().lower()
+            if entity_type and entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
+                continue
+
+            raw_entity_name = str(row.get("name") or "").strip()
+            entity_name = raw_entity_name[1:] if raw_entity_name.startswith("@") else raw_entity_name
+            if not entity_name:
+                entity_name = raw_name.lstrip("@").strip()
+            if not entity_name:
+                continue
+
+            seen_entities.add(normalized)
+            mentions.append((normalized, entity_name))
+
+        return mentions
+
+    # Remove legacy inline URL-index tags injected into prompt anchors.
+    text = re.sub(
+        r"\(\s*ref_image_url\s*:\s*#\d+\s*\)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\|\s*ref_image_url\s*:\s*#\d+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"^\s*API\s+ref\s+mapping\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(
+        r"^\s*实体参考映射\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(
+        r"^\s*实体参考图映射\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
+    if not ordered_refs and not isinstance(reference_video_urls, list):
+        return text
+
+    index_map: Dict[str, int] = {}
+    for idx, url in enumerate(ordered_refs, start=1):
+        if url not in index_map:
+            index_map[url] = idx
+        base_url = url.split("?")[0]
+        if base_url not in index_map:
+            index_map[base_url] = idx
+
+    image_slots: List[str] = []
+    if isinstance(ref_image_url, list):
+        start_urls = [str(x).strip() for x in ref_image_url if str(x).strip()]
+    else:
+        single_start = str(ref_image_url or "").strip()
+        start_urls = [single_start] if single_start else []
+    end_url = str(last_frame_url or "").strip()
+    keyframe_urls = [str(x).strip() for x in (keyframes or []) if str(x).strip()]
+
+    for u in start_urls:
+        idx = index_map.get(u)
+        if idx is not None:
+            image_slots.append(f"图{idx}")
+    if end_url:
+        idx = index_map.get(end_url)
+        if idx is not None:
+            image_slots.append(f"图{idx}")
+    for u in keyframe_urls:
+        idx = index_map.get(u)
+        if idx is not None:
+            image_slots.append(f"图{idx}")
+
+    image_slots = [x for x in dict.fromkeys(image_slots) if x]
+    video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
+    media_slots = image_slots + video_slots
+
+    pairs: List[Tuple[str, str, str]] = []
+
+    # First, always show explicit start/end images if they are mapped and if desired?
+    # Usually this is primarily for mapping entities to reference images for API consumption.
+
+    seen_urls: set[str] = set()
+
+    mentioned_entity_map = {normalized: raw_name for normalized, raw_name in _collect_prompt_entity_mentions(text)}
+    if entity_lookup:
+        # Relaxed matching to map any entity in ordered_refs
+        for key, row in entity_lookup.items():
+            norm_key = str(key or "").strip()
+            if not norm_key: continue
+            
+            if norm_key.lower() in {"global style", "camera movement", "action beat chain", "dynamic atmosphere", "lighting style"}:
+                continue
+
+            allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
+            entity_type = str(row.get("entity_type") or "").strip().lower()
+            if entity_type and entity_type not in allowed_types:
+                continue
+
+            image_url = str(row.get("image_url") or "").strip()
+            image_base = image_url.split("?")[0]
+            mapped_idx = index_map.get(image_url) or index_map.get(image_base)
+            if not image_url or mapped_idx is None:
+                continue
+
+            matched = norm_key in mentioned_entity_map
+
+            if matched and image_url not in seen_urls:
+                seen_urls.add(image_url)
+                # Use the exact string that appeared in the prompt for accurate replacing
+                char_name = mentioned_entity_map[norm_key]
+                anchor_text = str(row.get("anchor_description") or "").strip()
+                pairs.append((f"@Image{mapped_idx}", char_name, anchor_text))
+
+    # Sequential fallback for unmatched images to unmatched entities (e.g. ENV/PROP with multiple images)
+    # This guarantees that Image2, Image3, etc. are injected at the actual positions in the prompt.
+    used_indexes = set()
+    for prefix_str, _, _ in pairs:
+        for m in re.finditer(r'@Image(\d+)', prefix_str):
+            used_indexes.add(int(m.group(1)))
+
+    if not pairs and not reference_video_urls:
+        return text
+
+    updated_text = text
+    for prefix_str, entity_name, anchor_text in pairs:
+        prefix = f"{prefix_str} "
+        if prefix.lower() in updated_text.lower() and entity_name.lower() in updated_text.lower():
+            continue
+
+        escaped_entity = re.escape(entity_name)
+        anchor_patterns = [
+            rf"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+            rf"[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+        ]
+
+        replaced = False
+        for pattern in anchor_patterns:
+            def _prepend_prefix(match: re.Match[str]) -> str:
+                token = str(match.group(0) or "")
+                if token.startswith(prefix):
+                    return token
+                return f"{prefix}{token}"
+
+            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
+            if count > 0:
+                updated_text = replaced_text
+                replaced = True
+                break
+
+        if replaced:
+            continue
+
+        # Fallback: prepend marker directly before the first plain entity mention.
+        plain_pattern = rf"(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])"
+
+        def _prepend_marker(match: re.Match[str]) -> str:
+            token = str(match.group(0) or "")
+            if token.startswith(prefix):
+                return token
+            return f"{prefix}{token}"
+
+        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
+        if count > 0:
+            updated_text = replaced_text
+
+    if reference_video_urls:
+        added_videos = False
+        for idx in range(1, len(reference_video_urls) + 1):
+            vid_tag = f"@Video{idx}"
+            if not re.search(r'@[Vv]ideo\s*' + str(idx) + r'|@[Vv]edie\s*' + str(idx) + r'|@[Vv]edio\s*' + str(idx), updated_text):
+                if not added_videos:
+                    if idx == 1:
+                        updated_text = f"延长{vid_tag}视频，一镜到底运镜，{updated_text.strip()}"
+                    else:
+                        updated_text = f"{vid_tag} {updated_text.strip()}"
+                    added_videos = True
+                else:
+                    updated_text = f"{vid_tag} {updated_text.strip()}"
+
+    return updated_text
+
+

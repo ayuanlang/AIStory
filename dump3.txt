@@ -101,4 +101,58 @@ def _append_video_api_ref_mapping(
     for u in start_urls:
         idx = index_map.get(u)
         if idx is not None:
+            image_slots.append(f"图{idx}")
+    if end_url:
+        idx = index_map.get(end_url)
+        if idx is not None:
+            image_slots.append(f"图{idx}")
+    for u in keyframe_urls:
+        idx = index_map.get(u)
+        if idx is not None:
+            image_slots.append(f"图{idx}")
+
+    image_slots = [x for x in dict.fromkeys(image_slots) if x]
+    video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
+    media_slots = image_slots + video_slots
+
+    pairs: List[Tuple[str, str, str]] = []
+
+    # First, always show explicit start/end images if they are mapped and if desired?
+    # Usually this is primarily for mapping entities to reference images for API consumption.
+
+    seen_urls: set[str] = set()
+
+    mentioned_entity_map = {normalized: raw_name for normalized, raw_name in _collect_prompt_entity_mentions(text)}
+    if entity_lookup:
+        # Relaxed matching to map any entity in ordered_refs
+        for key, row in entity_lookup.items():
+            norm_key = str(key or "").strip()
+            if not norm_key: continue
             
+            if norm_key.lower() in {"global style", "camera movement", "action beat chain", "dynamic atmosphere", "lighting style"}:
+                continue
+
+            allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
+            entity_type = str(row.get("entity_type") or "").strip().lower()
+            if entity_type and entity_type not in allowed_types:
+                continue
+
+            image_url = str(row.get("image_url") or "").strip()
+            image_base = image_url.split("?")[0]
+            mapped_idx = index_map.get(image_url) or index_map.get(image_base)
+            if not image_url or mapped_idx is None:
+                continue
+
+            matched = norm_key in mentioned_entity_map
+
+            if matched and image_url not in seen_urls:
+                seen_urls.add(image_url)
+                # Use the exact string that appeared in the prompt for accurate replacing
+                char_name = mentioned_entity_map[norm_key]
+                anchor_text = str(row.get("anchor_description") or "").strip()
+                pairs.append((f"@Image{mapped_idx}", char_name, anchor_text))
+
+    # Sequential fallback for unmatched images to unmatched entities (e.g. ENV/PROP with multiple images)
+    # This guarantees that Image2, Image3, etc. are injected at the actual positions in the prompt.
+    used_indexes = set()
+    for prefix_str, _

@@ -1,264 +1,92 @@
-const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
-        const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
-        const emptyReport = {
-            checkedSceneCount: importedSceneRows.length,
-            missingSceneCount: 0,
-            missingItemCount: 0,
-            missingSceneReports: [],
-            supplementReport: {
-                createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
-                countsByType: { character: 0, prop: 0, environment: 0 },
-            },
-            importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
-        };
+def _append_video_api_ref_mapping(
+    prompt: str,
+    refs: List[str],
+    ref_image_url: Optional[Union[str, List[str]]],
+    last_frame_url: Optional[str],
+    keyframes: Optional[List[str]] = None,
+    reference_video_urls: Optional[List[str]] = None,
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    text = str(prompt or "").strip()
+    if not text:
+        return text
 
-        onLog?.(`[Phase 2 Debug] checking early return condition: projectId=${projectId}, importedSceneRows count=${importedSceneRows.length}`);
+    def _collect_prompt_entity_mentions(source_text: str) -> List[Tuple[str, str]]:
+        mentions: List[Tuple[str, str]] = []
+        seen_entities: set[str] = set()
+        mention_regex = re.compile(
+            r"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?([^\]】]+?)\s*[\]】]|[\[【]\s*@?([^\]】]+?)\s*[\]】]",
+            re.IGNORECASE,
+        )
 
-        if (!projectId) {
-            onLog?.(`[Phase 2 Debug] aborting! Because projectId is empty.`);
-            return emptyReport;
-        }
+        for match in mention_regex.finditer(source_text):
+            raw_name = str(match.group(1) or match.group(2) or "").strip()
+            normalized = _normalize_entity_anchor_token(raw_name)
+            if not normalized or normalized in seen_entities:
+                continue
+            row = entity_lookup.get(normalized) if entity_lookup else None
+            if not row:
+                continue
 
-                const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
-                const extractedSections = extractAnalysisSections(authoritativeSubjectText);
-                let subjectIndexText = extractedSections.subjectIndexText || "";
-                let adaptationText = extractedSections.adaptationText || "";
+            entity_type = str(row.get("entity_type") or "").strip().lower()
+            if entity_type and entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
+                continue
 
-                    if (adaptationText) {
-                            onLog?.(`[Asset Gen Tracking] Extracted Script Adaptation (length: ${adaptationText.length})`);
-                    }
+            raw_entity_name = str(row.get("name") or "").strip()
+            entity_name = raw_entity_name[1:] if raw_entity_name.startswith("@") else raw_entity_name
+            if not entity_name:
+                entity_name = raw_name.lstrip("@").strip()
+            if not entity_name:
+                continue
 
-          onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
+            seen_entities.add(normalized)
+            mentions.append((normalized, entity_name))
 
-          if (authoritativeSubjectText.includes("PROHIBITED_CONTENT")) {
-              throw new Error("剧本内容涉嫌违规，已被安全系统拦截，请修改剧本文本后重试。");
-          }
+        return mentions
 
-        // Try to match the block wrapped by at least 5 dashes: ---------
-        if (extractedSections.hasStructuredSubjectIndex) {
-            onLog?.(`[Asset Gen Tracking] Extracted Subject Index (length: ${subjectIndexText.length})`);
-        } else {
-            onLog?.(`[Asset Gen Tracking] Error: Failed to find Subject Index header or dashes! Aborting asset generation.`, 'error');
-            throw new Error(SUBJECT_INDEX_PARSE_ERROR);
-        }
+    # Remove legacy inline URL-index tags injected into prompt anchors.
+    text = re.sub(
+        r"\(\s*ref_image_url\s*:\s*#\d+\s*\)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\|\s*ref_image_url\s*:\s*#\d+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"^\s*API\s+ref\s+mapping\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(
+        r"^\s*实体参考映射\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(
+        r"^\s*实体参考图映射\s*:\s*.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
-        // Phase 2 Preparation: Save extracted subjectIndexText to episode and set UI state
-        if (subjectIndexText.trim() || adaptationText.trim()) {
-              if (subjectIndexText.trim()) setSubjectIndexText(subjectIndexText);
-              const updatePayload = {};
-              if (subjectIndexText.trim()) updatePayload.ai_scene_analysis_subject_index = subjectIndexText.trim();
-              if (adaptationText.trim()) updatePayload.ai_scene_analysis_adaptation = adaptationText.trim();
-              
-              try {
-                  await updateEpisode(activeEpisode.id, updatePayload);
-                  onLog?.(`[Phase 2] Saved analysis meta (index len: ${subjectIndexText.length}, adaptation len: ${adaptationText.length})`);
-              } catch (error) {
-                  onLog?.(`[Phase 2] Warning: Failed to save analysis meta to episode: ${error.message}`);
-              }
-          }
+    ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
+    if not ordered_refs and not isinstance(reference_video_urls, list):
+        return text
 
-        if (!subjectIndexText.trim()) {
-            console.log("No Subject Index found in the analysis result. Skipping asset generation.");
-            return emptyReport;
-        }
+    index_map: Dict[str, int] = {}
+    for idx, url in enumerate(ordered_refs, start=1):
+        if url not in index_map:
+            index_map[url] = idx
+        base_url = url.split("?")[0]
+        if base_url not in index_map:
+            index_map[base_url] = idx
 
-        setAnalysisFlowStatus({
-            phase: "generating_assets",
-            message: t("✨ 正在为您生成对应的人物和场景资产...", "Generating design assets from Subject Index..."),
-        });
-
-        try {
-            onLog?.(`[Asset Gen Tracking] Preparing to fetch 'entity_design.md'`);
-            const promptRes = await fetchPrompt("skills/scene_analysis_feature_stack/entity_design.md").catch(() => null);
-            let promptContent = promptRes?.content || "";
-            if (!promptContent) {
-                onLog?.(`[Asset Gen Tracking] Warning: 'entity_design.md' prompt is empty or failed to load.`);
-            }
-
-            let finalPromptContent = promptContent;
-            let finalSubjectIndexText = subjectIndexText;
-
-            // Inject Project Info Context for Phase 2
-            const projectInfo = (project?.global_info && typeof project?.global_info === 'object') ? project.global_info : {};
-            const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
-            const getInfoValue = (aliases = []) => {
-                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                for (const [k, v] of Object.entries(projectInfo)) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    const text = String(v || '').trim();
-                    if (text) return text;
-                }
-                return '';
-            };
-
-            const language = getInfoValue(['language', 'project_language', 'lang']);
-            const getInfoArray = (aliases = []) => {
-                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                for (const [k, v] of Object.entries(projectInfo)) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    if (Array.isArray(v)) {
-                        const arr = v.map(item => String(item || '').trim()).filter(Boolean);
-                        if (arr.length) return arr;
-                    }
-                    if (typeof v === 'string') {
-                        const arr = v.split(/[\n,，;；]/).map(item => item.trim()).filter(Boolean);
-                        if (arr.length) return arr;
-                    }
-                }
-                return [];
-            };
-            const visualParams = (projectInfo?.tech_params && typeof projectInfo.tech_params === 'object' && projectInfo.tech_params.visual_standard) ? projectInfo.tech_params.visual_standard : {};
-            const getVisualValue = (aliases = []) => {
-                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                for (const [k, v] of Object.entries(visualParams || {})) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    const text = String(v || '').trim();
-                    if (text) return text;
-                }
-                for (const [k, v] of Object.entries(projectInfo)) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    const text = String(v || '').trim();
-                    if (text) return text;
-                }
-                return '';
-            };
-            const borrowedFilms = getInfoArray(['borrowed_films', 'borrowedFilms', 'reference_films', 'referenceFilms']);
-
-            const metaParts = [
-                'Project Context (prepend and treat as high-priority constraints for generating design assets):',
-                '[Basic Info]'
-            ];
-            const title = getInfoValue(['script_title', 'title']);
-            const episode = getInfoValue(['series_episode', 'episode']);
-            const type = getInfoValue(['type']);
-            const basePositioning = getInfoValue(['base_positioning']);
-            if (title) metaParts.push(`Title: ${title}`);
-            if (episode) metaParts.push(`Episode: ${episode}`);
-            if (type) metaParts.push(`Type: ${type}`);
-            if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
-            if (language) {
-                metaParts.push(`Language: ${language}`);
-            } else {
-                 metaParts.push(`Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.`);
-            }
-            metaParts.push('[Technical & Visual Parameters]');
-            const aspectRatio = getVisualValue(['aspect_ratio']);
-            const imageSize = getVisualValue(['image_size']);
-            const horizontalResolution = getVisualValue(['horizontal_resolution']);
-            const verticalResolution = getVisualValue(['vertical_resolution']);
-            const frameRate = getVisualValue(['frame_rate']);
-            const quality = getVisualValue(['quality']);
-            const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
-            const tone = getInfoValue(['tone', 'mood']);
-            const lighting = getInfoValue(['lighting', 'light']);
-            
-            if (aspectRatio) metaParts.push(`Aspect Ratio: ${aspectRatio}`);
-            if (imageSize) metaParts.push(`Image Size: ${imageSize}`);
-            if (horizontalResolution) metaParts.push(`Horizontal Resolution: ${horizontalResolution}`);
-            if (verticalResolution) metaParts.push(`Vertical Resolution: ${verticalResolution}`);
-            if (frameRate) metaParts.push(`Frame Rate: ${frameRate}`);
-            if (quality) metaParts.push(`Quality: ${quality}`);
-            if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
-            if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
-            if (tone) metaParts.push(`Tone: ${tone}`);
-            if (lighting) metaParts.push(`Lighting: ${lighting}`);
-            
-            const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
-            const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
-            const shotPrefField = getInfoValue(['shot_preference', 'lens_preference', 'camera_preference']);
-            const broadcastSafetyField = getInfoValue(['broadcast_security_level', 'broadcast_safety_level', 'safety_level', 'broadcast_safety']);
-
-            if (eraField) metaParts.push(`Era / Period: ${eraField}`);
-            if (regionField) metaParts.push(`Region / Country: ${regionField}`);
-            if (shotPrefField) metaParts.push(`Shot / Lens Preference: ${shotPrefField}`);
-            if (broadcastSafetyField) metaParts.push(`Broadcast Security Level: ${broadcastSafetyField}`);
-            
-            metaParts.push('Use this project context as first-class constraints before generating the subjects.');
-
-            if (Object.keys(projectInfo).length > 0) {
-                finalSubjectIndexText = `${metaParts.join('\n')}\n\n[Subject Index extracted from Phase 1]\n${finalSubjectIndexText}`;
-            }
-
-            const isUserSuper = isSuperuser || isSuperuserRef.current; // Capture current state or use ref if we had one
-            if (isUserSuper) {
-                setSystemPrompt(finalPromptContent);
-                setUserPrompt(finalSubjectIndexText);
-                setShowAnalysisModal(true);
-                
-                onLog?.(`[Asset Gen Tracking] Waiting for Superuser to confirm entity_design prompt...`);
-                // Wait for the modal submit
-                const confirmed = await new Promise(resolve => {
-                    phase2ResolverRef.current = resolve;
-                });
-                
-                if (!confirmed || typeof confirmed !== 'object') {
-                    onLog?.(`[Asset Gen Tracking] Superuser aborted second pass phase.`);
-                    return emptyReport;
-                }
-                
-                finalPromptContent = confirmed.systemPrompt || finalPromptContent;
-                finalSubjectIndexText = confirmed.userPrompt || finalSubjectIndexText;
-            }
-
-            onLog?.(`[Asset Gen Tracking] Launching second LLM call for 'subject_generation'`);
-
-            const result = await awaitAnalyzeSceneWithRecovery(
-                () => analyzeScene(
-                    finalSubjectIndexText, 
-                    finalPromptContent, 
-                    null, 
-                    activeEpisode?.id || null, 
-                    analysisAttentionNotes, 
-                    selectedReuseSubjectAssets, 
-                    {
-                        onTaskCreated: (taskId) => {
-                            setActiveAnalysisTaskId(String(taskId || '').trim());
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt: Date.now(), phase: 2 });
-                        }
-                    }, 
-                    projectId,
-                    "subject_generation",
-                    null,
-                    "2_pass_generate_assets"
-                ),
-                { startedAt: Date.now(), baselineText: activeEpisode?.ai_entity_design_result || '', resultField: 'ai_entity_design_result' }
-            );
-
-            const analyzedText = extractAnalysisTextFromResult(result);
-            setLlmAssetRawResultContent(analyzedText);
-
-            if (analyzedText) {
-                // Safeguard: make sure we are not importing plain text phase 1 by mistake
-                const hasValidSubjectJsonBlock = /"characters"\s*:\s*\[|"props"\s*:\s*\[|"environments"\s*:\s*\[|"posters"\s*:\s*\[/i.test(analyzedText);
-                const backendSubjectsJson = result?.subjects_json;
-                
-                if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
-                    onLog?.(`[Asset Gen Tracking] Warning: AI did not return a valid Entities JSON block. Skipping import to prevent overwriting index.`, "warning");
-                    throw new Error("AI 引擎在整理出场名单时开小差了，未能返回标准数据表。请点击查阅原文检查，是否可以手动重新生成。");
-                } else {
-                    // Automatically import the generated subjects
-                    const sceneImportReport = await doImportText(analyzedText, 'json', {
-                        onLog,
-                        projectId,
-                        episodeId: activeEpisode?.id,
-                        subjectsJson: backendSubjectsJson || null,
-                        suppressAlerts: true,
-                    });
-
-                    const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
-                    const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
-                    onLog?.(`[Asset Gen Tracking] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
-
-                    return {
-                        checkedSceneCount: importedSceneRows.length,
-                        missingSceneCount: 0,
-                        missingItemCount: createdLen + matchedLen,
-                        supplementReport: {
-                            createdItems: sceneImportReport?.createdSubjectItems || [],
-                            skippedItems: sceneImportReport?.skippedSubjectItems || [],
-                            failedItems: [],
-                        },
-                        importedSubjectCounts: sceneImportReport?.importedSubjectCounts,
-                        dbPersistedCounts: sceneImportReport?.dbPersistedCounts,
-                        dbRunInsertedCounts: sceneImportReport?.dbRunInsertedCounts,
-                    };
+   

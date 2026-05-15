@@ -175,7 +175,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         if (!strictPromptOnly && isVideoRefManager) {
             return getEntityMatches().map(e => e.image_url).filter(Boolean);
         }
-        return collectMatchedSubjectImageUrlsFromPrompt({
+        return collectMatchedEntityImageUrlsFromPrompt({
             promptText,
             entityPool: entities,
         });

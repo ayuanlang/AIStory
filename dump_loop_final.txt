@@ -1,0 +1,501 @@
+﻿
+                          "completed": completed,
+                          "success": success,
+                          "failed": failed,
+                          "mode": mode,
+                          "max_concurrency": max_workers,
+                      },
+                  )
+                  _release_db_connection(db, "shot_media_batch_video_final")
+              return
+  
+>         for shot in target_shots:
+              episode = _read_latest_episode()
+              if not episode:
+                  break
+              latest = _read_shot_media_batch_status(episode)
+              if bool(latest.get("stop_requested") or latest.get("force_stopped
+")):
+                  _persist_stopped_status()
+                  return
+  
+              shot_label = str(shot.shot_id or shot.shot_name or f"#{shot.id}")
+              latest["current_shot_id"] = shot.id
+              latest["current_shot_label"] = shot_label
+              latest["message"] = f"Processing shot {shot_label}..."
+              latest["updated_at"] = now_bj_iso()
+              _persist_shot_media_batch_status(db, episode, latest)
+              _release_db_connection(db, "shot_media_batch_shot_start")
+  
+              shot_ok = True
+              try:
+                  tech = _parse_shot_tech(shot)
+                  end_frame_url = str(tech.get("end_frame_url") or "").strip()
+  
+                  shot_entity_lookup = entity_lookup
+                  if tech.get("entity_url_map"):
+                      import copy
+                      shot_entity_lookup = copy.deepcopy(entity_lookup)
+                      for k_str, v in tech.get("entity_url_map").items():
+                          k_str = str(k_str).strip()
+                          for norm_name, row in shot_entity_lookup.items():
+                              if str(row.get("entity_id", "")) == k_str or norm
+_name == _normalize_entity_anchor_token(k_str):
+                                  row["image_url"] = str(v).strip()
+  
+                  need_start = overwrite_existing or not str(shot.image_url or 
+"").strip()
+                  need_end = overwrite_existing or not end_frame_url
+  
+                  if _is_stop_requested():
+                      _persist_stopped_status()
+                      return
+  
+                  if need_start:
+                      start_prompt_raw = str(shot.start_frame or shot.video_con
+tent or "").strip()
+                      if start_prompt_raw:
+                          is_sap_start_prompt = str(start_prompt_raw).strip().u
+pper() == "SAP"
+                          prev_end = _find_previous_shot_end_frame_url(db, epis
+ode_id, int(shot.id))
+                          if is_sap_start_prompt and prev_end:
+                              tech = _parse_shot_tech(shot)
+                              shot.image_url = prev_end
+                              if str(tech.get("start_frame_url") or "").strip()
+ != prev_end:
+                                  tech["start_frame_url"] = prev_end
+                                  shot.technical_notes = json.dumps(tech, ensur
+e_ascii=False)
+                              db.add(shot)
+                              db.commit()
+                              db.refresh(shot)
+                              logger.info(
+                                  "[shot_media_batch] SAP start_frame linked fr
+om previous end_frame | shot_id=%s shot_label=%s prev_end=%s",
+                                  shot.id,
+                                  shot_label,
+                                  prev_end,
+                              )
+                          elif len(start_prompt_raw) < min_prompt_chars:
+                              logger.info(
+                                  "[shot_media_batch] skip start_frame due to s
+hort prompt | shot_id=%s shot_label=%s prompt_len=%s",
+                                  shot.id,
+                                  shot_label,
+                                  len(start_prompt_raw),
+                              )
+                          else:
+                              latest = _read_shot_media_batch_status(episode)
+                              latest["current_shot_id"] = shot.id
+                              latest["current_shot_label"] = shot_label
+                              latest["current_asset_type"] = "start_frame"
+                              latest["current_asset_label"] = "Start Frame"
+                              latest["message"] = f"Processing shot {shot_label
+} 路 Start Frame..."
+                              latest["updated_at"] = now_bj_iso()
+                              _persist_shot_media_batch_status(db, episode, lat
+est)
+                              _release_db_connection(db, "shot_media_batch_star
+t_status")
+  
+                              start_ref_index_map = _compute_subject_ref_index_
+map(start_prompt_raw, shot_entity_lookup)
+                              logger.info(
+                                  "[shot_media_batch] subject_ref_index_map ass
+et=start_frame shot_id=%s shot_label=%s map=%s",
+                                  shot.id,
+                                  shot_label,
+                                  start_ref_index_map,
+                              )
+                              start_prompt = _inject_shot_prompt_anchors(start_
+prompt_raw, shot_entity_lookup, global_style, start_ref_index_map)
+                              auto_matches = []
+                              auto_matches.extend([x for x in _collect_prompt_e
+ntity_ref_images(start_prompt_raw, shot_entity_lookup) if x not in auto_matches
+])
+                              start_refs: List[str] = []
+                              if isinstance(tech.get("ref_image_urls"), list):
+                                  saved_refs = [str(x).strip() for x in tech.ge
+t("ref_image_urls") or [] if str(x).strip()]
+                                  deleted_refs = {str(x).strip() for x in tech.
+get("deleted_ref_urls") or [] if str(x).strip()}
+                                  new_auto = [url for url in auto_matches if ur
+l not in saved_refs and url not in deleted_refs]
+                                  start_refs = saved_refs + new_auto
+                                  if is_sap_start_prompt and prev_end and prev_
+end not in start_refs and prev_end not in deleted_refs:
+                                      # SAP means reusing previous shot end fra
+me as current start reference.
+                                      start_refs.insert(0, prev_end)
+                              else:
+                                  start_refs = list(auto_matches)
+                                  if prev_end and prev_end not in start_refs:
+                                      start_refs.insert(0, prev_end)
+  
+                              start_refs = [x for x in dict.fromkeys([str(x).st
+rip() for x in start_refs if str(x).strip()]) if x]
+                              start_req = GenerationRequest(
+                                  prompt=start_prompt,
+                                  ref_image_url=start_refs if start_refs else N
+one,
+                                  project_id=episode.project_id,
+                                  shot_id=shot.id,
+                                  shot_number=shot.shot_id,
+                                  shot_name=shot.shot_name,
+                                  asset_type="start_frame",
+                              )
+                              _release_db_connection(db, "shot_media_batch_star
+t_frame")
+                              asyncio.run(_run_stage_with_retry(
+                                  lambda: _run_generate_image(req=start_req, cu
+rrent_user=user_principal, db=db),
+                                  "start_frame",
+                                  shot_label,
+                              ))
+                              shot = db.query(Shot).filter(Shot.id == shot.id).
+first() or shot
+  
+                  if _is_stop_requested():
+                      _persist_stopped_status()
+                      return
+  
+                  if need_end:
+                      end_prompt_raw = str(shot.end_frame or "").strip()
+                      if end_prompt_raw:
+                          normalized_end_prompt = end_prompt_raw.strip().upper(
+)
+                          should_reuse_start_as_end = normalized_end_prompt in 
+{"NO", "N/A", "NONE", "NULL", "NA"}
+                          if should_reuse_start_as_end:
+                              start_frame_url = str(shot.image_url or "").strip
+()
+                              if start_frame_url:
+                                  tech = _parse_shot_tech(shot)
+                                  prev_end_url = str(tech.get("end_frame_url") 
+or "").strip()
+                                  if prev_end_url != start_frame_url:
+                                      tech["end_frame_url"] = start_frame_url
+                                      tech["end_frame_reused_from_start"] = Tru
+e
+                                      shot.technical_notes = json.dumps(tech, e
+nsure_ascii=False)
+                                      db.add(shot)
+                                      db.commit()
+                                      db.refresh(shot)
+                                  end_frame_url = start_frame_url
+                                  logger.info(
+                                      "[shot_media_batch] end_frame=NO-like, re
+use start_frame_url | shot_id=%s shot_label=%s end_frame_url=%s",
+                                      shot.id,
+                                      shot_label,
+                                      start_frame_url,
+                                  )
+                              else:
+                                  logger.info(
+                                      "[shot_media_batch] end_frame=NO-like but
+ start_frame_url missing | shot_id=%s shot_label=%s",
+                                      shot.id,
+                                      shot_label,
+                                  )
+                          elif len(end_prompt_raw) < min_prompt_chars:
+                              logger.info(
+                                  "[shot_media_batch] skip end_frame due to sho
+rt prompt | shot_id=%s shot_label=%s prompt_len=%s",
+                                  shot.id,
+                                  shot_label,
+                                  len(end_prompt_raw),
+                              )
+                          else:
+                              latest = _read_shot_media_batch_status(episode)
+                              latest["current_shot_id"] = shot.id
+                              latest["current_shot_label"] = shot_label
+                              latest["current_asset_type"] = "end_frame"
+                              latest["current_asset_label"] = "End Frame"
+                              latest["message"] = f"Processing shot {shot_label
+} 路 End Frame..."
+                              latest["updated_at"] = now_bj_iso()
+                              _persist_shot_media_batch_status(db, episode, lat
+est)
+                              _release_db_connection(db, "shot_media_batch_end_
+status")
+  
+                              end_ref_index_map = _compute_subject_ref_index_ma
+p(end_prompt_raw, shot_entity_lookup)
+                              logger.info(
+                                  "[shot_media_batch] subject_ref_index_map ass
+et=end_frame shot_id=%s shot_label=%s map=%s",
+                                  shot.id,
+                                  shot_label,
+                                  end_ref_index_map,
+                              )
+                              end_prompt = _inject_shot_prompt_anchors(end_prom
+pt_raw, shot_entity_lookup, global_style, end_ref_index_map)
+                              refs: List[str] = []
+                              if isinstance(tech.get("end_ref_image_urls"), lis
+t):
+                                  refs.extend([str(x).strip() for x in tech.get
+("end_ref_image_urls") or [] if str(x).strip()])
+                              else:
+                                  refs.extend([x for x in _collect_prompt_entit
+y_ref_images(end_prompt_raw, shot_entity_lookup) if x not in refs])
+  
+                              deleted_refs = {str(x).strip() for x in tech.get(
+"deleted_ref_urls") or [] if str(x).strip()}
+                              start_image = str(shot.image_url or "").strip()
+                              if start_image and start_image not in refs and st
+art_image not in deleted_refs:
+                                  refs.insert(0, start_image)
+  
+                              refs = [x for x in dict.fromkeys([str(x).strip() 
+for x in refs if str(x).strip()]) if x]
+                              end_req = GenerationRequest(
+                                  prompt=end_prompt,
+                                  ref_image_url=refs if refs else None,
+                                  project_id=episode.project_id,
+                                  shot_id=shot.id,
+                                  shot_number=shot.shot_id,
+                                  shot_name=shot.shot_name,
+                                  asset_type="end_frame",
+                              )
+                              _release_db_connection(db, "shot_media_batch_end_
+frame")
+                              asyncio.run(_run_stage_with_retry(
+                                  lambda: _run_generate_image(req=end_req, curr
+ent_user=user_principal, db=db),
+                                  "end_frame",
+                                  shot_label,
+                              ))
+                              shot = db.query(Shot).filter(Shot.id == shot.id).
+first() or shot
+                              tech = _parse_shot_tech(shot)
+                              end_frame_url = str(tech.get("end_frame_url") or 
+"").strip()
+  
+                  if _is_stop_requested():
+                      _persist_stopped_status()
+                      return
+  
+                  if mode == "videos":
+                      need_video = overwrite_existing or not str(shot.video_url
+ or "").strip()
+                      if need_video:
+                          latest = _read_shot_media_batch_status(episode)
+                          latest["current_shot_id"] = shot.id
+                          latest["current_shot_label"] = shot_label
+                          latest["current_asset_type"] = "video"
+                          latest["current_asset_label"] = "Video"
+                          latest["message"] = f"Processing shot {shot_label} 路 
+Video..."
+                          latest["updated_at"] = now_bj_iso()
+                          _persist_shot_media_batch_status(db, episode, latest)
+                          _release_db_connection(db, "shot_media_batch_video_st
+atus")
+  
+                          video_prompt_raw = str(shot.video_content or shot.pro
+mpt or "").strip() or "Video motion"
+                          video_ref_index_map = _compute_subject_ref_index_map(
+video_prompt_raw, shot_entity_lookup)
+                          logger.info(
+                              "[shot_media_batch] subject_ref_index_map asset=v
+ideo shot_id=%s shot_label=%s map=%s",
+                              shot.id,
+                              shot_label,
+                              video_ref_index_map,
+                          )
+                          video_prompt = _inject_shot_prompt_anchors(video_prom
+pt_raw, shot_entity_lookup, global_style, video_ref_index_map)
+  
+                          def _resolve_video_mode(payload: Dict[str, Any]) -> s
+tr:
+                              raw_mode = payload.get("video_mode_unified") or p
+ayload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "start"
+                              return _normalize_video_ref_mode(raw_mode) or "st
+art"
+  
+                          video_mode = _resolve_video_mode(tech)
+                          refs: List[str] = []
+                          explicit_last_frame_url = end_frame_url or None
+                          video_prompt_candidates: List[str] = [
+                              str(video_prompt_raw or "").strip(),
+                              str(shot.start_frame or "").strip(),
+                              str(shot.end_frame or "").strip(),
+                              str(tech.get("video_prompt_cn") or "").strip(),
+                              str(tech.get("start_frame_cn") or "").strip(),
+                              str(tech.get("end_frame_cn") or "").strip(),
+                          ]
+                          if isinstance(tech.get("video_ref_image_urls"), list)
+:
+                              refs.extend([str(x).strip() for x in tech.get("vi
+deo_ref_image_urls") or [] if str(x).strip()])
+                          else:
+                              shot_mode = str(video_mode or "").strip().lower()
+                              if not shot_mode:
+                                  end_prompt_len = len(str(shot.end_frame or ""
+).strip())
+                                  shot_mode = "start_end" if end_frame_url and 
+end_prompt_len >= 3 else "start"
+  
+                              if shot_mode == "end":
+                                  if end_frame_url:
+                                      explicit_last_frame_url = end_frame_url
+                              else:
+                                  if str(shot.image_url or "").strip():
+                                      refs.append(str(shot.image_url).strip())
+  
+                                  if shot_mode == "entity_refs":
+                                      keyframes = tech.get("keyframes")
+                                      if isinstance(keyframes, list):
+                                          refs.extend([str(x).strip() for x in 
+keyframes if str(x).strip()])
+  
+                                  if shot_mode == "start_end" and end_frame_url
+:
+                                      explicit_last_frame_url = end_frame_url
+  
+                          refs, auto_entity_refs = _merge_entity_refs_for_video
+_mode(
+                              refs,
+                              ref_mode=video_mode,
+                              prompt_candidates=video_prompt_candidates,
+                              entity_lookup=shot_entity_lookup,
+                              manual_override=bool(tech.get("video_ref_image_ur
+ls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
+                              associated_entities=shot.associated_entities,
+                          )
+  
+                          normalized_refs, normalized_last_frame_url, batch_ref
+_info = _normalize_video_request_refs(
+                              refs or None,
+                              explicit_last_frame_url,
+                              video_mode,
+                              supports_last_frame_mode=True,
+                          )
+  
+                          ordered_video_refs: List[str] = []
+                          if isinstance(normalized_refs, list):
+                              ordered_video_refs.extend([str(x).strip() for x i
+n normalized_refs if str(x).strip()])
+                          elif str(normalized_refs or "").strip():
+                              ordered_video_refs.append(str(normalized_refs).st
+rip())
+                          if str(normalized_last_frame_url or "").strip():
+                              ordered_video_refs.append(str(normalized_last_fra
+me_url).strip())
+                          ordered_video_refs = [x for x in dict.fromkeys(ordere
+d_video_refs) if x]
+  
+                          video_prompt = _append_video_api_ref_mapping(
+                              video_prompt,
+                              ordered_video_refs,
+                              normalized_refs,
+                              normalized_last_frame_url,
+                              None,
+                              entity_lookup=shot_entity_lookup,
+                          )
+  
+                          video_prompt_cn_raw = str(tech.get("video_prompt_cn")
+ or "").strip()
+                          video_prompt_cn = ""
+                          if video_prompt_cn_raw:
+                              video_cn_ref_index_map = _compute_subject_ref_ind
+ex_map(video_prompt_cn_raw, shot_entity_lookup)
+                              video_prompt_cn = _inject_shot_prompt_anchors(vid
+eo_prompt_cn_raw, shot_entity_lookup, global_style, video_cn_ref_index_map)
+                              video_prompt_cn = _append_video_api_ref_mapping(
+                                  video_prompt_cn,
+                                  ordered_video_refs,
+                                  normalized_refs,
+                                  normalized_last_frame_url,
+                                  None,
+                                  entity_lookup=shot_entity_lookup,
+                              )
+                              tech["video_prompt_cn"] = video_prompt_cn
+                              db.query(type(shot)).filter(type(shot).id == shot
+.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
+                              db.commit()
+  
+                          logger.info(
+                              "[shot_media_batch] video ref resolution | shot_i
+d=%s shot_label=%s video_mode=%s refs=%s last_frame=%s auto_entity_refs=%s fall
+back_to_refs=%s",
+                              shot.id,
+                              shot_label,
+                              video_mode,
+                              len(ordered_video_refs),
+                              bool(str(normalized_last_frame_url or "").strip()
+),
+                              len(auto_entity_refs),
+                              bool(batch_ref_info.get("fallback_to_refs")),
+                          )
+  
+                          duration_val = 5.0
+                          try:
+                              duration_val = float(str(shot.duration or 5).stri
+p() or 5)
+                          except Exception:
+                              duration_val = 5.0
+  
+                          multi_prompt_payload = None
+                          if video_prompt_cn:
+                              multi_prompt_payload = [
+                                  {"prompt": video_prompt, "type": "en"},
+                                  {"prompt": video_prompt_cn, "type": "zh"}
+                              ]
+                          batch_status = _read_shot_media_batch_status(episode)
+ if episode else {}
+                          video_req = VideoGenerationRequest(
+                              draft_mode=bool((batch_status or {}).get("draft_m
+ode")),
+                              prompt=video_prompt,
+                              multi_prompt=multi_prompt_payload,
+                              ref_image_url=normalized_refs,
+                              last_frame_url=normalized_last_frame_url,
+                              ref_mode=video_mode,
+                              keyframes=None,
+                              duration=duration_val,
+                              project_id=episode.project_id,
+                              shot_id=shot.id,
+                              shot_number=shot.shot_id,
+                              shot_name=shot.shot_name,
+                              asset_type="video",
+                              system_api_id=system_api_id,
+                          )
+                          _release_db_connection(db, "shot_media_batch_video")
+                          try:
+                              callback_ticket_val = f"video-shot-{shot.id}"
+                              callback_url_val = str(media_service._resolve_pro
+vider_callback_url({}, callback_ticket_val) or "").strip()
+                          except Exception:
+                              callback_ticket_val = f"video-shot-{shot.id}"
+                              callback_url_val = ""
+  
+                          asyncio.run(_run_stage_with_retry(
+                              lambda: _run_generate_video(
+                                  req=video_req,
+                                  current_user=user_principal,
+                                  db=db,
+                                  provider_callback_ticket=callback_ticket_val,
+                                  provider_callback_url=callback_url_val
+                              ),
+                              "video",
+                              shot_label,
+                          ))
+  
+                  success += 1
+                  _log_batch_sys_event(
+                      kind="shot-media-batch",
+                      phase="item",
+                      user_id=user_id,
+                      user_name=user_name,
+                      project_id=project_id,
+                      episode_id=episode_id,
+                      job_id=job_id,
+                      item_id=int(shot.id),
+                      item_label=shot_label,
+                      result="success",
+                      message="Shot media generated",
+                      extra={"mode": mode},
+                  )
+
+

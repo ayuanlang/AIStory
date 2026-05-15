@@ -27597,14 +27597,6 @@ async def submit_generate_video_endpoint(
                         if str(row.get("entity_id", "")) == k_str or norm_name == _normalize_entity_anchor_token(k_str):
                             row["image_url"] = str(v).strip()
 
-            if submit_entity_lookup:
-                auto_entity_urls = _collect_prompt_entity_ref_images(submit_prompt, submit_entity_lookup)
-                for u in auto_entity_urls:
-                    if u not in submit_refs:
-                        submit_refs.append(u)
-                req_payload["ref_image_url"] = submit_refs
-                submit_ref_image_url = submit_refs
-
             req_payload["prompt"] = _append_video_api_ref_mapping(
                 submit_prompt,
                 submit_refs,
@@ -30788,15 +30780,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         if str(normalized_last_frame_url or "").strip():
                             ordered_video_refs.append(str(normalized_last_frame_url).strip())
                         ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
-
-                        auto_video_entity_urls = _collect_prompt_entity_ref_images(video_prompt_raw, shot_entity_lookup)
-                        for u in auto_video_entity_urls:
-                            if u not in ordered_video_refs:
-                                ordered_video_refs.append(u)
-                        if isinstance(normalized_refs, list):
-                            normalized_refs = ordered_video_refs
-                        else:
-                            normalized_refs = ordered_video_refs
 
                         video_prompt = _append_video_api_ref_mapping(
                             video_prompt,

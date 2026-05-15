@@ -3857,15 +3857,31 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const allMatches = [...matches, ...envMatches];
                 const entityImages = allMatches.map(e => e.image_url).filter(Boolean);
                 techObj.video_ref_image_urls = Array.from(new Set(entityImages));
+                
+                const eMap = {};
+                allMatches.forEach(e => {
+                    if (e.id && e.image_url) {
+                        eMap[String(e.id)] = String(e.image_url);
+                    }
+                });
+                techObj.entity_url_map = eMap;
 
             } else {
                 techObj.video_gen_mode = mode;
                 techObj.video_ref_submit_mode = 'auto';
-                const promptEntityRefs = collectMatchedSubjectImageUrlsFromPrompt({
+                const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
                     promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(techObj.video_prompt_cn || '').trim()}`,
                     entityPool: entities,
                 });
                 techObj.video_ref_image_urls = buildAutoVideoRefList(editingShot, techObj, mode, promptEntityRefs);
+                
+                const autoMap = {};
+                entities.forEach(e => {
+                    if (e.id && e.image_url) {
+                        autoMap[String(e.id)] = String(e.image_url);
+                    }
+                });
+                techObj.entity_url_map = autoMap;
             }
             techObj.video_ref_image_urls_manual = false;
             techObj.video_ref_image_urls_user_edited = false;
@@ -6431,7 +6447,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
 
             const effectiveVideoMode = resolveUnifiedVideoMode(tech);
-            const promptEntityRefs = collectMatchedSubjectImageUrlsFromPrompt({
+            const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
                 promptText: `${getShotVideoPromptEn(shotSnapshot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
                 entityPool: resolvedEntities,
             });
@@ -6591,6 +6607,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'video',
                     image_urls: image_urls, // Distinguish clearly here
+                    entity_url_map: tech.entity_url_map || undefined,
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
                         createdVideoJobId = String(jobId || '').trim();
