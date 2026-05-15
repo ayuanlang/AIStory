@@ -578,15 +578,17 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
              setShowHistoricalProjectAssets(false);
              setEpisodeFilter('all');
              setAssetTypeFilter('all');
-             setSecondaryFilterKind('all');
-             setSecondaryFilterValue('');
+             const initialKind = contextShotId ? 'shot' : (contextEntityId ? 'entity' : 'all');
+             const initialValue = contextShotId || contextEntityId || '';
+             setSecondaryFilterKind(initialKind);
+             setSecondaryFilterValue(String(initialValue));
              setSubCategoryFilter('all');
-             setSecondaryAutoFollow(false);
+             setSecondaryAutoFollow(true);
              setNameFilter('');
              setSelectedAssetId('');
              setSelectedMulti(new Set());
         }
-    }, [episodeId, isOpen]);
+    }, [episodeId, isOpen, contextShotId, contextEntityId]);
 
         useEffect(() => {
                  if (episodeId && availableShots.length === 0) {
