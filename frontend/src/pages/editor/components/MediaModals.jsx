@@ -578,17 +578,15 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
              setShowHistoricalProjectAssets(false);
              setEpisodeFilter('all');
              setAssetTypeFilter('all');
-             const initialKind = contextShotId ? 'shot' : (contextEntityId ? 'entity' : 'all');
-             const initialValue = contextShotId || contextEntityId || '';
-             setSecondaryFilterKind(initialKind);
-             setSecondaryFilterValue(String(initialValue));
+             setSecondaryFilterKind('all');
+             setSecondaryFilterValue('');
              setSubCategoryFilter('all');
-             setSecondaryAutoFollow(true);
+             setSecondaryAutoFollow(false);
              setNameFilter('');
              setSelectedAssetId('');
              setSelectedMulti(new Set());
         }
-    }, [episodeId, isOpen, contextShotId, contextEntityId]);
+    }, [episodeId, isOpen]);
 
         useEffect(() => {
                  if (episodeId && availableShots.length === 0) {
@@ -755,6 +753,11 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 });
             }
         } else if (secondaryFilterKind === 'shot') {
+            // Shot scope should not mix in entity assets.
+            filtered = filtered.filter((asset) => isShotBoundAsset(asset));
+            logAssetPickerDebug('level2:shot-scope', {
+                summary: summarizeAssetsForDebug(filtered),
+            });
             // Only narrow by exact shot when user explicitly chooses a shot value.
             if (secondaryFilterValue) {
                 const exactShotOnly = filtered.filter((asset) => String(resolveAssetShotId(asset)) === String(secondaryFilterValue));
