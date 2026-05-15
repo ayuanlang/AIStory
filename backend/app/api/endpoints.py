@@ -29642,7 +29642,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
             continue
 
         entity_type = str(row.get("entity_type") or "").strip().lower()
-        if entity_type not in {"subject", "character", "char"}:
+        if entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
             continue
 
         image_url = str(row.get("image_url") or "").strip()
@@ -29872,7 +29872,7 @@ def _append_video_api_ref_mapping(
             if not re.search(r'@[Vv]ideo\s*' + str(idx) + r'|@[Vv]edie\s*' + str(idx) + r'|@[Vv]edio\s*' + str(idx), updated_text):
                 if not added_videos:
                     if idx == 1:
-                        updated_text = f"延长{vid_tag}视频，一镜到底运镜，{updated_text.strip()}"
+                        updated_text = f"进行延长视频续写，从{vid_tag}视频继承角色，道具在环境的布局(不用参考运镜与动作），并从该视频的尾帧开始，按以下提示词开始续写延长视频：{updated_text.strip()}"
                     else:
                         updated_text = f"{vid_tag} {updated_text.strip()}"
                     added_videos = True
@@ -30503,6 +30503,16 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 tech = _parse_shot_tech(shot)
                 end_frame_url = str(tech.get("end_frame_url") or "").strip()
 
+                shot_entity_lookup = entity_lookup
+                if tech.get("entity_url_map"):
+                    import copy
+                    shot_entity_lookup = copy.deepcopy(entity_lookup)
+                    for k_str, v in tech.get("entity_url_map").items():
+                        k_str = str(k_str).strip()
+                        for norm_name, row in shot_entity_lookup.items():
+                            if str(row.get("entity_id", "")) == k_str or norm_name == _normalize_entity_anchor_token(k_str):
+                                row["image_url"] = str(v).strip()
+
                 need_start = overwrite_existing or not str(shot.image_url or "").strip()
                 need_end = overwrite_existing or not end_frame_url
 
@@ -30548,16 +30558,16 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             _persist_shot_media_batch_status(db, episode, latest)
                             _release_db_connection(db, "shot_media_batch_start_status")
 
-                            start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, entity_lookup)
+                            start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, shot_entity_lookup)
                             logger.info(
                                 "[shot_media_batch] subject_ref_index_map asset=start_frame shot_id=%s shot_label=%s map=%s",
                                 shot.id,
                                 shot_label,
                                 start_ref_index_map,
                             )
-                            start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
+                            start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, shot_entity_lookup, global_style, start_ref_index_map)
                             auto_matches = []
-                            auto_matches.extend([x for x in _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup) if x not in auto_matches])
+                            auto_matches.extend([x for x in _collect_prompt_entity_ref_images(start_prompt_raw, shot_entity_lookup) if x not in auto_matches])
                             start_refs: List[str] = []
                             if isinstance(tech.get("ref_image_urls"), list):
                                 saved_refs = [str(x).strip() for x in tech.get("ref_image_urls") or [] if str(x).strip()]
@@ -30642,19 +30652,19 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             _persist_shot_media_batch_status(db, episode, latest)
                             _release_db_connection(db, "shot_media_batch_end_status")
 
-                            end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, entity_lookup)
+                            end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, shot_entity_lookup)
                             logger.info(
                                 "[shot_media_batch] subject_ref_index_map asset=end_frame shot_id=%s shot_label=%s map=%s",
                                 shot.id,
                                 shot_label,
                                 end_ref_index_map,
                             )
-                            end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, entity_lookup, global_style, end_ref_index_map)
+                            end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, shot_entity_lookup, global_style, end_ref_index_map)
                             refs: List[str] = []
                             if isinstance(tech.get("end_ref_image_urls"), list):
                                 refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
                             else:
-                                refs.extend([x for x in _collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup) if x not in refs])
+                                refs.extend([x for x in _collect_prompt_entity_ref_images(end_prompt_raw, shot_entity_lookup) if x not in refs])
 
                             deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
                             start_image = str(shot.image_url or "").strip()
@@ -30699,14 +30709,14 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         _release_db_connection(db, "shot_media_batch_video_status")
 
                         video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
-                        video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
+                        video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, shot_entity_lookup)
                         logger.info(
                             "[shot_media_batch] subject_ref_index_map asset=video shot_id=%s shot_label=%s map=%s",
                             shot.id,
                             shot_label,
                             video_ref_index_map,
                         )
-                        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
+                        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, shot_entity_lookup, global_style, video_ref_index_map)
 
                         def _resolve_video_mode(payload: Dict[str, Any]) -> str:
                             raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "start"
@@ -30750,7 +30760,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             refs,
                             ref_mode=video_mode,
                             prompt_candidates=video_prompt_candidates,
-                            entity_lookup=entity_lookup,
+                            entity_lookup=shot_entity_lookup,
                             manual_override=bool(tech.get("video_ref_image_urls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
                             associated_entities=shot.associated_entities,
                         )
@@ -30777,21 +30787,21 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             normalized_refs,
                             normalized_last_frame_url,
                             None,
-                            entity_lookup=entity_lookup,
+                            entity_lookup=shot_entity_lookup,
                         )
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
                         video_prompt_cn = ""
                         if video_prompt_cn_raw:
-                            video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, entity_lookup)
-                            video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, entity_lookup, global_style, video_cn_ref_index_map)
+                            video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, shot_entity_lookup)
+                            video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, shot_entity_lookup, global_style, video_cn_ref_index_map)
                             video_prompt_cn = _append_video_api_ref_mapping(
                                 video_prompt_cn,
                                 ordered_video_refs,
                                 normalized_refs,
                                 normalized_last_frame_url,
                                 None,
-                                entity_lookup=entity_lookup,
+                                entity_lookup=shot_entity_lookup,
                             )
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
