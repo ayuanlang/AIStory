@@ -27597,6 +27597,14 @@ async def submit_generate_video_endpoint(
                         if str(row.get("entity_id", "")) == k_str or norm_name == _normalize_entity_anchor_token(k_str):
                             row["image_url"] = str(v).strip()
 
+            if submit_entity_lookup:
+                auto_entity_urls = _collect_prompt_entity_ref_images(submit_prompt, submit_entity_lookup)
+                for u in auto_entity_urls:
+                    if u not in submit_refs:
+                        submit_refs.append(u)
+                req_payload["ref_image_url"] = submit_refs
+                submit_ref_image_url = submit_refs
+
             req_payload["prompt"] = _append_video_api_ref_mapping(
                 submit_prompt,
                 submit_refs,
@@ -29872,7 +29880,7 @@ def _append_video_api_ref_mapping(
             if not re.search(r'@[Vv]ideo\s*' + str(idx) + r'|@[Vv]edie\s*' + str(idx) + r'|@[Vv]edio\s*' + str(idx), updated_text):
                 if not added_videos:
                     if idx == 1:
-                        updated_text = f"进行延长视频续写，从{vid_tag}视频继承角色，道具在环境的布局(不用参考运镜与动作），并从该视频的尾帧开始，按以下提示词开始续写延长视频：{updated_text.strip()}"
+                        updated_text = f"对视频{vid_tag}进行延长续写，继承该视频角色，道具在环境的布局(不用参考运镜与动作），并从该视频的尾帧开始，严格按以下提示词重新开始续写新视频：{updated_text.strip()}"
                     else:
                         updated_text = f"{vid_tag} {updated_text.strip()}"
                     added_videos = True
@@ -30780,6 +30788,15 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         if str(normalized_last_frame_url or "").strip():
                             ordered_video_refs.append(str(normalized_last_frame_url).strip())
                         ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
+
+                        auto_video_entity_urls = _collect_prompt_entity_ref_images(video_prompt_raw, shot_entity_lookup)
+                        for u in auto_video_entity_urls:
+                            if u not in ordered_video_refs:
+                                ordered_video_refs.append(u)
+                        if isinstance(normalized_refs, list):
+                            normalized_refs = ordered_video_refs
+                        else:
+                            normalized_refs = ordered_video_refs
 
                         video_prompt = _append_video_api_ref_mapping(
                             video_prompt,
