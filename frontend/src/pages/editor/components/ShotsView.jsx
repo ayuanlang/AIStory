@@ -495,12 +495,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
 
             if (currentIdx === 0) {
-                notifyUiMessage(t('这是第一镜，没有上个分镜！', 'This is the first shot, no previous shot available!'), 'warning');
+                notifyUiMessage(t('这是第一镜，暂时无法使用上镜续写。', 'This is the first shot, so previous-shot continuation is unavailable.'), 'warning');
                 return;
             } else if (currentIdx > 0) {
                 const prevShot = sortedArray[currentIdx - 1];
                 if (!prevShot?.video_url) {
-                    notifyUiMessage(t('上个分镜还没有生成视频！', 'The previous shot has no video available yet!'), 'warning');
+                    notifyUiMessage(t('上一镜头还没有可用于续写的视频内容。', 'The previous shot does not have video content available for continuation yet.'), 'warning');
                     return;
                 }
             } else if (selectedShotIds.length > 0) {
@@ -513,7 +513,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     }
                 }
                 if (!valid) {
-                    notifyUiMessage(t('选中的分镜中没有前置分镜包含视频内容！', 'None of the selected shots have a previous shot with a video!'), 'warning');
+                    notifyUiMessage(t('选中的分镜里没有可用于上镜续写的视频内容。', 'None of the selected shots have previous video content available for continuation.'), 'warning');
                     return;
                 }
             } else if (shots.length > 0 && currentIdx === -1) {
@@ -7836,12 +7836,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         <span className={isDraftMode ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('草稿(480p)', 'Draft(480p)')}</span>
                     </label>
 
-                    <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('生成视频时，强制将参考图片以“图N”的形式注入提示词。', 'Inject ref images as “Pic N” into video prompt')}>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后会优先沿用上一镜的视频内容，帮助当前镜头继续续写并保持连贯。', 'Continue from the previous shot to keep the current shot visually consistent.')}>
                         <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${usePrevVideo ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
                             {usePrevVideo && <Check className="w-2.5 h-2.5 text-white" />}
                         </div>
                         <input type="checkbox" className="hidden" checked={usePrevVideo} onChange={(e) => handleToggleUsePrevVideo(e.target.checked)} />
-                        <span className={usePrevVideo ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('上镜视频', 'Prev Video')}</span>
+                        <span className={usePrevVideo ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('上镜续写', 'Shot Continuation')}</span>
                     </label>
 
                      {/* Settings Button Moved to Edit Shot View */}
@@ -8521,7 +8521,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     <div className={`w-2.5 h-2.5 rounded-sm border flex items-center justify-center transition-colors ${usePrevVideo ? 'bg-primary border-primary' : 'border-white/30 hover:border-white/50 bg-black/20'}`}>
                                                         {usePrevVideo && <Check className="w-2 h-2 text-white" />}
                                                     </div>
-                                                    <span className={usePrevVideo ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('上镜视频', 'Prev Video')}</span>
+                                                    <span className={usePrevVideo ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('上镜续写', 'Shot Continuation')}</span>
                                                 </label>
 
                                                 <button 
