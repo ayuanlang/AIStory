@@ -571,8 +571,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisFlowStatus({
             phase: 'warning',
             message: hasMore
-                ? `${t('分析返回告警：', 'Analysis warning: ')}${warningSummary} (+${uniqueWarnings.length - 1})`
-                : `${t('分析返回告警：', 'Analysis warning: ')}${warningSummary}`,
+                ? `${t('有些内容需要您最后确认：', 'A few items still need your review: ')}${warningSummary} (+${uniqueWarnings.length - 1})`
+                : `${t('有些内容需要您最后确认：', 'A few items still need your review: ')}${warningSummary}`,
         });
         setTimeout(() => {
             setAnalysisFlowStatus(prev => (prev?.phase === 'warning' ? { phase: 'idle', message: '' } : prev));
@@ -593,7 +593,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (prevPhase === 'completed' || prevPhase === 'warning' || prevPhase === 'failed') return prev;
                 return {
                     phase: 'completed',
-                    message: prevMessage || t('🎉 剧本分析与场景构建已完成，快来看看吧！', 'Analysis and import completed.'),
+                    message: prevMessage || t('三步内容已经整理完成，您可以继续检查、微调并推进后续制作。', 'All three steps are complete. You can now review and continue.'),
                 };
             }
 
@@ -601,7 +601,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (prevPhase === 'warning') return prev;
                 return {
                     phase: 'warning',
-                    message: prevMessage || String(analysisUiReport?.warning || '').trim() || t('分析已结束，但有告警需要处理。', 'Analysis finished with warnings that need review.'),
+                    message: prevMessage || String(analysisUiReport?.warning || '').trim() || t('内容已经整理出来了，但有少量细节建议您再确认一下。', 'The result is ready, but a few details still need review.'),
                 };
             }
 
@@ -609,7 +609,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (prevPhase === 'failed') return prev;
                 return {
                     phase: 'failed',
-                    message: prevMessage || String(analysisUiReport?.error || '').trim() || t('分析失败。', 'Analysis failed.'),
+                    message: prevMessage || String(analysisUiReport?.error || '').trim() || t('这次整理没能顺利完成，请再试一次。', 'This run did not finish successfully. Please try again.'),
                 };
             }
 
@@ -621,13 +621,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const normalized = String(code || '').trim();
         if (!normalized) return '';
         if (normalized === 'ANALYSIS_OUTPUT_TRUNCATED') {
-            return t('AI Script Analysis 的最后一段输出在长度上限处停止，当前结果未通过完整性校验。', 'The final AI Script Analysis segment stopped at the length limit, and the result did not pass integrity checks.');
+            return t('本轮整理在最后一步提前结束了，结果可能还不够完整。', 'The run stopped early near the end, so the result may still be incomplete.');
         }
         if (normalized === 'ANALYSIS_OUTPUT_CONTINUED') {
-            return t('AI Script Analysis 曾因长度上限分段，系统已自动续写；是否最终完整以结果校验为准。', 'AI Script Analysis hit a length limit and auto-continuation was applied; final completeness depends on integrity checks.');
+            return t('内容较长，系统已经自动接着整理；请以最终结果为准。', 'The content was long, so the system continued automatically; please review the final result.');
         }
         if (normalized === 'ANALYSIS_JSON_INVALID') {
-            return t('AI Script Analysis 检测到结构片段损坏。', 'AI Script Analysis detected invalid structured fragments.');
+            return t('整理结果里有一小部分内容没有完全成型。', 'A small part of the structured result is incomplete.');
         }
         if (normalized === 'ANALYSIS_SUBJECTS_UNVERIFIED') {
             return '';
@@ -636,7 +636,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return '';
         }
         if (normalized === 'ANALYSIS_LLM_CALL_FAILED_RETRIED') {
-            return t('生成期间 AI 走神了一小下，不过我们已经帮您自动重连啦。请稍微留意一下最终的报告详情哦。', 'LLM call failures occurred during scene analysis; the system retried/fallback to continue. Please review result details and warnings.');
+            return t('中途有过一次短暂中断，不过系统已经自动接续完成，建议您最后再看一眼结果。', 'There was a brief interruption, but the system resumed automatically. Please give the result a quick final review.');
         }
         return '';
     }, [t]);
@@ -692,7 +692,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return '出现供应商政策不允许内容';
         }
         if (stable.includes('第一阶段未解析到完整的 Subject Index 区块') || stable.includes('第一阶段返回未完成或被截断')) {
-            return t('第一阶段返回未完成或被截断，缺少完整 Subject Index；当前结果不能继续使用。请重试，必要时切换其他模型。', 'Stage 1 returned incomplete or truncated output and is missing a complete Subject Index. The current result cannot be used. Please retry, and switch models if needed.');
+            return t('这次故事梳理没有完整结束，关键内容还没整理齐，建议重新执行一次。', 'The story pass did not complete, so key planning details are still missing. Please run it again.');
         }
         if (
             normalized.includes('剧本分析结果不可用')
@@ -700,8 +700,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('please directly rerun AI script analysis')
         ) {
             return t(
-                '剧本分析返回告警：结果需要人工复核，但不再阻断原文、Markdown 与 JSON 的加载。',
-                'Scene analysis returned warnings: the result needs manual review, but no longer blocks loading raw text, markdown, or JSON.'
+                '内容已经整理出来，但仍建议您人工复核后再继续。',
+                'The result is available, but it should be reviewed before continuing.'
             );
         }
         if (
@@ -710,8 +710,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('missing required sections')
         ) {
             return t(
-                '剧本分析返回告警：本次返回缺少部分必要结构段，请人工复核；系统仍会继续加载已返回的原文、Markdown 与 JSON。',
-                'Scene analysis returned warnings: some required sections are missing. Please review manually; the system will still load returned raw text, markdown, and JSON.'
+                '这次整理缺少部分必要内容，请您先确认后再继续。',
+                'Some required parts are missing from this run. Please review before continuing.'
             );
         }
         if (
@@ -719,8 +719,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('truncated')
         ) {
             return t(
-                '剧本分析返回告警：续写后结果仍可能不完整，请人工复核；系统将继续加载已返回内容。',
-                'Scene analysis returned warnings: the result may still be incomplete after continuation. Please review manually; the system will continue loading returned content.'
+                '系统已经尽量续接本轮整理，但结果可能还不够完整，建议再确认一下。',
+                'The system continued this run automatically, but the result may still be incomplete.'
             );
         }
         if (
@@ -729,8 +729,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('json 不完整')
         ) {
             return t(
-                '剧本分析返回告警：本次返回的部分结构片段损坏，请人工复核；系统会尽可能继续解析并加载可用内容。',
-                'Scene analysis returned warnings: some structured fragments are invalid. Please review manually; the system will keep parsing and loading usable content where possible.'
+                '结果里有少量内容没有整理完整，系统已经尽量保留可用部分，请您再确认一次。',
+                'A small portion of the result is incomplete. Usable content was kept, but please review it.'
             );
         }
         return stable;
@@ -4097,7 +4097,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             setAnalysisFlowStatus({
                 phase: 'generating_assets',
-                message: t("✨ 发现有个没完成的第二阶段任务，正在为您继续生成对应的人物和场景资产...", "Resuming Phase 2 asset generation..."),
+                message: t("发现上次还有资料补齐没收尾，正在继续为您完善角色、道具和场景信息...", "Resuming asset preparation..."),
             });
             try {
                 const result = await awaitAnalyzeSceneWithRecovery(
@@ -4164,17 +4164,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const skippedCount = sceneImportReport?.skippedSubjectItems?.length || 0;
                         setAnalysisFlowStatus({
                             phase: 'completed',
-                            message: t(`🎉 恢复成功！系统回溯了进度，顺利为您生成了 ${createdCount} 个全新资产（有 ${skippedCount} 个已存在从而跳过）。`, `Recovery successful. Generated ${createdCount} new assets (skipped ${skippedCount}).`)
+                            message: t(`已顺利接上上次进度，本次补齐了 ${createdCount} 份新资料，另有 ${skippedCount} 份已有内容已自动跳过。`, `Recovery successful. Added ${createdCount} new items and skipped ${skippedCount} existing ones.`)
                         });
                     }
                 } else {
-                    setAnalysisFlowStatus({ phase: 'warning', message: t('恢复第二阶段分析失败：未返回有效内容', 'Failed to resume phase 2: returned no content') });
+                    setAnalysisFlowStatus({ phase: 'warning', message: t('已尝试接续上次进度，但这一步暂时没有整理出可用内容。', 'Tried to resume, but no usable content was returned.') });
                 }
                 clearAnalysisTaskMarker(activeEpisode.id);
             } catch (e) {
                 console.error("Phase 2 recovery error:", e);
                 const friendlyRecoveryError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
-                setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第二阶段分析任务失败：${friendlyRecoveryError}`, `Failed to resume Phase 2 analysis task: ${friendlyRecoveryError}`) });
+                setAnalysisFlowStatus({ phase: 'failed', message: t(`接续上次资料补齐时未成功完成：${friendlyRecoveryError}`, `Failed while resuming asset preparation: ${friendlyRecoveryError}`) });
                   setAnalysisUiReport(prev => ({ ...prev, status: 'error', error: friendlyRecoveryError }));
                   clearAnalysisTaskMarker(activeEpisode.id);
             } finally {
@@ -4215,7 +4215,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisStopRequestedRef.current = false;
         setAnalysisFlowStatus({
             phase: 'analyzing',
-            message: t('🔄 发现有个没完成的场景任务，接着帮您做完...', 'Detected an in-progress analysis task, reconnecting...'),
+            message: t('发现上次的剧本整理还没结束，正在继续为您接着处理...', 'Detected an in-progress analysis task and reconnecting...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -5691,7 +5691,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
             phase: 'autosaving',
-            message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
+            message: t('正在整理您刚刚编辑的内容，准备开始本轮剧本分析...', 'Saving the latest edits before analysis...'),
         });
         setAnalysisUiReport({
             status: 'running',
@@ -5753,7 +5753,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('正在通读剧本，梳理剧情主线、人物关系和关键场景，通常需要几分钟。', 'Reading the script and organizing the main story beats.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
@@ -5787,11 +5787,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.llmReturnedAt = Date.now();
             setAnalysisFlowStatus({
                 phase: 'processing_output_workspace',
-                message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
+                message: t('故事主线已经梳理出来，正在汇总重点内容，马上进入场景整理。', 'The main story structure is ready and is being prepared for the next step.'),
             });
             setAnalysisFlowStatus({
                 phase: 'processing_output_workspace',
-                message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
+                message: t('故事主线已经梳理出来，正在汇总重点内容，马上进入场景整理。', 'The main story structure is ready and is being prepared for the next step.'),
             });
 
             if (result && result.meta) {
@@ -5861,7 +5861,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
                 phase: 'saving_scenes',
-                message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
+                message: t('正在把剧情拆成可继续调整的场景结构，请稍等片刻。', 'Turning the story into editable scene structure...'),
             });
             try {
                 importReport = await runAutoImportAndSwitchToScenes(analyzedText, {
@@ -6155,7 +6155,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
             phase: 'autosaving',
-            message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
+            message: t('正在整理您刚刚编辑的内容，准备开始本轮剧本分析...', 'Saving the latest edits before analysis...'),
         });
         const retryResetNotice = retryCount > 0
             ? t('检测到首轮未返回完整 Subject Index，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing Subject Index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
@@ -6195,7 +6195,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
-                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('正在通读剧本，梳理剧情主线、人物关系和关键场景，通常需要几分钟。', 'Reading the script and organizing the main story beats.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
@@ -6584,14 +6584,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return { status: analysisUiReport.status, error: analysisUiReport.error, warning: analysisUiReport.warning };
     }, [analysisUiReport, analysisFlowStatus]);
 
+    const analysisBusinessSteps = useMemo(() => ([
+        {
+            key: 'story_alignment',
+            label: t('理清故事', 'Understand Story'),
+            detail: t('梳理剧情、人物和情绪线', 'Organize plot, characters, and emotional beats'),
+        },
+        {
+            key: 'scene_structuring',
+            label: t('整理场景', 'Structure Scenes'),
+            detail: t('生成可继续调整的场景框架', 'Build an editable scene structure'),
+        },
+        {
+            key: 'asset_preparation',
+            label: t('补齐资料', 'Prepare Assets'),
+            detail: t('补充角色、道具和场景资料', 'Prepare characters, props, and environments'),
+        },
+    ]), [t]);
+
+    const getAnalysisBusinessStepIndex = useCallback((phase) => {
+        const normalized = String(phase || '').trim();
+        if (normalized === 'autosaving' || normalized === 'analyzing' || normalized === 'processing_output_workspace') return 0;
+        if (normalized === 'saving_scenes') return 1;
+        if (normalized === 'generating_assets' || normalized === 'completed') return 2;
+        return -1;
+    }, []);
+
+    const terminalAnalysisStepIndex = useMemo(() => {
+        if (String(llmAssetRawResultContent || '').trim()) return 2;
+        if (String(subjectIndexText || '').trim()) return 1;
+        if (String(adaptationText || llmRawResultContent || '').trim()) return 0;
+        return 0;
+    }, [adaptationText, llmAssetRawResultContent, llmRawResultContent, subjectIndexText]);
+
     const phase1StageCards = useMemo(() => ([
         {
             key: 'stage1-card',
-            eyebrow: t('第一阶段', 'Stage 1'),
-            title: t('剧本改编', 'Script Adaptation'),
+            eyebrow: t('阶段一', 'Step 1'),
+            title: t('故事梳理', 'Story Alignment'),
             status: String(adaptationText || '').trim() ? 'completed' : (String(llmRawResultContent || '').trim() ? 'warning' : 'idle'),
-            badge: String(adaptationText || '').trim() ? t('已提取', 'Ready') : t('待输出', 'Pending'),
-            summary: t('只展示从第一阶段结果中提取出的“修改后的剧本”正文。', 'Shows only the adapted script body extracted from Stage 1 output.'),
+            badge: String(adaptationText || '').trim() ? t('已完成', 'Done') : t('待开始', 'Pending'),
+            summary: t('先统一剧情脉络、人物关系和这一集的主要推进方向，形成后续可继续加工的故事底稿。', 'Organizes the story flow, character relationships, and key beats into a working draft.'),
             content: adaptationText,
             actions: [
                 {
@@ -6603,15 +6636,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     loading: isAnalyzing,
                 },
             ],
-            placeholder: t('第一阶段尚未提取到“修改后的剧本”正文。', 'No adapted script extracted from Stage 1 yet.'),
+            placeholder: t('完成故事梳理后，这里会展示整理好的剧情底稿。', 'The aligned story draft will appear here after step 1.'),
         },
         {
             key: 'stage2-card',
-            eyebrow: t('第二阶段', 'Stage 2'),
-            title: t('资产分析提取', 'Beats and Assets'),
+            eyebrow: t('阶段二', 'Step 2'),
+            title: t('场景整理', 'Scene Structuring'),
             status: String(subjectIndexText || '').trim() ? 'completed' : 'idle',
-            badge: String(subjectIndexText || '').trim() ? t('已生成', 'Ready') : t('待输出', 'Pending'),
-            summary: t('展示第二阶段产出的 Subject Index / 资产提取结果；Project Visual Backfill 默认继承第一阶段并仅在必要时校准。', 'Shows the Stage 2 Subject Index and asset extraction result; Project Visual Backfill is inherited from Stage 1 and only adjusted when necessary.'),
+            badge: String(subjectIndexText || '').trim() ? t('已完成', 'Done') : t('待开始', 'Pending'),
+            summary: t('把故事底稿拆成可继续调整的场景和重点要素，方便后续确认执行内容。', 'Turns the story draft into scenes and key production items for follow-up work.'),
             content: subjectIndexText,
             actions: [
                 {
@@ -6623,18 +6656,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     loading: isAnalyzing,
                 },
             ],
-            placeholder: t('第二阶段尚未生成 Subject Index。', 'No Subject Index generated by Stage 2 yet.'),
+            placeholder: t('完成场景整理后，这里会显示本集的场景与重点要素清单。', 'Scene structure and key items will appear here after step 2.'),
         },
     ]), [adaptationText, handleAnalysisClick, isAnalyzing, llmRawResultContent, subjectIndexText, t]);
 
     const phase2StageCards = useMemo(() => ([
         {
             key: 'stage3-card',
-            eyebrow: t('第三阶段', 'Stage 3'),
-            title: t('资产设计', 'Asset Design'),
+            eyebrow: t('阶段三', 'Step 3'),
+            title: t('资料补齐', 'Asset Preparation'),
             status: String(llmAssetRawResultContent || '').trim() ? 'completed' : 'idle',
-            badge: String(llmAssetRawResultContent || '').trim() ? t('已生成', 'Ready') : t('待输出', 'Pending'),
-            summary: t('展示第三阶段的角色、道具、场景等资产设计输出。', 'Shows the Stage 3 asset design output for characters, props, and environments.'),
+            badge: String(llmAssetRawResultContent || '').trim() ? t('已完成', 'Done') : t('待开始', 'Pending'),
+            summary: t('补齐角色、道具、场景等执行资料，让后续制作可以顺畅接上。', 'Prepares the supporting character, prop, and environment details for production.'),
             content: llmAssetRawResultContent,
             actions: [
                 {
@@ -6646,7 +6679,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     loading: isRetryingPhase2,
                 },
             ],
-            placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
+            placeholder: t('完成资料补齐后，这里会展示可直接衔接后续制作的参考内容。', 'Prepared production details will appear here after step 3.'),
         },
     ]), [handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, subjectIndexText, t]);
 
@@ -6743,7 +6776,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2 font-semibold">
                             {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4" /> : <Loader2 className="w-4 h-4 animate-spin" />}
-                            <span>{t('场景拆解进度', 'AI Script Analysis Status')}</span>
+                            <span>{t('剧本分析进度', 'Script Analysis Progress')}</span>
                         </div>
                         {!isAnalyzing && (
                             <button
@@ -6759,34 +6792,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         )}
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
-                                                                        {[
-                            { key: 'autosaving', label: t('自动保存', 'Auto Save') },
-                            { key: 'analyzing', label: t('场景解析', 'Scene Planning') },
-                            { key: 'saving_scenes', label: t('保存结构', 'Import Structure') },
-                            { key: 'generating_assets', label: t('推演资产', 'Asset Generation') },
-                            { key: 'completed', label: t('AI 总结报告', 'Report') },
-                        ].map((step, idx) => {
-                            const stepOrder = ['autosaving', 'analyzing', 'saving_scenes', 'generating_assets', 'completed'];
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
+                        {analysisBusinessSteps.map((step, idx) => {
                             const phase = analysisFlowStatus.phase || 'idle';
-                            const currentIndex = stepOrder.indexOf(phase);
-                            const stepIndex = stepOrder.indexOf(step.key);
+                            const currentIndex = getAnalysisBusinessStepIndex(phase);
                             const hasFinalReport = !!(analysisUiReport && analysisUiReport.status !== 'running');
                             const isTerminalWarning = phase === 'warning';
                             const isTerminalFailed = phase === 'failed';
+                            const progressIndex = (isTerminalWarning || isTerminalFailed)
+                                ? terminalAnalysisStepIndex
+                                : currentIndex;
                             const isDone = !isTerminalFailed && (
                                 hasFinalReport
-                                    ? stepIndex <= 3
-                                    : (isTerminalWarning ? stepIndex <= 2 : currentIndex > stepIndex || phase === 'completed')
+                                    ? idx <= terminalAnalysisStepIndex
+                                    : idx < progressIndex || phase === 'completed'
                             );
-                            const isActive = !isTerminalFailed && !isTerminalWarning && currentIndex === stepIndex;
-                            const isFailed = isTerminalFailed && step.key === 'analyzing';
+                            const isActive = !isTerminalFailed && !isTerminalWarning && progressIndex === idx;
+                            const isWarning = isTerminalWarning && idx === terminalAnalysisStepIndex;
+                            const isFailed = isTerminalFailed && idx === terminalAnalysisStepIndex;
                             return (
                                 <div
                                     key={step.key}
                                     className={`rounded-lg border px-3 py-2 flex items-center gap-2 ${
                                         isFailed
                                             ? 'border-red-400/50 bg-red-500/20'
+                                            : isWarning
+                                                ? 'border-amber-400/50 bg-amber-500/20'
                                             : isActive
                                                 ? 'border-purple-300/60 bg-purple-400/20'
                                                 : isDone
@@ -6795,7 +6826,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     }`}
                                 >
                                     <span className="text-[11px] font-bold opacity-80">{idx + 1}</span>
-                                    <span className="text-xs leading-tight">{step.label}</span>
+                                    <div className="flex flex-col leading-tight">
+                                        <span className="text-xs font-semibold">{step.label}</span>
+                                        <span className="text-[10px] opacity-70">{step.detail}</span>
+                                    </div>
                                 </div>
                             );
                         })}
@@ -6807,9 +6841,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                     {isAnalyzing && analysisFlowStatus.phase === 'analyzing' && analysisHeartbeatElapsedMs >= 5000 && (
                         <div className="mb-2 text-[11px] text-amber-200/90">
-                            {t('仍在等待后端响应...', 'Still waiting for backend response...')} ({formatDurationMs(analysisHeartbeatElapsedMs)})
+                            {t('仍在持续梳理中，请稍候...', 'Still working through the script...')} ({formatDurationMs(analysisHeartbeatElapsedMs)})
                             <span className="ml-2 text-amber-100/80">
-                                {t('提交阶段超时约 300s，整体等待最长约 600s；复杂剧本通常需要更久。', 'Submit timeout is about 300s and total wait can take up to about 600s; complex scripts usually take longer.')}
+                                {t('剧情越复杂、内容越长，整理时间通常也会更久。', 'Longer and more complex scripts usually take more time.')}
                             </span>
                         </div>
                     )}
