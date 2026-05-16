@@ -334,17 +334,21 @@ class LLMService:
             model = payload.get("model", "")
             if not model:
                 model = payload.get("request", {}).get("model", "")
-            api_url = payload.get("request", {}).get("url", "")
+            api_url = payload.get("url") or payload.get("request", {}).get("url", "")
             
             # Request vs Response mapping
             payload_json = json.dumps(_strip_base64_from_log(payload.get("request", {})), ensure_ascii=False) if "request" in payload else None
             response_json = json.dumps(_strip_base64_from_log(payload.get("response", {})), ensure_ascii=False) if "response" in payload else None
             
-            error_msg = payload.get("error") if "error" in payload else None
-            if not error_msg and "str_error" in payload:
-                error_msg = payload.get("str_error")
-            if not error_msg and payload.get("human_summary"):
-                error_msg = payload.get("human_summary")
+            error_components = []
+            if payload.get("error"):
+                error_components.append(f"Error: {payload['error']}")
+            if payload.get("str_error") and payload.get("str_error") != payload.get("error"):
+                error_components.append(f"Details: {payload['str_error']}")
+            if payload.get("human_summary") and payload.get("human_summary") != payload.get("error"):
+                error_components.append(f"Summary: {payload['human_summary']}")
+                
+            error_msg = " | ".join(error_components) if error_components else None
                 
             latency_ms = payload.get("latency_ms")
             
@@ -884,7 +888,7 @@ class LLMService:
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": "kie",
                 "category": "LLM",
-                "url": url,
+                "request": {"url": url, "model": resolved_model, "payload": payload},
                 "model": resolved_model,
                 "error_kind": "connection",
                 "error_text": str(exc),
@@ -906,7 +910,7 @@ class LLMService:
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": "kie",
                 "category": "LLM",
-                "url": url,
+                "request": {"url": url, "model": resolved_model, "payload": payload},
                 "model": resolved_model,
                 "status_code": resp.status_code,
                 "response_text": resp.text[:500],
@@ -1721,7 +1725,7 @@ class LLMService:
                  self._safe_log_json("LLM_RESPONSE_ERROR", {
                      "provider": "doubao",
                      "category": "LLM",
-                     "url": url,
+                     "request": {"url": url, "model": model, "payload": payload},
                      "model": model,
                      "status_code": response.status_code,
                      "response_text": response.text[:500],
@@ -1766,7 +1770,7 @@ class LLMService:
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": "doubao",
                 "category": "LLM",
-                "url": url,
+                "request": {"url": url, "model": model, "payload": payload},
                 "model": model,
                 "error_kind": error_kind,
                 "error_text": str(e),
@@ -2774,7 +2778,7 @@ class LLMService:
                 self._safe_log_json("LLM_RESPONSE_ERROR", {
                     "provider": provider,
                     "category": resolved_category,
-                    "url": url,
+                    "request": {"url": url, "model": model, "messages": messages},
                     "model": model,
                     "error_kind": "ambiguous_submit_transport",
                     "error_text": str(e2),
@@ -2795,7 +2799,7 @@ class LLMService:
                 self._safe_log_json("LLM_RESPONSE_ERROR", {
                     "provider": provider,
                     "category": resolved_category,
-                    "url": url,
+                    "request": {"url": url, "model": model, "messages": messages},
                     "model": model,
                     "error_kind": "connection",
                     "error_text": str(e2),
@@ -2816,7 +2820,7 @@ class LLMService:
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": provider,
                 "category": resolved_category,
-                "url": url,
+                "request": {"url": url, "model": model, "messages": messages},
                 "model": model,
                 "error_kind": "ambiguous_submit_transport",
                 "error_text": str(e),
@@ -2844,7 +2848,7 @@ class LLMService:
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": provider,
                 "category": resolved_category,
-                "url": url,
+                "request": {"url": url, "model": model, "messages": messages, "config": extra_config},
                 "model": model,
                 "status_code": response.status_code,
                 "response_text": response.text,
@@ -3221,7 +3225,7 @@ class LLMService:
                         self._safe_log_json("LLM_RESPONSE_ERROR", {
                             "provider": provider,
                             "category": resolved_category,
-                            "url": url,
+                            "request": {"url": url, "model": payload.get("model") or model, "messages": messages, "config": extra_config},
                             "model": payload.get("model") or model,
                             "status_code": response.status_code,
                             "response_text": error_text,
@@ -3401,7 +3405,7 @@ class LLMService:
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": provider,
                 "category": resolved_category,
-                "url": url,
+                "request": {"url": url, "model": payload.get("model") or model, "messages": messages},
                 "model": payload.get("model") or model,
                 "error_kind": "connection",
                 "error_text": str(exc),
@@ -3422,7 +3426,7 @@ class LLMService:
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": provider,
                 "category": resolved_category,
-                "url": url,
+                "request": {"url": url, "model": payload.get("model") or model, "messages": messages},
                 "model": payload.get("model") or model,
                 "error_kind": "ambiguous_submit_transport" if str(provider or "").strip().lower() == "kie" else "timeout",
                 "error_text": str(exc),
@@ -3468,7 +3472,7 @@ class LLMService:
             self._safe_log_json("LLM_RESPONSE_ERROR", {
                 "provider": provider,
                 "category": resolved_category,
-                "url": url,
+                "request": {"url": url, "model": payload.get("model") or model, "messages": messages},
                 "model": payload.get("model") or model,
                 "error_kind": "exception",
                 "error_text": str(exc),

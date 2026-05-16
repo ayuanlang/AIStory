@@ -2,6 +2,11 @@
 
 This package adds a routed scene-analysis base prompt plus runtime feature skills for the non-classic path.
 
+Current staged flow:
+- Stage 1: script adaptation (`scene_planning_1_script_optimization.md`)
+- Stage 2: asset analysis extraction (`scene_planning_2_beats_and_assets.md`)
+- Stage 3: asset design (`entity_design.md`)
+
 Goals:
 - Keep `classic` on the original `scene_analysis.txt` path.
 - Use a separate routed base prompt for `feature_stack` and `decision_engine`.

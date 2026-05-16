@@ -1,58 +1,77 @@
 import React from 'react';
-import { CheckCircle, AlertTriangle } from 'lucide-react';
-
-function formatDurationMs(ms) {
-    if (!ms) return '0s';
-    const s = Math.floor(ms / 1000);
-    return `${s}s`;
-}
+import ReactMarkdown from 'react-markdown';
+import { Loader2, RefreshCw, PlayCircle } from 'lucide-react';
 
 export default function LLMResultPanel({
-    title, t, report, rawText, onRawTextChange, onRawTextBlur,
-    isRawReadOnly = false, placeholder = '', extraContent = null
+    title, t, placeholder = '', stageCards = []
 }) {
+    const normalizedCards = Array.isArray(stageCards) ? stageCards.filter(Boolean) : [];
+
     return (
         <div className="flex flex-col gap-3 p-4 border border-white/10 rounded-lg bg-black/20 h-full overflow-y-auto custom-scrollbar">
-            <h3 className="text-sm font-bold text-white/90 tracking-wide flex items-center gap-2">{title}</h3>
-            {
-                extraContent && (
-                    <div className="mt-4 shrink-0">
-                        {extraContent}
-                    </div>
-                )
-            }
-            {report && report.status !== 'running' && (
-                <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm space-y-3 shrink-0">
-                    <div className="font-bold text-white/90 text-base flex items-center gap-2">
-                        <CheckCircle className="w-5 h-5 text-emerald-400" /> {t('run completed!', 'Execution Completed!')}
-                    </div>
-                    {report.warning && (
-                        <div className="flex items-center gap-2 text-amber-400 text-xs mt-1 bg-amber-500/10 p-2 rounded">
-                            <AlertTriangle className="w-4 h-4 shrink-0" />
-                            {report.warning}
-                        </div>
-                    )}
-                    {report.error && (
-                        <div className="flex items-center gap-2 text-red-400 text-xs mt-1 bg-red-500/10 p-2 rounded">
-                            <AlertTriangle className="w-4 h-4 shrink-0" />
-                            {report.error}
-                        </div>
-                    )}
+            <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-bold text-white/90 tracking-wide flex items-center gap-2">{title}</h3>
+            </div>
+            {normalizedCards.length > 0 && (
+                <div className="space-y-3 shrink-0">
+                    {normalizedCards.map((card) => {
+                        const cardStatus = String(card.status || '').trim();
+                        const cardActions = Array.isArray(card.actions) ? card.actions.filter(Boolean) : [];
+                        const toneClass = cardStatus === 'completed'
+                            ? 'border-emerald-500/20 bg-emerald-500/5'
+                            : cardStatus === 'running'
+                                ? 'border-sky-500/20 bg-sky-500/5'
+                                : cardStatus === 'warning'
+                                    ? 'border-amber-500/20 bg-amber-500/5'
+                                    : 'border-white/10 bg-white/5';
+                        return (
+                            <div key={String(card.key || card.title)} className={`rounded-xl border ${toneClass} overflow-hidden`}>
+                                <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-xs uppercase tracking-[0.18em] text-white/45 font-bold">{card.eyebrow || t('阶段输出', 'Stage Output')}</div>
+                                        <div className="text-sm font-semibold text-white/90 mt-1">{card.title}</div>
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                                        {card.badge && (
+                                            <div className="px-2 py-1 rounded-full bg-white/10 text-[10px] font-bold text-white/70 uppercase tracking-wide">
+                                                {card.badge}
+                                            </div>
+                                        )}
+                                        {cardActions.map((action) => {
+                                            const isDisabled = !!action.disabled;
+                                            const isLoading = !!action.loading;
+                                            const Icon = action.icon === 'play' ? PlayCircle : RefreshCw;
+                                            return (
+                                                <button
+                                                    key={String(action.key || action.label || Math.random())}
+                                                    type="button"
+                                                    onClick={action.onClick}
+                                                    disabled={isDisabled || isLoading}
+                                                    className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold border flex items-center gap-1.5 ${isDisabled || isLoading ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-white/10 hover:bg-white/15 border-white/15 text-white/90'}`}
+                                                >
+                                                    {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />}
+                                                    {action.label}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                                {(card.summary || card.meta) && (
+                                    <div className="px-4 pt-3 pb-1 space-y-2">
+                                        {card.summary && <div className="text-xs text-white/70">{card.summary}</div>}
+                                        {card.meta && <div className="text-[11px] text-white/50">{card.meta}</div>}
+                                    </div>
+                                )}
+                                <div className="px-4 pb-4 pt-3 prose prose-invert prose-p:my-1.5 prose-headings:my-2 prose-li:my-0.5 prose-pre:bg-black/40 prose-pre:border prose-pre:border-white/10 prose-code:text-amber-200 max-w-none text-sm text-white/85">
+                                    {String(card.content || '').trim()
+                                        ? <ReactMarkdown>{String(card.content || '')}</ReactMarkdown>
+                                        : <div className="text-xs text-white/35 italic">{card.placeholder || placeholder || t('暂无阶段输出。', 'No stage output yet.')}</div>}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             )}
-            <div className="flex-1 flex flex-col min-h[300px]">
-                <div className="px-1 pb-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">
-                    {t('LLM Raw Response', 'LLM Raw Response')}
-                </div>
-                <textarea
-                    className="w-full flex-1 p-4 bg-black/40 text-white/80 font-mono text-[12px] leading-relaxed focus:outline-none custom-scrollbar border border-white/10 rounded-md"
-                    placeholder={placeholder}
-                    value={rawText || ''}
-                    onChange={e => onRawTextChange?.(e.target.value)}
-                    onBlur={onRawTextBlur}
-                    readOnly={isRawReadOnly}
-                />
-            </div>
         </div>
     );
 }

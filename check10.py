@@ -56,7 +56,7 @@ from app.services.video_service import create_montage
 from app.services.project_cost_service import compute_project_cost_estimation
 from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
-from typing import Any, List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
+from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
 from pydantic import BaseModel
 import bcrypt
 import re
@@ -460,7 +460,7 @@ def _prune_recent_analyze_scene_tasks_locked(now_ts: float) -> None:
 
 # ── Generic async-task polling endpoint ──────────────────────────────────
 @router.get("/tasks/{task_id}")
-def poll_task(task_id: str, current_user: Any = Depends(get_current_user)):
+def poll_task(task_id: str, current_user: User = Depends(get_current_user)):
     info = _get_task_status(task_id, user_id=current_user.id)
     if info is None:
         info = _generation_task_status(task_id, user_id=current_user.id)
@@ -470,7 +470,7 @@ def poll_task(task_id: str, current_user: Any = Depends(get_current_user)):
 
 
 @router.post("/tasks/{task_id}/cancel")
-def cancel_task(task_id: str, current_user: Any = Depends(get_current_user)):
+def cancel_task(task_id: str, current_user: User = Depends(get_current_user)):
     _cancel_generation_task_ref(task_id, user_id=current_user.id, reason="Task canceled by user request")
     info = _cancel_task(task_id, user_id=current_user.id, reason="Task canceled by user request")
     if info is None:
@@ -1120,7 +1120,7 @@ def _read_image_job_file(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _persist_data_uri_image_result(
-    current_user: Any,
+    current_user: User,
     media_url: Optional[str],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -1224,7 +1224,7 @@ def _persist_data_uri_image_result(
 
 
 def _persist_remote_image_result(
-    current_user: Any,
+    current_user: User,
     media_url: Optional[str],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -1495,7 +1495,7 @@ def _asset_meta_to_dict(raw_meta: Any) -> Dict[str, Any]:
     return {}
 
 
-def _visible_asset_owner_ids_for_project(project: Optional[Project], current_user: Any) -> List[int]:
+def _visible_asset_owner_ids_for_project(project: Optional[Project], current_user: User) -> List[int]:
     owner_ids = {int(current_user.id)}
     try:
         if project and getattr(project, "owner_id", None) is not None:
@@ -1507,7 +1507,7 @@ def _visible_asset_owner_ids_for_project(project: Optional[Project], current_use
 
 def _resolve_precise_asset_library_url(
     db: Session,
-    current_user: Any,
+    current_user: User,
     legacy_url: Any,
     *,
     project: Optional[Project],
@@ -1575,7 +1575,7 @@ def _resolve_precise_asset_library_url(
 
 def _repair_entity_image_url_from_assets(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     entity: Optional[Entity],
 ) -> bool:
@@ -1612,7 +1612,7 @@ def _repair_entity_image_url_from_assets(
 
 def _repair_shot_media_urls_from_assets(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     shot: Optional[Shot],
 ) -> bool:
@@ -1677,7 +1677,7 @@ def _repair_shot_media_urls_from_assets(
 
 def _repair_entities_image_urls_from_assets(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     entities: List[Entity],
 ) -> List[Entity]:
@@ -1727,7 +1727,7 @@ def _diagnose_entity_image_url(image_url: Any) -> Dict[str, Any]:
 
 def _repair_shots_media_urls_from_assets(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     shots: List[Shot],
 ) -> List[Shot]:
@@ -1776,7 +1776,7 @@ def _refresh_shot_media_urls(shot: Shot, db: Session) -> Shot:
 
 def _replace_legacy_temp_urls_in_shot_payload(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     shot: Shot,
     update_data: Dict[str, Any],
@@ -3192,7 +3192,7 @@ def _build_scene_analysis_blocking_failure_detail(
 
 
 @router.post("/fix-db-schema")
-def fix_db_schema_endpoint(current_user: Any = Depends(get_current_user)):
+def fix_db_schema_endpoint(current_user: User = Depends(get_current_user)):
     """
     Emergency endpoint to trigger DB migration manually.
     Only accessible by authorized users (technically any logged in user for now, assuming admin).
@@ -3279,7 +3279,7 @@ def create_system_log_action(
     payload: SystemLogCreate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     action = str(payload.action or "").strip().upper()
     if not action:
@@ -3729,7 +3729,7 @@ def get_effective_setting_snapshot(
     category: str = "LLM",
     provider: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     resolved_setting, source, meta = _resolve_effective_api_setting_meta(
         db,
@@ -3950,7 +3950,7 @@ class PromptContentUpdateRequest(BaseModel):
 
 
 @router.get("/prompts/{filename:path}")
-async def get_prompt_content(filename: str, current_user: Any = Depends(get_current_user)):
+async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
     """Retrieve content of a prompt file."""
     normalized = str(filename or "").strip().strip("/")
 
@@ -4017,7 +4017,7 @@ async def get_prompt_content(filename: str, current_user: Any = Depends(get_curr
 async def update_prompt_content(
     filename: str,
     payload: PromptContentUpdateRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not bool(getattr(current_user, "is_superuser", False) or getattr(current_user, "is_system", False)):
         raise HTTPException(status_code=403, detail="Only system/admin users can update prompt files")
@@ -4042,7 +4042,7 @@ async def update_prompt_content(
 
 
 @router.get("/prompts/skills")
-async def list_prompt_skills(current_user: Any = Depends(get_current_user)):
+async def list_prompt_skills(current_user: User = Depends(get_current_user)):
     """List available prompt skills and metadata for frontend/tooling discovery."""
     try:
         registry = load_skills_registry()
@@ -4061,7 +4061,7 @@ async def list_prompt_skills(current_user: Any = Depends(get_current_user)):
 
 
 @router.get("/prompts/skills/{skill_id}")
-async def get_prompt_skill_detail(skill_id: str, current_user: Any = Depends(get_current_user)):
+async def get_prompt_skill_detail(skill_id: str, current_user: User = Depends(get_current_user)):
     """Get one prompt skill metadata by skill id."""
     meta = get_skill_meta(skill_id)
     if not meta:
@@ -4070,7 +4070,7 @@ async def get_prompt_skill_detail(skill_id: str, current_user: Any = Depends(get
 
 
 @router.get("/prompts/scene-analysis/features")
-async def get_scene_analysis_feature_options(current_user: Any = Depends(get_current_user)):
+async def get_scene_analysis_feature_options(current_user: User = Depends(get_current_user)):
     """List feature-stack modes and enum dimensions for scene analysis prompt composition."""
     return get_scene_analysis_feature_catalog()
 
@@ -4140,7 +4140,7 @@ def _build_scene_analysis_slot_blocks_summary(bundle: Dict[str, Any]) -> List[Di
 async def preview_scene_analysis_route(
     request: AnalyzeSceneRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Preview the decision-engine routing result for scene analysis without calling the LLM."""
     requested_mode = str(getattr(request, "scene_analysis_mode", "") or "").strip() or None
@@ -4198,7 +4198,7 @@ async def preview_scene_analysis_route(
 async def get_project_subject_inventory_prompt(
     project_id: int, 
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     try:
         _require_project_access(db, project_id, current_user)
@@ -4232,7 +4232,7 @@ async def get_project_subject_inventory_prompt(
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 @router.post("/analyze_scene", response_model=Dict[str, Any])
-async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
+async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
     """
     Submits raw script text to LLM for Scene/Beat analysis using a specific prompt template.
     Returns the raw analysis result (Markdown/JSON).
@@ -6078,7 +6078,7 @@ class TranslateRequest(BaseModel):
 async def translate_text(
     req: TranslateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -6351,7 +6351,7 @@ class RefinePromptRequest(BaseModel):
 @router.post("/tools/refine_prompt")
 async def refine_prompt(
     req: RefinePromptRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     async_mode: str = Query("0"),
 ):
@@ -6429,7 +6429,7 @@ async def refine_prompt(
 @router.post("/agent/command", response_model=AgentResponse)
 async def process_agent_command(
     request: AgentRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     async_mode: str = Query("0"),
 ):
@@ -6561,7 +6561,7 @@ async def process_agent_command(
 @router.post("/agent/system-management/command", response_model=AgentResponse)
 async def process_system_management_agent_command(
     request: AgentRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     async_mode: str = Query("0"),
 ):
@@ -6684,7 +6684,7 @@ async def _sse_event_generator(events_gen):
 @router.post("/agent/command/stream")
 async def stream_agent_command(
     request: AgentRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     print(f"[STREAM-DEBUG] === stream_agent_command entered === query={request.query[:80] if request.query else 'N/A'}, user={current_user.id}")
     project_id = request.project_id or request.context.get("projectId")
@@ -6770,7 +6770,7 @@ async def stream_agent_command(
 @router.post("/agent/system-management/command/stream")
 async def stream_system_management_agent_command(
     request: AgentRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not bool(getattr(current_user, "is_superuser", False)):
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
@@ -7439,7 +7439,7 @@ def _resolve_project_share_users(
 def _sync_project_managed_shares(
     db: Session,
     project: Project,
-    current_user: Any,
+    current_user: User,
     *,
     share_users: Optional[Any] = None,
     reviewer_users: Optional[Any] = None,
@@ -7563,7 +7563,7 @@ def _review_thread_has_unread(thread: ProjectAssetReviewThreadModel, current_use
     return latest_dt > last_read_dt
 
 
-def _mark_review_thread_read_for_user(thread: ProjectAssetReviewThreadModel, current_user: Any, *, read_at: Optional[str] = None) -> None:
+def _mark_review_thread_read_for_user(thread: ProjectAssetReviewThreadModel, current_user: User, *, read_at: Optional[str] = None) -> None:
     now_iso = str(read_at or now_bj_iso())
     if int(current_user.id or 0) == int(thread.requester_user_id or 0):
         thread.requester_last_read_at = now_iso
@@ -7680,7 +7680,7 @@ def _validate_review_target_ids_for_project(
     return normalized_entity_ids, normalized_shot_ids
 
 
-def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThreadModel, current_user: Any, project: Project) -> str:
+def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThreadModel, current_user: User, project: Project) -> str:
     if current_user.id == thread.reviewer_user_id:
         return "reviewer"
     if current_user.id == thread.requester_user_id:
@@ -7691,7 +7691,7 @@ def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThreadMod
 def _resolve_review_reviewer(
     db: Session,
     project: Project,
-    current_user: Any,
+    current_user: User,
     reviewer_user_id: Optional[int],
     reviewer_user: Optional[str],
 ) -> User:
@@ -7735,7 +7735,7 @@ def _resolve_review_reviewer(
     return reviewer
 
 
-def _require_review_thread_access(db: Session, thread_id: int, current_user: Any) -> Tuple[ProjectAssetReviewThreadModel, Project]:
+def _require_review_thread_access(db: Session, thread_id: int, current_user: User) -> Tuple[ProjectAssetReviewThreadModel, Project]:
     _require_review_models()
     thread = _run_with_schema_self_heal(
         db,
@@ -7753,7 +7753,7 @@ def _require_review_thread_access(db: Session, thread_id: int, current_user: Any
     raise HTTPException(status_code=403, detail="Not authorized to access this review thread")
 
 
-def _require_review_round_access(db: Session, round_id: int, current_user: Any) -> Tuple[ProjectAssetReviewRoundModel, ProjectAssetReviewThreadModel, Project]:
+def _require_review_round_access(db: Session, round_id: int, current_user: User) -> Tuple[ProjectAssetReviewRoundModel, ProjectAssetReviewThreadModel, Project]:
     _require_review_models()
     round_row = db.query(ProjectAssetReviewRound).filter(ProjectAssetReviewRound.id == round_id).first()
     if not round_row:
@@ -7765,7 +7765,7 @@ def _require_review_round_access(db: Session, round_id: int, current_user: Any) 
 def _require_project_access(
     db: Session,
     project_id: int,
-    current_user: Any,
+    current_user: User,
     owner_only: bool = False,
 ) -> Project:
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -7792,7 +7792,7 @@ def _require_project_access(
     raise HTTPException(status_code=403, detail="Not authorized")
 
 
-def _attach_project_flags(project: Project, current_user: Any) -> Project:
+def _attach_project_flags(project: Project, current_user: User) -> Project:
     project.is_owner = (project.owner_id == current_user.id)
     return project
 
@@ -8615,7 +8615,7 @@ async def generate_markdown_with_retry(
 def create_project(
     project: ProjectCreate, 
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     if not project.global_info:
         project.global_info = {}
@@ -8671,7 +8671,7 @@ def create_project(
 def list_project_shares(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
     rows = _run_with_schema_self_heal(
@@ -8696,7 +8696,7 @@ def create_project_share(
     project_id: int,
     payload: ProjectShareCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
     target = str(payload.target_user or "").strip()
@@ -8734,7 +8734,7 @@ def delete_project_share(
     project_id: int,
     shared_user_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
     share = _get_project_share_record(db, project_id, shared_user_id)
@@ -8749,7 +8749,7 @@ def delete_project_share(
 def list_project_review_threads(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     _require_project_access(db, project_id, current_user)
@@ -8774,7 +8774,7 @@ def list_project_review_threads(
 @router.get("/projects/review_threads/inbox", response_model=List[ProjectAssetReviewThreadOut])
 def list_review_inbox_threads(
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     threads = _run_with_schema_self_heal(
@@ -8798,7 +8798,7 @@ def list_review_inbox_threads(
 @router.get("/projects/review_threads/outbox", response_model=List[ProjectAssetReviewThreadOut])
 def list_review_outbox_threads(
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     threads = _run_with_schema_self_heal(
@@ -8824,7 +8824,7 @@ def create_project_review_thread(
     project_id: int,
     payload: ProjectAssetReviewThreadCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     project = _require_project_access(db, project_id, current_user)
@@ -8903,7 +8903,7 @@ def create_project_review_thread(
 def get_review_thread(
     thread_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
@@ -8919,7 +8919,7 @@ def mark_review_thread_read(
     thread_id: int,
     payload: ProjectAssetReviewThreadReadUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
@@ -8941,7 +8941,7 @@ def update_review_thread_status(
     thread_id: int,
     payload: ProjectAssetReviewThreadStatusUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, project = _require_review_thread_access(db, thread_id, current_user)
@@ -8982,7 +8982,7 @@ def update_review_thread_status(
 def list_review_thread_rounds(
     thread_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
@@ -9002,7 +9002,7 @@ def create_review_thread_round(
     thread_id: int,
     payload: ProjectAssetReviewRoundCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, project = _require_review_thread_access(db, thread_id, current_user)
@@ -9064,7 +9064,7 @@ def create_review_thread_round(
 def list_review_round_messages(
     round_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     round_row, _thread, _project = _require_review_round_access(db, round_id, current_user)
@@ -9084,7 +9084,7 @@ def create_review_round_message(
     round_id: int,
     payload: ProjectAssetReviewMessageCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     round_row, thread, project = _require_review_round_access(db, round_id, current_user)
@@ -9155,7 +9155,7 @@ async def generate_project_story_dna_global(
     project_id: int,
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -9360,7 +9360,7 @@ def save_project_story_generator_global_input(
     project_id: int,
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Persist Story Generator (Global/Project) draft inputs without calling the LLM."""
     project = _require_project_access(db, project_id, current_user)
@@ -9414,7 +9414,7 @@ class StoryGeneratorGlobalImportRequest(BaseModel):
 def export_project_story_generator_global_package(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -9569,7 +9569,7 @@ def import_project_story_generator_global_package(
     project_id: int,
     req: StoryGeneratorGlobalImportRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -9692,7 +9692,7 @@ async def analyze_project_novel_to_story_generator_fields(
     project_id: int,
     req: AnalyzeNovelRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -9860,7 +9860,7 @@ def read_projects(
     skip: int = 0, 
     limit: int = 100, 
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     def _query_with(session: Session) -> List[Project]:
         shared_project_ids = [
@@ -9979,7 +9979,7 @@ def read_projects(
 def read_project(
     project_id: int, 
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -10058,7 +10058,7 @@ def update_project(
     project_id: int, 
     project_in: ProjectUpdate, 
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user)
     
@@ -10128,7 +10128,7 @@ def get_project_cost_estimation(
     project_id: int,
     refresh: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -10147,7 +10147,7 @@ def get_project_cost_estimation(
 def recompute_project_cost_estimation(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
     snapshot = _recompute_and_persist_project_cost_estimation(db, project_id)
@@ -10160,7 +10160,7 @@ def recompute_episode_cost_estimation(
     project_id: int,
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Recompute cost estimation scoped to a single episode, then persist full project snapshot."""
     _require_project_access(db, project_id, current_user)
@@ -10187,7 +10187,7 @@ def recompute_scene_cost_estimation(
     project_id: int,
     scene_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Recompute cost estimation for a specific scene, persist full project snapshot, return scene slice."""
     _require_project_access(db, project_id, current_user)
@@ -10216,7 +10216,7 @@ def recompute_scene_cost_estimation(
 def delete_project(
     project_id: int, 
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user, owner_only=True)
 
@@ -10427,7 +10427,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
 def read_episodes(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     # Verify access
     _require_project_access(db, project_id, current_user)
@@ -10440,7 +10440,7 @@ def update_episode_segments(
     episode_id: int,
     segments: List[ScriptSegmentBase],
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -10475,7 +10475,7 @@ def create_episode(
     project_id: int,
     episode: EpisodeCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     _require_project_access(db, project_id, current_user)
         
@@ -10501,7 +10501,7 @@ def update_episode(
     episode_id: int,
     episode_in: EpisodeUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -10562,7 +10562,7 @@ class CharacterCanonCategoriesRequest(BaseModel):
 def get_project_character_profiles(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
     gi = project.global_info or {}
@@ -10577,7 +10577,7 @@ def update_project_character_profiles(
     project_id: int,
     req: CharacterProfilesUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -10616,7 +10616,7 @@ def save_project_character_canon_input(
     project_id: int,
     req: CharacterCanonInputRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Persist Project Character Canon draft inputs without calling the LLM."""
     project = _require_project_access(db, project_id, current_user)
@@ -10656,7 +10656,7 @@ def save_project_character_canon_categories(
     project_id: int,
     req: CharacterCanonCategoriesRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Persist Project Character Canon tag/identity category configuration."""
     project = _require_project_access(db, project_id, current_user)
@@ -10691,7 +10691,7 @@ async def generate_project_character_profile(
     project_id: int,
     req: CharacterProfileGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -11063,7 +11063,7 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
 def get_episode_character_profiles(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11077,7 +11077,7 @@ def update_episode_character_profiles(
     episode_id: int,
     req: CharacterProfilesUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11094,7 +11094,7 @@ async def generate_episode_character_profile(
     episode_id: int,
     req: CharacterProfileGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -11288,7 +11288,7 @@ async def generate_episode_story_dna(
     episode_id: int,
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -11474,7 +11474,7 @@ def save_episode_story_generator_input(
     episode_id: int,
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Persist Story Generator draft inputs without calling the LLM.
 
@@ -11524,7 +11524,7 @@ async def generate_episode_scenes_from_story(
     episode_id: int,
     req: ScriptScenesGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -11728,7 +11728,7 @@ def start_episode_scenes_generation_job(
     episode_id: int,
     req: ScriptScenesGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11786,7 +11786,7 @@ def start_episode_scenes_generation_job(
 def get_episode_scenes_generation_job_status(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11814,7 +11814,7 @@ def get_episode_scenes_generation_job_status(
 def stop_episode_scenes_generation_job(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11857,7 +11857,7 @@ async def generate_project_episode_scripts_from_global_framework(
     project_id: int,
     req: ProjectEpisodeScriptsGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     """Generate per-episode script drafts from Project Overview artifacts.
@@ -12563,7 +12563,7 @@ async def generate_project_episode_scripts_from_global_framework(
 def get_project_episode_scripts_generation_status(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -12589,7 +12589,7 @@ def get_project_episode_scripts_generation_status(
 def stop_project_episode_scripts_generation(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -12629,7 +12629,7 @@ def stop_project_episode_scripts_generation(
 def delete_episode(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -13109,7 +13109,7 @@ def read_scenes(
     skip: int = 0,
     limit: int = 300,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     # Ownership check
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
@@ -13141,7 +13141,7 @@ def create_scene(
     episode_id: int,
     scene: SceneCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -13191,7 +13191,7 @@ def update_scene(
     scene_id: int,
     scene_in: SceneCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not db_scene:
@@ -13219,7 +13219,7 @@ def update_scene(
 def delete_scene(
     scene_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not db_scene:
@@ -13245,7 +13245,7 @@ async def regenerate_scene(
     scene_id: int,
     req: SceneRegenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -13801,7 +13801,7 @@ def read_episode_shots(
     skip: int = 0,
     limit: int = 300,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -13875,7 +13875,7 @@ def read_episode_shots(
 def read_shot_detail(
     shot_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     shot = db.query(Shot).filter(Shot.id == shot_id).first()
     if not shot:
@@ -14522,7 +14522,7 @@ def _build_shot_regenerate_prompts(
 def ai_prompt_preview(
     scene_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not scene:
@@ -14562,7 +14562,7 @@ def ai_prompt_preview(
 
 
 @router.get("/prompts/shot-generation/features")
-async def get_shot_generation_feature_options(current_user: Any = Depends(get_current_user)):
+async def get_shot_generation_feature_options(current_user: User = Depends(get_current_user)):
     return get_shot_generation_feature_catalog()
 
 
@@ -14581,7 +14581,7 @@ def _shot_generation_slot_origin(slot_token: Any) -> str:
 async def preview_shot_generation_route(
     request: ShotGenerationRoutePreviewRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     scene = db.query(Scene).filter(Scene.id == request.scene_id).first()
     if not scene:
@@ -15077,7 +15077,7 @@ def start_scene_ai_shots_batch(
     episode_id: int,
     req: SceneAiShotsBatchStartRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -15157,7 +15157,7 @@ def get_scene_ai_shots_batch_status(
     episode_id: int,
     response: Response,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _apply_no_store_headers(response)
     response.headers["X-Poll-Interval-Ms"] = "2500"
@@ -15189,7 +15189,7 @@ def get_scene_ai_shots_batch_status(
 def stop_scene_ai_shots_batch(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -15230,7 +15230,7 @@ async def ai_generate_shots(
     scene_id: int,
     req: Optional[AIShotGenRequest] = None,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -15530,7 +15530,7 @@ async def ai_regenerate_shots(
     scene_id: int,
     req: Optional[AIShotRegenerateRequest] = None,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -15770,7 +15770,7 @@ async def ai_regenerate_shots(
 def get_scene_latest_ai_result(
     scene_id: int, 
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """Get the latest saved AI shot generation result for a scene.
 
@@ -15827,7 +15827,7 @@ def update_scene_latest_ai_result(
     scene_id: int,
     data: AnalysisContent, # Reusing this schema: { "content": ... }
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Update (Save/Edit) the latest shot generation result without applying it.
@@ -15860,7 +15860,7 @@ def apply_scene_ai_result(
     scene_id: int,
     data: Optional[AnalysisContent] = None, # Optional: apply provided content instead of stored
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Apply the stored (or provided) shot list to the actual Shots table.
@@ -16182,7 +16182,7 @@ def apply_scene_ai_result(
 def read_shots(
     scene_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not scene:
@@ -16207,7 +16207,7 @@ def create_shot(
     scene_id: int,
     shot: ShotCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     import os
     logger.info(f"[create_shot] START. scene_id={scene_id}")
@@ -16280,7 +16280,7 @@ def update_shot(
     shot_id: int,
     shot_in: ShotUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     db_shot = db.query(Shot).filter(Shot.id == shot_id).first()
     if not db_shot:
@@ -16309,7 +16309,7 @@ def update_shot(
 def delete_shot(
     shot_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     db_shot = db.query(Shot).filter(Shot.id == shot_id).first()
     if not db_shot:
@@ -16452,7 +16452,7 @@ def read_entities(
     episode_id: Optional[int] = None,
     include_project_null_episode: Optional[bool] = False,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -16519,7 +16519,7 @@ def create_entity(
     project_id: int,
     entity: EntityCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -16702,7 +16702,7 @@ async def clone_entity_with_llm(
     entity_id: int,
     req: EntityCloneWithLLMRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -16943,7 +16943,7 @@ def update_entity(
     entity_id: int,
     entity_in: EntityUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     entity = db.query(Entity).filter(Entity.id == entity_id).first()
     if not entity:
@@ -17049,7 +17049,7 @@ async def generate_sora_character(
     entity_id: int,
     req: SoraCharacterGenRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     """
@@ -17262,7 +17262,7 @@ async def generate_sora_character(
 def delete_entity(
     entity_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     entity = db.query(Entity).filter(Entity.id == entity_id).first()
     if not entity:
@@ -17278,7 +17278,7 @@ def delete_entity(
 def delete_project_entities(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
         
@@ -18410,30 +18410,9 @@ class AdminStorageUsageOut(BaseModel):
     users: List[AdminStorageUsageUserOut]
 
 
-
-from app.schemas.system_log import LLMCallLogOut
-
-@router.get("/admin/llm_logs", response_model=List[LLMCallLogOut])
-def get_llm_call_logs(
-    limit: int = 100,
-    offset: int = 0,
-    provider: Optional[str] = None,
-    tag: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
-):
-    from app.models.all_models import LLMCallLog
-    query = db.query(LLMCallLog)
-    if provider:
-        query = query.filter(LLMCallLog.provider == provider)
-    if tag:
-        query = query.filter(LLMCallLog.tag == tag)
-    logs = query.order_by(LLMCallLog.id.desc()).offset(offset).limit(limit).all()
-    return logs
-
 @router.get("/admin/runtime-logs/files", response_model=List[RuntimeLogFileOut])
 def list_runtime_log_files(
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Only superuser can view runtime logs")
@@ -18465,7 +18444,7 @@ def view_runtime_log_file(
     action: Optional[str] = Query(None),
     start_time: Optional[str] = Query(None),
     end_time: Optional[str] = Query(None),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Only superuser can view runtime logs")
@@ -18516,7 +18495,7 @@ def view_runtime_log_file(
 
 @router.get("/admin/storage-usage", response_model=AdminStorageUsageOut)
 def get_admin_storage_usage(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -18592,7 +18571,7 @@ def get_admin_storage_usage(
 
 @router.get("/admin/storage-usage/expired", response_model=AdminExpiredFilesOut)
 def get_admin_expired_files(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -18641,7 +18620,7 @@ def get_admin_expired_files(
 @router.post("/admin/storage-usage/expired/remind", response_model=GenericMessageOut)
 def remind_admin_expired_files(
     req: AdminExpiredRemindRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -18698,7 +18677,7 @@ def remind_admin_expired_files(
 @router.post("/admin/storage-usage/expired/delete", response_model=GenericMessageOut)
 def delete_admin_expired_files(
     req: AdminExpiredDeleteRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -18975,7 +18954,7 @@ def _url_reference_tokens(raw_url: Any) -> set[str]:
     return {str(item).strip() for item in tokens if str(item or "").strip()}
 
 
-def _resolve_accessible_project_ids_for_user(db: Session, current_user: Any) -> List[int]:
+def _resolve_accessible_project_ids_for_user(db: Session, current_user: User) -> List[int]:
     owner_ids = [
         pid for (pid,) in db.query(Project.id).filter(Project.owner_id == current_user.id).all()
         if pid is not None
@@ -18990,7 +18969,7 @@ def _resolve_accessible_project_ids_for_user(db: Session, current_user: Any) -> 
 @router.get("/assets/unreferenced-ids", response_model=dict)
 def get_unreferenced_asset_ids(
     project_id: Optional[int] = None,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     # Base asset query for the user
@@ -19251,7 +19230,7 @@ def get_assets(
     scene_id: Optional[str] = None,
     skip: int = 0,
     limit: int = 120,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     safe_skip = max(int(skip or 0), 0)
@@ -19583,7 +19562,7 @@ def get_assets(
 
 def create_asset_url(
     asset_in: AssetCreate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     meta = asset_in.meta_info if asset_in.meta_info else {}
@@ -19619,7 +19598,7 @@ def upload_asset(
     asset_type: Optional[str] = None,
     source_asset_url: Optional[str] = None,
     idempotency_key: Optional[str] = None,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     max_upload_bytes = max(int(settings.MAX_ASSET_UPLOAD_MB or 100), 1) * 1024 * 1024
@@ -19773,7 +19752,7 @@ def upload_asset(
 @router.delete("/assets/{asset_id}")
 def delete_asset(
     asset_id: int,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
@@ -19802,7 +19781,7 @@ def delete_asset(
 @router.post("/assets/batch-delete")
 def batch_delete_assets(
     asset_ids: List[int] = Body(...),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     assets = db.query(Asset).filter(
@@ -19836,7 +19815,7 @@ def batch_delete_assets(
 def update_asset(
     asset_id: int,
     asset_update: AssetUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
@@ -19862,7 +19841,7 @@ def update_asset(
 @router.post("/assets/{asset_id}/mark-current", response_model=dict)
 def mark_asset_current_project_asset(
     asset_id: int,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
@@ -19881,7 +19860,7 @@ def mark_asset_current_project_asset(
 @router.post("/assets/rebind-shot-media", response_model=dict)
 def rebind_shot_media_from_assets(
     payload: AssetRebindShotMediaRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if payload.project_id:
@@ -20342,7 +20321,7 @@ def _wechat_config_to_dict(row: Optional[WechatPayConfig]) -> Dict[str, Any]:
 
 @router.get("/admin/payment-config", response_model=PaymentConfig)
 def get_payment_config(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -20365,7 +20344,7 @@ def get_payment_config(
 @router.post("/admin/payment-config", response_model=PaymentConfig)
 def update_payment_config(
     idx: PaymentConfig,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -20409,7 +20388,7 @@ def update_payment_config(
 
 @router.get("/admin/smtp-config", response_model=SMTPConfig)
 def get_smtp_config(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -20458,7 +20437,7 @@ def get_smtp_config(
 @router.post("/admin/smtp-config", response_model=SMTPConfig)
 def update_smtp_config(
     idx: SMTPConfig,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -20497,7 +20476,7 @@ def update_smtp_config(
 @router.post("/admin/smtp-config/test")
 def test_smtp_config(
     payload: SMTPTestRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -20525,7 +20504,7 @@ def test_smtp_config(
 @router.post("/admin/smtp-config/broadcast")
 def broadcast_email_to_all_users(
     payload: SMTPBroadcastRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -20603,7 +20582,7 @@ def get_maintenance_status(db: Session = Depends(get_db)):
 
 @router.get("/admin/maintenance-config", response_model=MaintenanceConfig)
 def get_maintenance_config(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -20620,7 +20599,7 @@ def get_maintenance_config(
 @router.post("/admin/maintenance-config", response_model=MaintenanceConfig)
 def update_maintenance_config(
     idx: MaintenanceConfig,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -20697,7 +20676,7 @@ def update_maintenance_config(
 
 
 @router.get("/admin/runtime-stats")
-def get_runtime_stats(current_user: Any = Depends(get_current_user)):
+def get_runtime_stats(current_user: User = Depends(get_current_user)):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -20760,7 +20739,7 @@ def get_runtime_stats(current_user: Any = Depends(get_current_user)):
 @router.get("/admin/upstream-diagnostics/grsai")
 def admin_diagnose_grsai_connectivity(
     timeout_seconds: int = 5,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -20869,7 +20848,7 @@ def get_recharge_plans(db: Session = Depends(get_db)):
 @router.post("/billing/recharge/create", response_model=PaymentOrderOut)
 def create_recharge_order(
     req: RechargeRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if req.amount <= 0:
@@ -20939,7 +20918,7 @@ def create_recharge_order(
 @router.get("/billing/recharge/status/{order_no}")
 def check_order_status(
     order_no: str,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     order = db.query(PaymentOrder).filter(PaymentOrder.order_no == order_no).first()
@@ -21104,7 +21083,7 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
 @router.post("/billing/recharge/mock_pay/{order_no}")
 def mock_pay_order(
     order_no: str,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Dev only or check config?
@@ -21180,7 +21159,7 @@ def mock_pay_order(
 
 @router.get("/billing/options")
 def get_billing_options(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Return provider/model dropdown options for Pricing Rules.
@@ -21246,7 +21225,7 @@ def get_billing_options(
 
 @router.get("/billing/feature-pricing", response_model=FeaturePricingOut)
 def get_billing_feature_pricing(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -21258,7 +21237,7 @@ def get_billing_feature_pricing(
 @router.put("/billing/feature-pricing", response_model=FeaturePricingOut)
 def update_billing_feature_pricing(
     payload: FeaturePricingUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -21270,7 +21249,7 @@ def update_billing_feature_pricing(
 
 @router.get("/billing/default-api-pricing", response_model=DefaultApiPricingOut)
 def get_billing_default_api_pricing(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -21286,7 +21265,7 @@ def get_billing_default_api_pricing(
 @router.put("/billing/default-api-pricing", response_model=DefaultApiPricingOut)
 def update_billing_default_api_pricing(
     payload: DefaultApiPricingUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -21306,7 +21285,7 @@ def update_billing_default_api_pricing(
 
 @router.get("/billing/taxonomy/preview")
 def get_billing_taxonomy_preview(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -21337,7 +21316,7 @@ def get_billing_taxonomy_preview(
 @router.get("/billing/project/{project_id}/stats")
 def get_project_billing_stats(
     project_id: int,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Return credit consumption stats for a project.
@@ -21398,7 +21377,7 @@ def get_transactions(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     limit: int = 100,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser and (user_id and user_id != current_user.id):
@@ -21470,7 +21449,7 @@ class CreditUpdate(BaseModel):
 def update_user_credits(
     user_id: int,
     credit_update: CreditUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -23405,7 +23384,7 @@ def _reservation_tx_id(reservation_tx: Any) -> Optional[int]:
 def _finalize_model_invocation_billing(
     *,
     db: Session,
-    current_user: Any,
+    current_user: User,
     task_type: str,
     provider: Optional[str],
     model: Optional[str],
@@ -23518,7 +23497,7 @@ def _resolve_latest_asset_provider_model(
 
 def _log_api_switch_regenerate_if_needed(
     db: Session,
-    current_user: Any,
+    current_user: User,
     req: Any,
     result: Any,
     media_type: str,
@@ -23575,7 +23554,7 @@ def _log_api_switch_regenerate_if_needed(
 
 def _bind_generated_media_to_shot(
     db: Session,
-    current_user: Any,
+    current_user: User,
     req: Any,
     media_url: Optional[str],
     oss_uploaded_success: Optional[bool] = None,
@@ -23702,7 +23681,7 @@ def _bind_generated_media_to_shot(
     )
 
 
-def _bind_generated_media_to_entity(db: Session, current_user: Any, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
+def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
     if not media_url:
         return
 
@@ -23832,7 +23811,7 @@ def _bind_generated_media_to_entity(db: Session, current_user: Any, req: Any, me
 @router.post("/generate/image")
 async def generate_image_endpoint(
     req: GenerationRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
@@ -23949,7 +23928,7 @@ def _resolve_media_runtime_target(
 
 async def _run_generate_image(
     req: GenerationRequest,
-    current_user: Any,
+    current_user: User,
     db: Session,
     job_progress_callback: Any = None,
     job_id: Optional[str] = None,
@@ -25313,7 +25292,7 @@ def _maybe_finalize_stuck_job(
 async def submit_generate_image_endpoint(
     req: GenerationRequest,
     request: Request,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     callback_url = _resolve_callback_url_from_payload(req)
     explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
@@ -25581,7 +25560,7 @@ class UserPasswordUpdate(BaseModel):
 
 @router.get("/users/me", response_model=UserOut)
 def read_users_me(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -25620,7 +25599,7 @@ def read_users_me(
 @router.put("/users/me/profile", response_model=UserOut)
 def update_my_profile(
     payload: UserProfileUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.id == current_user.id).first()
@@ -25639,7 +25618,7 @@ def update_my_profile(
 @router.put("/users/me/password")
 def update_my_password(
     payload: UserPasswordUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.id == current_user.id).first()
@@ -25661,7 +25640,7 @@ def update_my_password(
 @router.post("/users/me/avatar", response_model=UserOut)
 async def update_my_avatar(
     file: UploadFile = File(...),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.id == current_user.id).first()
@@ -25722,7 +25701,7 @@ async def update_my_avatar(
 def get_users(
     skip: int = 0, 
     limit: int = 100, 
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -25735,7 +25714,7 @@ def get_users(
 def get_users_page(
     page: int = 1,
     page_size: int = 20,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -25791,7 +25770,7 @@ def get_users_page(
 def update_user(
     user_id: int, 
     user_in: UserUpdate, 
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -25861,7 +25840,7 @@ def update_user(
 @router.post("/generate/video")
 async def generate_video_endpoint(
     req: VideoGenerationRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     dedup_key = _build_video_dedup_key(req, current_user.id)
@@ -25931,7 +25910,7 @@ async def generate_video_endpoint(
 @router.post("/generate/voice")
 async def generate_voice_endpoint(
     req: VoiceGenerationRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     reservation_tx = None
@@ -26474,7 +26453,7 @@ async def generate_voice_endpoint(
 
 async def _run_generate_video(
     req: VideoGenerationRequest,
-    current_user: Any,
+    current_user: User,
     db: Session,
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
@@ -27902,7 +27881,7 @@ async def submit_generate_video_endpoint(
     req: VideoGenerationRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     callback_url = _resolve_callback_url_from_payload(req)
     explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
@@ -28287,7 +28266,7 @@ def get_generation_job_pool(
     limit: int = 200,
     shot_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "all").strip().lower()
     allowed_kinds = {
@@ -28684,7 +28663,7 @@ def repair_generation_job_history(
     older_than_minutes: int = 120,
     dry_run: bool = True,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "all").strip().lower()
     allowed_kinds = {"all", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}
@@ -28836,7 +28815,7 @@ def stop_generation_job(
     job_id: str,
     force: bool = False,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "").strip().lower()
     if safe_kind not in {"image", "video", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}:
@@ -28986,7 +28965,7 @@ def delete_generation_job(
     kind: str,
     job_id: str,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     is_superuser = bool(getattr(current_user, "is_superuser", False))
 
@@ -29152,7 +29131,7 @@ def stop_all_generation_jobs(
     kind: str = "all",
     force: bool = False,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "all").strip().lower()
     allowed_kinds = {"all", "image", "video", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}
@@ -30060,7 +30039,10 @@ def _append_video_api_ref_mapping(
             if entity_type and entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
                 continue
 
-            entity_name = raw_name.lstrip("@").strip()
+            raw_entity_name = str(row.get("name") or "").strip()
+            entity_name = raw_entity_name[1:] if raw_entity_name.startswith("@") else raw_entity_name
+            if not entity_name:
+                entity_name = raw_name.lstrip("@").strip()
             if not entity_name:
                 continue
 
@@ -30188,6 +30170,7 @@ def _append_video_api_ref_mapping(
         return text
 
     updated_text = text
+    print('PAIRS:', pairs)
     for prefix_str, entity_name, anchor_text in pairs:
         prefix = f"{prefix_str} "
         if prefix.lower() in updated_text.lower() and entity_name.lower() in updated_text.lower():
@@ -31367,7 +31350,7 @@ def start_shot_media_batch_job(
     episode_id: int,
     req: ShotMediaBatchStartRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -31464,7 +31447,7 @@ def start_shot_media_batch_job(
 def get_shot_media_batch_job_status(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     cached_status = _get_cached_shot_media_batch_status(int(episode_id))
     try:
@@ -31529,7 +31512,7 @@ def get_shot_media_batch_job_status(
 def stop_shot_media_batch_job(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -31593,7 +31576,7 @@ async def generate_montage(
     project_id: int,
     request: MontageRequest,
     async_mode: bool = Query(False),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     try:
         items_payload = [item.dict() for item in request.items]
@@ -31631,7 +31614,7 @@ async def generate_montage(
 async def delete_montage(
     project_id: int,
     request: MontageDeleteRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     _require_project_access(db, int(project_id), current_user)
@@ -31677,7 +31660,7 @@ class AnalyzeImageRequest(BaseModel):
 async def analyze_asset_image(
     request: AnalyzeImageRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Analyzes an asset image to extract style and prompt descriptions.
@@ -31911,7 +31894,7 @@ async def analyze_entity_image(
     system_api_id: Optional[int] = Query(None),
     feature_name: Optional[str] = Query(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Analyzes an entity (subject) image using Vision model and updates its attributes based on visual content.
@@ -32524,7 +32507,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 def get_entity_latest_analysis(
     entity_id: int, 
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get the latest saved analysis result for an entity.
@@ -32549,7 +32532,7 @@ def update_entity_latest_analysis(
     entity_id: int,
     data: AnalysisContent,
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Update (Save/Edit) the latest analysis result without applying it.
@@ -32583,7 +32566,7 @@ def apply_entity_analysis(
     entity_id: int,
     data: Optional[AnalysisContent] = None, # Optional payload to override stored
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Apply the stored (or provided) analysis result to update Entity fields.
@@ -32657,7 +32640,7 @@ def apply_entity_analysis(
 
 
 @router.post("/analyze_scene/stream")
-async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_user: Any = Depends(get_current_user), db: Session = Depends(get_db)):
+async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     _release_db_connection(db, "stream_analyze_scene_before_delegate")
     return await analyze_scene(request=request, current_user=current_user, db=db, async_mode="0", is_stream=True)
 
@@ -32666,13 +32649,13 @@ class QueueConfigBase(BaseModel):
     callback_threads: int
 
 @router.get("/admin/queue/config", response_model=QueueConfigBase)
-async def admin_get_queue_config(current_user: Any = Depends(get_current_user)):
+async def admin_get_queue_config(current_user: User = Depends(get_current_user)):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     return QueueConfigBase(**_load_queue_config())
 
 @router.put("/admin/queue/config", response_model=QueueConfigBase)
-async def admin_update_queue_config(config: QueueConfigBase, current_user: Any = Depends(get_current_user)):
+async def admin_update_queue_config(config: QueueConfigBase, current_user: User = Depends(get_current_user)):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
@@ -32695,7 +32678,7 @@ async def split_script(
     episode_id: int,
     req: ScriptSplitRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     project = _require_project_access(db, project_id, current_user)
@@ -32939,7 +32922,7 @@ async def api_generate_entity_from_text(
     text_desc: str = Form(...),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
 
@@ -32981,7 +32964,7 @@ async def api_generate_entity_from_image(
     file: UploadFile = File(...),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
 
@@ -33032,7 +33015,7 @@ async def api_generate_entity_from_derive(
     derive_desc: str = Form(""),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
 

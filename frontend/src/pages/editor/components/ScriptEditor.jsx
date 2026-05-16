@@ -196,7 +196,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [userPrompt, setUserPrompt] = useState('');
     const [isSuperuser, setIsSuperuser] = useState(false);
     const isSuperuserRef = useRef(false);
-    const SUBJECT_INDEX_PARSE_ERROR = '第一阶段未解析到完整的 Subject Index 区块，请确认返回结果中包含完整的 Subject Index 内容（如标题区块或 subject_no=... 条目）后重试。';
+    const SUBJECT_INDEX_PARSE_ERROR = '第一阶段返回未完成或被截断，未解析到完整的 Subject Index 区块；当前结果不能继续作为完整分析使用。请重新执行，或切换模型后重试。';
 
     const extractAnalysisSections = useCallback((rawText) => {
         const authoritativeSubjectText = String(rawText || '');
@@ -213,16 +213,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
         }
 
-        const adaptMatch = authoritativeSubjectText.match(/\*\*\s*剧本改编(?:补充说明)?\s*\*\*[:：]?\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i)
+        const adaptMatch = authoritativeSubjectText.match(/\*\*\s*剧本改编(?:补 充说明)?\s*\*\*[:：]?\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i)
             || authoritativeSubjectText.match(/###?\s*剧本改编(?:补充说明)?\s*\n([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i)
             || authoritativeSubjectText.match(/剧本改编(?:补充说明)?[:：\n]\s*([\s\S]*?)(?=\n(?:-{3,}|###?|\|)|$)/i);
         if (adaptMatch) {
             extractedAdaptationText = (adaptMatch[1] || adaptMatch[2] || adaptMatch[3] || '').trim();
         }
 
-        // Priority bypass: if downstream markers are present, Subject Index must have been fully output.
-        // cover_poster entry, project_visual_backfill block, or Part 2 JSON sections are only emitted
-        // after the Subject Index is complete — treat their presence as a guaranteed success signal.
         const hasDownstreamMarker = (
             /subject_type\s*=\s*cover_poster/i.test(authoritativeSubjectText)
             || /project_visual_backfill/i.test(authoritativeSubjectText)
@@ -232,35 +229,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || /Final\s+Consistency\s+Report/i.test(authoritativeSubjectText)
         );
 
-        // Try 4+ dashes on both sides (model may output 4–9 dashes; avoids 3-dash MD HR)
         const dashMatch = authoritativeSubjectText.match(/-{4,}\s*\n([\s\S]*?)\n\s*-{4,}/);
         if (dashMatch && dashMatch[1].trim()) {
             extractedText = dashMatch[1].trim();
             hasStructuredSubjectIndex = true;
         } else {
-            // Match any level of # heading, or exact "Subject Index" string anywhere
-            const match = authoritativeSubjectText.match(/(?:^|\b|\s)#{0,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色|道具|场景|设计资产|Entities)\s*(?:\*\*)?\s*\n[\s\S]*/i) || 
-                          authoritativeSubjectText.match(/#{1,6}\s*(?:\*\*)?\s*(?:Subject Index|角色|道具|场景|设计资产|Entities)[\s\S]*/i) ||
-                          authoritativeSubjectText.match(/(?:^|\b|\s)(?:\*\*)?\s*(?:Subject Index|Subjects? Index)[\s\S]*/i);
+            const match = authoritativeSubjectText.match(/(?:^|\b|\s)#{0,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)\s*(?:\*\*)?\s*\n[\s\S]*/i)
+                || authoritativeSubjectText.match(/#{1,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)[\s\S]*/i)
+                || authoritativeSubjectText.match(/(?:^|\b|\s)(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)[\s\S]*/i);
             if (match) {
                 extractedText = match[0];
                 hasStructuredSubjectIndex = true;
             } else {
-                // Allow subject_no=S001 or subject_no=1 (with or without S prefix)
                 const pipeMatch = authoritativeSubjectText.match(/(?:^|\n)\s*(subject_no\s*=\s*[A-Za-z]?\d+[\s\S]*)/i);
                 if (pipeMatch && String(pipeMatch[1] || '').trim()) {
                     extractedText = String(pipeMatch[1] || '').trim();
                     hasStructuredSubjectIndex = true;
                 } else {
-                    // Detect any pipe-separated line with subject_type=
                     const subjectTypeLine = authoritativeSubjectText.match(/(?:^|\n)(.*subject_type\s*=\s*(?:character|prop|environment|cover_poster).*(?:\|.*)+)/i);
                     if (subjectTypeLine && String(subjectTypeLine[1] || '').trim()) {
                         const idx = authoritativeSubjectText.indexOf(subjectTypeLine[1]);
                         extractedText = authoritativeSubjectText.slice(idx).trim();
                         hasStructuredSubjectIndex = true;
                     } else if (hasDownstreamMarker) {
-                        // Downstream markers confirm Subject Index was fully emitted even if its
-                        // header/format is non-standard. Use the full text as the index content.
                         extractedText = authoritativeSubjectText;
                         hasStructuredSubjectIndex = true;
                     } else {
@@ -270,15 +261,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        // If a downstream marker is present but we still haven't confirmed via structural parsing,
-        // override hasStructuredSubjectIndex to true so the error is not thrown.
         if (!hasStructuredSubjectIndex && hasDownstreamMarker) {
             extractedText = authoritativeSubjectText;
             hasStructuredSubjectIndex = true;
         }
 
-        // Clean up downstream trailing sections that got accidentally captured by greedy matching,
-        // but WE KEEP the 'Project Visual Backfill' JSON as it provides useful visual constraints for Phase 2 asset generation.
         const trailingConsistencyReport = extractedText.match(/(?:\n-{3,}\n*)?###?\s*(?:Final\s*Consistency\s*Report|一致性检查)[\s\S]*/i);
         if (trailingConsistencyReport) {
             extractedText = extractedText.replace(trailingConsistencyReport[0], '').trim();
@@ -292,6 +279,155 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
     }, []);
 
+    const isSplitStage1Prompt = useCallback((promptText) => {
+        const text = String(promptText || '');
+        if (!text.trim()) return false;
+        return /Skill\s*1-1\s*:\s*剧本改编与整体规划/i.test(text)
+            || /三阶段工作流[\s\S]{0,120}第一阶段/i.test(text)
+            || /本提示词专门负责[\s\S]{0,80}第一阶段/i.test(text);
+    }, []);
+
+    const extractStage1AdaptedScriptBody = useCallback((stage1Text) => {
+        const text = String(stage1Text || '').replace(/\r\n/g, '\n').trim();
+        if (!text) return '';
+
+        const trimScriptBody = (candidateText) => {
+            let candidate = String(candidateText || '').trim();
+            if (!candidate) return '';
+
+            const sceneHeadingMatch = candidate.match(/^\s*(?:\*\*)?\s*(?:【场景\s*[^\n]+】|\*\*【场景\s*[^\n]+】\*\*|Scene\s*\d+\s*[:：]|\[Scene\s*\d+[^\n]*\])/im);
+            if (sceneHeadingMatch?.index >= 0) {
+                candidate = candidate.slice(sceneHeadingMatch.index).trim();
+            }
+
+            const endMarkerMatch = candidate.match(/^\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)/im);
+            if (endMarkerMatch?.index >= 0) {
+                candidate = candidate.slice(0, endMarkerMatch.index).trim();
+            }
+
+            return candidate;
+        };
+
+        const sectionPatterns = [
+            /^.*?(?:###\s*第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$/is,
+            /^.*?(?:##\s*第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$/is,
+            /^.*?(?:第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$/is,
+            /^.*?(?:###\s*Second\s*Part[:：]?\s*Adapted\s*Script.*?\n)(.*)$/is,
+            /^.*?(?:##\s*Second\s*Part[:：]?\s*Adapted\s*Script.*?\n)(.*)$/is,
+            /^.*?(?:Adapted\s*Script\s*[-(（].*?\n)(.*)$/is,
+        ];
+
+        for (const pattern of sectionPatterns) {
+            const match = text.match(pattern);
+            if (!match) continue;
+            const extracted = trimScriptBody(match[1] || '');
+            if (extracted) return extracted;
+        }
+
+        const fallbackAdaptation = trimScriptBody(extractAnalysisSections(text)?.adaptationText || '');
+        if (fallbackAdaptation) return fallbackAdaptation;
+
+        return trimScriptBody(text);
+    }, [extractAnalysisSections]);
+
+    const buildStage2UserInputFromStage1 = useCallback((stage1Text, reuseSubjectAssets = []) => {
+        const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
+        const extractProjectVisualBackfillJson = (rawText) => {
+            const text = String(rawText || '').trim();
+            if (!text) return '';
+
+            const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+            let match;
+            while ((match = fenceRegex.exec(text)) !== null) {
+                const candidate = String(match[1] || '').trim();
+                if (!candidate) continue;
+                try {
+                    const parsed = JSON.parse(candidate);
+                    if (parsed && typeof parsed === 'object' && parsed.project_visual_backfill && typeof parsed.project_visual_backfill === 'object') {
+                        return JSON.stringify(parsed, null, 2);
+                    }
+                } catch {
+                    // ignore invalid fenced JSON
+                }
+            }
+
+            let braceDepth = 0;
+            let startIndex = -1;
+            let inString = false;
+            for (let i = 0; i < text.length; i++) {
+                const ch = text[i];
+                const prev = i > 0 ? text[i - 1] : '';
+                if (ch === '"' && prev !== '\\') {
+                    inString = !inString;
+                }
+                if (inString) continue;
+                if (ch === '{') {
+                    if (braceDepth === 0) startIndex = i;
+                    braceDepth += 1;
+                } else if (ch === '}') {
+                    braceDepth -= 1;
+                    if (braceDepth === 0 && startIndex !== -1) {
+                        const candidate = text.slice(startIndex, i + 1).trim();
+                        startIndex = -1;
+                        try {
+                            const parsed = JSON.parse(candidate);
+                            if (parsed && typeof parsed === 'object' && parsed.project_visual_backfill && typeof parsed.project_visual_backfill === 'object') {
+                                return JSON.stringify(parsed, null, 2);
+                            }
+                        } catch {
+                            // ignore invalid object candidate
+                        }
+                    }
+                }
+            }
+
+            return '';
+        };
+
+        const stage1VisualBackfillJson = extractProjectVisualBackfillJson(stage1Text);
+        const stage2InputParts = [
+            '请执行第二阶段“资产分析提取”。以下“修改后的剧本”与 Stage 1 已产出的 `Project Visual Backfill` 是唯一权威输入来源；如与原始剧本存在任何差异，一律以上游 Stage 1 结果为准。',
+        ];
+
+        if (project?.global_info && typeof project.global_info === 'object' && Object.keys(project.global_info).length > 0) {
+            try {
+                stage2InputParts.push(`[Project Metadata]\n${JSON.stringify(project.global_info, null, 2)}`);
+            } catch {
+                stage2InputParts.push(`[Project Metadata]\n${String(project.global_info)}`);
+            }
+        }
+
+        if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
+            const reuseLines = [
+                '[Reusable Subject Assets - High Priority]',
+                'Reuse these existing subjects whenever they already match the current script. Do not rename them arbitrarily.',
+            ];
+            reuseSubjectAssets.forEach((item) => {
+                if (!item || typeof item !== 'object') return;
+                const name = String(item.name || '').trim();
+                if (!name) return;
+                const detailParts = [`name=${name}`];
+                if (item.type) detailParts.push(`type=${String(item.type).trim()}`);
+                if (item.description) detailParts.push(`description=${String(item.description).trim()}`);
+                if (item.anchor_description) detailParts.push(`anchors=${String(item.anchor_description).trim()}`);
+                reuseLines.push(`- ${detailParts.join(' | ')}`);
+            });
+            if (reuseLines.length > 2) {
+                stage2InputParts.push(reuseLines.join('\n'));
+            }
+        }
+
+        stage2InputParts.push(`[Stage 1 Adapted Script - Authoritative Input]\n${adaptedScriptText || String(stage1Text || '').trim()}`);
+        if (stage1VisualBackfillJson) {
+            stage2InputParts.push(`[Stage 1 Project Visual Backfill - Authoritative Input]\n${stage1VisualBackfillJson}`);
+        }
+
+        return {
+            adaptedScriptText,
+            userInput: stage2InputParts.filter(part => String(part || '').trim()).join('\n\n'),
+        };
+    }, [extractStage1AdaptedScriptBody, project?.global_info]);
+
     useEffect(() => {
         isSuperuserRef.current = isSuperuser;
     }, [isSuperuser]);
@@ -300,10 +436,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!activeEpisode) return;
         const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode.ai_scene_analysis_result || '';
         if (authoritativeSubjectText) {
-            const { subjectIndexText: extractedText, adaptationText: extractedAdaptationText } = extractAnalysisSections(authoritativeSubjectText);
+            const extractedSections = extractAnalysisSections(authoritativeSubjectText);
+            const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+            const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+            const extractedText = persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? String(extractedSections.subjectIndexText || '').trim() : '');
+            const extractedAdaptationText = persistedAdaptationText || (
+                /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)
+                    ? String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim()
+                    : ''
+            );
 
-            // 剧本分析界面的修改是持久化的，不再从llm直接回填与持久化：
-            // 我们只进行UI展现刷新（用户自行通过编辑决定保存）
             if (extractedText !== subjectIndexText) {
                 setSubjectIndexText(extractedText);
             }
@@ -549,8 +691,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (normalized.includes('prohibited_content')) {
             return '出现供应商政策不允许内容';
         }
-        if (stable.includes('第一阶段未解析到完整的 Subject Index 区块')) {
-            return t('大模型开小差了，请选择其他AI。', 'The model got distracted. Please choose another AI.');
+        if (stable.includes('第一阶段未解析到完整的 Subject Index 区块') || stable.includes('第一阶段返回未完成或被截断')) {
+            return t('第一阶段返回未完成或被截断，缺少完整 Subject Index；当前结果不能继续使用。请重试，必要时切换其他模型。', 'Stage 1 returned incomplete or truncated output and is missing a complete Subject Index. The current result cannot be used. Please retry, and switch models if needed.');
         }
         if (
             normalized.includes('剧本分析结果不可用')
@@ -1591,6 +1733,120 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return sections.join('\n\n');
     };
 
+    const buildStage1ProjectContextSection = useCallback(() => {
+        const info = (project?.global_info && typeof project.global_info === 'object') ? project.global_info : {};
+        if (!info || Object.keys(info).length === 0) return '';
+
+        const visual = (info?.tech_params && typeof info.tech_params === 'object' && info.tech_params.visual_standard && typeof info.tech_params.visual_standard === 'object')
+            ? info.tech_params.visual_standard
+            : {};
+        const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
+        const getInfoValue = (aliases = []) => {
+            const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
+            for (const [key, value] of Object.entries(info || {})) {
+                if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
+                const text = String(value || '').trim();
+                if (text) return text;
+            }
+            return '';
+        };
+        const getInfoArray = (aliases = []) => {
+            const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
+            for (const [key, value] of Object.entries(info || {})) {
+                if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
+                if (Array.isArray(value)) {
+                    const items = value.map((item) => String(item || '').trim()).filter(Boolean);
+                    if (items.length > 0) return items;
+                }
+                if (typeof value === 'string') {
+                    const items = value.split(/[\n,，;；]/).map((item) => item.trim()).filter(Boolean);
+                    if (items.length > 0) return items;
+                }
+            }
+            return [];
+        };
+        const getVisualValue = (aliases = []) => {
+            const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
+            for (const [key, value] of Object.entries(visual || {})) {
+                if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
+                const text = String(value || '').trim();
+                if (text) return text;
+            }
+            for (const [key, value] of Object.entries(info || {})) {
+                if (!normalizedAlias.has(normalizeInfoKey(key))) continue;
+                const text = String(value || '').trim();
+                if (text) return text;
+            }
+            return '';
+        };
+
+        const borrowedFilms = getInfoArray(['borrowed_films', 'borrowedFilms', 'reference_films', 'referenceFilms']);
+        const language = getInfoValue(['language', 'project_language', 'lang']);
+        const metaParts = [
+            'Project Context (prepend and treat as high-priority constraints):',
+            '[Basic Info]',
+        ];
+        const title = getInfoValue(['script_title', 'title']);
+        const episode = getInfoValue(['series_episode', 'episode']);
+        const type = getInfoValue(['type']);
+        const basePositioning = getInfoValue(['base_positioning']);
+        if (title) metaParts.push(`Title: ${title}`);
+        if (episode) metaParts.push(`Episode: ${episode}`);
+        if (type) metaParts.push(`Type: ${type}`);
+        if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
+        if (language) {
+            metaParts.push(`Language: ${language}`);
+        } else {
+            metaParts.push('Language: (empty)');
+            metaParts.push('Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.');
+        }
+
+        metaParts.push('[Technical & Visual Parameters]');
+        const aspectRatio = getVisualValue(['aspect_ratio']);
+        const imageSize = getVisualValue(['image_size']);
+        const horizontalResolution = getVisualValue(['horizontal_resolution']);
+        const verticalResolution = getVisualValue(['vertical_resolution']);
+        const frameRate = getVisualValue(['frame_rate']);
+        const quality = getVisualValue(['quality']);
+        const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
+        const tone = getInfoValue(['tone', 'mood']);
+        const lighting = getInfoValue(['lighting', 'light']);
+        if (aspectRatio) metaParts.push(`Aspect Ratio: ${aspectRatio}`);
+        if (imageSize) metaParts.push(`Image Size: ${imageSize}`);
+        if (horizontalResolution) metaParts.push(`Horizontal Resolution: ${horizontalResolution}`);
+        if (verticalResolution) metaParts.push(`Vertical Resolution: ${verticalResolution}`);
+        if (frameRate) metaParts.push(`Frame Rate: ${frameRate}`);
+        if (quality) metaParts.push(`Quality: ${quality}`);
+        if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
+        if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
+        if (tone) metaParts.push(`Tone: ${tone}`);
+        if (lighting) metaParts.push(`Lighting: ${lighting}`);
+
+        const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
+        const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
+        const shotPrefField = getInfoValue(['shot_preference', 'lens_preference', 'camera_preference']);
+        const broadcastSafetyField = getInfoValue(['broadcast_security_level', 'broadcast_safety_level', 'safety_level', 'broadcast_safety']);
+        if (eraField) metaParts.push(`Era / Period: ${eraField}`);
+        if (regionField) metaParts.push(`Region / Country: ${regionField}`);
+        if (shotPrefField) metaParts.push(`Shot / Lens Preference: ${shotPrefField}`);
+        if (broadcastSafetyField) metaParts.push(`Broadcast Security Level: ${broadcastSafetyField}`);
+        metaParts.push('Use this project context as first-class constraints before analyzing the script.');
+
+        return metaParts.length > 1 ? metaParts.join('\n') : '';
+    }, [project?.global_info]);
+
+    const ensureStage1ProjectContextInjected = useCallback((inputText) => {
+        const scriptText = String(inputText || '').trim();
+        if (!scriptText) return '';
+        if (scriptText.startsWith('Project Context (prepend and treat as high-priority constraints):')) {
+            return scriptText;
+        }
+
+        const projectContextSection = buildStage1ProjectContextSection();
+        if (!projectContextSection) return scriptText;
+        return `${projectContextSection}\n\nScript to Analyze:\n\n${scriptText}`;
+    }, [buildStage1ProjectContextSection]);
+
     const mergeEntitiesPayload = (basePayload, patchPayload) => {
         const base = basePayload || { characters: [], props: [], environments: [] };
         const patch = patchPayload || { characters: [], props: [], environments: [] };
@@ -1642,7 +1898,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     promptContent = fallbackRes?.content || '';
                 } catch {
                     try {
-                        const fallbackRes2 = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning.md');
+                        const fallbackRes2 = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
                         promptContent = fallbackRes2?.content || '';
                     } catch {
                         promptContent = '';
@@ -1816,71 +2072,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // alert(alertMessage);
     }, [localizeAnalysisWarningCode, onLog, t]);
 
-    const ensureSubjectsImportedBeforePostChecks = useCallback(async (analysisResult, importReport = null) => {
-        const subjectsJson = (analysisResult?.subjects_json && typeof analysisResult.subjects_json === 'object')
-            ? analysisResult.subjects_json
-            : null;
-        if (!subjectsJson || typeof onImportText !== 'function') {
-            return importReport;
-        }
-
-        const expectedCount =
-            (Array.isArray(subjectsJson.characters) ? subjectsJson.characters.length : 0)
-            + (Array.isArray(subjectsJson.props) ? subjectsJson.props.length : 0)
-            + (Array.isArray(subjectsJson.environments) ? subjectsJson.environments.length : 0);
-        if (expectedCount <= 0) {
-            return importReport;
-        }
-
-        const importedCounts = importReport?.importedSubjectCounts || {};
-        const createdCount =
-            Number(importedCounts.character || 0)
-            + Number(importedCounts.prop || 0)
-            + Number(importedCounts.environment || 0);
-        const skippedCount = Array.isArray(importReport?.skippedSubjectItems)
-            ? importReport.skippedSubjectItems.length
-            : 0;
-        const handledCount = createdCount + skippedCount;
-
-        if (handledCount >= expectedCount) {
-            return importReport;
-        }
-
-        onLog?.(
-            `Subjects import pre-check: expected=${expectedCount}, handled=${handledCount}. Running explicit subjects_json import before consistency/supplement checks.`,
-            'warning'
-        );
-
-        const subjectsImportReport = await onImportText(
-            JSON.stringify(subjectsJson, null, 2),
-            'json',
-            { suppressAlerts: true }
-        );
-
-        const mergedImportedCounts = {
-            character: (Number(importedCounts.character || 0) + Number(subjectsImportReport?.importedSubjectCounts?.character || 0)),
-            prop: (Number(importedCounts.prop || 0) + Number(subjectsImportReport?.importedSubjectCounts?.prop || 0)),
-            environment: (Number(importedCounts.environment || 0) + Number(subjectsImportReport?.importedSubjectCounts?.environment || 0)),
-        };
-
-        return {
-            ...(importReport && typeof importReport === 'object' ? importReport : {}),
-            importedSubjectCounts: mergedImportedCounts,
-            createdSubjectItems: [
-                ...(Array.isArray(importReport?.createdSubjectItems) ? importReport.createdSubjectItems : []),
-                ...(Array.isArray(subjectsImportReport?.createdSubjectItems) ? subjectsImportReport.createdSubjectItems : []),
-            ],
-            skippedSubjectItems: [
-                ...(Array.isArray(importReport?.skippedSubjectItems) ? importReport.skippedSubjectItems : []),
-                ...(Array.isArray(subjectsImportReport?.skippedSubjectItems) ? subjectsImportReport.skippedSubjectItems : []),
-            ],
-            subjectsImportPrecheck: {
-                expectedCount,
-                handledCountBefore: handledCount,
-                reranExplicitImport: true,
-            },
-        };
-    }, [onImportText, onLog]);
 
     const handleImportEntities = async () => {
         const payload = getAnalysisEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
@@ -2448,6 +2639,126 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return false;
         }
     };
+
+    const resetAutoSubjectsImportCache = useCallback(() => {
+        lastAutoSubjectsImportRef.current = { signature: '', result: null };
+    }, []);
+
+    const buildSubjectsImportSignature = useCallback((payload) => {
+        if (!payload || typeof payload !== 'object') return '';
+        try {
+            return JSON.stringify({
+                characters: Array.isArray(payload.characters) ? payload.characters : [],
+                props: Array.isArray(payload.props) ? payload.props : [],
+                environments: Array.isArray(payload.environments) ? payload.environments : [],
+                posters: Array.isArray(payload.posters) ? payload.posters : [],
+                covers: Array.isArray(payload.covers) ? payload.covers : [],
+            });
+        } catch (_) {
+            return '';
+        }
+    }, []);
+
+    const importSubjectsJsonWithDedupe = useCallback(async (text, options = {}) => {
+        const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
+        const subjectsJson = (options?.subjectsJson && typeof options.subjectsJson === 'object')
+            ? options.subjectsJson
+            : getAnalysisEntitiesPayloadFromJsonText(text);
+        const importReason = String(options?.reason || 'auto-subjects-import').trim() || 'auto-subjects-import';
+        const signature = buildSubjectsImportSignature(subjectsJson);
+
+        if (signature && lastAutoSubjectsImportRef.current.signature === signature) {
+            onLog?.(`[Asset Gen Tracking] Skipped duplicate subjects import (${importReason}); identical payload already imported in this run.`, 'info');
+            return lastAutoSubjectsImportRef.current.result || {
+                ok: true,
+                changed: false,
+                importedSubjectCounts: { character: 0, prop: 0, environment: 0, poster: 0 },
+                createdSubjectItems: [],
+                skippedSubjectItems: [],
+            };
+        }
+
+        const importResult = await doImportText(text, 'json', {
+            ...importOptions,
+            subjectsJson: subjectsJson || importOptions.subjectsJson || null,
+            suppressAlerts: importOptions.suppressAlerts !== false,
+        });
+
+        if (signature && importResult) {
+            lastAutoSubjectsImportRef.current = { signature, result: importResult };
+        }
+
+        return importResult;
+    }, [buildSubjectsImportSignature, doImportText, getAnalysisEntitiesPayloadFromJsonText, onLog]);
+
+    const ensureSubjectsImportedBeforePostChecks = useCallback(async (analysisResult, importReport = null) => {
+        const subjectsJson = (analysisResult?.subjects_json && typeof analysisResult.subjects_json === 'object')
+            ? analysisResult.subjects_json
+            : null;
+        if (!subjectsJson || typeof onImportText !== 'function') {
+            return importReport;
+        }
+
+        const expectedCount =
+            (Array.isArray(subjectsJson.characters) ? subjectsJson.characters.length : 0)
+            + (Array.isArray(subjectsJson.props) ? subjectsJson.props.length : 0)
+            + (Array.isArray(subjectsJson.environments) ? subjectsJson.environments.length : 0);
+        if (expectedCount <= 0) {
+            return importReport;
+        }
+
+        const importedCounts = importReport?.importedSubjectCounts || {};
+        const createdCount =
+            Number(importedCounts.character || 0)
+            + Number(importedCounts.prop || 0)
+            + Number(importedCounts.environment || 0);
+        const skippedCount = Array.isArray(importReport?.skippedSubjectItems)
+            ? importReport.skippedSubjectItems.length
+            : 0;
+        const handledCount = createdCount + skippedCount;
+
+        if (handledCount >= expectedCount) {
+            return importReport;
+        }
+
+        onLog?.(
+            `Subjects import pre-check: expected=${expectedCount}, handled=${handledCount}. Running explicit subjects_json import before consistency/supplement checks.`,
+            'warning'
+        );
+
+        const subjectsImportReport = await importSubjectsJsonWithDedupe(
+            JSON.stringify(subjectsJson, null, 2),
+            {
+                reason: 'precheck-subjects-json',
+                subjectsJson,
+                importOptions: { suppressAlerts: true },
+            }
+        );
+
+        const mergedImportedCounts = {
+            character: (Number(importedCounts.character || 0) + Number(subjectsImportReport?.importedSubjectCounts?.character || 0)),
+            prop: (Number(importedCounts.prop || 0) + Number(subjectsImportReport?.importedSubjectCounts?.prop || 0)),
+            environment: (Number(importedCounts.environment || 0) + Number(subjectsImportReport?.importedSubjectCounts?.environment || 0)),
+        };
+
+        return {
+            ...(importReport && typeof importReport === 'object' ? importReport : {}),
+            importedSubjectCounts: mergedImportedCounts,
+            createdSubjectItems: [
+                ...(Array.isArray(importReport?.createdSubjectItems) ? importReport.createdSubjectItems : []),
+                ...(Array.isArray(subjectsImportReport?.createdSubjectItems) ? subjectsImportReport.createdSubjectItems : []),
+            ],
+            skippedSubjectItems: [
+                ...(Array.isArray(importReport?.skippedSubjectItems) ? importReport.skippedSubjectItems : []),
+                ...(Array.isArray(subjectsImportReport?.skippedSubjectItems) ? subjectsImportReport.skippedSubjectItems : []),
+            ],
+            subjectsImportPrecheck: {
+                expectedCount,
+                handledCountBefore: handledCount,
+                reranExplicitImport: true,
+            },
+        };
+    }, [importSubjectsJsonWithDedupe, onImportText, onLog]);
 
     const runAutoImportAndSwitchToScenes = async (analyzedText, options = {}) => {
         if (autoImportRunningRef.current) {
@@ -3137,12 +3448,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
-    const persistLlmResultContent = async (content, resultField = 'ai_scene_analysis_result') => {
+    const persistLlmResultContent = async (content, resultField = 'ai_scene_analysis_result', options = {}) => {
         if (!activeEpisode?.id) return;
         if (!onUpdateEpisodeInfo) return;
 
         try {
-            await onUpdateEpisodeInfo(activeEpisode.id, { [resultField]: content || '' });
+            const nextContent = String(content || '');
+            const updatePayload = { [resultField]: nextContent };
+            const logSource = String(options?.source || 'unspecified').trim() || 'unspecified';
+
+            if (resultField === 'ai_scene_analysis_result') {
+                const extractedSections = extractAnalysisSections(nextContent);
+                const subjectIndexValue = extractedSections?.hasStructuredSubjectIndex
+                    ? String(extractedSections.subjectIndexText || '').trim()
+                    : '';
+                const looksLikeAdaptedScript = /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(nextContent);
+                const adaptationValue = looksLikeAdaptedScript
+                    ? String(extractStage1AdaptedScriptBody(nextContent) || '').trim()
+                    : '';
+
+                updatePayload.ai_scene_analysis_subject_index = subjectIndexValue;
+                updatePayload.ai_scene_analysis_adaptation = adaptationValue;
+
+                onLog?.(
+                    `[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${subjectIndexValue.length} adaptation_len=${adaptationValue.length}`,
+                    'info'
+                );
+            } else {
+                onLog?.(
+                    `[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`,
+                    'info'
+                );
+            }
+
+            await onUpdateEpisodeInfo(activeEpisode.id, updatePayload);
         } catch (e) {
             console.error("Failed to persist LLM result", e);
             if (onLog) onLog(`Failed to save LLM result: ${e.message}`);
@@ -3161,6 +3500,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisRunInFlightRef = useRef(false);
     const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
+    const lastAutoSubjectsImportRef = useRef({ signature: '', result: null });
     const lastSubjectsImportIncompleteAlertRef = useRef('');
     const ANALYSIS_TASK_MAX_AGE_MS = 60 * 60 * 1000;
     const ANALYSIS_TASK_MARKER_TTL_MS = 120 * 60 * 1000;
@@ -3431,12 +3771,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
                 const extractedSections = extractAnalysisSections(authoritativeSubjectText);
-                let subjectIndexText = extractedSections.subjectIndexText || "";
-                let adaptationText = extractedSections.adaptationText || "";
+                let subjectIndexText = extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : "";
+                let adaptationBodyText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+                if (!adaptationBodyText && /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)) {
+                    adaptationBodyText = String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim();
+                }
 
-                    if (adaptationText) {
-                            onLog?.(`[Asset Gen Tracking] Extracted Script Adaptation (length: ${adaptationText.length})`);
-                    }
+                if (adaptationBodyText) {
+                    onLog?.(`[Asset Gen Tracking] Extracted Script Adaptation (length: ${adaptationBodyText.length})`);
+                }
 
           onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
 
@@ -3456,15 +3799,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         // Phase 2 Preparation: Save extracted subjectIndexText to episode and set UI state
-        if (subjectIndexText.trim() || adaptationText.trim()) {
+        if (subjectIndexText.trim() || adaptationBodyText.trim()) {
               if (subjectIndexText.trim()) setSubjectIndexText(subjectIndexText);
+              if (adaptationBodyText.trim()) setAdaptationText(adaptationBodyText);
               const updatePayload = {};
               if (subjectIndexText.trim()) updatePayload.ai_scene_analysis_subject_index = subjectIndexText.trim();
-              if (adaptationText.trim()) updatePayload.ai_scene_analysis_adaptation = adaptationText.trim();
+              if (adaptationBodyText.trim()) updatePayload.ai_scene_analysis_adaptation = adaptationBodyText.trim();
               
               try {
                   await updateEpisode(activeEpisode.id, updatePayload);
-                  onLog?.(`[Phase 2] Saved analysis meta (index len: ${subjectIndexText.length}, adaptation len: ${adaptationText.length})`);
+                  onLog?.(`[Phase 2] Saved analysis meta (index len: ${subjectIndexText.length}, adaptation len: ${adaptationBodyText.length})`);
               } catch (error) {
                   onLog?.(`[Phase 2] Warning: Failed to save analysis meta to episode: ${error.message}`);
               }
@@ -3675,13 +4019,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     throw new Error("AI 引擎在整理出场名单时开小差了，未能返回标准数据表。请点击查阅原文检查，是否可以手动重新生成。");
                 } else {
                     // Automatically import the generated subjects
-                    const sceneImportReport = await doImportText(analyzedText, 'json', {
-                        onLog,
-                        projectId,
-                        episodeId: activeEpisode?.id,
-                        subjectsJson: backendSubjectsJson || null,
-                        suppressAlerts: true,
-                    });
+                        const sceneImportReport = await importSubjectsJsonWithDedupe(analyzedText, {
+                            reason: 'phase2-entity-design-recovery',
+                            subjectsJson: backendSubjectsJson || null,
+                            importOptions: {
+                                onLog,
+                                projectId,
+                                episodeId: activeEpisode?.id,
+                                subjectsJson: backendSubjectsJson || null,
+                                suppressAlerts: true,
+                            },
+                        });
 
                     const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
                     const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
@@ -3776,12 +4124,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
                         onLog?.(`[Asset Gen Tracking] Warning: AI did not return a valid Entities JSON block during Phase 2 recovery.`);
                     } else {
-                        const sceneImportReport = await doImportText(analyzedText, 'json', {
-                            onLog,
-                            projectId,
-                            episodeId: activeEpisode?.id,
+                        const sceneImportReport = await importSubjectsJsonWithDedupe(analyzedText, {
+                            reason: 'phase2-entity-design',
                             subjectsJson: backendSubjectsJson || null,
-                            suppressAlerts: true,
+                            importOptions: {
+                                onLog,
+                                projectId,
+                                episodeId: activeEpisode?.id,
+                                subjectsJson: backendSubjectsJson || null,
+                                suppressAlerts: true,
+                            },
                         });
                         
                         setAnalysisUiReport(prev => {
@@ -3942,7 +4294,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.persistStartedAt = Date.now();
             try {
                 if (!savedByBackend) {
-                    await persistLlmResultContent(analyzedText || '');
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'resume-analysis' });
                 } else {
                     await refreshAnalysisFromDB();
                 }
@@ -5065,120 +5417,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatus({ phase: 'idle', message: '' });
 
+        const stage1Input = ensureStage1ProjectContextInjected(rawContent);
+
         if (isSuperuser) {
             // Fetch default prompt
             try {
-                const res = await fetchPrompt("skills/scene_analysis_feature_stack/scene_planning.md");
+                const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
                 setSystemPrompt(res.content);
-                
-                // Construct full user prompt with metadata visible
-                let fullContent = rawContent;
-                if (project?.global_info) {
-                            const info = projectInfo;
-                            const visual = (info?.tech_params && typeof info.tech_params === 'object' && info.tech_params.visual_standard && typeof info.tech_params.visual_standard === 'object')
-                                ? info.tech_params.visual_standard
-                                : {};
-                            const getInfoArray = (aliases = []) => {
-                                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                                for (const [k, v] of Object.entries(info || {})) {
-                                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                                    if (Array.isArray(v)) {
-                                        const arr = v.map(item => String(item || '').trim()).filter(Boolean);
-                                        if (arr.length) return arr;
-                                    }
-                                    if (typeof v === 'string') {
-                                        const arr = v.split(/[\n,，;；]/).map(item => item.trim()).filter(Boolean);
-                                        if (arr.length) return arr;
-                                    }
-                                }
-                                return [];
-                            };
-                            const getVisualValue = (aliases = []) => {
-                                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                                for (const [k, v] of Object.entries(visual || {})) {
-                                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                                    const text = String(v || '').trim();
-                                    if (text) return text;
-                                }
-                                for (const [k, v] of Object.entries(info || {})) {
-                                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                                    const text = String(v || '').trim();
-                                    if (text) return text;
-                                }
-                                return '';
-                            };
-                            const borrowedFilms = getInfoArray(['borrowed_films', 'borrowedFilms', 'reference_films', 'referenceFilms']);
-                            const language = getInfoValue(['language', 'project_language', 'lang']);
 
-                            const metaParts = [
-                                'Project Context (prepend and treat as high-priority constraints):',
-                                '[Basic Info]',
-                            ];
-                            const title = getInfoValue(['script_title', 'title']);
-                            const episode = getInfoValue(['series_episode', 'episode']);
-                            const type = getInfoValue(['type']);
-                            const basePositioning = getInfoValue(['base_positioning']);
-                            if (title) metaParts.push(`Title: ${title}`);
-                            if (episode) metaParts.push(`Episode: ${episode}`);
-                            if (type) metaParts.push(`Type: ${type}`);
-                            if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
-                            if (language) {
-                                metaParts.push(`Language: ${language}`);
-                            } else {
-                                metaParts.push(`Language: (empty)`);
-                                metaParts.push(`Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.`);
-                            }
-                            metaParts.push('[Technical & Visual Parameters]');
-                            const aspectRatio = getVisualValue(['aspect_ratio']);
-                            const imageSize = getVisualValue(['image_size']);
-                            const horizontalResolution = getVisualValue(['horizontal_resolution']);
-                            const verticalResolution = getVisualValue(['vertical_resolution']);
-                            const frameRate = getVisualValue(['frame_rate']);
-                            const quality = getVisualValue(['quality']);
-                            const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
-                            const tone = getInfoValue(['tone', 'mood']);
-                            const lighting = getInfoValue(['lighting', 'light']);
-                            if (aspectRatio) metaParts.push(`Aspect Ratio: ${aspectRatio}`);
-                            if (imageSize) metaParts.push(`Image Size: ${imageSize}`);
-                            if (horizontalResolution) metaParts.push(`Horizontal Resolution: ${horizontalResolution}`);
-                            if (verticalResolution) metaParts.push(`Vertical Resolution: ${verticalResolution}`);
-                            if (frameRate) metaParts.push(`Frame Rate: ${frameRate}`);
-                            if (quality) metaParts.push(`Quality: ${quality}`);
-                            if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
-                            if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
-                            if (tone) metaParts.push(`Tone: ${tone}`);
-                            if (lighting) metaParts.push(`Lighting: ${lighting}`);
-
-                            const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
-                            const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
-                            const shotPrefField = getInfoValue(['shot_preference', 'lens_preference', 'camera_preference']);
-                            const broadcastSafetyField = getInfoValue(['broadcast_security_level', 'broadcast_safety_level', 'safety_level', 'broadcast_safety']);
-                            if (eraField) metaParts.push(`Era / Period: ${eraField}`);
-                            if (regionField) metaParts.push(`Region / Country: ${regionField}`);
-                            if (shotPrefField) metaParts.push(`Shot / Lens Preference: ${shotPrefField}`);
-                            if (broadcastSafetyField) metaParts.push(`Broadcast Security Level: ${broadcastSafetyField}`);
-                            metaParts.push(`Use this project context as first-class constraints before analyzing the script.`);
-
-                     if (metaParts.length > 1) {
-                        fullContent = `${metaParts.join('\n')}\n\nScript to Analyze:\n\n${rawContent}`;
-                     }
-                }
-
-                setUserPrompt(fullContent);
+                setUserPrompt(stage1Input);
                 setShowAnalysisModal(true);
                 setIsAnalyzing(false); // Enable back since we are just showing the modal
             } catch (e) {
                 console.error("Failed to fetch system prompt", e);
                 // Fallback if fails
                 setSystemPrompt("Error loading system prompt.");
-                setUserPrompt(rawContent);
+                setUserPrompt(stage1Input);
                 setShowAnalysisModal(true);
                 setIsAnalyzing(false);
             }
         } else {
              // Normal user flow
              // executeAnalysis will set it back to true, but we can leave it true since it will continue turning
-            executeAnalysis(rawContent);
+            executeAnalysis(stage1Input, null, true);
         }
     };
 
@@ -5586,7 +5847,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 if (!savedByBackend) {
                     if (onLog) onLog('Saving raw LLM output to episode analysis field...', 'process');
-                    await persistLlmResultContent(analyzedText);
+                    await persistLlmResultContent(analyzedText, 'ai_scene_analysis_result', { source: 'standard-analysis' });
                 } else {
                     if (onLog) onLog('LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
                     await refreshAnalysisFromDB();
@@ -5793,7 +6054,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         let basePromptForSupplement = '';
         try {
-            const promptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning.md');
+            const promptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
             basePromptForSupplement = String(promptRes?.content || '').trim();
         } catch {
             basePromptForSupplement = '';
@@ -5831,11 +6092,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         await executeAnalysis(supplementInput, supplementPrompt, false);
     };
 
-    const executeAdvancedAnalysis = async (userInput, customSystemPrompt, retryCount = 0) => {
+    const executeAdvancedAnalysis = async (userInput, customSystemPrompt, retryCount = 0, skipMetadata = false) => {
         if (!activeEpisode?.id) {
             alert("No active episode selected.");
             return;
         }
+
+        resetAutoSubjectsImportCache();
 
         const forceRegenerate = forceRegenerateRef.current;
         forceRegenerateRef.current = false;
@@ -5928,6 +6191,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         try {
             await autoSaveScriptBeforeAnalysis();
+            const metadata = skipMetadata ? null : (project?.global_info || null);
 
             setAnalysisFlowStatus({
                 phase: 'analyzing',
@@ -5936,11 +6200,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phaseMarks.analyzeStartedAt = Date.now();
 
             const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
+            const splitStage1Flow = isSplitStage1Prompt(customSystemPrompt);
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => analyzeScene(
                     userInput,
                     customSystemPrompt,
-                    null,
+                    metadata,
                     activeEpisode?.id || null,
                     analysisAttentionNotes,
                     selectedReuseSubjectAssets,
@@ -6002,22 +6267,61 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const analysisSections = extractAnalysisSections(analyzedText || '');
+            let finalAnalysisText = analyzedText || '';
+            let importSourceText = analyzedText || '';
+            let analysisSections = extractAnalysisSections(finalAnalysisText);
+
+            if (splitStage1Flow) {
+                const { adaptedScriptText, userInput: stage2UserInput } = buildStage2UserInputFromStage1(analyzedText || '', selectedReuseSubjectAssets);
+                if (!String(adaptedScriptText || '').trim()) {
+                    throw new Error('第一阶段未提取到“修改后的剧本”正文，请确认返回结果包含第二部分剧本正文后重试。');
+                }
+
+                setAdaptationText(adaptedScriptText);
+
+                if (onLog) onLog('Stage 1 split prompt detected. Running Stage 2 asset extraction before Subject Index validation.', 'info');
+
+                const stage2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_beats_and_assets.md');
+                const stage2Result = await awaitAnalyzeSceneWithRecovery(
+                    () => analyzeScene(
+                        stage2UserInput,
+                        stage2PromptRes?.content || '',
+                        null,
+                        null,
+                        analysisAttentionNotes,
+                        selectedReuseSubjectAssets,
+                        {
+                            onTaskCreated: (taskId) => {
+                                setActiveAnalysisTaskId(String(taskId || '').trim());
+                                saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 2 });
+                            },
+                        },
+                        projectId
+                    ),
+                    { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: '' }
+                );
+
+                const stage2Text = extractAnalysisTextFromResult(stage2Result) || '';
+                finalAnalysisText = [String(analyzedText || '').trim(), String(stage2Text || '').trim()].filter(Boolean).join('\n\n');
+                importSourceText = finalAnalysisText;
+                analysisSections = extractAnalysisSections(finalAnalysisText);
+            }
+
             if (!analysisSections.hasStructuredSubjectIndex) {
                 if (onLog) onLog('Missing Subject Index after phase 1 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
                 throw new Error(SUBJECT_INDEX_PARSE_ERROR);
             }
 
-            setLlmRawResultContent(analyzedText || "");
-            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
-            lastLoadedAnalysisRef.current = analyzedText || "";
+            setLlmRawResultContent(finalAnalysisText || '');
+            setLlmResultContent(normalizeLlmMarkdownTable(finalAnalysisText || ''));
+            lastLoadedAnalysisRef.current = finalAnalysisText || '';
 
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             phaseMarks.persistStartedAt = Date.now();
             try {
-                if (!savedByBackend) {
+                if (splitStage1Flow || !savedByBackend) {
                     if (onLog) onLog('Saving advanced raw LLM output to episode analysis field...', 'process');
-                    await persistLlmResultContent(analyzedText || '');
+                    await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', { source: splitStage1Flow ? 'advanced-analysis-split-combined' : 'advanced-analysis' });
                 } else {
                     if (onLog) onLog('Advanced LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
                     await refreshAnalysisFromDB();
@@ -6034,7 +6338,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
-                importReport = await runAutoImportAndSwitchToScenes(analyzedText || "", {
+                importReport = await runAutoImportAndSwitchToScenes(importSourceText || finalAnalysisText || '', {
                     switchToScenes: false,
                     importOptions: {
                         autoSupplementSceneSubjects: false,
@@ -6057,9 +6361,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseMarks.importFinishedAt = Date.now();
             }
             importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
-            maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
+            maybeAlertIncompleteSubjectsImport(result, finalAnalysisText || '');
 
-            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, finalAnalysisText);
             if (importReport && typeof importReport === 'object') {
                 importReport = {
                     ...importReport,
@@ -6192,6 +6496,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!activeEpisode?.id) return;
         setIsRetryingPhase2(true);
         try {
+            resetAutoSubjectsImportCache();
             onLog?.('Retrying Phase 2 (Asset Generation)...', 'process');
             // Re-run the second pass with the (potentially edited) subjectIndexText
             // It will also bust deduplication cache by using sceneAnalysisMode = "2_pass_generate_assets" internally
@@ -6278,6 +6583,72 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (analysisFlowStatus?.phase === 'analysis' || analysisFlowStatus?.phase === 'scene') return null;
         return { status: analysisUiReport.status, error: analysisUiReport.error, warning: analysisUiReport.warning };
     }, [analysisUiReport, analysisFlowStatus]);
+
+    const phase1StageCards = useMemo(() => ([
+        {
+            key: 'stage1-card',
+            eyebrow: t('第一阶段', 'Stage 1'),
+            title: t('剧本改编', 'Script Adaptation'),
+            status: String(adaptationText || '').trim() ? 'completed' : (String(llmRawResultContent || '').trim() ? 'warning' : 'idle'),
+            badge: String(adaptationText || '').trim() ? t('已提取', 'Ready') : t('待输出', 'Pending'),
+            summary: t('只展示从第一阶段结果中提取出的“修改后的剧本”正文。', 'Shows only the adapted script body extracted from Stage 1 output.'),
+            content: adaptationText,
+            actions: [
+                {
+                    key: 'restart-stage1-card',
+                    label: t('从此重跑', 'Restart Here'),
+                    icon: 'refresh',
+                    onClick: handleAnalysisClick,
+                    disabled: isAnalyzing,
+                    loading: isAnalyzing,
+                },
+            ],
+            placeholder: t('第一阶段尚未提取到“修改后的剧本”正文。', 'No adapted script extracted from Stage 1 yet.'),
+        },
+        {
+            key: 'stage2-card',
+            eyebrow: t('第二阶段', 'Stage 2'),
+            title: t('资产分析提取', 'Beats and Assets'),
+            status: String(subjectIndexText || '').trim() ? 'completed' : 'idle',
+            badge: String(subjectIndexText || '').trim() ? t('已生成', 'Ready') : t('待输出', 'Pending'),
+            summary: t('展示第二阶段产出的 Subject Index / 资产提取结果；Project Visual Backfill 默认继承第一阶段并仅在必要时校准。', 'Shows the Stage 2 Subject Index and asset extraction result; Project Visual Backfill is inherited from Stage 1 and only adjusted when necessary.'),
+            content: subjectIndexText,
+            actions: [
+                {
+                    key: 'restart-stage2-card',
+                    label: t('从此重跑', 'Restart Here'),
+                    icon: 'refresh',
+                    onClick: handleAnalysisClick,
+                    disabled: isAnalyzing,
+                    loading: isAnalyzing,
+                },
+            ],
+            placeholder: t('第二阶段尚未生成 Subject Index。', 'No Subject Index generated by Stage 2 yet.'),
+        },
+    ]), [adaptationText, handleAnalysisClick, isAnalyzing, llmRawResultContent, subjectIndexText, t]);
+
+    const phase2StageCards = useMemo(() => ([
+        {
+            key: 'stage3-card',
+            eyebrow: t('第三阶段', 'Stage 3'),
+            title: t('资产设计', 'Asset Design'),
+            status: String(llmAssetRawResultContent || '').trim() ? 'completed' : 'idle',
+            badge: String(llmAssetRawResultContent || '').trim() ? t('已生成', 'Ready') : t('待输出', 'Pending'),
+            summary: t('展示第三阶段的角色、道具、场景等资产设计输出。', 'Shows the Stage 3 asset design output for characters, props, and environments.'),
+            content: llmAssetRawResultContent,
+            actions: [
+                {
+                    key: 'restart-stage3-card',
+                    label: t('从此重跑', 'Restart Here'),
+                    icon: 'play',
+                    onClick: handleRetryPhase2,
+                    disabled: isAnalyzing || isRetryingPhase2 || !String(subjectIndexText || '').trim(),
+                    loading: isRetryingPhase2,
+                },
+            ],
+            placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
+        },
+    ]), [handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, subjectIndexText, t]);
 
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
@@ -6628,10 +6999,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             <LLMResultPanel
                 title={t('第一阶段解构', 'Phase 1: Analysis')}
                 t={t}
-                report={phase1AnalysisReport}
-                rawText={llmRawResultContent}
-                onRawTextChange={handleLlmRawContentChange}
-                onRawTextBlur={handleSaveLlmRawContent}
+                stageCards={phase1StageCards}
                 placeholder={t('第一阶段返回的文本...', 'Phase 1 raw text...')}
             />
         </div>
@@ -6640,364 +7008,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             <LLMResultPanel
                 title={t('第二阶段补充资产', 'Phase 2: Assets')}
                 t={t}
-                report={phase2AnalysisReport}
-                rawText={llmAssetRawResultContent}
-                onRawTextChange={setLlmAssetRawResultContent}
+                stageCards={phase2StageCards}
                 placeholder={t('第二阶段返回的实体补充...', 'Phase 2 raw text...')}
-                extraContent={
-                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 mt-2">
-                        <div className="font-bold text-white/90 text-sm mb-3">
-                            📋 {t('Subject Index', 'Phase 2 Subject Index')}
-                        </div>
-                        <div className="space-y-3">
-                            <textarea 
-                                className="w-full h-32 p-3 bg-black/30 border border-white/10 rounded-md text-white/80 font-mono text-xs resize-none focus:outline-none"
-                                value={subjectIndexText}
-                                onChange={(e) => setSubjectIndexText(e.target.value)}
-                                readOnly={!isEditingSubjectIndex}
-                                placeholder={t('粘贴或编辑 Index...', 'Paste Index...')}
-                            />
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={() => setIsEditingSubjectIndex(!isEditingSubjectIndex)}
-                                    className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-500/20 text-blue-300"
-                                >
-                                    {isEditingSubjectIndex ? t('完成', 'Done') : t('修改', 'Edit')}
-                                </button>
-                                {isEditingSubjectIndex && (
-                                    <button
-                                        onClick={async () => {
-                                            try {
-                                                await updateEpisode(activeEpisode.id, { ai_scene_analysis_subject_index: subjectIndexText });
-                                                setIsEditingSubjectIndex(false);
-                                            } catch (e) {}
-                                        }}
-                                        className="px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-500/20 text-emerald-300"
-                                    >
-                                        {t('保存', 'Save')}
-                                    </button>
-                                )}
-                                <button
-                                    onClick={handleRetryPhase2}
-                                    disabled={isAnalyzing}
-                                    className="px-3 py-1.5 font-bold rounded-lg text-[11px] bg-amber-500 text-black ml-auto"
-                                >
-                                    {t('基于已有的 Index 重跑实体生成', 'Run Phase 2 on Index')}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                }
             />
         </div>
     </div>
         
                 </div>
-
-                {isSuperuser && (
-                <div className="border-t border-white/10 bg-black/10 shrink-0">
-                    <div className="px-6 py-3 border-b border-white/10">
-                        <div className="text-sm text-primary uppercase font-extrabold tracking-wide">{t('AI 提炼与草稿区', 'Analysis Output Workspace')}</div>
-                    </div>
-                    <div className="space-y-0">
-                        <div className="border-b border-white/10">
-                            <div className="px-6 py-3 flex flex-wrap items-start justify-between gap-3">
-                                <div>
-                                    <div className="text-sm text-white uppercase font-bold tracking-wide">{t('场景列表', 'Scene List')}</div>
-                                    <div className="text-[11px] text-muted-foreground mt-1">
-                                        {t('场景数', 'Scene Count')}: <span className="font-mono text-white/80">{llmSceneCount}</span>
-                                        <span className="ml-3">
-                                            {t('Subjects 去重', 'Subjects Dedup')}: <span className="font-mono text-white/80">{llmSceneSubjectDedupStats.total}</span>
-                                        </span>
-                                        <span className="ml-3 font-mono text-white/70">{t('角色', 'C')} {llmSceneSubjectDedupStats.character}</span>
-                                        <span className="ml-2 font-mono text-white/70">{t('场景', 'E')} {llmSceneSubjectDedupStats.environment}</span>
-                                        <span className="ml-2 font-mono text-white/70">{t('道具', 'P')} {llmSceneSubjectDedupStats.prop}</span>
-                                    </div>
-                                    {analysisRuntimeMeta && (
-                                        <div className="text-[10px] text-white/60 mt-1">
-                                            {t('结束原因', 'Finish')}: {analysisRuntimeMeta.finishReason} · seg: {analysisRuntimeMeta.segmentsCount} · {t('最终不完整', 'Final incomplete')}: {analysisRuntimeMeta.incompleteAfterContinuation ? t('是', 'yes') : t('否', 'no')}
-                                            {analysisRuntimeMeta.maxSegmentsStop ? ` · ${t('续写达到上限', 'Continuation hit max segments')}` : ''}
-                                            {` · ${t('请求上限', 'Req cap')}: ${analysisRuntimeMeta.requestedCap}`}
-                                            {` · ${t('完成token', 'Out tok')}: ${analysisRuntimeMeta.completionTokens}`}
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={() => {
-                                            const textToCopy = llmMarkdownTableText || llmResultContent || '';
-                                            navigator.clipboard.writeText(textToCopy);
-                                            if (onLog) onLog(t('LLM 返回结果已复制到剪贴板。', 'LLM result copied to clipboard.'), 'success');
-                                        }}
-                                        className="px-3 py-1.5 rounded-md text-[10px] font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white/80"
-                                        title={t('复制当前 LLM 返回结果', 'Copy current LLM result')}
-                                    >
-                                        {t('复制', 'Copy')}
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="h-[260px] sm:h-[320px] overflow-auto custom-scrollbar px-4 sm:px-6 pb-4 sm:pb-6">
-                                {llmMarkdownTable ? (
-                                    <table className="w-full text-left border-collapse text-xs font-mono min-w-[720px] sm:min-w-[900px]">
-                                        <thead className="sticky top-0 z-10 bg-black/50 backdrop-blur-sm">
-                                            <tr>
-                                                {llmMarkdownTable.headers.map((header, idx) => (
-                                                    <th key={idx} className="p-2 border-b border-white/10 font-medium text-muted-foreground whitespace-nowrap">{header}</th>
-                                                ))}
-                                                <th className="p-2 border-b border-white/10 font-medium text-muted-foreground whitespace-nowrap">{t('角色数', 'Characters')}</th>
-                                                <th className="p-2 border-b border-white/10 font-medium text-muted-foreground whitespace-nowrap">{t('场景数', 'Environments')}</th>
-                                                <th className="p-2 border-b border-white/10 font-medium text-muted-foreground whitespace-nowrap">{t('道具数', 'Props')}</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-white/5">
-                                            {llmMarkdownTable.rows.map((row, rowIdx) => (
-                                                <tr key={rowIdx} className="hover:bg-white/5 transition-colors">
-                                                    {llmMarkdownTable.headers.map((_, colIdx) => (
-                                                        <td key={colIdx} className="p-1 align-top">
-                                                            <textarea
-                                                                className="w-full min-h-[34px] bg-transparent border border-transparent hover:border-white/10 focus:border-primary/40 rounded px-1.5 py-1 text-white/90 leading-relaxed focus:outline-none resize-y"
-                                                                value={row[colIdx] || ''}
-                                                                onChange={(e) => handleLlmCellChange(rowIdx, colIdx, e.target.value)}
-                                                                onBlur={handlePersistLlmWorkspace}
-                                                            />
-                                                        </td>
-                                                    ))}
-                                                    <td className="p-2 align-top text-[11px] text-white/80 font-mono whitespace-nowrap" title={llmSceneSubjectStats[rowIdx]?.characterNames || ''}>
-                                                        {llmSceneSubjectStats[rowIdx]?.characterCount ?? 0}
-                                                    </td>
-                                                    <td className="p-2 align-top text-[11px] text-white/80 font-mono whitespace-nowrap" title={llmSceneSubjectStats[rowIdx]?.environmentNames || ''}>
-                                                        {llmSceneSubjectStats[rowIdx]?.environmentCount ?? 0}
-                                                    </td>
-                                                    <td className="p-2 align-top text-[11px] text-white/80 font-mono whitespace-nowrap" title={llmSceneSubjectStats[rowIdx]?.propNames || ''}>
-                                                        {llmSceneSubjectStats[rowIdx]?.propCount ?? 0}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                ) : (
-                                    <div className="text-xs text-muted-foreground pt-4">
-                                        {t('未检测到可解析的 Markdown 表格。', 'No parseable Markdown table detected.')}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        <div>
-                            <div className="px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-                                <div className="text-sm text-white uppercase font-bold tracking-wide">
-                                    {t('实体列表', 'Entity List')}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={handleImportEntities}
-                                        disabled={isImportingEntities || isCheckingSubjectConsistency || isCheckingCoreCoverage}
-                                        className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold border border-white/10 ${(isImportingEntities || isCheckingSubjectConsistency || isCheckingCoreCoverage) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/5 hover:bg-white/10 text-white/80'}`}
-                                        title={t('导入第 3 部分：实体 JSON', 'Import Part 3: entities JSON')}
-                                    >
-                                        {isImportingEntities ? t('导入中...', 'Importing...') : t('导入实体', 'Import Entities')}
-                                    </button>
-                                    <button
-                                        onClick={handleRunSubjectConsistencyCheck}
-                                        disabled={isImportingEntities || isCheckingSubjectConsistency || isCheckingCoreCoverage}
-                                        className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold border border-white/10 ${(isImportingEntities || isCheckingSubjectConsistency || isCheckingCoreCoverage) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/5 hover:bg-white/10 text-white/80'}`}
-                                        title={t('检查 Markdown 表格中的 subject 与 JSON entities 是否一致', 'Check consistency between markdown subjects and JSON entities')}
-                                    >
-                                        {isCheckingSubjectConsistency ? t('检查中...', 'Checking...') : t('核对出场名单', 'Check Subject Consistency')}
-                                    </button>
-                                    <button
-                                        onClick={runCoreCoverageCheck}
-                                        disabled={isImportingEntities || isCheckingSubjectConsistency || isCheckingCoreCoverage}
-                                        className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold border border-white/10 ${(isImportingEntities || isCheckingSubjectConsistency || isCheckingCoreCoverage) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/5 hover:bg-white/10 text-white/80'}`}
-                                        title={t('检查 Core Scene Info 是否覆盖原始剧本内容', 'Check whether Core Scene Info fully covers original script text')}
-                                    >
-                                        {isCheckingCoreCoverage ? t('校验中...', 'Checking...') : t('校验 Core 覆盖', 'Check Core Coverage')}
-                                    </button>
-                                </div>
-                            </div>
-
-                            {(workspaceOpStatus.running || workspaceOpStatus.message) && (
-                                <div className="px-6 pb-3">
-                                    <div className="rounded-lg border border-white/10 bg-black/20 p-2.5 text-xs">
-                                        <div className="flex items-center justify-between gap-2 mb-1.5">
-                                            <div className="flex items-center gap-2 text-white/90">
-                                                {workspaceOpStatus.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5 text-emerald-300" />}
-                                                <span>{workspaceOpStatus.message}</span>
-                                            </div>
-                                            <span className="font-mono text-white/60">{Math.round(Number(workspaceOpStatus.progress || 0))}%</span>
-                                        </div>
-                                        <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
-                                            <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.round(Number(workspaceOpStatus.progress || 0))}%` }} />
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            <div className="px-6 pb-4 text-xs text-muted-foreground space-y-1">
-                                <div>{t('实体总数', 'Total entities')}: {totalLlmEntityCount}</div>
-                                <div>
-                                    {t('Subjects 生成统计', 'Subject generation stats')}: 
-                                    <span className="ml-1 font-mono text-white/80">{t('角色', 'Characters')} {subjectTypeGenerationStats.character.generated}/{subjectTypeGenerationStats.character.total}</span>
-                                    <span className="ml-3 font-mono text-white/80">{t('场景', 'Environments')} {subjectTypeGenerationStats.environment.generated}/{subjectTypeGenerationStats.environment.total}</span>
-                                    <span className="ml-3 font-mono text-white/80">{t('道具', 'Props')} {subjectTypeGenerationStats.prop.generated}/{subjectTypeGenerationStats.prop.total}</span>
-                                </div>
-                            </div>
-
-                            {totalLlmEntityCount === 0 ? (
-                                <div className="px-6 pb-6 text-xs text-muted-foreground">
-                                    {t('未检测到可解析的实体 JSON（characters / environments / props）。', 'No parseable entities JSON detected (characters / environments / props).')}
-                                </div>
-                            ) : (
-                                <div className="px-6 pb-6 grid grid-cols-1 xl:grid-cols-3 gap-4">
-                                    {llmEntityGroups.map((group) => {
-                                        const GroupIcon = group.icon;
-                                        return (
-                                            <div key={group.key} className="rounded-lg border border-white/10 bg-black/20 p-3">
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-white/90">
-                                                        <GroupIcon size={14} className="text-primary" />
-                                                        <span>{t(group.labelZh, group.labelEn)}</span>
-                                                    </div>
-                                                    <span className="text-[11px] text-muted-foreground font-mono">{group.items.length}</span>
-                                                </div>
-                                                <div className="space-y-1.5 max-h-56 overflow-auto custom-scrollbar pr-1">
-                                                    {group.items.length === 0 ? (
-                                                        <div className="text-[11px] text-muted-foreground">{t('暂无', 'Empty')}</div>
-                                                    ) : group.items.map((item, idx) => (
-                                                        (() => {
-                                                            const dependencies = getEntityDependencies(item);
-                                                            const hasDependencies = dependencies.length > 0;
-                                                            const isCharacterGroup = group.key === 'character';
-                                                            const dependencyPreview = dependencies.slice(0, 3).join(', ');
-                                                            const dependencyMore = dependencies.length > 3 ? ` +${dependencies.length - 3}` : '';
-                                                            return (
-                                                        <button
-                                                            key={`${group.key}-${idx}`}
-                                                            type="button"
-                                                            onClick={() => setJsonEntityDetailModal({
-                                                                open: true,
-                                                                groupKey: group.key,
-                                                                groupLabelZh: group.labelZh,
-                                                                groupLabelEn: group.labelEn,
-                                                                item,
-                                                            })}
-                                                            className={`w-full text-left rounded-md border px-2.5 py-2 hover:bg-white/10 transition-colors ${hasDependencies ? (isCharacterGroup ? 'border-amber-400/40 bg-amber-500/10' : 'border-sky-400/30 bg-sky-500/10') : 'border-white/10 bg-white/5'}`}
-                                                            title={t('查看完整 JSON', 'View full JSON')}
-                                                        >
-                                                            <div className="flex items-center justify-between gap-2">
-                                                                <div className="text-xs font-semibold text-white/90 truncate" title={item?.name || item?.name_en || ''}>
-                                                                    {item?.name || item?.name_en || t('未命名', 'Unnamed')}
-                                                                </div>
-                                                                {hasDependencies && (
-                                                                    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${isCharacterGroup ? 'border-amber-300/40 text-amber-200 bg-amber-500/20' : 'border-sky-300/40 text-sky-200 bg-sky-500/20'}`}>
-                                                                        <LinkIcon size={10} />
-                                                                        {isCharacterGroup ? t('角色依赖', 'Role Dependency') : t('有依赖', 'Has Dependency')}
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                            <div className="text-[11px] text-white/55 mt-0.5 line-clamp-2">
-                                                                {String(item?.description || item?.narrative_description || item?.anchor_description || '').trim() || t('无描述', 'No description')}
-                                                            </div>
-                                                            {hasDependencies && (
-                                                                <div className="text-[10px] mt-1 text-white/75 line-clamp-2" title={dependencies.join(', ')}>
-                                                                    {t('依赖', 'Depends on')}: {dependencyPreview}{dependencyMore}
-                                                                </div>
-                                                            )}
-                                                        </button>
-                                                            );
-                                                        })()
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-
-                            <div className="px-6 pb-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">{t('第一次调用 LLM 原文（场景解构）', 'Phase 1 LLM Raw Response')}</div>
-                            <textarea
-                                className="w-full h-44 px-6 pb-6 bg-transparent text-white/70 font-mono text-[11px] leading-relaxed focus:outline-none custom-scrollbar resize-none border-t border-white/5"
-                                placeholder={t('第一次 LLM 返回的剧本解构数据会显示在这里。', 'Phase 1 LLM response text is shown here.')}
-                                value={llmRawResultContent || ''}
-                                onChange={(e) => handleLlmRawContentChange(e.target.value)}
-                                onBlur={handleSaveLlmRawContent}
-                            />
-
-                            <div className="px-6 pb-2 pt-2 text-[10px] text-muted-foreground uppercase font-bold tracking-wide">{t('第二次调用 LLM 原文（实体资产）', 'Phase 2 LLM Asset Generation Response')}</div>
-                            <textarea
-                                className="w-full h-44 px-6 pb-6 bg-transparent text-amber-100/70 font-mono text-[11px] leading-relaxed focus:outline-none custom-scrollbar resize-none border-t border-white/5"
-                                placeholder={t('第二次 LLM 返回的实体补充生成数据会显示在这里。', 'Phase 2 LLM asset generation response text is shown here.')}
-                                value={llmAssetRawResultContent || ''}
-                                onChange={(e) => setLlmAssetRawResultContent(e.target.value)}
-                            />
-
-                            <div className="rounded-lg border border-white/10 bg-black/20 p-4 mt-4">
-                                <div className="font-bold text-white/90 text-sm mb-3 flex items-center gap-2">
-                                    📋 {t('Phase 1 Subject Index', 'Phase 1 Subject Index')}
-                                </div>
-                                <div className="space-y-3">
-                                    <textarea 
-                                        className="w-full h-32 p-3 bg-black/30 border border-white/10 rounded-md text-white/80 font-mono text-xs resize-none focus:outline-none focus:border-white/20"
-                                        value={subjectIndexText}
-                                        onChange={(e) => {
-                                            if (isEditingSubjectIndex) {
-                                                setSubjectIndexText(e.target.value);
-                                            }
-                                        }}
-                                        readOnly={!isEditingSubjectIndex}
-                                        placeholder={t('在这里粘贴或编辑 Subject Index 用于第二阶段...', 'Paste or edit Subject Index here for Phase 2...')}
-                                    />
-                                    <div className="flex gap-2">
-                                        <button
-                                                onClick={() => setIsEditingSubjectIndex(!isEditingSubjectIndex)}
-                                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/50 text-blue-300"
-                                            >
-                                                {isEditingSubjectIndex ? t('完成编辑', 'Done') : t('修改', 'Edit')}
-                                            </button>
-                                            {isEditingSubjectIndex && (
-                                                <button
-                                                    onClick={async () => {
-                                                        try {
-                                                            await updateEpisode(activeEpisode.id, { 
-                                                                ai_scene_analysis_subject_index: subjectIndexText 
-                                                            });
-                                                            onLog?.('Subject Index saved successfully');
-                                                            setIsEditingSubjectIndex(false);
-                                                        } catch (error) {
-                                                            onLog?.(`Failed to save Subject Index: ${error.message}`);
-                                                        }
-                                                    }}
-                                                    className="px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-300"
-                                                >
-                                                    {t('保存', 'Save')}
-                                                </button>
-                                            )}
-                                            <button
-                                                onClick={handleRetryPhase2}
-                                                disabled={isRetryingPhase2}
-                                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                                            >
-                                                {isRetryingPhase2 ? (
-                                                    <>
-                                                        <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                                                        {t('正在重试...', 'Retrying...')}
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <RefreshCw className="w-3 h-3 flex-shrink-0" />
-                                                        {t('重试第二阶段(资产生成)', 'Retry Phase 2')}
-                                                    </>
-                                                )}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                        </div>
-                    </div>
-                </div>
-                )}
-
-
             </div>
 
             {jsonEntityDetailModal.open && (
@@ -7189,7 +7206,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                   phase2ResolverRef.current = null;
                                                   resolver({ systemPrompt, userPrompt });
                                               } else {
-                                                  executeAdvancedAnalysis(userPrompt, systemPrompt);
+                                                  executeAdvancedAnalysis(userPrompt, systemPrompt, 0, true);
                                               }
                                               setShowAnalysisModal(false);
                                           }}

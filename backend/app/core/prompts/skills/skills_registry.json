@@ -15,7 +15,8 @@
       "title": "Scene Analysis Feature Stack",
       "type": "analysis",
       "prompts": [
-        "skills/scene_analysis_feature_stack/scene_planning.md",
+        "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md",
+        "skills/scene_analysis_feature_stack/scene_planning_2_beats_and_assets.md",
         "skills/scene_analysis_feature_stack/entity_design.md"
       ],
       "legacy_refs": []

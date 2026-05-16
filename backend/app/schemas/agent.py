@@ -28,7 +28,7 @@ class AnalyzeSceneRequest(BaseModel):
     project_id: Optional[int] = None
     episode_id: Optional[int] = None
     llm_config: Optional[Dict[str, Any]] = None
-    prompt_file: Optional[str] = "skills/scene_analysis_feature_stack/scene_planning.md"
+    prompt_file: Optional[str] = "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
     system_prompt: Optional[str] = None
     project_metadata: Optional[Dict[str, Any]] = None
     scene_analysis_mode: Optional[str] = None

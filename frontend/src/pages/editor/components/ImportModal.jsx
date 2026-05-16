@@ -194,7 +194,7 @@ export const ImportModal = ({ isOpen, onClose, onImport, defaultType = 'auto', p
             const body = {
                   text: text,
                   project_id: project?.id,
-                  prompt_file: "skills/scene_analysis_feature_stack/scene_planning.md",
+                  prompt_file: "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md",
                   include_negative_prompt: true,
                   function_name: "script_analysis",
                   system_api_id: Number(localStorage.getItem('func_api_script_analysis')) || null,
