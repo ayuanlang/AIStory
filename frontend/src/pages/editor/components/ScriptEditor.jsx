@@ -3606,6 +3606,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setIsAnalyzing(false);
         }
     }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, loadAnalysisTaskMarker, onLog, t]);
+
+    const hasStoppableAnalysisTask = useMemo(() => {
+        const markerTaskId = activeEpisode?.id
+            ? String(loadAnalysisTaskMarker(activeEpisode.id)?.taskId || '').trim()
+            : '';
+        return Boolean(String(activeAnalysisTaskId || '').trim() || markerTaskId);
+    }, [activeAnalysisTaskId, activeEpisode?.id, loadAnalysisTaskMarker]);
+
     const refreshAnalysisFromDB = useCallback(async ({ resultField = 'ai_scene_analysis_result' } = {}) => {
         if (!projectId || !activeEpisode?.id) return;
         try {
@@ -6717,7 +6725,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </>
                                 )}
                             </button>
-                            {isAnalyzing && (
+                            {hasStoppableAnalysisTask && (
                                 <button
                                     onClick={handleStopAnalysisTask}
                                     disabled={isStoppingAnalysisTask}
@@ -6848,7 +6856,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                     )}
 
-                    {isAnalyzing && analysisFlowStatus.phase === 'analyzing' && (
+                    {hasStoppableAnalysisTask && (
                         <div className="mb-2">
                             <button
                                 onClick={handleStopAnalysisTask}
@@ -7212,7 +7220,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                         
                         <div className="p-4 border-t border-white/10 bg-white/5 flex justify-end gap-2">
-                            {isAnalyzing && (
+                            {hasStoppableAnalysisTask && (
                                 <button
                                     onClick={handleStopAnalysisTask}
                                     disabled={isStoppingAnalysisTask}

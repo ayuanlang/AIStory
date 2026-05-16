@@ -9275,7 +9275,7 @@ const UserAdmin = () => {
                                               {llmLogs.map(log => (
                                                   <tr key={log.id} className="hover:bg-white/5">
                                                       <td className="px-4 py-3 opacity-60">#{log.id}</td>
-                                                      <td className="px-4 py-3 whitespace-nowrap">{new Date(log.timestamp + 'Z').toLocaleString()}</td>
+                                                      <td className="px-4 py-3 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.provider}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.model}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.tag}</td>
