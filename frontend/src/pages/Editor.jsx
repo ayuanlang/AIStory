@@ -19,6 +19,8 @@ import {
 import { 
     fetchProject, 
     updateProject,
+    exportProjectBackup,
+    importProjectBackup,
     generateProjectStoryGlobal,
     analyzeProjectNovel,
     generateProjectCharacterProfile,
@@ -214,11 +216,14 @@ const Editor = ({
     );
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [isJobPoolOpen, setIsJobPoolOpen] = useState(false);
+    const [isProjectBackupExporting, setIsProjectBackupExporting] = useState(false);
+    const [isProjectBackupImporting, setIsProjectBackupImporting] = useState(false);
     const [jobPoolLoading, setJobPoolLoading] = useState(false);
     const [jobPoolStoppingId, setJobPoolStoppingId] = useState('');
     const [jobPoolDeletingId, setJobPoolDeletingId] = useState('');
     const [jobPoolStoppingAll, setJobPoolStoppingAll] = useState(false);
     const [jobPoolStoppingAllApi, setJobPoolStoppingAllApi] = useState(false);
+    const projectBackupFileInputRef = useRef(null);
     const [jobPoolStopLimit, setJobPoolStopLimit] = useState('20');
     const [jobPoolFilterKind, setJobPoolFilterKind] = useState('all');
     const [jobPoolRunningOnly, setJobPoolRunningOnly] = useState(true);
@@ -2681,36 +2686,79 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
     };
 
     const handleExport = async () => {
+        if (isProjectBackupExporting) return;
         addLog("Preparing project export...", "process");
+        setIsProjectBackupExporting(true);
         try {
-            // 1. Fetch latest project data
-            const projectData = await fetchProject(id);
-            // 2. Fetch all episodes
-            const episodesData = await fetchEpisodes(id);
-
-            const exportData = {
-                project: projectData,
-                episodes: episodesData,
-                export_date: new Date().toISOString(),
-                version: "1.0"
-            };
-
+            const exportData = await exportProjectBackup(id);
+            const backupTitle = String(exportData?.project?.title || project?.title || id || 'project').trim();
             const jsonString = JSON.stringify(exportData, null, 2);
             const blob = new Blob([jsonString], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.href = url;
-            link.download = `Project_${(projectData.title || id).replace(/[^a-z0-9]/gi, '_')}_Export.json`;
+            link.download = `Project_${backupTitle.replace(/[^a-z0-9]/gi, '_')}_Backup.json`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
             
-            addLog("Project exported to local disk.", "success");
+            addLog("Project backup exported to local disk.", "success");
         } catch (e) {
             console.error(e);
             addLog(`Export failed: ${e.message}`, "error");
             alert(`Failed to export project: ${e?.message || 'Unknown error'}`);
+        } finally {
+            setIsProjectBackupExporting(false);
+        }
+    };
+
+    const handleImportBackupClick = () => {
+        if (isProjectBackupImporting) return;
+        projectBackupFileInputRef.current?.click();
+    };
+
+    const handleImportBackupFileChange = async (event) => {
+        const file = event?.target?.files?.[0] || null;
+        event.target.value = '';
+        if (!file) return;
+        if (isProjectBackupImporting) return;
+
+        let parsed = null;
+        try {
+            const rawText = await file.text();
+            parsed = JSON.parse(rawText);
+        } catch (e) {
+            alert(t('备份文件不是有效的 JSON。', 'Backup file is not valid JSON.'));
+            return;
+        }
+
+        const sourceTitle = String(parsed?.project?.title || '').trim() || file.name.replace(/\.json$/i, '');
+        const ok = await confirmUiMessage(t(
+            `确认导入项目备份？\n将基于备份新建一个项目：${sourceTitle}`,
+            `Import this project backup?\nA new project will be created from: ${sourceTitle}`
+        ));
+        if (!ok) return;
+
+        setIsProjectBackupImporting(true);
+        addLog(`Importing project backup: ${file.name}`, 'process');
+        try {
+            const res = await importProjectBackup({ backup: parsed });
+            const importedProject = res?.project;
+            const imported = res?.imported || {};
+            addLog(
+                `Project backup imported: episodes=${Number(imported?.episodes || 0)}, scenes=${Number(imported?.scenes || 0)}, shots=${Number(imported?.shots || 0)}, entities=${Number(imported?.entities || 0)}, assets=${Number(imported?.assets || 0)}`,
+                'success'
+            );
+            if (importedProject?.id) {
+                navigate(`/projects/${importedProject.id}`);
+            }
+        } catch (e) {
+            console.error(e);
+            addLog(`Project backup import failed: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
+            alert(e?.response?.data?.detail || e?.message || t('项目备份导入失败', 'Failed to import project backup'));
+        } finally {
+            setIsProjectBackupImporting(false);
         }
     };
 
@@ -3261,6 +3309,30 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                     
                     <button
                         onClick={() => {
+                            trackMenuAction('editor.action.project_backup_export', t('导出备份', 'Export Backup'), handleExport);
+                        }}
+                        disabled={isProjectBackupExporting}
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={t('导出当前项目完整备份', 'Export full backup for current project')}
+                    >
+                        {isProjectBackupExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                        <span className="text-xs font-medium hidden sm:block">{t('导出备份', 'Export Backup')}</span>
+                    </button>
+
+                    <button
+                        onClick={() => {
+                            trackMenuAction('editor.action.project_backup_import', t('导入备份', 'Import Backup'), handleImportBackupClick);
+                        }}
+                        disabled={isProjectBackupImporting}
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={t('从备份文件新建项目', 'Create a new project from backup file')}
+                    >
+                        {isProjectBackupImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                        <span className="text-xs font-medium hidden sm:block">{t('导入备份', 'Import Backup')}</span>
+                    </button>
+
+                    <button
+                        onClick={() => {
                             trackMenuAction('editor.action.job_pool', t('任务池', 'Job Pool'), () => setIsJobPoolOpen(true));
                         }}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
@@ -3294,6 +3366,14 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                     </button>
                 </div>
             </div>
+
+            <input
+                ref={projectBackupFileInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={handleImportBackupFileChange}
+            />
 
             {/* Compact Project Status and Cost Bar */}
             <ProjectStatusBar 

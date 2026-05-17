@@ -1,5 +1,5 @@
 ﻿
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     api,
     fetchProjects,
@@ -29,6 +29,7 @@ import {
     getKieStandardValueOptions,
     getProjectCreateOptionsCatalog,
     fetchMe as fetchMeApi,
+    importProjectBackup,
 } from '../services/api';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import Editor from './Editor';
@@ -62,6 +63,7 @@ import {
     X,
     Menu,
     Loader2,
+    Upload,
     ChevronsLeft,
     ChevronsRight,
     Info,
@@ -484,6 +486,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isProjectsLoading, setIsProjectsLoading] = useState(false);
     const [hasLoadedProjectsOnce, setHasLoadedProjectsOnce] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
+    const [isProjectBackupImporting, setIsProjectBackupImporting] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
   const [newHasExistingAssets, setNewHasExistingAssets] = useState(false);
@@ -526,6 +529,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     // Theme Logic - Moved to Parent for persistence on reload
     const [currentTheme, setCurrentTheme] = useState('default');
     const [toast, setToast] = useState(null);
+    const projectBackupFileInputRef = useRef(null);
     const [shareModalProject, setShareModalProject] = useState(null);
     const [shareModalTab, setShareModalTab] = useState('share');
     const [projectShares, setProjectShares] = useState([]);
@@ -936,6 +940,63 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         
         if (targetProjectId && newScriptText.trim()) {
             setSelectedProjectId(targetProjectId);
+        }
+    };
+
+    const handleImportBackupClick = () => {
+        if (isProjectBackupImporting) return;
+        projectBackupFileInputRef.current?.click();
+    };
+
+    const handleImportBackupFileChange = async (event) => {
+        const file = event?.target?.files?.[0] || null;
+        event.target.value = '';
+        if (!file || isProjectBackupImporting) return;
+
+        let backupPayload = null;
+        try {
+            const rawText = await file.text();
+            backupPayload = JSON.parse(rawText);
+        } catch (error) {
+            setToast({ type: 'error', message: t('备份文件不是有效的 JSON', 'Backup file is not valid JSON') });
+            setTimeout(() => setToast(null), 3500);
+            return;
+        }
+
+        const sourceTitle = String(backupPayload?.project?.title || '').trim() || file.name.replace(/\.json$/i, '');
+        const ok = await confirmUiMessage(t(
+            `确认导入项目备份？\n将基于备份新建项目：${sourceTitle}`,
+            `Import this project backup?\nA new project will be created from: ${sourceTitle}`
+        ));
+        if (!ok) return;
+
+        setIsProjectBackupImporting(true);
+        try {
+            const res = await importProjectBackup({ backup: backupPayload });
+            const importedProject = res?.project || null;
+            const importedStats = res?.imported || {};
+            await loadProjects();
+            if (importedProject?.id) {
+                setSelectedProject(importedProject);
+                setSelectedProjectId(importedProject.id);
+            }
+            setToast({
+                type: 'success',
+                message: t(
+                    `备份导入完成：${Number(importedStats.episodes || 0)} 集，${Number(importedStats.scenes || 0)} 场，${Number(importedStats.shots || 0)} 镜头`,
+                    `Backup imported: ${Number(importedStats.episodes || 0)} episodes, ${Number(importedStats.scenes || 0)} scenes, ${Number(importedStats.shots || 0)} shots`
+                )
+            });
+            setTimeout(() => setToast(null), 3500);
+        } catch (error) {
+            console.error('Failed to import project backup', error);
+            setToast({
+                type: 'error',
+                message: error?.response?.data?.detail || error?.message || t('项目备份导入失败', 'Failed to import project backup'),
+            });
+            setTimeout(() => setToast(null), 4000);
+        } finally {
+            setIsProjectBackupImporting(false);
         }
     };
 
@@ -1744,6 +1805,13 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 </div>
 
                 <div className="max-w-7xl mx-auto w-full px-4 pt-6 pb-4 sm:px-6 lg:px-12 md:pt-8 relative z-40">
+                    <input
+                        ref={projectBackupFileInputRef}
+                        type="file"
+                        accept="application/json,.json"
+                        className="hidden"
+                        onChange={handleImportBackupFileChange}
+                    />
                     {/* Header */}
                     <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div>
@@ -1797,6 +1865,14 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                             className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground rounded-full hover:bg-primary/90 shadow-lg shadow-primary/20 transition-all hover:scale-105 font-medium"
                                         >
                                             <Plus className="w-4 h-4" /> {t('新建项目', 'New Project')}
+                                        </button>
+                                        <button
+                                            onClick={handleImportBackupClick}
+                                            disabled={isProjectBackupImporting}
+                                            className="flex items-center gap-2 px-5 py-2.5 bg-secondary text-secondary-foreground rounded-full hover:bg-secondary/80 transition-all font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {isProjectBackupImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                                            {t('导入备份', 'Import Backup')}
                                         </button>
                                         <button
                                             onClick={() => {
@@ -1875,6 +1951,10 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 autoFocus
                                             />
                                             <button onClick={handleCreate} className="px-6 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">{t('创建', 'Create')}</button>
+                                            <button onClick={handleImportBackupClick} disabled={isProjectBackupImporting} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+                                                {isProjectBackupImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                                                {t('导入备份', 'Import Backup')}
+                                            </button>
                                             <button onClick={() => {
                                                 setIsCreating(false);
                                                 resetCreateProjectForm();

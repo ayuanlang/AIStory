@@ -21,7 +21,7 @@ import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
-from sqlalchemy import or_, and_, text, inspect, cast, String, func
+from sqlalchemy import or_, and_, text, inspect, cast, String, func, update as sa_update
 from app.db.session import get_db, SessionLocal
 from app.models import all_models as models
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
@@ -54,7 +54,7 @@ import os
 from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
 from app.services.project_cost_service import compute_project_cost_estimation
-from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
+from app.api.deps import get_current_active_superuser, get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
 from typing import Any, List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
 from pydantic import BaseModel
@@ -116,6 +116,7 @@ SystemAPISetting = models.SystemAPISetting
 ScriptSegment = models.ScriptSegment
 TransactionHistory = models.TransactionHistory
 TransactionAction = models.TransactionAction
+ProjectGroupCreditAllocation = getattr(models, "ProjectGroupCreditAllocation", None)
 SMTPSystemConfig = models.SMTPSystemConfig
 WechatPayConfig = models.WechatPayConfig
 ProviderKeyPool = models.ProviderKeyPool
@@ -5517,6 +5518,136 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
 
             return ""
 
+        def _extract_scene_markdown_table(analysis_output: str) -> str:
+            text = str(analysis_output or "").replace("\r\n", "\n")
+            if not text.strip():
+                return ""
+
+            lines = text.split("\n")
+            table_lines: List[str] = []
+            in_table = False
+            for raw_line in lines:
+                line = str(raw_line or "")
+                if line.count("|") >= 2:
+                    table_lines.append(line.rstrip())
+                    in_table = True
+                    continue
+                if in_table:
+                    break
+            return "\n".join(table_lines).strip()
+
+        def _load_stage_outputs_bundle(raw_text: str) -> Dict[str, Any]:
+            text = str(raw_text or "").strip()
+            if not text:
+                return {"version": 1, "stages": {}}
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                return {"version": 1, "stages": {}}
+            if isinstance(parsed, dict) and isinstance(parsed.get("stages"), dict):
+                return parsed
+            return {"version": 1, "stages": {}}
+
+        def _upsert_stage_output(bundle: Dict[str, Any], stage_key: str, *, title: str, inputs: Optional[Dict[str, Any]] = None, outputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            stable_bundle = bundle if isinstance(bundle, dict) else {"version": 1, "stages": {}}
+            stable_bundle.setdefault("version", 1)
+            stages = stable_bundle.setdefault("stages", {})
+            stage_payload = stages.setdefault(stage_key, {"key": stage_key, "title": title, "restartable": True, "inputs": {}, "outputs": {}})
+            stage_payload["key"] = stage_key
+            stage_payload["title"] = title
+            stage_payload["restartable"] = True
+            stage_payload.setdefault("inputs", {})
+            stage_payload.setdefault("outputs", {})
+            if isinstance(inputs, dict):
+                stage_payload["inputs"].update(inputs)
+            if isinstance(outputs, dict):
+                stage_payload["outputs"].update(outputs)
+            return stable_bundle
+
+        def _artifact_payload(key: str, title: str, kind: str, content: Any) -> Dict[str, Any]:
+            return {
+                "key": key,
+                "title": title,
+                "kind": kind,
+                "content": str(content or "").strip(),
+            }
+
+        def _build_stage_outputs_bundle(existing_bundle_text: str, *, analysis_raw_text: str = "", asset_raw_text: str = "", script_input_text: str = "", project_context: Any = None) -> str:
+            bundle = _load_stage_outputs_bundle(existing_bundle_text)
+            analysis_text = str(analysis_raw_text or "").strip()
+            asset_text = str(asset_raw_text or "").strip()
+            script_text = str(script_input_text or "").strip()
+            project_context_text = ""
+            if project_context is not None:
+                try:
+                    project_context_text = json.dumps(project_context, ensure_ascii=False, indent=2)
+                except Exception:
+                    project_context_text = str(project_context)
+
+            if analysis_text:
+                adapted_payload = _extract_stage1_adapted_script_payload(analysis_text)
+                adapted_script = str(adapted_payload.get("script_text") or "").strip()
+                visual_backfill_json = _extract_stage1_project_visual_backfill_json(analysis_text)
+                subject_index_text = _extract_subject_index_text(analysis_text)
+                scene_markdown = _extract_scene_markdown_table(analysis_text)
+
+                bundle = _upsert_stage_output(
+                    bundle,
+                    "stage1",
+                    title="Script Adaptation",
+                    inputs={
+                        "script_content": _artifact_payload("script_content", "Episode Script", "markdown", script_text),
+                        "project_context": _artifact_payload("project_context", "Project Context", "json", project_context_text),
+                    },
+                    outputs={
+                        "adapted_script": _artifact_payload("adapted_script", "Adapted Script", "markdown", adapted_script),
+                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "Project Visual Backfill", "json", visual_backfill_json),
+                        "raw_text": _artifact_payload("raw_text", "Raw Stage 1 Output", "text", analysis_text),
+                    },
+                )
+                bundle = _upsert_stage_output(
+                    bundle,
+                    "stage2",
+                    title="Beats and Assets",
+                    inputs={
+                        "adapted_script": _artifact_payload("adapted_script", "Stage 1 Adapted Script", "markdown", adapted_script),
+                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "Stage 1 Project Visual Backfill", "json", visual_backfill_json),
+                    },
+                    outputs={
+                        "scene_markdown": _artifact_payload("scene_markdown", "Scene Markdown", "markdown", scene_markdown),
+                        "subject_index": _artifact_payload("subject_index", "Subject Index", "markdown", subject_index_text),
+                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "Project Visual Backfill", "json", visual_backfill_json),
+                        "raw_text": _artifact_payload("raw_text", "Raw Stage 2 Output", "text", analysis_text),
+                    },
+                )
+
+            if asset_text:
+                bundle = _upsert_stage_output(
+                    bundle,
+                    "stage3",
+                    title="Asset Design",
+                    inputs={
+                        "subject_index": _artifact_payload(
+                            "subject_index",
+                            "Stage 2 Subject Index",
+                            "markdown",
+                            _extract_subject_index_text(analysis_text) or str((((bundle.get("stages") or {}).get("stage2") or {}).get("outputs") or {}).get("subject_index", {}).get("content") or ""),
+                        ),
+                        "project_visual_backfill": _artifact_payload(
+                            "project_visual_backfill",
+                            "Stage 2 Project Visual Backfill",
+                            "json",
+                            _extract_stage1_project_visual_backfill_json(analysis_text) or str((((bundle.get("stages") or {}).get("stage2") or {}).get("outputs") or {}).get("project_visual_backfill", {}).get("content") or ""),
+                        ),
+                    },
+                    outputs={
+                        "asset_design_json": _artifact_payload("asset_design_json", "Asset Design JSON", "json", asset_text),
+                        "raw_text": _artifact_payload("raw_text", "Raw Stage 3 Output", "text", asset_text),
+                    },
+                )
+
+            return json.dumps(bundle, ensure_ascii=False, indent=2)
+
         if use_split_scene_analysis_flow:
             stage1_prompt_filename = "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
             stage2_prompt_filename = "skills/scene_analysis_feature_stack/scene_planning_2_beats_and_assets.md"
@@ -5725,10 +5856,18 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             if effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"]:
                 persisted_field_name = "ai_entity_design_result"
                 episode.ai_entity_design_result = result_content
+                episode.ai_stage_outputs = _build_stage_outputs_bundle(
+                    getattr(episode, "ai_stage_outputs", "") or "",
+                    analysis_raw_text=getattr(episode, "ai_scene_analysis_result", "") or "",
+                    asset_raw_text=result_content,
+                    script_input_text=getattr(episode, "script_content", "") or "",
+                    project_context=getattr(getattr(episode, "project", None), "global_info", None),
+                )
                 logger.info(
-                    "[analyze_scene] Persisted raw phase2 output to ai_entity_design_result episode_id=%s chars=%s",
+                    "[analyze_scene] Persisted raw phase2 output to ai_entity_design_result episode_id=%s chars=%s stage_bundle_chars=%s",
                     episode_id,
                     len(result_content or ""),
+                    len(str(getattr(episode, "ai_stage_outputs", "") or "")),
                 )
             else:
                 persisted_field_name = "ai_scene_analysis_result"
@@ -5745,8 +5884,15 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
 
                 episode.ai_scene_analysis_subject_index = persisted_subject_index
                 episode.ai_scene_analysis_adaptation = persisted_adaptation
+                episode.ai_stage_outputs = _build_stage_outputs_bundle(
+                    getattr(episode, "ai_stage_outputs", "") or "",
+                    analysis_raw_text=result_content,
+                    asset_raw_text=getattr(episode, "ai_entity_design_result", "") or "",
+                    script_input_text=getattr(episode, "script_content", "") or "",
+                    project_context=getattr(getattr(episode, "project", None), "global_info", None),
+                )
                 logger.info(
-                    "[analyze_scene] Persisted scene analysis output to ai_scene_analysis_result episode_id=%s chars=%s subject_index_chars=%s adaptation_chars=%s split_flow=%s subject_index_source=%s adaptation_source=%s",
+                    "[analyze_scene] Persisted scene analysis output to ai_scene_analysis_result episode_id=%s chars=%s subject_index_chars=%s adaptation_chars=%s split_flow=%s subject_index_source=%s adaptation_source=%s stage_bundle_chars=%s",
                     episode_id,
                     len(result_content or ""),
                     len(persisted_subject_index or ""),
@@ -5754,6 +5900,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                     use_split_scene_analysis_flow,
                     ("dash_block_or_header" if persisted_subject_index else "empty"),
                     (adapted_payload_for_persist.get("method") if persisted_adaptation else "empty"),
+                    len(str(getattr(episode, "ai_stage_outputs", "") or "")),
                 )
 
             saved_to_episode = True
@@ -6906,6 +7053,423 @@ class ProjectOut(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class ProjectBackupImportRequest(BaseModel):
+    backup: Dict[str, Any]
+    title: Optional[str] = None
+
+
+def _clone_backup_json(value: Any) -> Any:
+    try:
+        return copy.deepcopy(value)
+    except Exception:
+        return value
+
+
+def _project_backup_export_payload(project: Project, db: Session, current_user: Any) -> Dict[str, Any]:
+    from sqlalchemy.orm import selectinload
+
+    episodes = (
+        db.query(Episode)
+        .options(selectinload(Episode.script_segments))
+        .filter(Episode.project_id == project.id)
+        .order_by(Episode.id.asc())
+        .all()
+    )
+    episode_ids = [int(ep.id) for ep in episodes]
+
+    scenes = []
+    scene_ids: List[int] = []
+    if episode_ids:
+        scenes = (
+            db.query(Scene)
+            .filter(Scene.episode_id.in_(episode_ids))
+            .order_by(Scene.id.asc())
+            .all()
+        )
+        scene_ids = [int(scene.id) for scene in scenes]
+
+    shots = []
+    if scene_ids:
+        shots = (
+            db.query(Shot)
+            .filter(Shot.scene_id.in_(scene_ids))
+            .order_by(Shot.id.asc())
+            .all()
+        )
+
+    entities = (
+        db.query(Entity)
+        .filter(Entity.project_id == project.id)
+        .order_by(Entity.id.asc())
+        .all()
+    )
+
+    assets_query = db.query(Asset).filter(Asset.project_id == project.id)
+    if episode_ids:
+        assets_query = assets_query.filter(or_(Asset.project_id == project.id, Asset.episode_id.in_(episode_ids)))
+    assets = assets_query.order_by(Asset.id.asc()).all()
+
+    shots_by_scene: Dict[int, List[Shot]] = {}
+    for shot in shots:
+        shots_by_scene.setdefault(int(shot.scene_id or 0), []).append(shot)
+
+    scenes_by_episode: Dict[int, List[Scene]] = {}
+    for scene in scenes:
+        scenes_by_episode.setdefault(int(scene.episode_id or 0), []).append(scene)
+
+    exported_episodes: List[Dict[str, Any]] = []
+    for ep in episodes:
+        exported_scenes: List[Dict[str, Any]] = []
+        for scene in scenes_by_episode.get(int(ep.id), []):
+            exported_shots: List[Dict[str, Any]] = []
+            for shot in shots_by_scene.get(int(scene.id), []):
+                exported_shots.append({
+                    "original_id": int(shot.id),
+                    "shot_id": shot.shot_id,
+                    "shot_name": shot.shot_name,
+                    "start_frame": shot.start_frame,
+                    "end_frame": shot.end_frame,
+                    "video_content": shot.video_content,
+                    "duration": shot.duration,
+                    "associated_entities": shot.associated_entities,
+                    "scene_code": shot.scene_code,
+                    "shot_logic_cn": shot.shot_logic_cn,
+                    "keyframes": shot.keyframes,
+                    "image_url": shot.image_url,
+                    "video_url": shot.video_url,
+                    "prompt": shot.prompt,
+                    "technical_notes": shot.technical_notes,
+                })
+
+            exported_scenes.append({
+                "original_id": int(scene.id),
+                "scene_no": scene.scene_no,
+                "original_script_text": scene.original_script_text,
+                "scene_name": scene.scene_name,
+                "equivalent_duration": scene.equivalent_duration,
+                "core_scene_info": scene.core_scene_info,
+                "environment_name": scene.environment_name,
+                "linked_characters": scene.linked_characters,
+                "key_props": scene.key_props,
+                "shots": exported_shots,
+            })
+
+        exported_episodes.append({
+            "original_id": int(ep.id),
+            "title": ep.title,
+            "script_content": ep.script_content,
+            "episode_info": _clone_backup_json(ep.episode_info or {}),
+            "ai_scene_analysis_result": ep.ai_scene_analysis_result,
+            "ai_scene_analysis_subject_index": ep.ai_scene_analysis_subject_index,
+            "ai_scene_analysis_adaptation": ep.ai_scene_analysis_adaptation,
+            "ai_entity_design_result": ep.ai_entity_design_result,
+            "ai_stage_outputs": ep.ai_stage_outputs,
+            "character_profiles": _clone_backup_json(ep.character_profiles or []),
+            "script_segments": [
+                {
+                    "pid": seg.pid,
+                    "title": seg.title,
+                    "content_revised": seg.content_revised,
+                    "content_original": seg.content_original,
+                    "narrative_function": seg.narrative_function,
+                    "analysis": seg.analysis,
+                }
+                for seg in (ep.script_segments or [])
+            ],
+            "scenes": exported_scenes,
+        })
+
+    exported_entities: List[Dict[str, Any]] = []
+    for entity in entities:
+        image_url = getattr(entity, "image_url", None)
+        if image_url:
+            try:
+                image_url = _refresh_managed_media_url(image_url, db)
+            except Exception:
+                pass
+        exported_entities.append({
+            "original_id": int(entity.id),
+            "original_episode_id": int(entity.episode_id) if entity.episode_id is not None else None,
+            "name": entity.name,
+            "type": entity.type,
+            "description": entity.description,
+            "image_url": image_url,
+            "generation_prompt_en": entity.generation_prompt_en,
+            "generation_prompt_cn": entity.generation_prompt_cn,
+            "anchor_description": entity.anchor_description,
+            "name_en": entity.name_en,
+            "base_name_en": entity.base_name_en,
+            "gender": entity.gender,
+            "role": entity.role,
+            "archetype": entity.archetype,
+            "appearance_cn": entity.appearance_cn,
+            "clothing": entity.clothing,
+            "action_characteristics": entity.action_characteristics,
+            "atmosphere": entity.atmosphere,
+            "visual_params": entity.visual_params,
+            "narrative_description": entity.narrative_description,
+            "visual_dependencies": _clone_backup_json(entity.visual_dependencies or []),
+            "dependency_strategy": _clone_backup_json(entity.dependency_strategy or {}),
+            "custom_attributes": _clone_backup_json(entity.custom_attributes or {}),
+        })
+
+    exported_assets: List[Dict[str, Any]] = []
+    for asset in assets:
+        asset_url = getattr(asset, "url", None)
+        if asset_url:
+            try:
+                asset_url = _refresh_managed_media_url(asset_url, db)
+            except Exception:
+                pass
+        exported_assets.append({
+            "original_id": int(asset.id),
+            "original_episode_id": int(asset.episode_id) if asset.episode_id is not None else None,
+            "type": asset.type,
+            "url": asset_url,
+            "filename": asset.filename,
+            "meta_info": _clone_backup_json(asset.meta_info or {}),
+            "remark": asset.remark,
+            "is_current_project_asset": bool(asset.is_current_project_asset),
+            "created_at": asset.created_at,
+        })
+
+    return {
+        "backup_type": "project_backup",
+        "version": "1.0",
+        "exported_at": now_bj_iso(),
+        "meta": {
+            "source_project_id": int(project.id),
+            "exported_by_user_id": int(getattr(current_user, "id", 0) or 0),
+            "episode_count": len(exported_episodes),
+            "scene_count": len(scenes),
+            "shot_count": len(shots),
+            "entity_count": len(exported_entities),
+            "asset_count": len(exported_assets),
+        },
+        "project": {
+            "title": project.title,
+            "description": (project.global_info or {}).get("notes") if isinstance(project.global_info, dict) else None,
+            "global_info": _clone_backup_json(project.global_info or {}),
+            "aspectRatio": (project.global_info or {}).get("aspectRatio") if isinstance(project.global_info, dict) else None,
+        },
+        "episodes": exported_episodes,
+        "entities": exported_entities,
+        "assets": exported_assets,
+    }
+
+
+def _build_imported_project_response(project: Project, db: Session, current_user: Any) -> Project:
+    db.refresh(project)
+    try:
+        project.cover_image = get_project_cover_image(db, project.id)
+    except Exception:
+        project.cover_image = None
+    project.aspectRatio = project.global_info.get('aspectRatio') if project.global_info else None
+    project.description = (project.global_info or {}).get("notes")
+    project.generation_seed = _ensure_project_generation_seed(db, project.id, current_user)
+    project.seed_initialized = False
+    project.missing_basic_fields = []
+    project.has_missing_basic_info = False
+    _attach_project_flags(project, current_user)
+    return project
+
+
+def _import_project_backup_to_new_project(db: Session, current_user: Any, backup: Dict[str, Any], title_override: Optional[str] = None) -> Dict[str, Any]:
+    if not isinstance(backup, dict):
+        raise HTTPException(status_code=400, detail="backup must be a JSON object")
+
+    project_payload = backup.get("project")
+    if not isinstance(project_payload, dict):
+        raise HTTPException(status_code=400, detail="backup.project is required")
+
+    backup_title = str(project_payload.get("title") or "").strip()
+    new_title = str(title_override or "").strip() or (f"{backup_title} (Imported)" if backup_title else "Imported Project")
+
+    raw_global_info = project_payload.get("global_info")
+    global_info = _clone_backup_json(raw_global_info if isinstance(raw_global_info, dict) else {})
+    if not isinstance(global_info, dict):
+        global_info = {}
+    description = str(project_payload.get("description") or "").strip()
+    if description:
+        global_info["notes"] = description
+    aspect_ratio = str(project_payload.get("aspectRatio") or "").strip()
+    if aspect_ratio:
+        global_info["aspectRatio"] = aspect_ratio
+    global_info.pop("cost_estimation", None)
+    global_info = _ensure_project_generation_defaults(global_info)
+
+    db_project = Project(title=new_title, global_info=global_info, owner_id=current_user.id)
+    db.add(db_project)
+    db.flush()
+
+    episode_id_map: Dict[int, int] = {}
+    imported_episode_count = 0
+    imported_scene_count = 0
+    imported_shot_count = 0
+    imported_entity_count = 0
+    imported_asset_count = 0
+
+    for episode_payload in (backup.get("episodes") or []):
+        if not isinstance(episode_payload, dict):
+            continue
+        db_episode = Episode(
+            project_id=db_project.id,
+            title=str(episode_payload.get("title") or "Episode").strip() or "Episode",
+            script_content=episode_payload.get("script_content"),
+            episode_info=_clone_backup_json(episode_payload.get("episode_info") or {}),
+            ai_scene_analysis_result=episode_payload.get("ai_scene_analysis_result"),
+            ai_scene_analysis_subject_index=episode_payload.get("ai_scene_analysis_subject_index"),
+            ai_scene_analysis_adaptation=episode_payload.get("ai_scene_analysis_adaptation"),
+            ai_entity_design_result=episode_payload.get("ai_entity_design_result"),
+            ai_stage_outputs=episode_payload.get("ai_stage_outputs"),
+            character_profiles=_clone_backup_json(episode_payload.get("character_profiles") or []),
+        )
+        db.add(db_episode)
+        db.flush()
+        imported_episode_count += 1
+
+        original_episode_id = episode_payload.get("original_id")
+        if original_episode_id is not None:
+            try:
+                episode_id_map[int(original_episode_id)] = int(db_episode.id)
+            except Exception:
+                pass
+
+        for seg in (episode_payload.get("script_segments") or []):
+            if not isinstance(seg, dict):
+                continue
+            db.add(ScriptSegment(
+                episode_id=db_episode.id,
+                pid=str(seg.get("pid") or "").strip(),
+                title=str(seg.get("title") or "").strip(),
+                content_revised=seg.get("content_revised") or "",
+                content_original=seg.get("content_original") or "",
+                narrative_function=seg.get("narrative_function") or "",
+                analysis=seg.get("analysis") or "",
+            ))
+
+        for scene_payload in (episode_payload.get("scenes") or []):
+            if not isinstance(scene_payload, dict):
+                continue
+            db_scene = Scene(
+                episode_id=db_episode.id,
+                scene_no=str(scene_payload.get("scene_no") or "").strip(),
+                original_script_text=scene_payload.get("original_script_text") or "",
+                scene_name=scene_payload.get("scene_name"),
+                equivalent_duration=scene_payload.get("equivalent_duration"),
+                core_scene_info=scene_payload.get("core_scene_info"),
+                environment_name=scene_payload.get("environment_name"),
+                linked_characters=scene_payload.get("linked_characters"),
+                key_props=scene_payload.get("key_props"),
+            )
+            db.add(db_scene)
+            db.flush()
+            imported_scene_count += 1
+
+            for shot_payload in (scene_payload.get("shots") or []):
+                if not isinstance(shot_payload, dict):
+                    continue
+                db.add(Shot(
+                    scene_id=db_scene.id,
+                    project_id=db_project.id,
+                    episode_id=db_episode.id,
+                    shot_id=shot_payload.get("shot_id"),
+                    shot_name=shot_payload.get("shot_name"),
+                    start_frame=shot_payload.get("start_frame"),
+                    end_frame=shot_payload.get("end_frame"),
+                    video_content=shot_payload.get("video_content"),
+                    duration=shot_payload.get("duration"),
+                    associated_entities=shot_payload.get("associated_entities"),
+                    scene_code=shot_payload.get("scene_code"),
+                    shot_logic_cn=shot_payload.get("shot_logic_cn"),
+                    keyframes=shot_payload.get("keyframes"),
+                    image_url=shot_payload.get("image_url"),
+                    video_url=shot_payload.get("video_url"),
+                    prompt=shot_payload.get("prompt"),
+                    technical_notes=shot_payload.get("technical_notes"),
+                ))
+                imported_shot_count += 1
+
+    for entity_payload in (backup.get("entities") or []):
+        if not isinstance(entity_payload, dict):
+            continue
+        mapped_episode_id = None
+        original_episode_id = entity_payload.get("original_episode_id", entity_payload.get("episode_id"))
+        if original_episode_id is not None:
+            try:
+                mapped_episode_id = episode_id_map.get(int(original_episode_id))
+            except Exception:
+                mapped_episode_id = None
+        db.add(Entity(
+            project_id=db_project.id,
+            episode_id=mapped_episode_id,
+            name=entity_payload.get("name"),
+            type=entity_payload.get("type"),
+            description=entity_payload.get("description"),
+            image_url=entity_payload.get("image_url"),
+            generation_prompt_en=entity_payload.get("generation_prompt_en"),
+            generation_prompt_cn=entity_payload.get("generation_prompt_cn"),
+            anchor_description=entity_payload.get("anchor_description"),
+            name_en=entity_payload.get("name_en"),
+            base_name_en=entity_payload.get("base_name_en"),
+            gender=entity_payload.get("gender"),
+            role=entity_payload.get("role"),
+            archetype=entity_payload.get("archetype"),
+            appearance_cn=entity_payload.get("appearance_cn"),
+            clothing=entity_payload.get("clothing"),
+            action_characteristics=entity_payload.get("action_characteristics"),
+            atmosphere=entity_payload.get("atmosphere"),
+            visual_params=entity_payload.get("visual_params"),
+            narrative_description=entity_payload.get("narrative_description"),
+            visual_dependencies=_coerce_visual_dependencies(entity_payload.get("visual_dependencies")),
+            dependency_strategy=_clone_backup_json(entity_payload.get("dependency_strategy") or {}),
+            custom_attributes=_clone_backup_json(entity_payload.get("custom_attributes") or {}),
+        ))
+        imported_entity_count += 1
+
+    for asset_payload in (backup.get("assets") or []):
+        if not isinstance(asset_payload, dict):
+            continue
+        mapped_episode_id = None
+        original_episode_id = asset_payload.get("original_episode_id", asset_payload.get("episode_id"))
+        if original_episode_id is not None:
+            try:
+                mapped_episode_id = episode_id_map.get(int(original_episode_id))
+            except Exception:
+                mapped_episode_id = None
+        db.add(Asset(
+            user_id=current_user.id,
+            project_id=db_project.id,
+            episode_id=mapped_episode_id,
+            is_current_project_asset=bool(asset_payload.get("is_current_project_asset")),
+            type=asset_payload.get("type"),
+            url=asset_payload.get("url"),
+            filename=asset_payload.get("filename"),
+            meta_info=_clone_backup_json(asset_payload.get("meta_info") or {}),
+            remark=asset_payload.get("remark"),
+            created_at=asset_payload.get("created_at") or now_bj_iso(),
+        ))
+        imported_asset_count += 1
+
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(db_project.id))
+    except Exception as cost_exc:
+        logger.warning("import_project_backup cost recompute skipped | project_id=%s err=%s", getattr(db_project, "id", None), cost_exc)
+
+    db.commit()
+
+    return {
+        "project": _build_imported_project_response(db_project, db, current_user),
+        "imported": {
+            "episodes": imported_episode_count,
+            "scenes": imported_scene_count,
+            "shots": imported_shot_count,
+            "entities": imported_entity_count,
+            "assets": imported_asset_count,
+        },
+    }
 
 
 class ProjectShareCreate(BaseModel):
@@ -8667,6 +9231,28 @@ def create_project(
     return db_project
 
 
+@router.post("/projects/import_backup", response_model=Dict[str, Any])
+def import_project_backup(
+    req: ProjectBackupImportRequest,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+):
+    try:
+        return _import_project_backup_to_new_project(
+            db,
+            current_user,
+            req.backup,
+            title_override=req.title,
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.error("[import_project_backup] failed user_id=%s err=%s", getattr(current_user, "id", None), exc)
+        raise HTTPException(status_code=500, detail=f"Failed to import project backup: {exc}")
+
+
 @router.get("/projects/{project_id}/shares", response_model=List[ProjectShareOut])
 def list_project_shares(
     project_id: int,
@@ -10053,6 +10639,16 @@ def read_project(
     return project
 
 
+@router.get("/projects/{project_id}/backup_export", response_model=Dict[str, Any])
+def export_project_backup(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user),
+):
+    project = _require_project_access(db, project_id, current_user, owner_only=True)
+    return _project_backup_export_payload(project, db, current_user)
+
+
 @router.put("/projects/{project_id}", response_model=ProjectOut)
 def update_project(
     project_id: int, 
@@ -10297,10 +10893,78 @@ def delete_project(
             db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
 
         if episode_ids:
+            detached_action_episode_count = db.execute(
+                sa_update(TransactionAction)
+                .where(TransactionAction.episode_id.in_(episode_ids))
+                .values(episode_id=None)
+            ).rowcount or 0
+            detached_history_episode_count = db.execute(
+                sa_update(TransactionHistory)
+                .where(TransactionHistory.episode_id.in_(episode_ids))
+                .values(episode_id=None)
+            ).rowcount or 0
+            detached_asset_episode_count = db.execute(
+                sa_update(Asset)
+                .where(Asset.episode_id.in_(episode_ids))
+                .values(episode_id=None)
+            ).rowcount or 0
+            db.flush()
+
+            remaining_action_episode_refs = (
+                db.query(func.count(TransactionAction.id))
+                .filter(TransactionAction.episode_id.in_(episode_ids))
+                .scalar()
+                or 0
+            )
+            if remaining_action_episode_refs:
+                sample_action_episode_refs = [
+                    {
+                        "id": int(row.id),
+                        "episode_id": int(row.episode_id),
+                        "project_id": int(row.project_id) if row.project_id is not None else None,
+                    }
+                    for row in db.query(TransactionAction.id, TransactionAction.episode_id, TransactionAction.project_id)
+                    .filter(TransactionAction.episode_id.in_(episode_ids))
+                    .limit(5)
+                    .all()
+                ]
+                logger.error(
+                    "[delete_project] transaction_action detach incomplete project_id=%s episode_ids=%s detached_actions=%s detached_history=%s detached_assets=%s remaining=%s samples=%s",
+                    project_id,
+                    episode_ids,
+                    detached_action_episode_count,
+                    detached_history_episode_count,
+                    detached_asset_episode_count,
+                    remaining_action_episode_refs,
+                    sample_action_episode_refs,
+                )
+                raise RuntimeError("Failed to detach transaction_action episode references before deleting episodes")
+
             db.query(ScriptSegment).filter(ScriptSegment.episode_id.in_(episode_ids)).delete(synchronize_session=False)
             db.query(Episode).filter(Episode.id.in_(episode_ids)).delete(synchronize_session=False)
 
         db.query(Entity).filter(Entity.project_id == project_id).delete(synchronize_session=False)
+
+        db.execute(
+            sa_update(TransactionAction)
+            .where(TransactionAction.project_id == project_id)
+            .values(project_id=None)
+        )
+        db.execute(
+            sa_update(TransactionHistory)
+            .where(TransactionHistory.project_id == project_id)
+            .values(project_id=None)
+        )
+        db.execute(
+            sa_update(Asset)
+            .where(Asset.project_id == project_id)
+            .values(project_id=None, is_current_project_asset=False)
+        )
+
+        if ProjectGroupCreditAllocation is not None:
+            db.query(ProjectGroupCreditAllocation).filter(
+                ProjectGroupCreditAllocation.project_id == project_id
+            ).delete(synchronize_session=False)
 
         if asset_ids_to_delete:
             db.query(Asset).filter(
@@ -10388,7 +11052,10 @@ class EpisodeCreate(BaseModel):
     script_content: Optional[str] = ""
     episode_info: Optional[Dict] = {}
     ai_scene_analysis_result: Optional[str] = None
+    ai_scene_analysis_subject_index: Optional[str] = None
+    ai_scene_analysis_adaptation: Optional[str] = None
     ai_entity_design_result: Optional[str] = None
+    ai_stage_outputs: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeUpdate(BaseModel):
@@ -10398,6 +11065,8 @@ class EpisodeUpdate(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
+    ai_entity_design_result: Optional[str] = None
+    ai_stage_outputs: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeOut(BaseModel):
@@ -10409,6 +11078,8 @@ class EpisodeOut(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
+    ai_entity_design_result: Optional[str] = None
+    ai_stage_outputs: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = []
     script_segments: List[ScriptSegmentOut] = []
     class Config:
@@ -10485,6 +11156,10 @@ def create_episode(
         script_content=episode.script_content,
         episode_info={},
         ai_scene_analysis_result=episode.ai_scene_analysis_result,
+        ai_scene_analysis_subject_index=episode.ai_scene_analysis_subject_index,
+        ai_scene_analysis_adaptation=episode.ai_scene_analysis_adaptation,
+        ai_entity_design_result=episode.ai_entity_design_result,
+        ai_stage_outputs=episode.ai_stage_outputs,
         character_profiles=episode.character_profiles or []
     )
     db.add(db_episode)
@@ -10517,6 +11192,14 @@ def update_episode(
     # episode_info is deprecated and intentionally ignored.
     if episode_in.ai_scene_analysis_result is not None:
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
+    if episode_in.ai_scene_analysis_subject_index is not None:
+        episode.ai_scene_analysis_subject_index = episode_in.ai_scene_analysis_subject_index
+    if episode_in.ai_scene_analysis_adaptation is not None:
+        episode.ai_scene_analysis_adaptation = episode_in.ai_scene_analysis_adaptation
+    if episode_in.ai_entity_design_result is not None:
+        episode.ai_entity_design_result = episode_in.ai_entity_design_result
+    if episode_in.ai_stage_outputs is not None:
+        episode.ai_stage_outputs = episode_in.ai_stage_outputs
     if episode_in.character_profiles is not None:
         episode.character_profiles = episode_in.character_profiles
     try:
@@ -18420,7 +19103,7 @@ def get_llm_call_logs(
     provider: Optional[str] = None,
     tag: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: Any = Depends(get_current_active_superuser)
 ):
     from app.models.all_models import LLMCallLog
     query = db.query(LLMCallLog)

@@ -4871,22 +4871,28 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             if (!prev || String(prev.id) !== String(latest.id)) return prev;
 
             const nextTechnicalNotes = mergeLiveSyncTechnicalNotes(prev.technical_notes, latest.technical_notes);
+            const prevImageUrl = String(prev.image_url || '').trim();
+            const latestImageUrl = String(latest.image_url || '').trim();
+            const prevVideoUrl = String(prev.video_url || '').trim();
+            const latestVideoUrl = String(latest.video_url || '').trim();
+            const imageAssetChanged = normalizeAssetUrlToken(prevImageUrl) !== normalizeAssetUrlToken(latestImageUrl);
+            const videoAssetChanged = normalizeAssetUrlToken(prevVideoUrl) !== normalizeAssetUrlToken(latestVideoUrl);
 
             const mediaChanged =
-                String(prev.image_url || '') !== String(latest.image_url || '') ||
-                String(prev.video_url || '') !== String(latest.video_url || '') ||
+                imageAssetChanged ||
+                videoAssetChanged ||
                 nextTechnicalNotes.changed;
 
             if (!mediaChanged) return prev;
 
             return {
                 ...prev,
-                image_url: latest.image_url || '',
-                video_url: latest.video_url || '',
+                image_url: imageAssetChanged ? latestImageUrl : prevImageUrl,
+                video_url: videoAssetChanged ? latestVideoUrl : prevVideoUrl,
                 technical_notes: nextTechnicalNotes.value,
             };
         });
-    }, [editingShot?.id, mergeLiveSyncTechnicalNotes, setEditingShot, shots]);
+    }, [editingShot?.id, mergeLiveSyncTechnicalNotes, normalizeAssetUrlToken, setEditingShot, shots]);
 
     useEffect(() => {
         if (!restoreEditingShotId) return;

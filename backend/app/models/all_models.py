@@ -274,6 +274,7 @@ class Episode(Base):
     ai_scene_analysis_subject_index = Column(Text, nullable=True)
     ai_scene_analysis_adaptation = Column(Text, nullable=True)
     ai_entity_design_result = Column(Text, nullable=True)
+    ai_stage_outputs = Column(Text, nullable=True)
 
     project = relationship("Project", back_populates="episodes")
     scenes = relationship("Scene", back_populates="episode", cascade="all, delete-orphan")

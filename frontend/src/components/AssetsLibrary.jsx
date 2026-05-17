@@ -921,6 +921,19 @@ const AssetsLibrary = () => {
         });
     }, [assets, localAssets, filter, sortOrder]);
 
+    useEffect(() => {
+        if (!selectedAsset?.id) return;
+        const mergedAssets = [...assets, ...localAssets];
+        const latest = mergedAssets.find((item) => item.id === selectedAsset.id);
+        if (!latest) {
+            setSelectedAsset(null);
+            return;
+        }
+        if (latest !== selectedAsset) {
+            setSelectedAsset(latest);
+        }
+    }, [assets, localAssets, selectedAsset]);
+
 
     const [isScanning, setIsScanning] = useState(false);
     const [scanProgress, setScanProgress] = useState(0);
@@ -1482,6 +1495,13 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
     const t = (zh, en) => tUI(uiLang, zh, en);
     const [remark, setRemark] = useState(asset.remark || '');
     const [isEditing, setIsEditing] = useState(false);
+    const category = getAssetCategory(asset?.type);
+    const typeLabel = String(category || asset?.type || '').toUpperCase();
+
+    useEffect(() => {
+        setRemark(asset.remark || '');
+        setIsEditing(false);
+    }, [asset?.id, asset?.remark]);
 
     const handleSave = async () => {
         try {
@@ -1504,13 +1524,13 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
             >
                 {/* Preview Area */}
                 <div className="flex-1 bg-black/50 flex items-center justify-center p-8 relative">
-                    {asset.type === 'image' ? (
+                    {category === 'image' ? (
                         <img src={getFullUrl(asset.url)} alt="preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
                     ) : (
                         <video src={getFullUrl(asset.url)} controls className="max-w-full max-h-full rounded-lg shadow-2xl" />
                     )}
                     <div className="absolute top-4 left-4 p-2 bg-black/60 backdrop-blur rounded-lg text-xs text-white/50 font-mono">
-                        {asset.type.toUpperCase()}
+                        {typeLabel}
                     </div>
                 </div>
 
@@ -1574,7 +1594,7 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                             )}
                         </div>
 
-                        {asset.type === 'image' && (
+                        {category === 'image' && (
                             <div className="pt-6 border-t border-white/10">
                                 <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">{t('AI 修改', 'AI Modify')}</label>
                                 <div className="text-[10px] text-white/40 mb-2">{t('将使用原图作为参考，结果会保存为新素材。', 'Original image will be used as reference. Result will be saved as new asset.')}</div>
@@ -1598,7 +1618,7 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                             </div>
                         )}
                         
-                        {asset.type === 'image' && (
+                            {category === 'image' && (
                              <AnalyzeSection asset={asset} />
                         )}
                     </div>

@@ -1021,6 +1021,16 @@ export const updateProject = async (id, data) => {
     return response.data;
 }
 
+export const exportProjectBackup = async (projectId) => {
+    const response = await api.get(`/projects/${projectId}/backup_export`);
+    return response.data;
+}
+
+export const importProjectBackup = async (payload) => {
+    const response = await api.post(`/projects/import_backup`, payload || {});
+    return response.data;
+}
+
 export const generateProjectStoryGlobal = async (projectId, payload) => {
     return await asyncLLMPost(`/projects/${projectId}/story_generator/global`, payload);
 }

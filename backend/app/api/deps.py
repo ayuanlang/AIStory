@@ -317,3 +317,17 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     principal_entry = _build_cached_principal(user)
     _cache_user_entry(principal_entry)
     return _entry_to_principal(principal_entry)
+
+
+def get_current_active_superuser(current_user: User = Depends(get_current_user)) -> User:
+    if not bool(getattr(current_user, "is_superuser", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The user doesn't have enough privileges",
+        )
+    if not _is_user_enabled(getattr(current_user, "is_active", 1)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is disabled",
+        )
+    return current_user
