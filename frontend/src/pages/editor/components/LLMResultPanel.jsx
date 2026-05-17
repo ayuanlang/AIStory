@@ -5,16 +5,29 @@ import { ChevronDown, Loader2, RefreshCw, PlayCircle } from 'lucide-react';
 export default function LLMResultPanel({
     title, t, placeholder = '', stageCards = []
 }) {
-    const normalizedCards = Array.isArray(stageCards) ? stageCards.filter(Boolean) : [];
+    const normalizedCards = React.useMemo(
+        () => (Array.isArray(stageCards) ? stageCards.filter(Boolean) : []),
+        [stageCards]
+    );
     const [collapsedCards, setCollapsedCards] = React.useState(() => ({}));
 
     React.useEffect(() => {
         setCollapsedCards((prev) => {
             const next = {};
+            let hasChanges = false;
             normalizedCards.forEach((card) => {
                 const key = String(card.key || card.title || '');
-                next[key] = Object.prototype.hasOwnProperty.call(prev, key) ? prev[key] : true;
+                const value = Object.prototype.hasOwnProperty.call(prev, key) ? prev[key] : true;
+                next[key] = value;
+                if (!Object.prototype.hasOwnProperty.call(prev, key) || prev[key] !== value) {
+                    hasChanges = true;
+                }
             });
+
+            if (!hasChanges && Object.keys(prev).length === normalizedCards.length) {
+                return prev;
+            }
+
             return next;
         });
     }, [normalizedCards]);

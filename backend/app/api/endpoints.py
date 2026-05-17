@@ -5517,6 +5517,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             if pipe_row_match:
                 return _trim_subject_index(text[pipe_row_match.start():])
 
+            markdown_table_match = re.search(
+                r"(?ims)^\s*\|\s*(?:subject_no|name\s*\((?:cn|zh)\)|名称(?:\s*[（(](?:中文|CN|ZH)[）)])?)\s*\|.*$\n\s*\|(?:\s*:?-{3,}:?\s*\|){2,}\s*$",
+                text,
+            )
+            if markdown_table_match:
+                return _trim_subject_index(text[markdown_table_match.start():])
+
             return ""
 
         def _extract_scene_markdown_table(analysis_output: str) -> str:
@@ -5641,12 +5648,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                             "markdown",
                             stage2_subject_index_text or _extract_subject_index_text(stage2_text or analysis_text),
                         ),
-                        "project_visual_backfill": _artifact_payload(
-                            "project_visual_backfill",
-                            "全局风格",
-                            "json",
-                            stage2_visual_backfill_json or _extract_stage1_project_visual_backfill_json(stage2_text or analysis_text),
-                        ),
                     },
                     outputs={
                         "asset_design_json": _artifact_payload("asset_design_json", "资产设计", "json", asset_text),
@@ -5686,15 +5687,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             project_visual_backfill_json = _extract_stage1_project_visual_backfill_json(raw_stage1_result)
 
             stage2_input_parts = [
-                "请执行第二阶段“资产分析提取”。以下‘修改后的剧本’与 Stage 1 已产出的 `Project Visual Backfill` 是唯一权威输入来源；如与原始剧本存在任何差异，一律以上游 Stage 1 结果为准。",
+                "请执行第二阶段“资产分析提取”。以下‘修改后的剧本’是主权威输入来源；Project Metadata 与 Stage 1 已产出的 `Project Visual Backfill` 作为补充约束一并生效；如与原始剧本存在任何差异，一律以上游 Stage 1 结果为准。",
             ]
-            should_backfill_stage2_project_metadata = (
-                isinstance(request.project_metadata, dict)
-                and bool(request.project_metadata)
-                and not str(adapted_script_text or "").strip()
-                and not str(project_visual_backfill_json or "").strip()
-            )
-            if should_backfill_stage2_project_metadata:
+            if isinstance(request.project_metadata, dict) and bool(request.project_metadata):
                 try:
                     stage2_input_parts.append(
                         "[Project Metadata]\n" + json.dumps(request.project_metadata, ensure_ascii=False, indent=2)
@@ -5730,7 +5725,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
 
             stage2_input_parts.append("[Stage 1 Adapted Script - Authoritative Input]\n" + (adapted_script_text or raw_stage1_result))
             if project_visual_backfill_json:
-                stage2_input_parts.append("[Stage 1 Project Visual Backfill - Authoritative Input]\n" + project_visual_backfill_json)
+                stage2_input_parts.append("[Stage 1 Project Visual Backfill - Supplemental Constraints]\n" + project_visual_backfill_json)
             stage2_user_content = "\n\n".join(part for part in stage2_input_parts if str(part or "").strip())
 
             stage2_messages = [
@@ -5971,16 +5966,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
         blocking_subject_warnings: List[str] = []
         if not is_entity_design_phase and not is_stage1_only_prompt:
             result_text = str(result_content or "")
-            has_subject_index = bool(
-                re.search(r"(?im)^\s*(?:#{1,6}\s*)?subject\s*index\b", result_text)
-                or re.search(r"(?im)\bsubject_no\s*=", result_text)
-                # Accept pipe-delimited Subject Index rows:
-                # S001|character|... / S010|prop|... / S014|cover_poster|...
-                or re.search(
-                    r"(?im)^\s*S\d{3,}\s*\|\s*(?:character|prop|environment|cover_poster)\s*\|",
-                    result_text,
-                )
-            )
+            has_subject_index = bool(_extract_subject_index_text(result_text))
             if not has_subject_index:
                 blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
                 blocking_subject_warnings.append(
@@ -17114,6 +17100,116 @@ class EntityOut(BaseModel):
         from_attributes = True
 
 
+def _upsert_entity_record(db: Session, project_id: int, entity: EntityCreate) -> Entity:
+    if entity.episode_id is not None:
+        episode = db.query(Episode).filter(Episode.id == entity.episode_id).first()
+        if not episode or int(getattr(episode, "project_id", 0) or 0) != int(project_id):
+            raise HTTPException(status_code=400, detail="episode_id does not belong to this project")
+
+    _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
+
+    normalized_name_candidates = set()
+    for raw_name in (entity.name, entity.name_en):
+        stable = str(raw_name or "").strip().lower()
+        if stable:
+            normalized_name_candidates.add(stable)
+
+    if not normalized_name_candidates:
+        raise HTTPException(status_code=400, detail="Entity name is required")
+
+    normalized_type = str(entity.type or "").strip().lower()
+    entity_name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
+    entity_name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
+
+    from sqlalchemy import or_
+    if entity.episode_id is None:
+        episode_scope_filter = Entity.episode_id.is_(None)
+    else:
+        episode_scope_filter = Entity.episode_id == entity.episode_id
+
+    existing_entity = db.query(Entity).filter(
+        Entity.project_id == project_id,
+        episode_scope_filter,
+        func.lower(func.trim(func.coalesce(Entity.type, ""))) == normalized_type,
+        or_(
+            entity_name_expr.in_(normalized_name_candidates),
+            entity_name_en_expr.in_(normalized_name_candidates),
+        ),
+    ).first()
+
+    if existing_entity:
+        update_values = {
+            "name": entity.name,
+            "type": entity.type,
+            "description": entity.description,
+            "image_url": entity.image_url,
+            "generation_prompt_en": entity.generation_prompt_en,
+            "generation_prompt_cn": entity.generation_prompt_cn,
+            "anchor_description": entity.anchor_description,
+            "name_en": entity.name_en,
+            "base_name_en": entity.base_name_en,
+            "gender": entity.gender,
+            "role": entity.role,
+            "archetype": entity.archetype,
+            "appearance_cn": entity.appearance_cn,
+            "clothing": entity.clothing,
+            "action_characteristics": entity.action_characteristics,
+            "atmosphere": entity.atmosphere,
+            "visual_params": entity.visual_params,
+            "narrative_description": entity.narrative_description,
+        }
+        for field_name, field_value in update_values.items():
+            if field_value is not None and str(field_value).strip() != "":
+                setattr(existing_entity, field_name, field_value)
+
+        if entity.episode_id is not None and existing_entity.episode_id is None:
+            existing_entity.episode_id = entity.episode_id
+
+        deps = _coerce_visual_dependencies(entity.visual_dependencies)
+        if deps:
+            existing_entity.visual_dependencies = deps
+        if isinstance(entity.dependency_strategy, dict) and entity.dependency_strategy:
+            existing_entity.dependency_strategy = entity.dependency_strategy
+        if isinstance(entity.custom_attributes, dict) and entity.custom_attributes:
+            merged_custom_attributes = dict(existing_entity.custom_attributes or {})
+            merged_custom_attributes.update(entity.custom_attributes)
+            existing_entity.custom_attributes = merged_custom_attributes
+
+        db.commit()
+        db.refresh(existing_entity)
+        return existing_entity
+
+    db_entity = Entity(
+        project_id=project_id,
+        episode_id=entity.episode_id,
+        name=entity.name,
+        type=entity.type,
+        description=entity.description,
+        image_url=entity.image_url,
+        generation_prompt_en=entity.generation_prompt_en,
+        generation_prompt_cn=entity.generation_prompt_cn,
+        anchor_description=entity.anchor_description,
+        name_en=entity.name_en,
+        base_name_en=entity.base_name_en,
+        gender=entity.gender,
+        role=entity.role,
+        archetype=entity.archetype,
+        appearance_cn=entity.appearance_cn,
+        clothing=entity.clothing,
+        action_characteristics=entity.action_characteristics,
+        atmosphere=entity.atmosphere,
+        visual_params=entity.visual_params,
+        narrative_description=entity.narrative_description,
+        visual_dependencies=_coerce_visual_dependencies(entity.visual_dependencies),
+        dependency_strategy=entity.dependency_strategy,
+        custom_attributes=entity.custom_attributes or {}
+    )
+    db.add(db_entity)
+    db.commit()
+    db.refresh(db_entity)
+    return db_entity
+
+
 def _coerce_visual_dependencies(value: Any) -> List[str]:
     candidates: List[Any] = []
     if isinstance(value, list):
@@ -17225,92 +17321,8 @@ def create_entity(
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user)
 ):
-    project = _require_project_access(db, project_id, current_user)
-
-    if entity.episode_id is not None:
-        episode = db.query(Episode).filter(Episode.id == entity.episode_id).first()
-        if not episode or int(getattr(episode, "project_id", 0) or 0) != int(project_id):
-            raise HTTPException(status_code=400, detail="episode_id does not belong to this project")
-
-    _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
-
-    normalized_name_candidates = set()
-    for raw_name in (entity.name, entity.name_en):
-        stable = str(raw_name or "").strip().lower()
-        if stable:
-            normalized_name_candidates.add(stable)
-
-    if not normalized_name_candidates:
-        raise HTTPException(status_code=400, detail="Entity name is required")
-
-    normalized_type = str(entity.type or "").strip().lower()
-    entity_name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
-    entity_name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
-
-    from sqlalchemy import or_
-    if entity.episode_id is None:
-        episode_scope_filter = Entity.episode_id.is_(None)
-    else:
-        episode_scope_filter = Entity.episode_id == entity.episode_id
-
-    existing_entity = db.query(Entity).filter(
-        Entity.project_id == project_id,
-        episode_scope_filter,
-        func.lower(func.trim(func.coalesce(Entity.type, ""))) == normalized_type,
-        or_(
-            entity_name_expr.in_(normalized_name_candidates),
-            entity_name_en_expr.in_(normalized_name_candidates),
-        ),
-    ).first()
-    
-    if existing_entity:
-        existing_entity.description = entity.description or existing_entity.description
-        existing_entity.image_url = entity.image_url or existing_entity.image_url
-        existing_entity.generation_prompt_en = entity.generation_prompt_en or existing_entity.generation_prompt_en
-        existing_entity.generation_prompt_cn = entity.generation_prompt_cn or existing_entity.generation_prompt_cn
-        existing_entity.anchor_description = entity.anchor_description or existing_entity.anchor_description
-        existing_entity.base_name_en = entity.base_name_en or existing_entity.base_name_en
-        existing_entity.role = entity.role or existing_entity.role
-        existing_entity.appearance_cn = entity.appearance_cn or existing_entity.appearance_cn
-        if entity.episode_id is not None and existing_entity.episode_id is None:
-            existing_entity.episode_id = entity.episode_id
-        db.commit()
-        db.refresh(existing_entity)
-        return existing_entity
-
-    # Create a new subject row if no duplicate exists.
-    db_entity = Entity(
-        project_id=project_id,
-        episode_id=entity.episode_id,
-        name=entity.name,
-        type=entity.type,
-        description=entity.description,
-        image_url=entity.image_url,
-        generation_prompt_en=entity.generation_prompt_en,
-        generation_prompt_cn=entity.generation_prompt_cn,
-        anchor_description=entity.anchor_description,
-        
-        name_en=entity.name_en,
-        base_name_en=entity.base_name_en,
-        gender=entity.gender,
-        role=entity.role,
-        archetype=entity.archetype,
-        appearance_cn=entity.appearance_cn,
-        clothing=entity.clothing,
-        action_characteristics=entity.action_characteristics,
-        
-        atmosphere=entity.atmosphere,
-        visual_params=entity.visual_params,
-        narrative_description=entity.narrative_description,
-        
-        visual_dependencies=_coerce_visual_dependencies(entity.visual_dependencies),
-        dependency_strategy=entity.dependency_strategy,
-        custom_attributes=entity.custom_attributes or {}
-    )
-    db.add(db_entity)
-    db.commit()
-    db.refresh(db_entity)
-    return db_entity
+    _require_project_access(db, project_id, current_user)
+    return _upsert_entity_record(db, project_id, entity)
 
 
 class EntityCloneWithLLMRequest(BaseModel):
@@ -33607,6 +33619,97 @@ def _extract_first_json_object(raw_text: str) -> Dict[str, Any]:
     return {}
 
 
+def _normalize_generated_entity_bucket(bucket_name: Optional[str], fallback_type: str = "character") -> str:
+    stable = str(bucket_name or fallback_type or "character").strip().lower()
+    if stable in {"character", "characters"}:
+        return "character"
+    if stable in {"prop", "props"}:
+        return "prop"
+    if stable in {"environment", "environments"}:
+        return "environment"
+    if stable in {"poster", "posters", "cover_poster", "cover poster"}:
+        return "poster"
+    return "character"
+
+
+def _extract_generated_entity_item(
+    payload: Any,
+    *,
+    forced_name: Optional[str] = None,
+    fallback_type: str = "character",
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    sections = [
+        ("characters", "character"),
+        ("props", "prop"),
+        ("environments", "environment"),
+        ("posters", "poster"),
+    ]
+    candidates: List[Tuple[str, str, Dict[str, Any]]] = []
+    for section_name, inferred_type in sections:
+        raw_items = payload.get(section_name)
+        if not isinstance(raw_items, list):
+            continue
+        for item in raw_items:
+            if isinstance(item, dict):
+                normalized = dict(item)
+                normalized["__entity_bucket__"] = inferred_type
+                candidates.append((section_name, inferred_type, normalized))
+
+    if not candidates:
+        if isinstance(payload.get("dependency_strategy"), dict) or payload.get("name") or payload.get("name_en"):
+            normalized = dict(payload)
+            normalized["__entity_bucket__"] = _normalize_generated_entity_bucket(payload.get("type"), fallback_type)
+            return normalized
+        return {}
+
+    stable_forced_name = str(forced_name or "").strip()
+    preferred_type = _normalize_generated_entity_bucket(fallback_type, fallback_type)
+
+    if stable_forced_name:
+        for _, _, candidate in candidates:
+            candidate_name = str(candidate.get("name") or "").strip()
+            if candidate_name == stable_forced_name:
+                return candidate
+
+    for _, inferred_type, candidate in candidates:
+        if inferred_type == preferred_type:
+            return candidate
+
+    return candidates[0][2]
+
+
+def _build_ai_generated_entity_schema_prompt(preferred_type: Optional[str] = None) -> str:
+    preferred = _normalize_generated_entity_bucket(preferred_type, "character") if preferred_type else None
+    target_hint = {
+        "character": "characters",
+        "prop": "props",
+        "environment": "environments",
+        "poster": "posters",
+    }.get(preferred or "", "")
+    section_line = (
+        f"Put the single generated entity in `{target_hint}` and keep the other three arrays empty. "
+        if target_hint else
+        "Put the single generated entity in the correct array by category and keep the other arrays empty. "
+    )
+    return (
+        "You are an entity designer. Return ONLY one JSON object wrapped by no extra prose. "
+        "The root object must always contain exactly four keys: characters, props, environments, posters. "
+        "Exactly one entity item may exist across those arrays in total. "
+        f"{section_line}"
+        "Follow the entity-design import schema used by the system. "
+        "For a character item include: subject_no, name, name_en, base_name_en, description_cn, gender, role, archetype, appearance_cn, clothing, action_characteristics, generation_prompt_cn, generation_prompt_en, negative_prompt_en, anchor_description, visual_dependencies, dependency_strategy. "
+        "For a prop item include: subject_no, name, name_en, base_name_en, type, description_cn, generation_prompt_cn, generation_prompt_en, negative_prompt_en, anchor_description, visual_dependencies, dependency_strategy. "
+        "For an environment item include: subject_no, name, name_en, base_name_en, atmosphere, visual_params, description_cn, generation_prompt_cn, generation_prompt_en, negative_prompt_en, anchor_description, visual_dependencies, dependency_strategy. "
+        "For a poster item include: subject_no, name, name_en, base_name_en, atmosphere, visual_params, description_cn, generation_prompt_cn, generation_prompt_en, negative_prompt_en, anchor_description, visual_dependencies, dependency_strategy. "
+        "All *_cn fields must be Chinese. All *_en fields must be English. anchor_description must be English phrases. "
+        "visual_dependencies must be an array. dependency_strategy must be an object with type and logic. "
+        "Do not omit required fields."
+    )
+
+
 def _create_generated_entity_from_payload(
     db: Session,
     project_id: int,
@@ -33614,32 +33717,63 @@ def _create_generated_entity_from_payload(
     *,
     fallback_name: str,
     fallback_type: str = "character",
+    forced_name: Optional[str] = None,
 ) -> Entity:
-    name = str(payload.get("name") or fallback_name or "Generated Entity").strip()
-    ent_type = str(payload.get("type") or fallback_type or "character").strip().lower()
-    if ent_type not in {"character", "environment", "prop", "poster"}:
-        ent_type = "character"
+    entity_payload = _extract_generated_entity_item(payload, forced_name=forced_name, fallback_type=fallback_type)
+    if not entity_payload:
+        raise HTTPException(status_code=500, detail="LLM returned no importable entity payload")
 
-    new_entity = Entity(
-        project_id=project_id,
+    ent_type = _normalize_generated_entity_bucket(entity_payload.get("__entity_bucket__") or fallback_type, fallback_type)
+    name = str(forced_name or entity_payload.get("name") or fallback_name or "Generated Entity").strip()
+    name_en = str(entity_payload.get("name_en") or "").strip() or None
+    base_name_en = str(entity_payload.get("base_name_en") or entity_payload.get("name_en") or "").strip() or None
+    description_cn = str(entity_payload.get("description_cn") or entity_payload.get("description") or entity_payload.get("bio") or "").strip()
+    narrative_description = str(entity_payload.get("narrative_description") or description_cn or entity_payload.get("bio") or "").strip() or None
+    custom_attributes = dict(entity_payload.get("custom_attributes") or {}) if isinstance(entity_payload.get("custom_attributes"), dict) else {}
+    if description_cn:
+        custom_attributes["description_cn"] = description_cn
+    custom_attributes.setdefault("source", "ai_entity_create")
+    if entity_payload.get("negative_prompt_en"):
+        custom_attributes["negative_prompt_en"] = str(entity_payload.get("negative_prompt_en")).strip()
+    if entity_payload.get("subject_no"):
+        custom_attributes["subject_no"] = str(entity_payload.get("subject_no")).strip()
+    original_name = str(entity_payload.get("name") or "").strip()
+    if original_name and original_name != name:
+        custom_attributes["llm_generated_name"] = original_name
+
+    prop_mode = str(entity_payload.get("type") or "").strip()
+    if ent_type == "prop" and prop_mode and prop_mode.lower() not in {"character", "characters", "prop", "props", "environment", "environments", "poster", "posters"}:
+        custom_attributes["prop_type"] = prop_mode
+
+    entity_create = EntityCreate(
         name=name,
         type=ent_type,
-        name_en=str(payload.get("name_en") or "").strip() or None,
-        base_name_en=str(payload.get("base_name_en") or payload.get("name_en") or "").strip() or None,
-        description=str(payload.get("description") or payload.get("bio") or "").strip() or None,
-        atmosphere=str(payload.get("atmosphere") or payload.get("personality") or "").strip() or None,
-        appearance_cn=str(payload.get("appearance_cn") or payload.get("features") or "").strip() or None,
-        narrative_description=str(payload.get("narrative_description") or payload.get("bio") or "").strip() or None,
+        description=description_cn or fallback_name,
+        generation_prompt_cn=str(entity_payload.get("generation_prompt_cn") or "").strip() or None,
+        generation_prompt_en=str(entity_payload.get("generation_prompt_en") or "").strip() or None,
+        anchor_description=str(entity_payload.get("anchor_description") or "").strip() or None,
+        name_en=name_en,
+        base_name_en=base_name_en,
+        gender=str(entity_payload.get("gender") or "").strip() or None,
+        role=str(entity_payload.get("role") or "").strip() or None,
+        archetype=str(entity_payload.get("archetype") or "").strip() or None,
+        appearance_cn=str(entity_payload.get("appearance_cn") or entity_payload.get("features") or "").strip() or None,
+        clothing=str(entity_payload.get("clothing") or "").strip() or None,
+        action_characteristics=str(entity_payload.get("action_characteristics") or "").strip() or None,
+        atmosphere=str(entity_payload.get("atmosphere") or entity_payload.get("personality") or "").strip() or None,
+        visual_params=str(entity_payload.get("visual_params") or "").strip() or None,
+        narrative_description=narrative_description,
+        visual_dependencies=_coerce_visual_dependencies(entity_payload.get("visual_dependencies")),
+        dependency_strategy=entity_payload.get("dependency_strategy") if isinstance(entity_payload.get("dependency_strategy"), dict) else {},
+        custom_attributes=custom_attributes,
     )
-    db.add(new_entity)
-    db.commit()
-    db.refresh(new_entity)
-    return new_entity
+    return _upsert_entity_record(db, project_id, entity_create)
 
 
 @router.post("/projects/{project_id}/entities/llm-text", response_model=EntityOut)
 async def api_generate_entity_from_text(
     project_id: int,
+    entity_name: str = Form(...),
     text_desc: str = Form(...),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
@@ -33660,21 +33794,26 @@ async def api_generate_entity_from_text(
     if model:
         llm_config = {**llm_config, "model": model}
 
-    system_prompt = (
-        "You are an entity designer. Return ONLY JSON with fields: "
-        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
-    )
+    system_prompt = _build_ai_generated_entity_schema_prompt()
     user_prompt = (
         "根据用户输入生成一个可入库的新实体。\n"
-        "要求 type 仅可为 character/environment/prop/poster 之一。\n"
+        "必须按实体导入示例输出一个顶层 JSON，对象内仅允许 characters、props、environments、posters 四个数组键。\n"
+        "四个数组里总共只能有 1 个实体，其他数组必须为空数组。\n"
+        f"实体中文名：{entity_name}\n"
         "用户输入：\n"
         f"{text_desc}"
     )
 
     try:
         resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
-        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
-        return _create_generated_entity_from_payload(db, project_id, payload, fallback_name="文本生成实体")
+        payload = _extract_first_json_payload(llm_service.sanitize_text_output(str(resp.get("content") or ""))) or {}
+        return _create_generated_entity_from_payload(
+            db,
+            project_id,
+            payload,
+            fallback_name=entity_name,
+            forced_name=entity_name,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM text generation failed: {e}")
 
@@ -33682,6 +33821,7 @@ async def api_generate_entity_from_text(
 @router.post("/projects/{project_id}/entities/llm-image", response_model=EntityOut)
 async def api_generate_entity_from_image(
     project_id: int,
+    entity_name: str = Form(...),
     file: UploadFile = File(...),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
@@ -33710,11 +33850,13 @@ async def api_generate_entity_from_image(
     img_b64 = base64.b64encode(image_bytes).decode("utf-8")
     data_url = f"data:{mime};base64,{img_b64}"
 
-    system_prompt = (
-        "You are a vision entity designer. Return ONLY JSON with fields: "
-        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
+    system_prompt = _build_ai_generated_entity_schema_prompt()
+    user_prompt = (
+        "请根据图片反推一个可入库的新实体。\n"
+        "必须按实体导入示例输出一个顶层 JSON，对象内仅允许 characters、props、environments、posters 四个数组键。\n"
+        "四个数组里总共只能有 1 个实体，其他数组必须为空数组。\n"
+        f"实体中文名固定为：{entity_name}"
     )
-    user_prompt = "请根据图片反推一个可入库的新实体。"
 
     try:
         resp = await llm_service.generate_content_with_fallback(
@@ -33723,8 +33865,14 @@ async def api_generate_entity_from_image(
             llm_config,
             image_urls=[data_url],
         )
-        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
-        return _create_generated_entity_from_payload(db, project_id, payload, fallback_name="图片反推实体")
+        payload = _extract_first_json_payload(llm_service.sanitize_text_output(str(resp.get("content") or ""))) or {}
+        return _create_generated_entity_from_payload(
+            db,
+            project_id,
+            payload,
+            fallback_name=entity_name,
+            forced_name=entity_name,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM image generation failed: {e}")
 
@@ -33732,6 +33880,7 @@ async def api_generate_entity_from_image(
 @router.post("/projects/{project_id}/entities/llm-derive", response_model=EntityOut)
 async def api_generate_entity_from_derive(
     project_id: int,
+    entity_name: str = Form(...),
     base_entity_id: int = Form(...),
     derive_desc: str = Form(""),
     model: Optional[str] = Form(None),
@@ -33757,12 +33906,12 @@ async def api_generate_entity_from_derive(
     if model:
         llm_config = {**llm_config, "model": model}
 
-    system_prompt = (
-        "You are an entity variation designer. Return ONLY JSON with fields: "
-        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
-    )
+    system_prompt = _build_ai_generated_entity_schema_prompt(str(base_entity.type or "character"))
     user_prompt = (
         "基于已有实体生成一个新的衍生实体，不要覆盖原实体。\n"
+        "必须按实体导入示例输出一个顶层 JSON，对象内仅允许 characters、props、environments、posters 四个数组键。\n"
+        "四个数组里总共只能有 1 个实体，其他数组必须为空数组。\n"
+        f"新实体中文名: {entity_name}\n"
         f"基础实体名称: {base_entity.name}\n"
         f"基础实体类型: {base_entity.type}\n"
         f"基础描述: {base_entity.description or ''}\n"
@@ -33772,13 +33921,14 @@ async def api_generate_entity_from_derive(
 
     try:
         resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
-        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
+        payload = _extract_first_json_payload(llm_service.sanitize_text_output(str(resp.get("content") or ""))) or {}
         return _create_generated_entity_from_payload(
             db,
             project_id,
             payload,
-            fallback_name=f"{base_entity.name}-变体",
+            fallback_name=entity_name,
             fallback_type=str(base_entity.type or "character"),
+            forced_name=entity_name,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM derive generation failed: {e}")

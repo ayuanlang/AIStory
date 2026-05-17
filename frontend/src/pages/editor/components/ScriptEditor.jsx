@@ -197,13 +197,48 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [userPrompt, setUserPrompt] = useState('');
     const [isSuperuser, setIsSuperuser] = useState(false);
     const isSuperuserRef = useRef(false);
-    const SUBJECT_INDEX_PARSE_ERROR = '第一阶段返回未完成或被截断，未解析到完整的 Subject Index 区块；当前结果不能继续作为完整分析使用。请重新执行，或切换模型后重试。';
+    const SUBJECT_INDEX_PARSE_ERROR = '第二阶段返回未完成或被截断，未解析到完整的资产清单区块；当前结果不能继续作为完整分析使用。请重新执行，或切换模型后重试。';
 
     const extractAnalysisSections = useCallback((rawText) => {
         const authoritativeSubjectText = String(rawText || '');
         let extractedText = '';
         let extractedAdaptationText = '';
         let hasStructuredSubjectIndex = false;
+
+        const looksLikeSubjectIndex = (candidateText) => {
+            const candidate = String(candidateText || '');
+            return /subject_no\s*=|subject_type\s*=|subject_name_(?:zh|en|exact)\s*=|subject_type\s*\|/i.test(candidate)
+                || /(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)/i.test(candidate);
+        };
+
+        const trimSubjectIndexSection = (candidateText) => {
+            let candidate = String(candidateText || '').replace(/\r\n/g, '\n').trim();
+            if (!candidate) return '';
+
+            const subjectHeaderMatch = candidate.match(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)\s*(?:\*\*)?\s*\n?/i);
+            if (subjectHeaderMatch?.index >= 0) {
+                candidate = candidate.slice(subjectHeaderMatch.index).trim();
+            }
+
+            const endMarkers = [
+                /^\s*-{4,}\s*$/im,
+                /^\s*(?:###?\s*)?(?:Project\s*Visual\s*Backfill|第三部分|Final\s*Consistency\s*Report|一致性检查)\b/im,
+                /^\s*\{\s*"project_visual_backfill"\s*:/im,
+            ];
+
+            let endIndex = -1;
+            for (const pattern of endMarkers) {
+                const match = pattern.exec(candidate);
+                if (!match || typeof match.index !== 'number' || match.index <= 0) continue;
+                endIndex = endIndex < 0 ? match.index : Math.min(endIndex, match.index);
+            }
+
+            if (endIndex > 0) {
+                candidate = candidate.slice(0, endIndex).trim();
+            }
+
+            return candidate.trim();
+        };
 
         if (!authoritativeSubjectText) {
             return {
@@ -231,30 +266,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         );
 
         const dashMatch = authoritativeSubjectText.match(/-{4,}\s*\n([\s\S]*?)\n\s*-{4,}/);
-        if (dashMatch && dashMatch[1].trim()) {
-            extractedText = dashMatch[1].trim();
-            hasStructuredSubjectIndex = true;
+        if (dashMatch && looksLikeSubjectIndex(dashMatch[1])) {
+            extractedText = trimSubjectIndexSection(dashMatch[1]);
+            hasStructuredSubjectIndex = !!extractedText;
         } else {
             const match = authoritativeSubjectText.match(/(?:^|\b|\s)#{0,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)\s*(?:\*\*)?\s*\n[\s\S]*/i)
                 || authoritativeSubjectText.match(/#{1,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)[\s\S]*/i)
                 || authoritativeSubjectText.match(/(?:^|\b|\s)(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)[\s\S]*/i);
             if (match) {
-                extractedText = match[0];
-                hasStructuredSubjectIndex = true;
+                extractedText = trimSubjectIndexSection(match[0]);
+                hasStructuredSubjectIndex = !!extractedText;
             } else {
                 const pipeMatch = authoritativeSubjectText.match(/(?:^|\n)\s*(subject_no\s*=\s*[A-Za-z]?\d+[\s\S]*)/i);
                 if (pipeMatch && String(pipeMatch[1] || '').trim()) {
-                    extractedText = String(pipeMatch[1] || '').trim();
-                    hasStructuredSubjectIndex = true;
+                    extractedText = trimSubjectIndexSection(String(pipeMatch[1] || ''));
+                    hasStructuredSubjectIndex = !!extractedText;
                 } else {
                     const subjectTypeLine = authoritativeSubjectText.match(/(?:^|\n)(.*subject_type\s*=\s*(?:character|prop|environment|cover_poster).*(?:\|.*)+)/i);
                     if (subjectTypeLine && String(subjectTypeLine[1] || '').trim()) {
                         const idx = authoritativeSubjectText.indexOf(subjectTypeLine[1]);
-                        extractedText = authoritativeSubjectText.slice(idx).trim();
-                        hasStructuredSubjectIndex = true;
-                    } else if (hasDownstreamMarker) {
-                        extractedText = authoritativeSubjectText;
-                        hasStructuredSubjectIndex = true;
+                        extractedText = trimSubjectIndexSection(authoritativeSubjectText.slice(idx));
+                        hasStructuredSubjectIndex = !!extractedText;
+                    } else if (hasDownstreamMarker && looksLikeSubjectIndex(authoritativeSubjectText)) {
+                        extractedText = trimSubjectIndexSection(authoritativeSubjectText);
+                        hasStructuredSubjectIndex = !!extractedText;
                     } else {
                         extractedText = authoritativeSubjectText;
                     }
@@ -262,9 +297,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        if (!hasStructuredSubjectIndex && hasDownstreamMarker) {
-            extractedText = authoritativeSubjectText;
-            hasStructuredSubjectIndex = true;
+        if (!hasStructuredSubjectIndex && hasDownstreamMarker && looksLikeSubjectIndex(authoritativeSubjectText)) {
+            extractedText = trimSubjectIndexSection(authoritativeSubjectText);
+            hasStructuredSubjectIndex = !!extractedText;
         }
 
         const trailingConsistencyReport = extractedText.match(/(?:\n-{3,}\n*)?###?\s*(?:Final\s*Consistency\s*Report|一致性检查)[\s\S]*/i);
@@ -390,23 +425,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段“场景分析结果 / 资产清单”生成。以下“优化后剧本”与第一阶段产出的“全局风格”是唯一权威输入来源；如与原始剧本存在任何差异，一律以上游结果为准。',
+            '请执行第二阶段“场景分析结果 / 资产清单”生成。以下“优化后剧本”是主权威输入来源；项目信息与第一阶段产出的“全局风格”作为补充约束一并生效；如与原始剧本存在任何差异，一律以上游结果为准。',
         ];
 
-        const shouldBackfillProjectMetadata = Boolean(
-            project?.global_info
-            && typeof project.global_info === 'object'
-            && Object.keys(project.global_info).length > 0
-            && !String(adaptedScriptText || '').trim()
-            && !String(stage1VisualBackfillJson || '').trim()
-        );
-
-        if (shouldBackfillProjectMetadata) {
-            try {
-                stage2InputParts.push(`[Project Metadata]\n${JSON.stringify(project.global_info, null, 2)}`);
-            } catch {
-                stage2InputParts.push(`[Project Metadata]\n${String(project.global_info)}`);
-            }
+        const projectContextSection = buildStage1ProjectContextSection();
+        if (projectContextSection) {
+            stage2InputParts.push(projectContextSection);
         }
 
         if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
@@ -431,7 +455,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         stage2InputParts.push(`[优化后剧本 - 第二阶段权威输入]\n${adaptedScriptText || String(stage1Text || '').trim()}`);
         if (stage1VisualBackfillJson) {
-            stage2InputParts.push(`[全局风格 - 第二阶段权威输入]\n${stage1VisualBackfillJson}`);
+            stage2InputParts.push(`[全局风格 - 第二阶段补充约束]\n${stage1VisualBackfillJson}`);
         }
 
         return {
@@ -703,8 +727,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (normalized.includes('prohibited_content')) {
             return '出现供应商政策不允许内容';
         }
-        if (stable.includes('第一阶段未解析到完整的 Subject Index 区块') || stable.includes('第一阶段返回未完成或被截断')) {
-            return t('第一阶段返回未完成或被截断，缺少完整 Subject Index；当前结果不能继续使用。请重试，必要时切换其他模型。', 'Stage 1 returned incomplete or truncated output and is missing a complete Subject Index. The current result cannot be used. Please retry, and switch models if needed.');
+        if (stable.includes('未解析到完整的 Subject Index 区块') || stable.includes('未解析到完整的资产清单区块') || stable.includes('第一阶段返回未完成或被截断') || stable.includes('第二阶段返回未完成或被截断')) {
+            return t('第二阶段返回未完成或被截断，缺少完整资产清单；当前结果不能继续使用。请重试，必要时切换其他模型。', 'Stage 2 returned incomplete or truncated output and is missing a complete asset index. The current result cannot be used. Please retry, and switch models if needed.');
         }
         if (
             normalized.includes('剧本分析结果不可用')
@@ -1745,7 +1769,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return sections.join('\n\n');
     };
 
-    const buildStage1ProjectContextSection = useCallback(() => {
+    function buildStage1ProjectContextSection() {
         const info = (project?.global_info && typeof project.global_info === 'object') ? project.global_info : {};
         if (!info || Object.keys(info).length === 0) return '';
 
@@ -1845,7 +1869,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         metaParts.push('Use this project context as first-class constraints before analyzing the script.');
 
         return metaParts.length > 1 ? metaParts.join('\n') : '';
-    }, [project?.global_info]);
+    }
 
     const ensureStage1ProjectContextInjected = useCallback((inputText) => {
         const scriptText = String(inputText || '').trim();
@@ -1857,7 +1881,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const projectContextSection = buildStage1ProjectContextSection();
         if (!projectContextSection) return scriptText;
         return `${projectContextSection}\n\nScript to Analyze:\n\n${scriptText}`;
-    }, [buildStage1ProjectContextSection]);
+    }, [project?.global_info]);
 
     const mergeEntitiesPayload = (basePayload, patchPayload) => {
         const base = basePayload || { characters: [], props: [], environments: [] };
@@ -3106,8 +3130,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const analysisSections = extractAnalysisSections(resolvedAnalysisRawText);
         const stage2SceneMarkdown = String(normalizeLlmMarkdownTable(resolvedStage2RawText || resolvedAnalysisRawText || '') || '').trim();
         const stage2SubjectIndexText = String(
-            (analysisSections?.hasStructuredSubjectIndex ? analysisSections.subjectIndexText : '')
-            || activeEpisode?.ai_scene_analysis_subject_index
+            activeEpisode?.ai_scene_analysis_subject_index
+            || (analysisSections?.hasStructuredSubjectIndex ? analysisSections.subjectIndexText : '')
             || ''
         ).trim();
         const stage2VisualBackfillJson = String(
@@ -3216,12 +3240,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             kind: 'markdown',
                             title: '资产清单',
                             content: stage2SubjectIndexText,
-                        },
-                        project_visual_backfill: {
-                            key: 'project_visual_backfill',
-                            kind: 'json',
-                            title: '全局风格',
-                            content: stage2VisualBackfillJson,
                         },
                     },
                     outputs: {
@@ -3998,8 +4016,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
                 const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
+                const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
                 const extractedSections = extractAnalysisSections(authoritativeSubjectText);
-                let subjectIndexText = extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : "";
+                let subjectIndexText = persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : "");
                 let adaptationBodyText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
                 if (!adaptationBodyText && /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)) {
                     adaptationBodyText = String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim();
@@ -4014,7 +4033,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Try to match the block wrapped by at least 5 dashes: ---------
         if (options?.isRetryPhase2) {
             onLog?.(`[Stage 3 Asset Design] Retry mode enabled. Bypassing asset-index structural check.`);
-            // When explicitly retrying Phase 2, we assume authoritativeSubjectText/subjectIndexText is already the correct content.
+            // When explicitly retrying Stage 3, we assume authoritativeSubjectText/subjectIndexText is already the correct content.
             // If the parser returned empty because it failed to find a header, use the explicit text instead.
             if (!subjectIndexText.trim() && explicitText) {
                 subjectIndexText = explicitText;
@@ -4043,7 +4062,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
           }
 
         if (!subjectIndexText.trim()) {
-            console.log("No Subject Index found in the analysis result. Skipping asset generation.");
+            console.log("No asset index found in the analysis result. Skipping Stage 3 asset design.");
             return emptyReport;
         }
 
@@ -4066,104 +4085,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let finalSubjectIndexText = subjectIndexText;
 
             // Inject project context ahead of the Stage 2 asset index for Stage 3 asset design.
-            const projectInfo = (project?.global_info && typeof project?.global_info === 'object') ? project.global_info : {};
-            const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
-            const getInfoValue = (aliases = []) => {
-                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                for (const [k, v] of Object.entries(projectInfo)) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    const text = String(v || '').trim();
-                    if (text) return text;
-                }
-                return '';
-            };
+            const designProjectContextSection = buildStage1ProjectContextSection()
+                .replace('Project Context (prepend and treat as high-priority constraints):', 'Project Context (prepend and treat as high-priority constraints for generating design assets):')
+                .replace('Use this project context as first-class constraints before analyzing the script.', 'Use this project context as first-class constraints before generating the subjects.');
 
-            const language = getInfoValue(['language', 'project_language', 'lang']);
-            const getInfoArray = (aliases = []) => {
-                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                for (const [k, v] of Object.entries(projectInfo)) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    if (Array.isArray(v)) {
-                        const arr = v.map(item => String(item || '').trim()).filter(Boolean);
-                        if (arr.length) return arr;
-                    }
-                    if (typeof v === 'string') {
-                        const arr = v.split(/[\n,，;；]/).map(item => item.trim()).filter(Boolean);
-                        if (arr.length) return arr;
-                    }
-                }
-                return [];
-            };
-            const visualParams = (projectInfo?.tech_params && typeof projectInfo.tech_params === 'object' && projectInfo.tech_params.visual_standard) ? projectInfo.tech_params.visual_standard : {};
-            const getVisualValue = (aliases = []) => {
-                const normalizedAlias = new Set((aliases || []).map(normalizeInfoKey));
-                for (const [k, v] of Object.entries(visualParams || {})) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    const text = String(v || '').trim();
-                    if (text) return text;
-                }
-                for (const [k, v] of Object.entries(projectInfo)) {
-                    if (!normalizedAlias.has(normalizeInfoKey(k))) continue;
-                    const text = String(v || '').trim();
-                    if (text) return text;
-                }
-                return '';
-            };
-            const borrowedFilms = getInfoArray(['borrowed_films', 'borrowedFilms', 'reference_films', 'referenceFilms']);
-
-            const metaParts = [
-                'Project Context (prepend and treat as high-priority constraints for generating design assets):',
-                '[Basic Info]'
-            ];
-            const title = getInfoValue(['script_title', 'title']);
-            const episode = getInfoValue(['series_episode', 'episode']);
-            const type = getInfoValue(['type']);
-            const basePositioning = getInfoValue(['base_positioning']);
-            if (title) metaParts.push(`Title: ${title}`);
-            if (episode) metaParts.push(`Episode: ${episode}`);
-            if (type) metaParts.push(`Type: ${type}`);
-            if (basePositioning) metaParts.push(`Base Positioning: ${basePositioning}`);
-            if (language) {
-                metaParts.push(`Language: ${language}`);
-            } else {
-                 metaParts.push(`Language Warning: project language is empty. You MUST infer one target natural language from script context and keep all natural-language descriptions consistently in that single language.`);
-            }
-            metaParts.push('[Technical & Visual Parameters]');
-            const aspectRatio = getVisualValue(['aspect_ratio']);
-            const imageSize = getVisualValue(['image_size']);
-            const horizontalResolution = getVisualValue(['horizontal_resolution']);
-            const verticalResolution = getVisualValue(['vertical_resolution']);
-            const frameRate = getVisualValue(['frame_rate']);
-            const quality = getVisualValue(['quality']);
-            const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
-            const tone = getInfoValue(['tone', 'mood']);
-            const lighting = getInfoValue(['lighting', 'light']);
-            
-            if (aspectRatio) metaParts.push(`Aspect Ratio: ${aspectRatio}`);
-            if (imageSize) metaParts.push(`Image Size: ${imageSize}`);
-            if (horizontalResolution) metaParts.push(`Horizontal Resolution: ${horizontalResolution}`);
-            if (verticalResolution) metaParts.push(`Vertical Resolution: ${verticalResolution}`);
-            if (frameRate) metaParts.push(`Frame Rate: ${frameRate}`);
-            if (quality) metaParts.push(`Quality: ${quality}`);
-            if (globalStyle) metaParts.push(`Global Style: ${globalStyle}`);
-            if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
-            if (tone) metaParts.push(`Tone: ${tone}`);
-            if (lighting) metaParts.push(`Lighting: ${lighting}`);
-            
-            const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
-            const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);
-            const shotPrefField = getInfoValue(['shot_preference', 'lens_preference', 'camera_preference']);
-            const broadcastSafetyField = getInfoValue(['broadcast_security_level', 'broadcast_safety_level', 'safety_level', 'broadcast_safety']);
-
-            if (eraField) metaParts.push(`Era / Period: ${eraField}`);
-            if (regionField) metaParts.push(`Region / Country: ${regionField}`);
-            if (shotPrefField) metaParts.push(`Shot / Lens Preference: ${shotPrefField}`);
-            if (broadcastSafetyField) metaParts.push(`Broadcast Security Level: ${broadcastSafetyField}`);
-            
-            metaParts.push('Use this project context as first-class constraints before generating the subjects.');
-
-            if (Object.keys(projectInfo).length > 0) {
-                finalSubjectIndexText = `${metaParts.join('\n')}\n\n[第二阶段资产清单 - 第三阶段权威输入]\n${finalSubjectIndexText}`;
+            if (designProjectContextSection) {
+                finalSubjectIndexText = `${designProjectContextSection}\n\n[第二阶段资产清单 - 第三阶段权威输入]\n${finalSubjectIndexText}`;
             }
 
             const isUserSuper = isSuperuser || isSuperuserRef.current; // Capture current state or use ref if we had one
@@ -4281,8 +4208,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
         } catch (error) {
-            console.error("Asset generation step failed:", error);
-            onLog?.(`Asset generation failed: ${error.message}`);
+            console.error("Stage 3 asset design step failed:", error);
+            onLog?.(`Stage 3 asset design failed: ${error.message}`);
             throw error;
         } finally {
             phase2GenerationInFlightRef.current = false;
@@ -5617,8 +5544,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
             if (hasExistingScenes || hasExistingSubjectIndex) {
                 const ok = await confirmUiMessage(t(
-                    '检测到已存在场景或Subject Index数据。重新分析将覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
-                    'Existing scenes or subject index detected. Regenerating will overwrite previous analysis results. Do you want to continue? (Choose Cancel to use original results)'
+                    '检测到已存在场景或资产清单数据。重新分析将覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
+                    'Existing scenes or asset index data detected. Regenerating will overwrite previous analysis results. Do you want to continue? (Choose Cancel to use original results)'
                 ));
                 if (!ok) {
                     return;
@@ -5737,10 +5664,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let resumeNotice = '';
         if (decision === 'phase2') {
             resumeNotice = hasSubjectsJson
-                ? t('检测到已有 subjects JSON 不完整，将直接重新执行资产设计阶段。', 'Detected incomplete existing subjects JSON. Phase 2 asset generation will be rerun directly.')
-                : t('未检测到完整的 subjects JSON，将直接重新执行资产设计阶段。', 'No complete subjects JSON was found. Phase 2 asset generation will be rerun directly.');
+                ? t('检测到已有 subjects JSON 不完整，将直接重新执行资产设计阶段。', 'Detected incomplete existing subjects JSON. Stage 3 asset design will be rerun directly.')
+                : t('未检测到完整的 subjects JSON，将直接重新执行资产设计阶段。', 'No complete subjects JSON was found. Stage 3 asset design will be rerun directly.');
         } else if (decision === 'completed') {
-            resumeNotice = t('检测到完整的 Markdown Scene、Subject Index 与 subjects JSON，本次启动将直接复用现有结果。', 'Detected complete markdown scenes, Subject Index, and subjects JSON. This run will reuse the existing results directly.');
+            resumeNotice = t('检测到完整的场景分析结果、资产清单与 subjects JSON，本次启动将直接复用现有结果。', 'Detected complete scene analysis results, asset index, and subjects JSON. This run will reuse the existing results directly.');
         }
 
         if (onLog) {
@@ -5788,14 +5715,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (subjectIndexText !== resolvedSubjectIndexText) {
                     setSubjectIndexText(resolvedSubjectIndexText);
                 }
-                if (onLog) onLog('Detected Subject Index in current page content and persisted it to episode before resuming analysis.', 'info');
+                if (onLog) onLog('Detected asset index in current page content and persisted it to episode before resuming analysis.', 'info');
             } catch (persistSubjectIndexErr) {
-                if (onLog) onLog(`Persist Subject Index before resume failed (continue): ${persistSubjectIndexErr?.message || persistSubjectIndexErr}`, 'warning');
+                if (onLog) onLog(`Persist asset index before resume failed (continue): ${persistSubjectIndexErr?.message || persistSubjectIndexErr}`, 'warning');
             }
         }
 
         const retryResetNotice = retryCount > 0
-            ? t('检测到首轮未返回完整 Subject Index，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing Subject Index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
+            ? t('检测到首轮未返回完整资产清单，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing asset index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
             : '';
         const combinedWarning = [retryResetNotice, resumeState?.preflightSceneSyncNotice, resumeState?.resumeNotice]
             .filter(Boolean)
@@ -5816,7 +5743,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 warning: combinedWarning,
                 error: '',
             });
-            if (onLog) onLog('AI Analysis startup reused existing markdown scenes, Subject Index, and subjects JSON. No LLM call was needed.', 'success');
+            if (onLog) onLog('AI Analysis startup reused existing scene analysis results, asset index, and subjects JSON. No LLM call was needed.', 'success');
             return true;
         }
 
@@ -5837,7 +5764,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatus({
             phase: 'processing_output_workspace',
-            message: '🚀 检测到场景与 Subject Index 已完整，直接进入资产设计...',
+                message: '🚀 检测到场景分析结果与资产清单已完整，直接进入资产设计...',
         });
 
         try {
@@ -6065,7 +5992,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             const analysisSections = extractAnalysisSections(analyzedText || '');
             if (!analysisSections.hasStructuredSubjectIndex) {
-                if (onLog) onLog('Missing Subject Index after phase 1 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
+                if (onLog) onLog('Missing asset index after Stage 2 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
                 throw new Error(SUBJECT_INDEX_PARSE_ERROR);
             }
 
@@ -6390,7 +6317,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
         });
         const retryResetNotice = retryCount > 0
-            ? t('检测到首轮未返回完整 Subject Index，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing Subject Index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
+            ? t('检测到首轮未返回完整资产清单，系统已清空当前分集场景并重新开始分析（资产已保留）。', 'Missing asset index in first attempt. Scenes were reset and analysis restarted from scratch (assets kept).')
             : '';
 
         setAnalysisUiReport({
@@ -6514,7 +6441,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 setAdaptationText(adaptedScriptText);
 
-                if (onLog) onLog('Stage 1 split prompt detected. Running Stage 2 asset extraction before Subject Index validation.', 'info');
+                if (onLog) onLog('Stage 1 split prompt detected. Running Stage 2 scene analysis before asset-index validation.', 'info');
 
                 const stage2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_beats_and_assets.md');
                 let finalStage2Prompt = stage2PromptRes?.content || '';
@@ -6566,7 +6493,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             if (!analysisSections.hasStructuredSubjectIndex) {
-                if (onLog) onLog('Missing Subject Index after phase 1 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
+                if (onLog) onLog('Missing asset index after Stage 2 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
                 throw new Error(SUBJECT_INDEX_PARSE_ERROR);
             }
 
@@ -7093,35 +7020,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [formatArtifactContent, getStageOutputContent, handleAnalysisClick, handleImportStageArtifact, handleRestoreAdaptedScript, isAnalyzing, llmRawResultContent, t]);
 
     const stage2StageCards = useMemo(() => {
-        const stage2AdaptedScriptInput = getStageInputContent('stage2', 'adapted_script');
-        const stage2VisualBackfillInput = getStageInputContent('stage2', 'project_visual_backfill');
         const sceneMarkdown = getStageOutputContent('stage2', 'scene_markdown');
-        const subjectIndex = getStageOutputContent('stage2', 'subject_index');
-        const visualBackfillJson = getStageOutputContent('stage2', 'project_visual_backfill');
+        const subjectIndex = String(activeEpisode?.ai_scene_analysis_subject_index || subjectIndexText || getStageOutputContent('stage2', 'subject_index') || '').trim();
 
         return [
-            {
-                key: 'stage2-input-adapted-script',
-                eyebrow: t('第二阶段输入', 'Stage 2 Input'),
-                title: t('优化后剧本', 'Optimized Script'),
-                status: stage2AdaptedScriptInput ? 'completed' : 'idle',
-                badge: stage2AdaptedScriptInput ? t('输入', 'Input') : t('缺失', 'Missing'),
-                summary: t('第二阶段重跑时读取第一阶段的优化后剧本。', 'Stage 1 optimized script reused by Stage 2.'),
-                content: stage2AdaptedScriptInput,
-                actions: [],
-                placeholder: t('缺少第一阶段优化后剧本输入。', 'Stage 2 is missing the Stage 1 optimized script input.'),
-            },
-            {
-                key: 'stage2-input-visual-backfill',
-                eyebrow: t('第二阶段输入', 'Stage 2 Input'),
-                title: t('全局风格', 'Global Style'),
-                status: stage2VisualBackfillInput ? 'completed' : 'idle',
-                badge: stage2VisualBackfillInput ? t('输入', 'Input') : t('缺失', 'Missing'),
-                summary: t('第二阶段继承的第一阶段 Project Visual Backfill。', 'Stage 1 Project Visual Backfill inherited by Stage 2.'),
-                content: formatArtifactContent(stage2VisualBackfillInput, 'json'),
-                actions: [],
-                placeholder: t('缺少第一阶段 Visual Backfill 输入。', 'Stage 2 is missing the Stage 1 visual backfill input.'),
-            },
             {
                 key: 'stage2-scene-markdown',
                 eyebrow: t('第二阶段', 'Stage 2'),
@@ -7178,62 +7080,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ],
                 placeholder: t('第二阶段尚未生成资产清单。', 'No Stage 2 asset index yet.'),
             },
-            {
-                key: 'stage2-visual-backfill',
-                eyebrow: t('第二阶段', 'Stage 2'),
-                title: t('全局风格', 'Global Style'),
-                status: visualBackfillJson ? 'completed' : 'idle',
-                badge: visualBackfillJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
-                summary: t('第二阶段默认继承并必要时校准的全局风格。', 'Stage 2 inherited and calibrated the global style.'),
-                content: formatArtifactContent(visualBackfillJson, 'json'),
-                actions: [
-                    {
-                        key: 'reimport-stage2-visual-backfill',
-                        label: t('重新导入', 'Re-import'),
-                        icon: 'refresh',
-                        onClick: () => handleImportStageArtifact({
-                            content: visualBackfillJson,
-                            importType: 'json',
-                            label: 'stage2 project visual backfill',
-                        }),
-                        disabled: isAnalyzing || !visualBackfillJson,
-                        loading: false,
-                    },
-                ],
-                placeholder: t('第二阶段尚未产出全局风格。', 'No Stage 2 global style yet.'),
-            },
         ];
-    }, [formatArtifactContent, getStageInputContent, getStageOutputContent, handleImportStageArtifact, handleRestartStage2, isAnalyzing, t]);
+    }, [activeEpisode?.ai_scene_analysis_subject_index, getStageOutputContent, handleImportStageArtifact, handleRestartStage2, isAnalyzing, subjectIndexText, t]);
 
     const stage3StageCards = useMemo(() => {
-        const stage3SubjectIndexInput = getStageInputContent('stage3', 'subject_index');
-        const stage3VisualBackfillInput = getStageInputContent('stage3', 'project_visual_backfill');
         const assetDesignJson = getStageOutputContent('stage3', 'asset_design_json');
         const assetDesignPayload = getAnalysisEntitiesPayloadFromJsonText(assetDesignJson);
 
         return [
-            {
-                key: 'stage3-input-subject-index',
-                eyebrow: t('第三阶段输入', 'Stage 3 Input'),
-                title: t('第二阶段资产清单', 'Stage 2 Asset Index'),
-                status: stage3SubjectIndexInput ? 'completed' : 'idle',
-                badge: stage3SubjectIndexInput ? t('输入', 'Input') : t('缺失', 'Missing'),
-                summary: t('第三阶段资产设计使用的第二阶段资产清单。', 'Stage 2 asset index consumed by Stage 3.'),
-                content: stage3SubjectIndexInput,
-                actions: [],
-                placeholder: t('缺少第二阶段资产清单输入。', 'Stage 3 is missing the Stage 2 asset index input.'),
-            },
-            {
-                key: 'stage3-input-visual-backfill',
-                eyebrow: t('第三阶段输入', 'Stage 3 Input'),
-                title: t('全局风格', 'Global Style'),
-                status: stage3VisualBackfillInput ? 'completed' : 'idle',
-                badge: stage3VisualBackfillInput ? t('输入', 'Input') : t('缺失', 'Missing'),
-                summary: t('第三阶段资产设计继承的 Project Visual Backfill。', 'Project Visual Backfill inherited by Stage 3.'),
-                content: formatArtifactContent(stage3VisualBackfillInput, 'json'),
-                actions: [],
-                placeholder: t('缺少第二阶段 Visual Backfill 输入。', 'Stage 3 is missing the Stage 2 visual backfill input.'),
-            },
             {
                 key: 'stage3-asset-design-json',
                 eyebrow: t('第三阶段', 'Stage 3'),
@@ -7271,7 +7125,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
             },
         ];
-    }, [formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageInputContent, getStageOutputContent, handleImportStageArtifact, handleRetryPhase2, isAnalyzing, isRetryingPhase2, t]);
+    }, [formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, handleRetryPhase2, isAnalyzing, isRetryingPhase2, t]);
 
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
@@ -7680,14 +7534,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             )}
 
             {postAnalysisCheckModal.open && (
-                <div
-                    className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-                    onClick={() => {
-                        if (postAnalysisCheckModal.status !== 'running') {
-                            closePostAnalysisCheckModal();
-                        }
-                    }}
-                >
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
                     <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-3xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
                             <h3 className="text-lg font-bold flex items-center gap-2">
@@ -7700,10 +7547,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </h3>
                             <button
                                 onClick={closePostAnalysisCheckModal}
-                                className={`p-1 rounded-lg transition-colors ${postAnalysisCheckModal.status === 'running' ? 'text-white/30 cursor-not-allowed' : 'hover:bg-white/10 text-white/80'}`}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors ${postAnalysisCheckModal.status === 'running' ? 'bg-white/5 text-white/30 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
                                 disabled={postAnalysisCheckModal.status === 'running'}
                             >
-                                <X className="w-5 h-5" />
+                                {t('退出', 'Exit')}
                             </button>
                         </div>
 
@@ -7758,13 +7605,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             )}
 
             {showAnalysisModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm" onClick={() => {
-                    if (phase2ResolverRef.current) {
-                        phase2ResolverRef.current(false);
-                        phase2ResolverRef.current = null;
-                    }
-                    setShowAnalysisModal(false);
-                }}>
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm">
                     <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-6xl h-[90vh] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
                             <h3 className="text-lg font-bold flex items-center gap-2">
@@ -7783,8 +7624,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     phase2ResolverRef.current = null;
                                 }
                                 setShowAnalysisModal(false);
-                            }} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
-                                <X className="w-5 h-5" />
+                            }} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-bold transition-colors text-white">
+                                {t('退出', 'Exit')}
                             </button>
                         </div>
                         
@@ -7832,6 +7673,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             )}
                              <button
                                 onClick={() => {
+                                    if (phase2ResolverRef.current) {
+                                        phase2ResolverRef.current(false);
+                                        phase2ResolverRef.current = null;
+                                    }
+                                    setShowAnalysisModal(false);
+                                }}
+                                className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg font-medium transition-colors text-white border border-white/10"
+                             >
+                                <X className="w-4 h-4" /> {t('退出', 'Exit')}
+                             </button>
+                             <button
+                                onClick={() => {
                                     const fullText = `[System Instruction]\n${systemPrompt}\n\n[User Input]\n${userPrompt}`;
                                     navigator.clipboard.writeText(fullText);
                                     if(onLog) onLog(t('完整提示词已复制到剪贴板。', 'Copied full prompt to clipboard.'));
@@ -7864,14 +7717,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             )}
 
             {subjectRecoveryModal.open && (
-                <div
-                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-                    onClick={() => {
-                        if (subjectRecoveryModal.status !== 'running') {
-                            setSubjectRecoveryModal(prev => ({ ...prev, open: false }));
-                        }
-                    }}
-                >
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
                     <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
                             <h3 className="text-lg font-bold flex items-center gap-2">
@@ -7890,10 +7736,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         setSubjectRecoveryModal(prev => ({ ...prev, open: false }));
                                     }
                                 }}
-                                className={`p-1 rounded-lg transition-colors ${subjectRecoveryModal.status === 'running' ? 'text-white/30 cursor-not-allowed' : 'hover:bg-white/10 text-white/80'}`}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors ${subjectRecoveryModal.status === 'running' ? 'bg-white/5 text-white/30 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
                                 disabled={subjectRecoveryModal.status === 'running'}
                             >
-                                <X className="w-5 h-5" />
+                                {t('退出', 'Exit')}
                             </button>
                         </div>
                         <div className="p-4 space-y-3 text-sm">
@@ -7915,7 +7761,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 disabled={subjectRecoveryModal.status === 'running'}
                                 className={`px-4 py-2 rounded-lg text-sm font-bold ${subjectRecoveryModal.status === 'running' ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
                             >
-                                {t('关闭', 'Close')}
+                                {t('退出', 'Exit')}
                             </button>
                         </div>
                     </div>

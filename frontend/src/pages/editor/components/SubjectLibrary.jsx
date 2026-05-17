@@ -158,6 +158,19 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
+
+const toRenderableText = (value) => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    try {
+        const serialized = JSON.stringify(value);
+        return serialized === '{}' || serialized === '[]' ? '' : serialized;
+    } catch {
+        return '';
+    }
+};
+
 export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
@@ -4131,11 +4144,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         };
     }, [entities, subTab]);
 
-    const handleGenerateEntityFromText = async (textDesc) => {
+    const handleGenerateEntityFromText = async (entityName, textDesc) => {
         try {
             setIsGeneratingRow(true);
-            await generateEntityFromText(projectId, textDesc);
-            await loadAssets();
+            await generateEntityFromText(projectId, entityName, textDesc);
+            await loadEntities();
             setShowAiEntityCreateModal(false);
         } catch (e) {
             console.error(e);
@@ -4145,11 +4158,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     };
 
-    const handleGenerateEntityFromImage = async (imageFile) => {
+    const handleGenerateEntityFromImage = async (entityName, imageFile) => {
         try {
             setIsGeneratingRow(true);
-            await generateEntityFromImage(projectId, imageFile);
-            await loadAssets();
+            await generateEntityFromImage(projectId, entityName, imageFile);
+            await loadEntities();
             setShowAiEntityCreateModal(false);
         } catch (e) {
             console.error(e);
@@ -4159,11 +4172,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     };
 
-    const handleGenerateDerivedEntity = async (baseEntityId, textDesc) => {
+    const handleGenerateDerivedEntity = async (entityName, baseEntityId, textDesc) => {
         try {
             setIsGeneratingRow(true);
-            await generateEntityDerived(projectId, baseEntityId, textDesc);
-            await loadAssets();
+            await generateEntityDerived(projectId, entityName, baseEntityId, textDesc);
+            await loadEntities();
             setShowAiEntityCreateModal(false);
         } catch (e) {
             console.error(e);
@@ -4919,27 +4932,39 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     </div>
 
                                     {/* Dependency Strategy */}
-                                    {viewingEntity.dependency_strategy && (viewingEntity.dependency_strategy.type || viewingEntity.dependency_strategy.logic) && (
-                                        <div className="space-y-1 pt-2 border-t border-white/5">
-                                            <h4 className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-2">
-                                                <Settings2 size={10} /> Dependency Strategy
-                                            </h4>
-                                            <div className="bg-white/5 rounded-lg border border-white/5 p-3 text-xs space-y-1">
-                                                {viewingEntity.dependency_strategy.type && (
-                                                    <div className="flex gap-2">
-                                                        <span className="text-muted-foreground">{t('类型：', 'Type:')}</span>
-                                                        <span className="font-bold text-primary">{viewingEntity.dependency_strategy.type}</span>
-                                                    </div>
-                                                )}
-                                                {viewingEntity.dependency_strategy.logic && (
-                                                    <div className="flex gap-2 flex-col sm:flex-row sm:items-baseline">
-                                                        <span className="text-muted-foreground whitespace-nowrap">{t('逻辑：', 'Logic:')}</span>
-                                                        <span className="text-white/80 italic">{viewingEntity.dependency_strategy.logic}</span>
-                                                    </div>
-                                                )}
+                                    {(() => {
+                                        const strategy = viewingEntity.dependency_strategy && typeof viewingEntity.dependency_strategy === 'object'
+                                            ? viewingEntity.dependency_strategy
+                                            : {};
+                                        const strategyTypeText = toRenderableText(strategy.type);
+                                        const strategyLogicText = toRenderableText(strategy.logic);
+
+                                        if (!strategyTypeText && !strategyLogicText) {
+                                            return null;
+                                        }
+
+                                        return (
+                                            <div className="space-y-1 pt-2 border-t border-white/5">
+                                                <h4 className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                                    <Settings2 size={10} /> Dependency Strategy
+                                                </h4>
+                                                <div className="bg-white/5 rounded-lg border border-white/5 p-3 text-xs space-y-1">
+                                                    {strategyTypeText && (
+                                                        <div className="flex gap-2">
+                                                            <span className="text-muted-foreground">{t('类型：', 'Type:')}</span>
+                                                            <span className="font-bold text-primary">{strategyTypeText}</span>
+                                                        </div>
+                                                    )}
+                                                    {strategyLogicText && (
+                                                        <div className="flex gap-2 flex-col sm:flex-row sm:items-baseline">
+                                                            <span className="text-muted-foreground whitespace-nowrap">{t('逻辑：', 'Logic:')}</span>
+                                                            <span className="text-white/80 italic">{strategyLogicText}</span>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
-                                        </div>
-                                    )}
+                                        );
+                                    })()}
 
                                     {/* Visual Dependencies (Editable) */}
                                     <div className="space-y-2 pt-2 border-t border-white/5">

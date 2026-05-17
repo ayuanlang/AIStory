@@ -3435,24 +3435,27 @@ export const splitEpisodeScript = async (projectId, episodeId, payload) => {
 };
 
 
-export const generateEntityFromText = async (projectId, textDesc, model = null) => {
+export const generateEntityFromText = async (projectId, entityName, textDesc, model = null) => {
     const formData = new FormData();
+    formData.append('entity_name', entityName);
     formData.append('text_desc', textDesc);
     if (model) formData.append('model', model);
     const response = await api.post(`/projects/${projectId}/entities/llm-text`, formData);
     return response.data;
 };
 
-export const generateEntityFromImage = async (projectId, imageFile, model = null) => {
+export const generateEntityFromImage = async (projectId, entityName, imageFile, model = null) => {
     const formData = new FormData();
+    formData.append('entity_name', entityName);
     formData.append('file', imageFile);
     if (model) formData.append('model', model);
     const response = await api.post(`/projects/${projectId}/entities/llm-image`, formData);
     return response.data;
 };
 
-export const generateEntityDerived = async (projectId, baseEntityId, deriveDesc, model = null) => {
+export const generateEntityDerived = async (projectId, entityName, baseEntityId, deriveDesc, model = null) => {
     const formData = new FormData();
+    formData.append('entity_name', entityName);
     formData.append('base_entity_id', baseEntityId);
     formData.append('derive_desc', deriveDesc);
     if (model) formData.append('model', model);

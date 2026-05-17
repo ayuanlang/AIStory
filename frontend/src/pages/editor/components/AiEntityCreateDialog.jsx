@@ -17,6 +17,7 @@ function AiEntityCreateDialog({
     isGeneratingRow,
 }) {
     const [tab, setTab] = useState('text');
+    const [entityName, setEntityName] = useState('');
     const [textDesc, setTextDesc] = useState('');
     const [imageFile, setImageFile] = useState(null);
     const [deriveEntityId, setDeriveEntityId] = useState('');
@@ -27,18 +28,25 @@ function AiEntityCreateDialog({
         if (!imageFile) return '';
         return URL.createObjectURL(imageFile);
     }, [imageFile]);
+    const isEntityNameMissing = !entityName.trim();
 
     if (!isOpen) return null;
 
     const handleGenerate = async () => {
         setError('');
         try {
+            const stableEntityName = entityName.trim();
+            if (!stableEntityName) {
+                setError('请输入实体中文名');
+                return;
+            }
+
             if (tab === 'text') {
                 if (!textDesc.trim()) {
                     setError('请输入实体描述');
                     return;
                 }
-                await onGenerateText(textDesc);
+                await onGenerateText(stableEntityName, textDesc);
                 return;
             }
 
@@ -47,7 +55,7 @@ function AiEntityCreateDialog({
                     setError('请先上传图片');
                     return;
                 }
-                await onGenerateImage(imageFile);
+                await onGenerateImage(stableEntityName, imageFile);
                 return;
             }
 
@@ -55,7 +63,7 @@ function AiEntityCreateDialog({
                 setError('请选择参考实体');
                 return;
             }
-            await onGenerateDerived(deriveEntityId, deriveDesc || '保持主体特征，生成一个新的变体实体');
+            await onGenerateDerived(stableEntityName, deriveEntityId, deriveDesc || '保持主体特征，生成一个新的变体实体');
         } catch (err) {
             const msg = err?.response?.data?.detail || err?.message || '生成失败';
             setError(String(msg));
@@ -99,6 +107,20 @@ function AiEntityCreateDialog({
                             {error}
                         </div>
                     )}
+
+                    <div className="space-y-2">
+                        <div className="text-xs text-white/70 flex items-center gap-1">
+                            <span>实体中文名</span>
+                            <span className="text-red-400">*</span>
+                        </div>
+                        <input
+                            value={entityName}
+                            onChange={(e) => setEntityName(e.target.value)}
+                            className={`w-full rounded-md bg-black/30 px-3 py-2 text-sm text-white ${isEntityNameMissing ? 'border border-red-500/60 focus:border-red-400' : 'border border-white/15'}`}
+                            placeholder="例如：墨宸"
+                        />
+                        <div className="text-[11px] text-white/45">提交前必须填写实体中文名，最终将按该名称入库。</div>
+                    </div>
 
                     {tab === 'text' && (
                         <div className="space-y-2">
@@ -176,7 +198,7 @@ function AiEntityCreateDialog({
                     </button>
                     <button
                         onClick={handleGenerate}
-                        disabled={isGeneratingRow}
+                        disabled={isGeneratingRow || isEntityNameMissing}
                         className="px-6 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
                         {isGeneratingRow ? (
