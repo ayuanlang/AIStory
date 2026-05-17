@@ -10892,9 +10892,9 @@ Negative prompt constraints: {neg_prompt}"""
             has_ref_videos = isinstance(ref_videos, list) and any(str(v).strip() for v in ref_videos)
 
             if has_ref_videos:
-                # Video extension: discard the fallback first frame (seedance_refs[0]) to preserve @Image mapping offsets
-                if len(seedance_refs) > 1:
-                    payload_input["reference_image_urls"] = seedance_refs[1:]
+                # Video extension: pass all references. `endpoints.py` tags all refs as @Image1...N.
+                if seedance_refs:
+                    payload_input["reference_image_urls"] = seedance_refs
                 
                 payload_input.pop("first_frame_url", None)
                 payload_input.pop("last_frame_url", None)

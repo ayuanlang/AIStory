@@ -899,6 +899,14 @@ class LLMService:
             f"[DEBUG][LLM][KIE] Response | status={resp.status_code} body_preview_len=800 body_preview={_strip_base64_from_log(resp.text[:800])}"
         )
 
+        content_type = str(resp.headers.get("Content-Type", "")).lower()
+        if "text/html" in content_type:
+            body_text = resp.text
+            if "<!doctype html>" in body_text.lower() or "<html" in body_text.lower():
+                err_msg = f"LLM returned HTML instead of expected format. Provider=kie, Model={resolved_model}"
+                logger.error(f"[JSON_ERROR_HTML] {err_msg} prefix={body_text[:200]}")
+                raise Exception(self._vendor_failed_message("kie", err_msg))
+
         if resp.status_code != 200:
             human_summary = self._build_human_readable_http_error_summary(
                 provider="kie",
@@ -2832,6 +2840,15 @@ class LLMService:
         
         _debug_log(f"[DEBUG][LLM][{provider}] Response | status={response.status_code} model={model} url={url} body={_strip_base64_from_log(response.text[:500])}")
 
+        content_type = str(response.headers.get("Content-Type", "")).lower()
+        if "text/html" in content_type:
+            body_text = response.text
+            if "<!doctype html>" in body_text.lower() or "<html" in body_text.lower():
+                provider_for_err = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
+                err_msg = f"LLM returned HTML instead of expected format. Provider={provider_for_err}, Model={model}"
+                logger.error(f"[JSON_ERROR_HTML] {err_msg} prefix={body_text[:200]}")
+                raise Exception(self._vendor_failed_message(provider_for_err, err_msg))
+
         if response.status_code != 200:
             provider = (extra_config or {}).get("__provider") or (extra_config or {}).get("provider") or self._infer_provider(base_url, model)
             resolved_setting_id = (extra_config or {}).get("__resolved_setting_id")
@@ -3246,6 +3263,16 @@ class LLMService:
                         "[STREAM_RESPONSE_TYPE] provider=%s model=%s status=%s content_type=%r payload_stream=%s",
                         provider, model, response.status_code, content_type, payload.get("stream"),
                     )
+
+                    if "text/html" in content_type:
+                        body_bytes = await response.aread()
+                        body_text = body_bytes.decode("utf-8", errors="replace")
+                        if "<!doctype html>" in body_text.lower() or "<html" in body_text.lower():
+                            err_msg = f"LLM returned HTML instead of expected format. Provider={provider}, Model={model}"
+                            logger.error(f"[STREAM_ERROR_HTML] {err_msg} prefix={body_text[:200]}")
+                            yield {"type": "error", "error": err_msg}
+                            return
+
                     if "event-stream" not in content_type:
                         logger.warning(
                             "[STREAM_FALLBACK_NON_SSE] provider=%s model=%s returned non-SSE content_type=%r; treating as full response",

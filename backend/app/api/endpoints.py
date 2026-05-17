@@ -21,7 +21,7 @@ import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
-from sqlalchemy import or_, and_, text, inspect, cast, String, func, update as sa_update
+from sqlalchemy import or_, and_, text, inspect, cast, String, func
 from app.db.session import get_db, SessionLocal
 from app.models import all_models as models
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
@@ -54,9 +54,9 @@ import os
 from app.services.media_service import MediaGenerationService
 from app.services.video_service import create_montage
 from app.services.project_cost_service import compute_project_cost_estimation
-from app.api.deps import get_current_active_superuser, get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
+from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
-from typing import Any, List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
+from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
 from pydantic import BaseModel
 import bcrypt
 import re
@@ -116,7 +116,6 @@ SystemAPISetting = models.SystemAPISetting
 ScriptSegment = models.ScriptSegment
 TransactionHistory = models.TransactionHistory
 TransactionAction = models.TransactionAction
-ProjectGroupCreditAllocation = getattr(models, "ProjectGroupCreditAllocation", None)
 SMTPSystemConfig = models.SMTPSystemConfig
 WechatPayConfig = models.WechatPayConfig
 ProviderKeyPool = models.ProviderKeyPool
@@ -461,7 +460,7 @@ def _prune_recent_analyze_scene_tasks_locked(now_ts: float) -> None:
 
 # ── Generic async-task polling endpoint ──────────────────────────────────
 @router.get("/tasks/{task_id}")
-def poll_task(task_id: str, current_user: Any = Depends(get_current_user)):
+def poll_task(task_id: str, current_user: User = Depends(get_current_user)):
     info = _get_task_status(task_id, user_id=current_user.id)
     if info is None:
         info = _generation_task_status(task_id, user_id=current_user.id)
@@ -471,7 +470,7 @@ def poll_task(task_id: str, current_user: Any = Depends(get_current_user)):
 
 
 @router.post("/tasks/{task_id}/cancel")
-def cancel_task(task_id: str, current_user: Any = Depends(get_current_user)):
+def cancel_task(task_id: str, current_user: User = Depends(get_current_user)):
     _cancel_generation_task_ref(task_id, user_id=current_user.id, reason="Task canceled by user request")
     info = _cancel_task(task_id, user_id=current_user.id, reason="Task canceled by user request")
     if info is None:
@@ -1121,7 +1120,7 @@ def _read_image_job_file(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _persist_data_uri_image_result(
-    current_user: Any,
+    current_user: User,
     media_url: Optional[str],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -1225,7 +1224,7 @@ def _persist_data_uri_image_result(
 
 
 def _persist_remote_image_result(
-    current_user: Any,
+    current_user: User,
     media_url: Optional[str],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -1251,7 +1250,7 @@ def _persist_remote_image_result(
     try:
         response = requests.get(
             raw,
-            stream=True,
+            stream=False,
             timeout=120,
             allow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"},
@@ -1496,7 +1495,7 @@ def _asset_meta_to_dict(raw_meta: Any) -> Dict[str, Any]:
     return {}
 
 
-def _visible_asset_owner_ids_for_project(project: Optional[Project], current_user: Any) -> List[int]:
+def _visible_asset_owner_ids_for_project(project: Optional[Project], current_user: User) -> List[int]:
     owner_ids = {int(current_user.id)}
     try:
         if project and getattr(project, "owner_id", None) is not None:
@@ -1508,7 +1507,7 @@ def _visible_asset_owner_ids_for_project(project: Optional[Project], current_use
 
 def _resolve_precise_asset_library_url(
     db: Session,
-    current_user: Any,
+    current_user: User,
     legacy_url: Any,
     *,
     project: Optional[Project],
@@ -1576,7 +1575,7 @@ def _resolve_precise_asset_library_url(
 
 def _repair_entity_image_url_from_assets(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     entity: Optional[Entity],
 ) -> bool:
@@ -1613,7 +1612,7 @@ def _repair_entity_image_url_from_assets(
 
 def _repair_shot_media_urls_from_assets(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     shot: Optional[Shot],
 ) -> bool:
@@ -1678,7 +1677,7 @@ def _repair_shot_media_urls_from_assets(
 
 def _repair_entities_image_urls_from_assets(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     entities: List[Entity],
 ) -> List[Entity]:
@@ -1728,7 +1727,7 @@ def _diagnose_entity_image_url(image_url: Any) -> Dict[str, Any]:
 
 def _repair_shots_media_urls_from_assets(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     shots: List[Shot],
 ) -> List[Shot]:
@@ -1777,7 +1776,7 @@ def _refresh_shot_media_urls(shot: Shot, db: Session) -> Shot:
 
 def _replace_legacy_temp_urls_in_shot_payload(
     db: Session,
-    current_user: Any,
+    current_user: User,
     project: Optional[Project],
     shot: Shot,
     update_data: Dict[str, Any],
@@ -2379,37 +2378,33 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             if value not in (None, ""):
                 req_context[key] = value
 
-        # Auto-infer asset_type if not provided (shot=start_frame, entity=subject)
-        if not str(req_context.get("asset_type") or "").strip():
-            if req_context.get("shot_id"):
-                req_context["asset_type"] = "start_frame"
-            elif req_context.get("entity_id") or req_context.get("entity_name") or req_context.get("subject_name"):
-                req_context["asset_type"] = "subject"
-
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         logger.info(
-            "[ImageJobPersist] start | job_id=%s user_id=%s entity_id=%s entity_name=%s shot_id=%s asset_type=%s raw_url=%s metadata_keys=%s",
+            "[ImageJobPersist] start | job_id=%s user_id=%s entity_id=%s entity_name=%s shot_id=%s raw_url=%s metadata_keys=%s",
             job_id,
             getattr(current_user, "id", None),
             req_context.get("entity_id"),
             req_context.get("entity_name") or req_context.get("subject_name"),
             req_context.get("shot_id"),
-            req_context.get("asset_type"),
             raw_url,
             sorted(list(metadata.keys())) if isinstance(metadata, dict) else [],
         )
         normalized_url, normalized_meta = _persist_data_uri_image_result(current_user, raw_url, metadata)
         normalized_url, normalized_meta = _persist_remote_image_result(current_user, normalized_url, normalized_meta)
         logger.info(
-            "[ImageJobPersist] normalized | job_id=%s user_id=%s entity_id=%s shot_id=%s asset_type=%s normalized_url=%s oss=%s",
+            "[ImageJobPersist] normalized | job_id=%s user_id=%s entity_id=%s shot_id=%s normalized_url=%s oss=%s",
             job_id,
             getattr(current_user, "id", None),
             req_context.get("entity_id"),
             req_context.get("shot_id"),
-            req_context.get("asset_type"),
             normalized_url,
             bool((normalized_meta or {}).get("oss")) if isinstance(normalized_meta, dict) else False,
         )
+        if normalized_meta is None:
+            normalized_meta = {}
+        normalized_meta["idempotency_key"] = job_id
+
+
         if normalized_meta is None:
             normalized_meta = {}
         normalized_meta["idempotency_key"] = job_id
@@ -2688,15 +2683,11 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         for key in (
             "prompt", "negative_prompt", "provider", "model", "aspect_ratio",
             "duration", "project_id", "episode_id", "scene_id", "shot_id",
-            "shot_number", "shot_name", "asset_type", "seed", "subject_id",
-            "entity_id", "entity_name", "subject_name", "subject_type", "entity_type",
-            "ref_image_url", "ref_video_urls", "last_frame_url", "keyframes", "ref_mode"
+            "shot_number", "shot_name", "asset_type", "seed", "subject_id"
         ):
             value = job.get(key)
             if value is not None and value != "":
                 req_context[key] = value
-        if not str(req_context.get("asset_type") or "").strip():
-            req_context["asset_type"] = "video"
 
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         
@@ -2712,18 +2703,8 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         if normalized_meta is not None:
             finalized_result["metadata"] = normalized_meta
 
-        # Register/bind on finalize so callback-only video paths are visible in asset library.
+        # Try to bind if relevant and not ephemeral
         if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
-            try:
-                _register_asset_helper(
-                    db,
-                    current_user.id,
-                    normalized_url,
-                    req_context,
-                    normalized_meta,
-                )
-            except Exception as reg_exc:
-                logger.warning(f"[_finalize_video_job_result_persistence] _register_asset_helper failed: {reg_exc}")
             try:
                 _bind_generated_media_to_shot(
                     db,
@@ -3172,7 +3153,7 @@ def _build_scene_analysis_blocking_failure_detail(
     if "ANALYSIS_JSON_INVALID" in codes:
         reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
     if "ANALYSIS_SUBJECT_INDEX_MISSING" in codes:
-        reasons_cn.append("第一阶段返回未完成或被截断，未解析到完整的 Subject Index 区块")
+        reasons_cn.append("第一阶段未解析到完整的 Subject Index 区块")
 
     raw_reasons: List[str] = []
     raw_reasons.extend([str(x or "").strip() for x in (integrity_warnings or []) if str(x or "").strip()])
@@ -3193,7 +3174,7 @@ def _build_scene_analysis_blocking_failure_detail(
 
 
 @router.post("/fix-db-schema")
-def fix_db_schema_endpoint(current_user: Any = Depends(get_current_user)):
+def fix_db_schema_endpoint(current_user: User = Depends(get_current_user)):
     """
     Emergency endpoint to trigger DB migration manually.
     Only accessible by authorized users (technically any logged in user for now, assuming admin).
@@ -3280,7 +3261,7 @@ def create_system_log_action(
     payload: SystemLogCreate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     action = str(payload.action or "").strip().upper()
     if not action:
@@ -3730,7 +3711,7 @@ def get_effective_setting_snapshot(
     category: str = "LLM",
     provider: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     resolved_setting, source, meta = _resolve_effective_api_setting_meta(
         db,
@@ -3951,7 +3932,7 @@ class PromptContentUpdateRequest(BaseModel):
 
 
 @router.get("/prompts/{filename:path}")
-async def get_prompt_content(filename: str, current_user: Any = Depends(get_current_user)):
+async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
     """Retrieve content of a prompt file."""
     normalized = str(filename or "").strip().strip("/")
 
@@ -4018,7 +3999,7 @@ async def get_prompt_content(filename: str, current_user: Any = Depends(get_curr
 async def update_prompt_content(
     filename: str,
     payload: PromptContentUpdateRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not bool(getattr(current_user, "is_superuser", False) or getattr(current_user, "is_system", False)):
         raise HTTPException(status_code=403, detail="Only system/admin users can update prompt files")
@@ -4043,7 +4024,7 @@ async def update_prompt_content(
 
 
 @router.get("/prompts/skills")
-async def list_prompt_skills(current_user: Any = Depends(get_current_user)):
+async def list_prompt_skills(current_user: User = Depends(get_current_user)):
     """List available prompt skills and metadata for frontend/tooling discovery."""
     try:
         registry = load_skills_registry()
@@ -4062,7 +4043,7 @@ async def list_prompt_skills(current_user: Any = Depends(get_current_user)):
 
 
 @router.get("/prompts/skills/{skill_id}")
-async def get_prompt_skill_detail(skill_id: str, current_user: Any = Depends(get_current_user)):
+async def get_prompt_skill_detail(skill_id: str, current_user: User = Depends(get_current_user)):
     """Get one prompt skill metadata by skill id."""
     meta = get_skill_meta(skill_id)
     if not meta:
@@ -4071,7 +4052,7 @@ async def get_prompt_skill_detail(skill_id: str, current_user: Any = Depends(get
 
 
 @router.get("/prompts/scene-analysis/features")
-async def get_scene_analysis_feature_options(current_user: Any = Depends(get_current_user)):
+async def get_scene_analysis_feature_options(current_user: User = Depends(get_current_user)):
     """List feature-stack modes and enum dimensions for scene analysis prompt composition."""
     return get_scene_analysis_feature_catalog()
 
@@ -4141,7 +4122,7 @@ def _build_scene_analysis_slot_blocks_summary(bundle: Dict[str, Any]) -> List[Di
 async def preview_scene_analysis_route(
     request: AnalyzeSceneRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Preview the decision-engine routing result for scene analysis without calling the LLM."""
     requested_mode = str(getattr(request, "scene_analysis_mode", "") or "").strip() or None
@@ -4199,7 +4180,7 @@ async def preview_scene_analysis_route(
 async def get_project_subject_inventory_prompt(
     project_id: int, 
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     try:
         _require_project_access(db, project_id, current_user)
@@ -4233,7 +4214,7 @@ async def get_project_subject_inventory_prompt(
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 @router.post("/analyze_scene", response_model=Dict[str, Any])
-async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
+async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
     """
     Submits raw script text to LLM for Scene/Beat analysis using a specific prompt template.
     Returns the raw analysis result (Markdown/JSON).
@@ -4718,7 +4699,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
         # Load the prompt template or use provided system_prompt
         system_instruction = ""
         template_signature: Dict[str, Any] = {}
-        resolved_prompt_filename = None
         
         if request.system_prompt:
             system_instruction = request.system_prompt
@@ -4728,10 +4708,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                 "template_hash_sha256": hashlib.sha256(str(system_instruction or "").encode("utf-8")).hexdigest(),
             }
         else:
-            prompt_filename = request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
+            prompt_filename = request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning.md"
             if feature_bundle.get("enabled") and not request.prompt_file:
-                prompt_filename = str(feature_bundle.get("base_prompt_file") or "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md")
-            resolved_prompt_filename = prompt_filename
+                prompt_filename = str(feature_bundle.get("base_prompt_file") or "skills/scene_analysis_feature_stack/scene_planning.md")
             try:
                 system_instruction = _resolve_prompt_text(prompt_filename)
             except FileNotFoundError:
@@ -4749,7 +4728,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                 "Rendered routed scene analysis prompt with explicit slots: requested_mode=%s effective_mode=%s base_prompt=%s slots=%s skills=%s features=%s combos=%s",
                 requested_scene_analysis_mode,
                 feature_bundle.get("mode"),
-                feature_bundle.get("base_prompt_file") or request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md",
+                feature_bundle.get("base_prompt_file") or request.prompt_file or "skills/scene_analysis_feature_stack/scene_planning.md",
                 sorted((feature_bundle.get("slot_blocks") or {}).keys()),
                 [item.get("skill_id") for item in (feature_bundle.get("selected_skills") or [])],
                 feature_bundle.get("normalized_features") or {},
@@ -5115,7 +5094,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             )
 
         logger.info(f"Analyzing scene for user {current_user_id} with model {config.get('model')}")
-        # Auto-continue if provider truncates (finish_reason=length).
+        # Auto-continue if provider truncates or the stream drops after yielding partial content.
         # Important: keep continuation prompts small (do NOT send the entire prior output back)
         # to avoid blowing up prompt size / hitting context window.
         # Token cap is controlled by provider/model config; local continuation only keeps a high safety ceiling.
@@ -5217,6 +5196,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                 })
 
                 accumulated = "".join(result_parts_loop)
+                
+                if part_finish == "error":
+                    break
+                    
                 if len(accumulated) >= _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP:
                     output_char_cap_reached_loop = True
                     finish_reason_loop = part_finish or finish_reason_loop or "safety_output_cap"
@@ -5233,8 +5216,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                 section_meta = _detect_scene_output_sections(accumulated)
                 missing_sections = [str(x) for x in (section_meta.get("missing_sections") or []) if str(x)]
                 continue_due_to_length = _is_length_finish_reason(part_finish)
+                continue_due_to_incomplete = (
+                    str(part_finish or "").strip().lower().replace("-", "_") == "incomplete"
+                    and bool(accumulated.strip())
+                    and seg_idx < max_segments
+                )
                 continue_due_to_structure = (
                     not continue_due_to_length
+                    and not continue_due_to_incomplete
                     and bool(missing_sections)
                     and seg_idx < max_segments
                     and continuation_by_structure_loop < 3
@@ -5242,7 +5231,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                 )
 
                 # Stop if not truncated.
-                if not continue_due_to_length and not continue_due_to_structure:
+                if not continue_due_to_length and not continue_due_to_incomplete and not continue_due_to_structure:
                     break
 
                 # Stop if provider returned nothing new.
@@ -5259,6 +5248,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                         missing_sections=", ".join(missing_sections),
                         suffix=suffix,
                     )
+                elif continue_due_to_incomplete:
+                    continuation_reason = "incomplete_stream"
+                    continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
                 else:
                     continuation_instruction = continuation_instruction_tpl.format(suffix=suffix)
 
@@ -5281,7 +5273,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                     {"role": "user", "content": continuation_instruction},
                 ]
 
-            if finish_reason_loop is not None and _is_length_finish_reason(finish_reason_loop) and len(segments_meta_loop) >= max_segments:
+            finish_reason_loop_norm = str(finish_reason_loop or "").strip().lower().replace("-", "_")
+            if finish_reason_loop_norm and (finish_reason_loop_norm == "incomplete" or _is_length_finish_reason(finish_reason_loop_norm)) and len(segments_meta_loop) >= max_segments:
                 continuation_stopped_by_max_segments_loop = True
 
             return {
@@ -5313,7 +5306,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             if ep_cache and script_hash:
                 exist_res = ep_cache.ai_scene_analysis_result or ""
                 if f"<!-- script_hash: {script_hash} -->" in exist_res:
-                    if "### Subject Index" in exist_res and "```json" not in exist_res.lower() and '"characters": [' not in exist_res:
+                    if re.search(r"(?i)subject\s*index", exist_res) and "```json" not in exist_res.lower() and '"characters": [' not in exist_res:
                         skip_step1 = True
                         cached_result_1 = exist_res
 
@@ -5321,476 +5314,34 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
 
         # 1. Execute required Phase based on mode natively
         is_entity_design_phase = (effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"])
-        resolved_prompt_filename_norm = str(resolved_prompt_filename or "").replace("\\", "/")
-        use_split_scene_analysis_flow = (
-            not is_entity_design_phase
-            and not bool(request.system_prompt)
-            and (
-                resolved_prompt_filename_norm.endswith("skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md")
-                or resolved_prompt_filename_norm.endswith("skills/scene_analysis_feature_stack/scene_planning.md")
-            )
-        )
-
-        def _is_stage1_script_optimization_prompt(prompt_text: Any) -> bool:
-            text = str(prompt_text or "").strip()
-            if not text:
-                return False
-            return bool(
-                re.search(r"Skill\s*1-1\s*:\s*剧本改编与整体规划", text, flags=re.IGNORECASE)
-                or re.search(r"三阶段工作流[\s\S]{0,120}第一阶段", text, flags=re.IGNORECASE)
-                or re.search(r"本提示词专门负责[\s\S]{0,80}第一阶段", text, flags=re.IGNORECASE)
-            )
-
-        is_stage1_only_prompt = bool(
-            not use_split_scene_analysis_flow
-            and not is_entity_design_phase
-            and (
-                resolved_prompt_filename_norm.endswith("skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md")
-                or _is_stage1_script_optimization_prompt(getattr(request, "system_prompt", ""))
-            )
-        )
-
-        def _extract_stage1_adapted_script_payload(stage1_output: str) -> Dict[str, Any]:
-            text = str(stage1_output or "").replace("\r\n", "\n").strip()
-            if not text:
-                return {
-                    "script_text": "",
-                    "method": "empty",
-                    "has_explicit_section": False,
-                    "scene_heading_count": 0,
-                }
-
-            def _trim_script_body(candidate_text: str) -> str:
-                candidate = str(candidate_text or "").strip()
-                if not candidate:
-                    return ""
-                scene_heading_match = re.search(
-                    r"(?im)^\s*(?:\*\*)?\s*(?:【场景\s*[^\n]+】|\*\*【场景\s*[^\n]+】\*\*|Scene\s*\d+\s*[:：]|\[Scene\s*\d+[^\n]*\])",
-                    candidate,
-                )
-                if scene_heading_match:
-                    candidate = candidate[scene_heading_match.start():].strip()
-
-                end_marker_match = re.search(
-                    r"(?im)^\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*\"project_visual_backfill\"|\[Project Metadata\]|\[Reusable Subject Assets)",
-                    candidate,
-                )
-                if end_marker_match:
-                    candidate = candidate[:end_marker_match.start()].strip()
-                return candidate
-
-            def _count_scene_headings(candidate_text: str) -> int:
-                return len(re.findall(
-                    r"(?im)^\s*(?:\*\*)?\s*(?:【场景\s*[^\n]+】|\*\*【场景\s*[^\n]+】\*\*|Scene\s*\d+\s*[:：]|\[Scene\s*\d+[^\n]*\])",
-                    str(candidate_text or ""),
-                ))
-
-            section_patterns = [
-                r"(?is)^.*?(?:###\s*第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$",
-                r"(?is)^.*?(?:##\s*第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$",
-                r"(?is)^.*?(?:第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$",
-                r"(?is)^.*?(?:###\s*Second\s*Part[:：]?\s*Adapted\s*Script.*?\n)(.*)$",
-                r"(?is)^.*?(?:##\s*Second\s*Part[:：]?\s*Adapted\s*Script.*?\n)(.*)$",
-                r"(?is)^.*?(?:Adapted\s*Script\s*[-(（].*?\n)(.*)$",
-            ]
-            for pattern in section_patterns:
-                match = re.search(pattern, text)
-                if not match:
-                    continue
-                extracted = _trim_script_body(match.group(1) or "")
-                if extracted:
-                    return {
-                        "script_text": extracted,
-                        "method": "explicit_adapted_script_section",
-                        "has_explicit_section": True,
-                        "scene_heading_count": _count_scene_headings(extracted),
-                    }
-
-            trimmed_scene_blocks = _trim_script_body(text)
-            scene_heading_count = _count_scene_headings(trimmed_scene_blocks)
-            if trimmed_scene_blocks and scene_heading_count > 0:
-                return {
-                    "script_text": trimmed_scene_blocks,
-                    "method": "scene_heading_fallback",
-                    "has_explicit_section": False,
-                    "scene_heading_count": scene_heading_count,
-                }
-
-            fallback_text = trimmed_scene_blocks or text
-            return {
-                "script_text": fallback_text,
-                "method": "full_text_fallback_trimmed" if fallback_text != text else "full_text_fallback",
-                "has_explicit_section": False,
-                "scene_heading_count": _count_scene_headings(fallback_text),
-            }
-
-        def _extract_stage1_project_visual_backfill_json(stage1_output: str) -> str:
-            text = str(stage1_output or "").strip()
-            if not text:
-                return ""
-
-            def _try_parse_candidate(candidate_text: str) -> str:
-                candidate = str(candidate_text or "").strip()
-                if not candidate:
-                    return ""
-                try:
-                    parsed = json.loads(candidate)
-                except Exception:
-                    return ""
-                if isinstance(parsed, dict) and isinstance(parsed.get("project_visual_backfill"), dict):
-                    return json.dumps(parsed, ensure_ascii=False, indent=2)
-                return ""
-
-            for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE):
-                parsed_candidate = _try_parse_candidate(match.group(1))
-                if parsed_candidate:
-                    return parsed_candidate
-
-            brace_depth = 0
-            start_index = -1
-            in_string = False
-            escape = False
-            for index, ch in enumerate(text):
-                if in_string:
-                    if escape:
-                        escape = False
-                    elif ch == "\\":
-                        escape = True
-                    elif ch == '"':
-                        in_string = False
-                    continue
-
-                if ch == '"':
-                    in_string = True
-                    continue
-
-                if ch == "{":
-                    if brace_depth == 0:
-                        start_index = index
-                    brace_depth += 1
-                elif ch == "}":
-                    brace_depth -= 1
-                    if brace_depth == 0 and start_index != -1:
-                        parsed_candidate = _try_parse_candidate(text[start_index:index + 1])
-                        start_index = -1
-                        if parsed_candidate:
-                            return parsed_candidate
-
-            return ""
-
-        def _extract_subject_index_text(analysis_output: str) -> str:
-            text = str(analysis_output or "").replace("\r\n", "\n").strip()
-            if not text:
-                return ""
-
-            def _trim_subject_index(candidate_text: str) -> str:
-                candidate = str(candidate_text or "").strip()
-                if not candidate:
-                    return ""
-                end_marker_match = re.search(
-                    r"(?im)^\s*(?:###\s*Project\s*Visual\s*Backfill|###\s*Final\s*Consistency\s*Report|\[Project Metadata\]|\[Reusable Subject Assets)",
-                    candidate,
-                )
-                if end_marker_match:
-                    candidate = candidate[:end_marker_match.start()].strip()
-                return candidate
-
-            dash_match = re.search(r"-{4,}\s*\n([\s\S]*?)\n\s*-{4,}", text)
-            if dash_match and str(dash_match.group(1) or "").strip():
-                return _trim_subject_index(dash_match.group(1))
-
-            header_match = re.search(
-                r"(?im)^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:Subject\s*Index|Subjects?\s*Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities\s*Index)\s*(?:\*\*)?\s*$",
-                text,
-            )
-            if header_match:
-                return _trim_subject_index(text[header_match.start():])
-
-            subject_no_match = re.search(r"(?im)^\s*subject_no\s*=", text)
-            if subject_no_match:
-                return _trim_subject_index(text[subject_no_match.start():])
-
-            pipe_row_match = re.search(
-                r"(?im)^\s*S\d{3,}\s*\|\s*(?:character|prop|environment|cover_poster)\s*\|",
-                text,
-            )
-            if pipe_row_match:
-                return _trim_subject_index(text[pipe_row_match.start():])
-
-            markdown_table_match = re.search(
-                r"(?ims)^\s*\|\s*(?:subject_no|name\s*\((?:cn|zh)\)|名称(?:\s*[（(](?:中文|CN|ZH)[）)])?)\s*\|.*$\n\s*\|(?:\s*:?-{3,}:?\s*\|){2,}\s*$",
-                text,
-            )
-            if markdown_table_match:
-                return _trim_subject_index(text[markdown_table_match.start():])
-
-            return ""
-
-        def _extract_scene_markdown_table(analysis_output: str) -> str:
-            text = str(analysis_output or "").replace("\r\n", "\n")
-            if not text.strip():
-                return ""
-
-            lines = text.split("\n")
-            table_lines: List[str] = []
-            in_table = False
-            for raw_line in lines:
-                line = str(raw_line or "")
-                if line.count("|") >= 2:
-                    table_lines.append(line.rstrip())
-                    in_table = True
-                    continue
-                if in_table:
-                    break
-            return "\n".join(table_lines).strip()
-
-        def _load_stage_outputs_bundle(raw_text: str) -> Dict[str, Any]:
-            text = str(raw_text or "").strip()
-            if not text:
-                return {"version": 1, "stages": {}}
-            try:
-                parsed = json.loads(text)
-            except Exception:
-                return {"version": 1, "stages": {}}
-            if isinstance(parsed, dict) and isinstance(parsed.get("stages"), dict):
-                return parsed
-            return {"version": 1, "stages": {}}
-
-        def _upsert_stage_output(bundle: Dict[str, Any], stage_key: str, *, title: str, inputs: Optional[Dict[str, Any]] = None, outputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-            stable_bundle = bundle if isinstance(bundle, dict) else {"version": 1, "stages": {}}
-            stable_bundle.setdefault("version", 1)
-            stages = stable_bundle.setdefault("stages", {})
-            stage_payload = stages.setdefault(stage_key, {"key": stage_key, "title": title, "restartable": True, "inputs": {}, "outputs": {}})
-            stage_payload["key"] = stage_key
-            stage_payload["title"] = title
-            stage_payload["restartable"] = True
-            stage_payload.setdefault("inputs", {})
-            stage_payload.setdefault("outputs", {})
-            if isinstance(inputs, dict):
-                stage_payload["inputs"].update(inputs)
-            if isinstance(outputs, dict):
-                stage_payload["outputs"].update(outputs)
-            return stable_bundle
-
-        def _artifact_payload(key: str, title: str, kind: str, content: Any) -> Dict[str, Any]:
-            return {
-                "key": key,
-                "title": title,
-                "kind": kind,
-                "content": str(content or "").strip(),
-            }
-
-        def _build_stage_outputs_bundle(existing_bundle_text: str, *, analysis_raw_text: str = "", asset_raw_text: str = "", script_input_text: str = "", project_context: Any = None, stage1_raw_text: str = "", stage2_raw_text: str = "") -> str:
-            bundle = _load_stage_outputs_bundle(existing_bundle_text)
-            analysis_text = str(analysis_raw_text or "").strip()
-            asset_text = str(asset_raw_text or "").strip()
-            script_text = str(script_input_text or "").strip()
-            stage1_text = str(stage1_raw_text or "").strip()
-            stage2_text = str(stage2_raw_text or "").strip()
-            project_context_text = ""
-            if project_context is not None:
-                try:
-                    project_context_text = json.dumps(project_context, ensure_ascii=False, indent=2)
-                except Exception:
-                    project_context_text = str(project_context)
-
-            if analysis_text:
-                stage1_authoritative_text = stage1_text or analysis_text
-                stage2_authoritative_text = stage2_text or analysis_text
-
-                adapted_payload = _extract_stage1_adapted_script_payload(stage1_authoritative_text)
-                adapted_script = str(adapted_payload.get("script_text") or "").strip()
-                visual_backfill_json = _extract_stage1_project_visual_backfill_json(stage1_authoritative_text)
-                subject_index_text = _extract_subject_index_text(stage2_authoritative_text)
-                scene_markdown = _extract_scene_markdown_table(stage2_authoritative_text)
-
-                bundle = _upsert_stage_output(
-                    bundle,
-                    "stage1",
-                    title="第一阶段：剧本修改说明 / 优化后剧本 / 全局风格",
-                    inputs={
-                        "script_content": _artifact_payload("script_content", "原始剧本", "markdown", script_text),
-                        "project_context": _artifact_payload("project_context", "项目上下文", "json", project_context_text),
-                    },
-                    outputs={
-                        "adapted_script": _artifact_payload("adapted_script", "优化后剧本", "markdown", adapted_script),
-                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "全局风格", "json", visual_backfill_json),
-                        "raw_text": _artifact_payload("raw_text", "第一阶段完整结果", "text", stage1_authoritative_text),
-                    },
-                )
-                bundle = _upsert_stage_output(
-                    bundle,
-                    "stage2",
-                    title="第二阶段：场景分析结果 / 资产清单",
-                    inputs={
-                        "adapted_script": _artifact_payload("adapted_script", "优化后剧本", "markdown", adapted_script),
-                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "全局风格", "json", visual_backfill_json),
-                    },
-                    outputs={
-                        "scene_markdown": _artifact_payload("scene_markdown", "场景分析结果", "markdown", scene_markdown),
-                        "subject_index": _artifact_payload("subject_index", "资产清单", "markdown", subject_index_text),
-                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "全局风格", "json", visual_backfill_json),
-                        "raw_text": _artifact_payload("raw_text", "第二阶段完整结果", "text", stage2_authoritative_text),
-                    },
-                )
-
-            if asset_text:
-                stage2_subject_index_text = str((((bundle.get("stages") or {}).get("stage2") or {}).get("outputs") or {}).get("subject_index", {}).get("content") or "")
-                stage2_visual_backfill_json = str((((bundle.get("stages") or {}).get("stage2") or {}).get("outputs") or {}).get("project_visual_backfill", {}).get("content") or "")
-                bundle = _upsert_stage_output(
-                    bundle,
-                    "stage3",
-                    title="第三阶段：资产设计",
-                    inputs={
-                        "subject_index": _artifact_payload(
-                            "subject_index",
-                            "资产清单",
-                            "markdown",
-                            stage2_subject_index_text or _extract_subject_index_text(stage2_text or analysis_text),
-                        ),
-                    },
-                    outputs={
-                        "asset_design_json": _artifact_payload("asset_design_json", "资产设计", "json", asset_text),
-                        "raw_text": _artifact_payload("raw_text", "第三阶段完整结果", "text", asset_text),
-                    },
-                )
-
-            return json.dumps(bundle, ensure_ascii=False, indent=2)
-
-        stage1_bundle_text = ""
-        stage2_bundle_text = ""
-
-        if use_split_scene_analysis_flow:
-            stage1_prompt_filename = "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
-            stage2_prompt_filename = "skills/scene_analysis_feature_stack/scene_planning_2_beats_and_assets.md"
-
-            try:
-                stage1_system_instruction = _resolve_prompt_text(stage1_prompt_filename)
-                stage2_system_instruction = _resolve_prompt_text(stage2_prompt_filename)
-            except FileNotFoundError as split_prompt_err:
-                logger.error("Split scene analysis prompt not found: %s", split_prompt_err)
-                raise HTTPException(status_code=404, detail="Split scene analysis prompt file not found.")
-
-            if feature_bundle.get("enabled"):
-                stage1_system_instruction = render_scene_analysis_routed_prompt(stage1_system_instruction, feature_bundle)
-                stage2_system_instruction = render_scene_analysis_routed_prompt(stage2_system_instruction, feature_bundle)
-
-            stage1_messages = [
-                {"role": "system", "content": stage1_system_instruction},
-                {"role": "user", "content": user_content},
-            ]
-            loop1_res = await _run_loop(stage1_messages)
-            raw_stage1_result = loop1_res.get("result_content", "")
-            stage1_bundle_text = str(raw_stage1_result or "")
-            adapted_script_payload = _extract_stage1_adapted_script_payload(raw_stage1_result)
-            adapted_script_text = str(adapted_script_payload.get("script_text") or "")
-            project_visual_backfill_json = _extract_stage1_project_visual_backfill_json(raw_stage1_result)
-
-            stage2_input_parts = [
-                "请执行第二阶段“资产分析提取”。以下‘修改后的剧本’是主权威输入来源；Project Metadata 与 Stage 1 已产出的 `Project Visual Backfill` 作为补充约束一并生效；如与原始剧本存在任何差异，一律以上游 Stage 1 结果为准。",
-            ]
-            if isinstance(request.project_metadata, dict) and bool(request.project_metadata):
-                try:
-                    stage2_input_parts.append(
-                        "[Project Metadata]\n" + json.dumps(request.project_metadata, ensure_ascii=False, indent=2)
-                    )
-                except Exception:
-                    stage2_input_parts.append("[Project Metadata]\n" + str(request.project_metadata))
-
-            reuse_subject_assets = getattr(request, "reuse_subject_assets", None) or []
-            if isinstance(reuse_subject_assets, list) and reuse_subject_assets:
-                reuse_lines = [
-                    "[Reusable Subject Assets - High Priority]",
-                    "Reuse these existing subjects whenever they already match the current script. Do not rename them arbitrarily.",
-                ]
-                for item in reuse_subject_assets:
-                    if not isinstance(item, dict):
-                        continue
-                    name = str(item.get("name") or "").strip()
-                    if not name:
-                        continue
-                    asset_type = str(item.get("type") or "").strip()
-                    description = str(item.get("description") or "").strip()
-                    anchor_description = str(item.get("anchor_description") or "").strip()
-                    detail_parts = [f"name={name}"]
-                    if asset_type:
-                        detail_parts.append(f"type={asset_type}")
-                    if description:
-                        detail_parts.append(f"description={description}")
-                    if anchor_description:
-                        detail_parts.append(f"anchors={anchor_description}")
-                    reuse_lines.append("- " + " | ".join(detail_parts))
-                if len(reuse_lines) > 2:
-                    stage2_input_parts.append("\n".join(reuse_lines))
-
-            stage2_input_parts.append("[Stage 1 Adapted Script - Authoritative Input]\n" + (adapted_script_text or raw_stage1_result))
-            if project_visual_backfill_json:
-                stage2_input_parts.append("[Stage 1 Project Visual Backfill - Supplemental Constraints]\n" + project_visual_backfill_json)
-            stage2_user_content = "\n\n".join(part for part in stage2_input_parts if str(part or "").strip())
-
-            stage2_messages = [
-                {"role": "system", "content": stage2_system_instruction},
-                {"role": "user", "content": stage2_user_content},
-            ]
-            loop2_res = await _run_loop(stage2_messages)
-            result_content_1 = raw_stage1_result
-            if script_hash:
-                result_content_1 = f"<!-- script_hash: {script_hash} -->\n" + result_content_1
-            result_content_2 = loop2_res.get("result_content", "")
-            stage2_bundle_text = str(result_content_2 or "")
-            result_content = result_content_1 + "\n\n" + result_content_2
-
-            segments_meta = list(loop1_res.get("segments_meta", [])) + list(loop2_res.get("segments_meta", []))
-            usage_total = _merge_usage(loop1_res.get("usage_total", {}), loop2_res.get("usage_total", {}))
-            resolved_llm_routing = loop2_res.get("resolved_llm_routing", {}) or loop1_res.get("resolved_llm_routing", {})
-            finish_reason = loop2_res.get("finish_reason", "stop")
-            continuation_stopped_by_max_segments = bool(
-                loop1_res.get("continuation_stopped_by_max_segments", False)
-                or loop2_res.get("continuation_stopped_by_max_segments", False)
-            )
-            output_char_cap_reached = bool(
-                loop1_res.get("output_char_cap_reached", False)
-                or loop2_res.get("output_char_cap_reached", False)
-            )
-            continuation_reason_counts = dict(loop1_res.get("continuation_reason_counts", {}))
-            for reason_key, reason_value in (loop2_res.get("continuation_reason_counts", {}) or {}).items():
-                continuation_reason_counts[reason_key] = int(continuation_reason_counts.get(reason_key) or 0) + int(reason_value or 0)
-            continuation_by_structure = int(loop1_res.get("continuation_by_structure", 0) or 0) + int(loop2_res.get("continuation_by_structure", 0) or 0)
-            provider_limit_hints = list(set(list(loop1_res.get("provider_limit_hints", []) or []) + list(loop2_res.get("provider_limit_hints", []) or [])))
-            llm_fallback_warnings = list(set(list(loop1_res.get("llm_fallback_warnings", []) or []) + list(loop2_res.get("llm_fallback_warnings", []) or [])))
-            debug_meta["split_scene_analysis_flow"] = True
-            debug_meta["scene_analysis_stage_prompt_files"] = [stage1_prompt_filename, stage2_prompt_filename]
-            debug_meta["scene_analysis_stage_names"] = ["stage_1_script_adaptation", "stage_2_asset_analysis_extraction", "stage_3_asset_design"]
-            debug_meta["stage1_adapted_script_extraction"] = {
-                "method": adapted_script_payload.get("method"),
-                "has_explicit_section": bool(adapted_script_payload.get("has_explicit_section")),
-                "scene_heading_count": int(adapted_script_payload.get("scene_heading_count") or 0),
-                "chars": len(adapted_script_text or ""),
-            }
-        else:
-            # Execute the LLM loop generically for single-pass modes
+        
+        # Execute the LLM loop generically for all modes
+        try:
             loop1_res = await _run_loop(messages)
-            result_content_1 = loop1_res.get("result_content", "")
+        except getattr(llm_service, "AmbiguousLLMTransportError", Exception) as e:
+            if type(e).__name__ == "AmbiguousLLMTransportError":
+                logger.error(f"[analyze_scene] {e}")
+                raise HTTPException(status_code=504, detail=str(e))
+            raise
+        result_content_1 = loop1_res.get("result_content", "")
+        
+        # In phase 1, attach script_hash for future reference if needed
+        if not is_entity_design_phase and script_hash:
+            result_content_1 = f"<!-- script_hash: {script_hash} -->\n" + result_content_1
+            
+        result_content = result_content_1
 
-            # In phase 1, attach script_hash for future reference if needed
-            if not is_entity_design_phase and script_hash:
-                result_content_1 = f"<!-- script_hash: {script_hash} -->\n" + result_content_1
-
-            result_content = result_content_1
-
-            # Expose all loop variables so the rest of the endpoint works seamlessly
-            segments_meta = loop1_res.get("segments_meta", [])
-            usage_total = loop1_res.get("usage_total", {})
-            resolved_llm_routing = loop1_res.get("resolved_llm_routing", {})
-            finish_reason = loop1_res.get("finish_reason", "stop")
-            continuation_stopped_by_max_segments = loop1_res.get("continuation_stopped_by_max_segments", False)
-            output_char_cap_reached = loop1_res.get("output_char_cap_reached", False)
-            continuation_reason_counts = dict(loop1_res.get("continuation_reason_counts", {}))
-            continuation_by_structure = loop1_res.get("continuation_by_structure", 0)
-            provider_limit_hints = list(set(loop1_res.get("provider_limit_hints", [])))
-            llm_fallback_warnings = list(set(loop1_res.get("llm_fallback_warnings", [])))
-            debug_meta["split_scene_analysis_flow"] = False
-            debug_meta["scene_analysis_stage_names"] = ["single_pass_analysis_or_stage_3_asset_design"]
+        # Expose all loop variables so the rest of the endpoint works seamlessly
+        segments_meta = loop1_res.get("segments_meta", [])
+        usage_total = loop1_res.get("usage_total", {})
+        resolved_llm_routing = loop1_res.get("resolved_llm_routing", {})
+        finish_reason = loop1_res.get("finish_reason", "stop")
+        continuation_stopped_by_max_segments = loop1_res.get("continuation_stopped_by_max_segments", False)
+        output_char_cap_reached = loop1_res.get("output_char_cap_reached", False)
+        continuation_reason_counts = dict(loop1_res.get("continuation_reason_counts", {}))
+        continuation_by_structure = loop1_res.get("continuation_by_structure", 0)
+        provider_limit_hints = list(set(loop1_res.get("provider_limit_hints", [])))
+        llm_fallback_warnings = list(set(loop1_res.get("llm_fallback_warnings", [])))
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
 
@@ -5851,6 +5402,24 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             "dedup_total_chars": dedup_total_chars,
         })
 
+        if finish_reason in ("incomplete", "error"):
+            logger.error(f"[analyze_scene] LLM returned finish_reason={finish_reason}; rejecting partial output.")
+            
+            # 记录断开的内容哪怕它不完整，以防止丢失上游(可能已扣费)的部分生成结果
+            # 这会将部分结果保存到 DB 的 llm_call_logs 表中
+            llm_service._safe_log_json("LLM_STREAM_INCOMPLETE_REJECTED", {
+                "provider": (config or {}).get("provider", ""),
+                "model": (config or {}).get("model", ""),
+                "episode_id": getattr(request, "episode_id", None),
+                "error": f"LLM connection dropped prematurely (reason: {finish_reason}).",
+                "response": {
+                    "partial_content_len": len(result_content or ""),
+                    "partial_content": result_content
+                }
+            })
+            
+            raise HTTPException(status_code=502, detail=f"LLM connection dropped prematurely (reason: {finish_reason}). Please retry.")
+
         # Persist raw LLM output as soon as it is available so phase-1/phase-2
         # source text is retained even if later validation or billing fails.
         saved_to_episode = False
@@ -5870,53 +5439,18 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             if effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"]:
                 persisted_field_name = "ai_entity_design_result"
                 episode.ai_entity_design_result = result_content
-                episode.ai_stage_outputs = _build_stage_outputs_bundle(
-                    getattr(episode, "ai_stage_outputs", "") or "",
-                    analysis_raw_text=getattr(episode, "ai_scene_analysis_result", "") or "",
-                    asset_raw_text=result_content,
-                    script_input_text=getattr(episode, "script_content", "") or "",
-                    project_context=getattr(getattr(episode, "project", None), "global_info", None),
-                )
                 logger.info(
-                    "[analyze_scene] Persisted 第三阶段资产设计到 ai_entity_design_result episode_id=%s chars=%s stage_bundle_chars=%s",
+                    "[analyze_scene] Persisted raw phase2 output to ai_entity_design_result episode_id=%s chars=%s",
                     episode_id,
                     len(result_content or ""),
-                    len(str(getattr(episode, "ai_stage_outputs", "") or "")),
                 )
             else:
                 persisted_field_name = "ai_scene_analysis_result"
                 episode.ai_scene_analysis_result = result_content
-                persisted_subject_index = _extract_subject_index_text(result_content)
-                persisted_adaptation = ""
-                adapted_payload_for_persist = _extract_stage1_adapted_script_payload(result_content)
-                adapted_script_for_persist = str(adapted_payload_for_persist.get("script_text") or "").strip()
-                if adapted_script_for_persist and (
-                    adapted_payload_for_persist.get("has_explicit_section")
-                    or int(adapted_payload_for_persist.get("scene_heading_count") or 0) > 0
-                ):
-                    persisted_adaptation = adapted_script_for_persist
-
-                episode.ai_scene_analysis_subject_index = persisted_subject_index
-                episode.ai_scene_analysis_adaptation = persisted_adaptation
-                episode.ai_stage_outputs = _build_stage_outputs_bundle(
-                    getattr(episode, "ai_stage_outputs", "") or "",
-                    analysis_raw_text=result_content,
-                    asset_raw_text=getattr(episode, "ai_entity_design_result", "") or "",
-                    script_input_text=getattr(episode, "script_content", "") or "",
-                    project_context=getattr(getattr(episode, "project", None), "global_info", None),
-                    stage1_raw_text=stage1_bundle_text,
-                    stage2_raw_text=stage2_bundle_text,
-                )
                 logger.info(
-                    "[analyze_scene] Persisted 第一二阶段业务结果到 ai_scene_analysis_result episode_id=%s chars=%s asset_index_chars=%s optimized_script_chars=%s split_flow=%s asset_index_source=%s optimized_script_source=%s stage_bundle_chars=%s",
+                    "[analyze_scene] Persisted raw phase1 output to ai_scene_analysis_result episode_id=%s chars=%s",
                     episode_id,
                     len(result_content or ""),
-                    len(persisted_subject_index or ""),
-                    len(persisted_adaptation or ""),
-                    use_split_scene_analysis_flow,
-                    ("dash_block_or_header" if persisted_subject_index else "empty"),
-                    (adapted_payload_for_persist.get("method") if persisted_adaptation else "empty"),
-                    len(str(getattr(episode, "ai_stage_outputs", "") or "")),
                 )
 
             saved_to_episode = True
@@ -5964,13 +5498,15 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
         # Do not hard-fail here so callers can still inspect/import partial output.
         blocking_codes: List[str] = []
         blocking_subject_warnings: List[str] = []
-        if not is_entity_design_phase and not is_stage1_only_prompt:
-            result_text = str(result_content or "")
-            has_subject_index = bool(_extract_subject_index_text(result_text))
+        if not is_entity_design_phase:
+            has_subject_index = bool(
+                re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", str(result_content or ""))
+                or re.search(r"(?i)(?:subject_no|subject_type)", str(result_content or ""))
+            )
             if not has_subject_index:
                 blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
                 blocking_subject_warnings.append(
-                    "第一阶段返回未完成或被截断，未解析到完整的 Subject Index 区块；当前结果不能作为完整分析继续使用。请重新执行，或切换模型后重试。"
+                    "第一阶段未解析到完整的 Subject Index 区块，请确认返回结果中包含完整的 Subject Index 内容（如标题区块或 subject_no=... 条目）后重试。"
                 )
 
         if blocking_codes:
@@ -5983,11 +5519,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                     integrity_meta.setdefault("warnings", []).append(warn_text)
 
             logger.warning(
-                "[analyze_scene] subject_index_missing_non_blocking episode_id=%s finish_reason=%s truncation_detected=%s structure_incomplete=%s codes=%s warnings=%s output_chars=%s",
+                "[analyze_scene] subject_index_missing_non_blocking episode_id=%s codes=%s warnings=%s output_chars=%s",
                 getattr(request, "episode_id", None),
-                finish_reason,
-                integrity_meta.get("truncation_detected"),
-                integrity_meta.get("structure_incomplete"),
                 blocking_codes,
                 blocking_subject_warnings,
                 len(result_content or ""),
@@ -6232,7 +5765,7 @@ class TranslateRequest(BaseModel):
 async def translate_text(
     req: TranslateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -6505,7 +6038,7 @@ class RefinePromptRequest(BaseModel):
 @router.post("/tools/refine_prompt")
 async def refine_prompt(
     req: RefinePromptRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     async_mode: str = Query("0"),
 ):
@@ -6583,7 +6116,7 @@ async def refine_prompt(
 @router.post("/agent/command", response_model=AgentResponse)
 async def process_agent_command(
     request: AgentRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     async_mode: str = Query("0"),
 ):
@@ -6715,7 +6248,7 @@ async def process_agent_command(
 @router.post("/agent/system-management/command", response_model=AgentResponse)
 async def process_system_management_agent_command(
     request: AgentRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     async_mode: str = Query("0"),
 ):
@@ -6838,7 +6371,7 @@ async def _sse_event_generator(events_gen):
 @router.post("/agent/command/stream")
 async def stream_agent_command(
     request: AgentRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     print(f"[STREAM-DEBUG] === stream_agent_command entered === query={request.query[:80] if request.query else 'N/A'}, user={current_user.id}")
     project_id = request.project_id or request.context.get("projectId")
@@ -6924,7 +6457,7 @@ async def stream_agent_command(
 @router.post("/agent/system-management/command/stream")
 async def stream_system_management_agent_command(
     request: AgentRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not bool(getattr(current_user, "is_superuser", False)):
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
@@ -7060,423 +6593,6 @@ class ProjectOut(BaseModel):
     
     class Config:
         from_attributes = True
-
-
-class ProjectBackupImportRequest(BaseModel):
-    backup: Dict[str, Any]
-    title: Optional[str] = None
-
-
-def _clone_backup_json(value: Any) -> Any:
-    try:
-        return copy.deepcopy(value)
-    except Exception:
-        return value
-
-
-def _project_backup_export_payload(project: Project, db: Session, current_user: Any) -> Dict[str, Any]:
-    from sqlalchemy.orm import selectinload
-
-    episodes = (
-        db.query(Episode)
-        .options(selectinload(Episode.script_segments))
-        .filter(Episode.project_id == project.id)
-        .order_by(Episode.id.asc())
-        .all()
-    )
-    episode_ids = [int(ep.id) for ep in episodes]
-
-    scenes = []
-    scene_ids: List[int] = []
-    if episode_ids:
-        scenes = (
-            db.query(Scene)
-            .filter(Scene.episode_id.in_(episode_ids))
-            .order_by(Scene.id.asc())
-            .all()
-        )
-        scene_ids = [int(scene.id) for scene in scenes]
-
-    shots = []
-    if scene_ids:
-        shots = (
-            db.query(Shot)
-            .filter(Shot.scene_id.in_(scene_ids))
-            .order_by(Shot.id.asc())
-            .all()
-        )
-
-    entities = (
-        db.query(Entity)
-        .filter(Entity.project_id == project.id)
-        .order_by(Entity.id.asc())
-        .all()
-    )
-
-    assets_query = db.query(Asset).filter(Asset.project_id == project.id)
-    if episode_ids:
-        assets_query = assets_query.filter(or_(Asset.project_id == project.id, Asset.episode_id.in_(episode_ids)))
-    assets = assets_query.order_by(Asset.id.asc()).all()
-
-    shots_by_scene: Dict[int, List[Shot]] = {}
-    for shot in shots:
-        shots_by_scene.setdefault(int(shot.scene_id or 0), []).append(shot)
-
-    scenes_by_episode: Dict[int, List[Scene]] = {}
-    for scene in scenes:
-        scenes_by_episode.setdefault(int(scene.episode_id or 0), []).append(scene)
-
-    exported_episodes: List[Dict[str, Any]] = []
-    for ep in episodes:
-        exported_scenes: List[Dict[str, Any]] = []
-        for scene in scenes_by_episode.get(int(ep.id), []):
-            exported_shots: List[Dict[str, Any]] = []
-            for shot in shots_by_scene.get(int(scene.id), []):
-                exported_shots.append({
-                    "original_id": int(shot.id),
-                    "shot_id": shot.shot_id,
-                    "shot_name": shot.shot_name,
-                    "start_frame": shot.start_frame,
-                    "end_frame": shot.end_frame,
-                    "video_content": shot.video_content,
-                    "duration": shot.duration,
-                    "associated_entities": shot.associated_entities,
-                    "scene_code": shot.scene_code,
-                    "shot_logic_cn": shot.shot_logic_cn,
-                    "keyframes": shot.keyframes,
-                    "image_url": shot.image_url,
-                    "video_url": shot.video_url,
-                    "prompt": shot.prompt,
-                    "technical_notes": shot.technical_notes,
-                })
-
-            exported_scenes.append({
-                "original_id": int(scene.id),
-                "scene_no": scene.scene_no,
-                "original_script_text": scene.original_script_text,
-                "scene_name": scene.scene_name,
-                "equivalent_duration": scene.equivalent_duration,
-                "core_scene_info": scene.core_scene_info,
-                "environment_name": scene.environment_name,
-                "linked_characters": scene.linked_characters,
-                "key_props": scene.key_props,
-                "shots": exported_shots,
-            })
-
-        exported_episodes.append({
-            "original_id": int(ep.id),
-            "title": ep.title,
-            "script_content": ep.script_content,
-            "episode_info": _clone_backup_json(ep.episode_info or {}),
-            "ai_scene_analysis_result": ep.ai_scene_analysis_result,
-            "ai_scene_analysis_subject_index": ep.ai_scene_analysis_subject_index,
-            "ai_scene_analysis_adaptation": ep.ai_scene_analysis_adaptation,
-            "ai_entity_design_result": ep.ai_entity_design_result,
-            "ai_stage_outputs": ep.ai_stage_outputs,
-            "character_profiles": _clone_backup_json(ep.character_profiles or []),
-            "script_segments": [
-                {
-                    "pid": seg.pid,
-                    "title": seg.title,
-                    "content_revised": seg.content_revised,
-                    "content_original": seg.content_original,
-                    "narrative_function": seg.narrative_function,
-                    "analysis": seg.analysis,
-                }
-                for seg in (ep.script_segments or [])
-            ],
-            "scenes": exported_scenes,
-        })
-
-    exported_entities: List[Dict[str, Any]] = []
-    for entity in entities:
-        image_url = getattr(entity, "image_url", None)
-        if image_url:
-            try:
-                image_url = _refresh_managed_media_url(image_url, db)
-            except Exception:
-                pass
-        exported_entities.append({
-            "original_id": int(entity.id),
-            "original_episode_id": int(entity.episode_id) if entity.episode_id is not None else None,
-            "name": entity.name,
-            "type": entity.type,
-            "description": entity.description,
-            "image_url": image_url,
-            "generation_prompt_en": entity.generation_prompt_en,
-            "generation_prompt_cn": entity.generation_prompt_cn,
-            "anchor_description": entity.anchor_description,
-            "name_en": entity.name_en,
-            "base_name_en": entity.base_name_en,
-            "gender": entity.gender,
-            "role": entity.role,
-            "archetype": entity.archetype,
-            "appearance_cn": entity.appearance_cn,
-            "clothing": entity.clothing,
-            "action_characteristics": entity.action_characteristics,
-            "atmosphere": entity.atmosphere,
-            "visual_params": entity.visual_params,
-            "narrative_description": entity.narrative_description,
-            "visual_dependencies": _clone_backup_json(entity.visual_dependencies or []),
-            "dependency_strategy": _clone_backup_json(entity.dependency_strategy or {}),
-            "custom_attributes": _clone_backup_json(entity.custom_attributes or {}),
-        })
-
-    exported_assets: List[Dict[str, Any]] = []
-    for asset in assets:
-        asset_url = getattr(asset, "url", None)
-        if asset_url:
-            try:
-                asset_url = _refresh_managed_media_url(asset_url, db)
-            except Exception:
-                pass
-        exported_assets.append({
-            "original_id": int(asset.id),
-            "original_episode_id": int(asset.episode_id) if asset.episode_id is not None else None,
-            "type": asset.type,
-            "url": asset_url,
-            "filename": asset.filename,
-            "meta_info": _clone_backup_json(asset.meta_info or {}),
-            "remark": asset.remark,
-            "is_current_project_asset": bool(asset.is_current_project_asset),
-            "created_at": asset.created_at,
-        })
-
-    return {
-        "backup_type": "project_backup",
-        "version": "1.0",
-        "exported_at": now_bj_iso(),
-        "meta": {
-            "source_project_id": int(project.id),
-            "exported_by_user_id": int(getattr(current_user, "id", 0) or 0),
-            "episode_count": len(exported_episodes),
-            "scene_count": len(scenes),
-            "shot_count": len(shots),
-            "entity_count": len(exported_entities),
-            "asset_count": len(exported_assets),
-        },
-        "project": {
-            "title": project.title,
-            "description": (project.global_info or {}).get("notes") if isinstance(project.global_info, dict) else None,
-            "global_info": _clone_backup_json(project.global_info or {}),
-            "aspectRatio": (project.global_info or {}).get("aspectRatio") if isinstance(project.global_info, dict) else None,
-        },
-        "episodes": exported_episodes,
-        "entities": exported_entities,
-        "assets": exported_assets,
-    }
-
-
-def _build_imported_project_response(project: Project, db: Session, current_user: Any) -> Project:
-    db.refresh(project)
-    try:
-        project.cover_image = get_project_cover_image(db, project.id)
-    except Exception:
-        project.cover_image = None
-    project.aspectRatio = project.global_info.get('aspectRatio') if project.global_info else None
-    project.description = (project.global_info or {}).get("notes")
-    project.generation_seed = _ensure_project_generation_seed(db, project.id, current_user)
-    project.seed_initialized = False
-    project.missing_basic_fields = []
-    project.has_missing_basic_info = False
-    _attach_project_flags(project, current_user)
-    return project
-
-
-def _import_project_backup_to_new_project(db: Session, current_user: Any, backup: Dict[str, Any], title_override: Optional[str] = None) -> Dict[str, Any]:
-    if not isinstance(backup, dict):
-        raise HTTPException(status_code=400, detail="backup must be a JSON object")
-
-    project_payload = backup.get("project")
-    if not isinstance(project_payload, dict):
-        raise HTTPException(status_code=400, detail="backup.project is required")
-
-    backup_title = str(project_payload.get("title") or "").strip()
-    new_title = str(title_override or "").strip() or (f"{backup_title} (Imported)" if backup_title else "Imported Project")
-
-    raw_global_info = project_payload.get("global_info")
-    global_info = _clone_backup_json(raw_global_info if isinstance(raw_global_info, dict) else {})
-    if not isinstance(global_info, dict):
-        global_info = {}
-    description = str(project_payload.get("description") or "").strip()
-    if description:
-        global_info["notes"] = description
-    aspect_ratio = str(project_payload.get("aspectRatio") or "").strip()
-    if aspect_ratio:
-        global_info["aspectRatio"] = aspect_ratio
-    global_info.pop("cost_estimation", None)
-    global_info = _ensure_project_generation_defaults(global_info)
-
-    db_project = Project(title=new_title, global_info=global_info, owner_id=current_user.id)
-    db.add(db_project)
-    db.flush()
-
-    episode_id_map: Dict[int, int] = {}
-    imported_episode_count = 0
-    imported_scene_count = 0
-    imported_shot_count = 0
-    imported_entity_count = 0
-    imported_asset_count = 0
-
-    for episode_payload in (backup.get("episodes") or []):
-        if not isinstance(episode_payload, dict):
-            continue
-        db_episode = Episode(
-            project_id=db_project.id,
-            title=str(episode_payload.get("title") or "Episode").strip() or "Episode",
-            script_content=episode_payload.get("script_content"),
-            episode_info=_clone_backup_json(episode_payload.get("episode_info") or {}),
-            ai_scene_analysis_result=episode_payload.get("ai_scene_analysis_result"),
-            ai_scene_analysis_subject_index=episode_payload.get("ai_scene_analysis_subject_index"),
-            ai_scene_analysis_adaptation=episode_payload.get("ai_scene_analysis_adaptation"),
-            ai_entity_design_result=episode_payload.get("ai_entity_design_result"),
-            ai_stage_outputs=episode_payload.get("ai_stage_outputs"),
-            character_profiles=_clone_backup_json(episode_payload.get("character_profiles") or []),
-        )
-        db.add(db_episode)
-        db.flush()
-        imported_episode_count += 1
-
-        original_episode_id = episode_payload.get("original_id")
-        if original_episode_id is not None:
-            try:
-                episode_id_map[int(original_episode_id)] = int(db_episode.id)
-            except Exception:
-                pass
-
-        for seg in (episode_payload.get("script_segments") or []):
-            if not isinstance(seg, dict):
-                continue
-            db.add(ScriptSegment(
-                episode_id=db_episode.id,
-                pid=str(seg.get("pid") or "").strip(),
-                title=str(seg.get("title") or "").strip(),
-                content_revised=seg.get("content_revised") or "",
-                content_original=seg.get("content_original") or "",
-                narrative_function=seg.get("narrative_function") or "",
-                analysis=seg.get("analysis") or "",
-            ))
-
-        for scene_payload in (episode_payload.get("scenes") or []):
-            if not isinstance(scene_payload, dict):
-                continue
-            db_scene = Scene(
-                episode_id=db_episode.id,
-                scene_no=str(scene_payload.get("scene_no") or "").strip(),
-                original_script_text=scene_payload.get("original_script_text") or "",
-                scene_name=scene_payload.get("scene_name"),
-                equivalent_duration=scene_payload.get("equivalent_duration"),
-                core_scene_info=scene_payload.get("core_scene_info"),
-                environment_name=scene_payload.get("environment_name"),
-                linked_characters=scene_payload.get("linked_characters"),
-                key_props=scene_payload.get("key_props"),
-            )
-            db.add(db_scene)
-            db.flush()
-            imported_scene_count += 1
-
-            for shot_payload in (scene_payload.get("shots") or []):
-                if not isinstance(shot_payload, dict):
-                    continue
-                db.add(Shot(
-                    scene_id=db_scene.id,
-                    project_id=db_project.id,
-                    episode_id=db_episode.id,
-                    shot_id=shot_payload.get("shot_id"),
-                    shot_name=shot_payload.get("shot_name"),
-                    start_frame=shot_payload.get("start_frame"),
-                    end_frame=shot_payload.get("end_frame"),
-                    video_content=shot_payload.get("video_content"),
-                    duration=shot_payload.get("duration"),
-                    associated_entities=shot_payload.get("associated_entities"),
-                    scene_code=shot_payload.get("scene_code"),
-                    shot_logic_cn=shot_payload.get("shot_logic_cn"),
-                    keyframes=shot_payload.get("keyframes"),
-                    image_url=shot_payload.get("image_url"),
-                    video_url=shot_payload.get("video_url"),
-                    prompt=shot_payload.get("prompt"),
-                    technical_notes=shot_payload.get("technical_notes"),
-                ))
-                imported_shot_count += 1
-
-    for entity_payload in (backup.get("entities") or []):
-        if not isinstance(entity_payload, dict):
-            continue
-        mapped_episode_id = None
-        original_episode_id = entity_payload.get("original_episode_id", entity_payload.get("episode_id"))
-        if original_episode_id is not None:
-            try:
-                mapped_episode_id = episode_id_map.get(int(original_episode_id))
-            except Exception:
-                mapped_episode_id = None
-        db.add(Entity(
-            project_id=db_project.id,
-            episode_id=mapped_episode_id,
-            name=entity_payload.get("name"),
-            type=entity_payload.get("type"),
-            description=entity_payload.get("description"),
-            image_url=entity_payload.get("image_url"),
-            generation_prompt_en=entity_payload.get("generation_prompt_en"),
-            generation_prompt_cn=entity_payload.get("generation_prompt_cn"),
-            anchor_description=entity_payload.get("anchor_description"),
-            name_en=entity_payload.get("name_en"),
-            base_name_en=entity_payload.get("base_name_en"),
-            gender=entity_payload.get("gender"),
-            role=entity_payload.get("role"),
-            archetype=entity_payload.get("archetype"),
-            appearance_cn=entity_payload.get("appearance_cn"),
-            clothing=entity_payload.get("clothing"),
-            action_characteristics=entity_payload.get("action_characteristics"),
-            atmosphere=entity_payload.get("atmosphere"),
-            visual_params=entity_payload.get("visual_params"),
-            narrative_description=entity_payload.get("narrative_description"),
-            visual_dependencies=_coerce_visual_dependencies(entity_payload.get("visual_dependencies")),
-            dependency_strategy=_clone_backup_json(entity_payload.get("dependency_strategy") or {}),
-            custom_attributes=_clone_backup_json(entity_payload.get("custom_attributes") or {}),
-        ))
-        imported_entity_count += 1
-
-    for asset_payload in (backup.get("assets") or []):
-        if not isinstance(asset_payload, dict):
-            continue
-        mapped_episode_id = None
-        original_episode_id = asset_payload.get("original_episode_id", asset_payload.get("episode_id"))
-        if original_episode_id is not None:
-            try:
-                mapped_episode_id = episode_id_map.get(int(original_episode_id))
-            except Exception:
-                mapped_episode_id = None
-        db.add(Asset(
-            user_id=current_user.id,
-            project_id=db_project.id,
-            episode_id=mapped_episode_id,
-            is_current_project_asset=bool(asset_payload.get("is_current_project_asset")),
-            type=asset_payload.get("type"),
-            url=asset_payload.get("url"),
-            filename=asset_payload.get("filename"),
-            meta_info=_clone_backup_json(asset_payload.get("meta_info") or {}),
-            remark=asset_payload.get("remark"),
-            created_at=asset_payload.get("created_at") or now_bj_iso(),
-        ))
-        imported_asset_count += 1
-
-    try:
-        _recompute_and_persist_project_cost_estimation(db, int(db_project.id))
-    except Exception as cost_exc:
-        logger.warning("import_project_backup cost recompute skipped | project_id=%s err=%s", getattr(db_project, "id", None), cost_exc)
-
-    db.commit()
-
-    return {
-        "project": _build_imported_project_response(db_project, db, current_user),
-        "imported": {
-            "episodes": imported_episode_count,
-            "scenes": imported_scene_count,
-            "shots": imported_shot_count,
-            "entities": imported_entity_count,
-            "assets": imported_asset_count,
-        },
-    }
 
 
 class ProjectShareCreate(BaseModel):
@@ -8010,7 +7126,7 @@ def _resolve_project_share_users(
 def _sync_project_managed_shares(
     db: Session,
     project: Project,
-    current_user: Any,
+    current_user: User,
     *,
     share_users: Optional[Any] = None,
     reviewer_users: Optional[Any] = None,
@@ -8134,7 +7250,7 @@ def _review_thread_has_unread(thread: ProjectAssetReviewThreadModel, current_use
     return latest_dt > last_read_dt
 
 
-def _mark_review_thread_read_for_user(thread: ProjectAssetReviewThreadModel, current_user: Any, *, read_at: Optional[str] = None) -> None:
+def _mark_review_thread_read_for_user(thread: ProjectAssetReviewThreadModel, current_user: User, *, read_at: Optional[str] = None) -> None:
     now_iso = str(read_at or now_bj_iso())
     if int(current_user.id or 0) == int(thread.requester_user_id or 0):
         thread.requester_last_read_at = now_iso
@@ -8251,7 +7367,7 @@ def _validate_review_target_ids_for_project(
     return normalized_entity_ids, normalized_shot_ids
 
 
-def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThreadModel, current_user: Any, project: Project) -> str:
+def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThreadModel, current_user: User, project: Project) -> str:
     if current_user.id == thread.reviewer_user_id:
         return "reviewer"
     if current_user.id == thread.requester_user_id:
@@ -8262,7 +7378,7 @@ def _resolve_thread_sender_role(db: Session, thread: ProjectAssetReviewThreadMod
 def _resolve_review_reviewer(
     db: Session,
     project: Project,
-    current_user: Any,
+    current_user: User,
     reviewer_user_id: Optional[int],
     reviewer_user: Optional[str],
 ) -> User:
@@ -8306,7 +7422,7 @@ def _resolve_review_reviewer(
     return reviewer
 
 
-def _require_review_thread_access(db: Session, thread_id: int, current_user: Any) -> Tuple[ProjectAssetReviewThreadModel, Project]:
+def _require_review_thread_access(db: Session, thread_id: int, current_user: User) -> Tuple[ProjectAssetReviewThreadModel, Project]:
     _require_review_models()
     thread = _run_with_schema_self_heal(
         db,
@@ -8324,7 +7440,7 @@ def _require_review_thread_access(db: Session, thread_id: int, current_user: Any
     raise HTTPException(status_code=403, detail="Not authorized to access this review thread")
 
 
-def _require_review_round_access(db: Session, round_id: int, current_user: Any) -> Tuple[ProjectAssetReviewRoundModel, ProjectAssetReviewThreadModel, Project]:
+def _require_review_round_access(db: Session, round_id: int, current_user: User) -> Tuple[ProjectAssetReviewRoundModel, ProjectAssetReviewThreadModel, Project]:
     _require_review_models()
     round_row = db.query(ProjectAssetReviewRound).filter(ProjectAssetReviewRound.id == round_id).first()
     if not round_row:
@@ -8336,7 +7452,7 @@ def _require_review_round_access(db: Session, round_id: int, current_user: Any) 
 def _require_project_access(
     db: Session,
     project_id: int,
-    current_user: Any,
+    current_user: User,
     owner_only: bool = False,
 ) -> Project:
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -8363,7 +7479,7 @@ def _require_project_access(
     raise HTTPException(status_code=403, detail="Not authorized")
 
 
-def _attach_project_flags(project: Project, current_user: Any) -> Project:
+def _attach_project_flags(project: Project, current_user: User) -> Project:
     project.is_owner = (project.owner_id == current_user.id)
     return project
 
@@ -9186,7 +8302,7 @@ async def generate_markdown_with_retry(
 def create_project(
     project: ProjectCreate, 
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     if not project.global_info:
         project.global_info = {}
@@ -9238,33 +8354,11 @@ def create_project(
     return db_project
 
 
-@router.post("/projects/import_backup", response_model=Dict[str, Any])
-def import_project_backup(
-    req: ProjectBackupImportRequest,
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-):
-    try:
-        return _import_project_backup_to_new_project(
-            db,
-            current_user,
-            req.backup,
-            title_override=req.title,
-        )
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as exc:
-        db.rollback()
-        logger.error("[import_project_backup] failed user_id=%s err=%s", getattr(current_user, "id", None), exc)
-        raise HTTPException(status_code=500, detail=f"Failed to import project backup: {exc}")
-
-
 @router.get("/projects/{project_id}/shares", response_model=List[ProjectShareOut])
 def list_project_shares(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
     rows = _run_with_schema_self_heal(
@@ -9289,7 +8383,7 @@ def create_project_share(
     project_id: int,
     payload: ProjectShareCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
     target = str(payload.target_user or "").strip()
@@ -9327,7 +8421,7 @@ def delete_project_share(
     project_id: int,
     shared_user_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
     share = _get_project_share_record(db, project_id, shared_user_id)
@@ -9342,7 +8436,7 @@ def delete_project_share(
 def list_project_review_threads(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     _require_project_access(db, project_id, current_user)
@@ -9367,7 +8461,7 @@ def list_project_review_threads(
 @router.get("/projects/review_threads/inbox", response_model=List[ProjectAssetReviewThreadOut])
 def list_review_inbox_threads(
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     threads = _run_with_schema_self_heal(
@@ -9391,7 +8485,7 @@ def list_review_inbox_threads(
 @router.get("/projects/review_threads/outbox", response_model=List[ProjectAssetReviewThreadOut])
 def list_review_outbox_threads(
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     threads = _run_with_schema_self_heal(
@@ -9417,7 +8511,7 @@ def create_project_review_thread(
     project_id: int,
     payload: ProjectAssetReviewThreadCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     project = _require_project_access(db, project_id, current_user)
@@ -9496,7 +8590,7 @@ def create_project_review_thread(
 def get_review_thread(
     thread_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
@@ -9512,7 +8606,7 @@ def mark_review_thread_read(
     thread_id: int,
     payload: ProjectAssetReviewThreadReadUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
@@ -9534,7 +8628,7 @@ def update_review_thread_status(
     thread_id: int,
     payload: ProjectAssetReviewThreadStatusUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, project = _require_review_thread_access(db, thread_id, current_user)
@@ -9575,7 +8669,7 @@ def update_review_thread_status(
 def list_review_thread_rounds(
     thread_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, _project = _require_review_thread_access(db, thread_id, current_user)
@@ -9595,7 +8689,7 @@ def create_review_thread_round(
     thread_id: int,
     payload: ProjectAssetReviewRoundCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     thread, project = _require_review_thread_access(db, thread_id, current_user)
@@ -9657,7 +8751,7 @@ def create_review_thread_round(
 def list_review_round_messages(
     round_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     round_row, _thread, _project = _require_review_round_access(db, round_id, current_user)
@@ -9677,7 +8771,7 @@ def create_review_round_message(
     round_id: int,
     payload: ProjectAssetReviewMessageCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_review_models()
     round_row, thread, project = _require_review_round_access(db, round_id, current_user)
@@ -9748,7 +8842,7 @@ async def generate_project_story_dna_global(
     project_id: int,
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -9953,7 +9047,7 @@ def save_project_story_generator_global_input(
     project_id: int,
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Persist Story Generator (Global/Project) draft inputs without calling the LLM."""
     project = _require_project_access(db, project_id, current_user)
@@ -10007,7 +9101,7 @@ class StoryGeneratorGlobalImportRequest(BaseModel):
 def export_project_story_generator_global_package(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -10162,7 +9256,7 @@ def import_project_story_generator_global_package(
     project_id: int,
     req: StoryGeneratorGlobalImportRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -10285,7 +9379,7 @@ async def analyze_project_novel_to_story_generator_fields(
     project_id: int,
     req: AnalyzeNovelRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -10453,7 +9547,7 @@ def read_projects(
     skip: int = 0, 
     limit: int = 100, 
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     def _query_with(session: Session) -> List[Project]:
         shared_project_ids = [
@@ -10572,7 +9666,7 @@ def read_projects(
 def read_project(
     project_id: int, 
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -10646,22 +9740,12 @@ def read_project(
     return project
 
 
-@router.get("/projects/{project_id}/backup_export", response_model=Dict[str, Any])
-def export_project_backup(
-    project_id: int,
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-):
-    project = _require_project_access(db, project_id, current_user, owner_only=True)
-    return _project_backup_export_payload(project, db, current_user)
-
-
 @router.put("/projects/{project_id}", response_model=ProjectOut)
 def update_project(
     project_id: int, 
     project_in: ProjectUpdate, 
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user)
     
@@ -10731,7 +9815,7 @@ def get_project_cost_estimation(
     project_id: int,
     refresh: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -10750,7 +9834,7 @@ def get_project_cost_estimation(
 def recompute_project_cost_estimation(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
     snapshot = _recompute_and_persist_project_cost_estimation(db, project_id)
@@ -10763,7 +9847,7 @@ def recompute_episode_cost_estimation(
     project_id: int,
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Recompute cost estimation scoped to a single episode, then persist full project snapshot."""
     _require_project_access(db, project_id, current_user)
@@ -10790,7 +9874,7 @@ def recompute_scene_cost_estimation(
     project_id: int,
     scene_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Recompute cost estimation for a specific scene, persist full project snapshot, return scene slice."""
     _require_project_access(db, project_id, current_user)
@@ -10819,7 +9903,7 @@ def recompute_scene_cost_estimation(
 def delete_project(
     project_id: int, 
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user, owner_only=True)
 
@@ -10900,78 +9984,10 @@ def delete_project(
             db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
 
         if episode_ids:
-            detached_action_episode_count = db.execute(
-                sa_update(TransactionAction)
-                .where(TransactionAction.episode_id.in_(episode_ids))
-                .values(episode_id=None)
-            ).rowcount or 0
-            detached_history_episode_count = db.execute(
-                sa_update(TransactionHistory)
-                .where(TransactionHistory.episode_id.in_(episode_ids))
-                .values(episode_id=None)
-            ).rowcount or 0
-            detached_asset_episode_count = db.execute(
-                sa_update(Asset)
-                .where(Asset.episode_id.in_(episode_ids))
-                .values(episode_id=None)
-            ).rowcount or 0
-            db.flush()
-
-            remaining_action_episode_refs = (
-                db.query(func.count(TransactionAction.id))
-                .filter(TransactionAction.episode_id.in_(episode_ids))
-                .scalar()
-                or 0
-            )
-            if remaining_action_episode_refs:
-                sample_action_episode_refs = [
-                    {
-                        "id": int(row.id),
-                        "episode_id": int(row.episode_id),
-                        "project_id": int(row.project_id) if row.project_id is not None else None,
-                    }
-                    for row in db.query(TransactionAction.id, TransactionAction.episode_id, TransactionAction.project_id)
-                    .filter(TransactionAction.episode_id.in_(episode_ids))
-                    .limit(5)
-                    .all()
-                ]
-                logger.error(
-                    "[delete_project] transaction_action detach incomplete project_id=%s episode_ids=%s detached_actions=%s detached_history=%s detached_assets=%s remaining=%s samples=%s",
-                    project_id,
-                    episode_ids,
-                    detached_action_episode_count,
-                    detached_history_episode_count,
-                    detached_asset_episode_count,
-                    remaining_action_episode_refs,
-                    sample_action_episode_refs,
-                )
-                raise RuntimeError("Failed to detach transaction_action episode references before deleting episodes")
-
             db.query(ScriptSegment).filter(ScriptSegment.episode_id.in_(episode_ids)).delete(synchronize_session=False)
             db.query(Episode).filter(Episode.id.in_(episode_ids)).delete(synchronize_session=False)
 
         db.query(Entity).filter(Entity.project_id == project_id).delete(synchronize_session=False)
-
-        db.execute(
-            sa_update(TransactionAction)
-            .where(TransactionAction.project_id == project_id)
-            .values(project_id=None)
-        )
-        db.execute(
-            sa_update(TransactionHistory)
-            .where(TransactionHistory.project_id == project_id)
-            .values(project_id=None)
-        )
-        db.execute(
-            sa_update(Asset)
-            .where(Asset.project_id == project_id)
-            .values(project_id=None, is_current_project_asset=False)
-        )
-
-        if ProjectGroupCreditAllocation is not None:
-            db.query(ProjectGroupCreditAllocation).filter(
-                ProjectGroupCreditAllocation.project_id == project_id
-            ).delete(synchronize_session=False)
 
         if asset_ids_to_delete:
             db.query(Asset).filter(
@@ -11059,10 +10075,7 @@ class EpisodeCreate(BaseModel):
     script_content: Optional[str] = ""
     episode_info: Optional[Dict] = {}
     ai_scene_analysis_result: Optional[str] = None
-    ai_scene_analysis_subject_index: Optional[str] = None
-    ai_scene_analysis_adaptation: Optional[str] = None
     ai_entity_design_result: Optional[str] = None
-    ai_stage_outputs: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeUpdate(BaseModel):
@@ -11072,8 +10085,6 @@ class EpisodeUpdate(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
-    ai_entity_design_result: Optional[str] = None
-    ai_stage_outputs: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
 
 class EpisodeOut(BaseModel):
@@ -11085,8 +10096,6 @@ class EpisodeOut(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
-    ai_entity_design_result: Optional[str] = None
-    ai_stage_outputs: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = []
     script_segments: List[ScriptSegmentOut] = []
     class Config:
@@ -11105,7 +10114,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
 def read_episodes(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     # Verify access
     _require_project_access(db, project_id, current_user)
@@ -11118,7 +10127,7 @@ def update_episode_segments(
     episode_id: int,
     segments: List[ScriptSegmentBase],
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11153,7 +10162,7 @@ def create_episode(
     project_id: int,
     episode: EpisodeCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     _require_project_access(db, project_id, current_user)
         
@@ -11163,10 +10172,6 @@ def create_episode(
         script_content=episode.script_content,
         episode_info={},
         ai_scene_analysis_result=episode.ai_scene_analysis_result,
-        ai_scene_analysis_subject_index=episode.ai_scene_analysis_subject_index,
-        ai_scene_analysis_adaptation=episode.ai_scene_analysis_adaptation,
-        ai_entity_design_result=episode.ai_entity_design_result,
-        ai_stage_outputs=episode.ai_stage_outputs,
         character_profiles=episode.character_profiles or []
     )
     db.add(db_episode)
@@ -11183,7 +10188,7 @@ def update_episode(
     episode_id: int,
     episode_in: EpisodeUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11199,14 +10204,6 @@ def update_episode(
     # episode_info is deprecated and intentionally ignored.
     if episode_in.ai_scene_analysis_result is not None:
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
-    if episode_in.ai_scene_analysis_subject_index is not None:
-        episode.ai_scene_analysis_subject_index = episode_in.ai_scene_analysis_subject_index
-    if episode_in.ai_scene_analysis_adaptation is not None:
-        episode.ai_scene_analysis_adaptation = episode_in.ai_scene_analysis_adaptation
-    if episode_in.ai_entity_design_result is not None:
-        episode.ai_entity_design_result = episode_in.ai_entity_design_result
-    if episode_in.ai_stage_outputs is not None:
-        episode.ai_stage_outputs = episode_in.ai_stage_outputs
     if episode_in.character_profiles is not None:
         episode.character_profiles = episode_in.character_profiles
     try:
@@ -11252,7 +10249,7 @@ class CharacterCanonCategoriesRequest(BaseModel):
 def get_project_character_profiles(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
     gi = project.global_info or {}
@@ -11267,7 +10264,7 @@ def update_project_character_profiles(
     project_id: int,
     req: CharacterProfilesUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -11306,7 +10303,7 @@ def save_project_character_canon_input(
     project_id: int,
     req: CharacterCanonInputRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Persist Project Character Canon draft inputs without calling the LLM."""
     project = _require_project_access(db, project_id, current_user)
@@ -11346,7 +10343,7 @@ def save_project_character_canon_categories(
     project_id: int,
     req: CharacterCanonCategoriesRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Persist Project Character Canon tag/identity category configuration."""
     project = _require_project_access(db, project_id, current_user)
@@ -11381,7 +10378,7 @@ async def generate_project_character_profile(
     project_id: int,
     req: CharacterProfileGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -11753,7 +10750,7 @@ def _run_episode_scene_generation_job(episode_id: int, req_payload: Dict[str, An
 def get_episode_character_profiles(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11767,7 +10764,7 @@ def update_episode_character_profiles(
     episode_id: int,
     req: CharacterProfilesUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -11784,7 +10781,7 @@ async def generate_episode_character_profile(
     episode_id: int,
     req: CharacterProfileGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -11978,7 +10975,7 @@ async def generate_episode_story_dna(
     episode_id: int,
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -12164,7 +11161,7 @@ def save_episode_story_generator_input(
     episode_id: int,
     req: "StoryGeneratorRequest",
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Persist Story Generator draft inputs without calling the LLM.
 
@@ -12214,7 +11211,7 @@ async def generate_episode_scenes_from_story(
     episode_id: int,
     req: ScriptScenesGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -12418,7 +11415,7 @@ def start_episode_scenes_generation_job(
     episode_id: int,
     req: ScriptScenesGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -12476,7 +11473,7 @@ def start_episode_scenes_generation_job(
 def get_episode_scenes_generation_job_status(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -12504,7 +11501,7 @@ def get_episode_scenes_generation_job_status(
 def stop_episode_scenes_generation_job(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -12547,7 +11544,7 @@ async def generate_project_episode_scripts_from_global_framework(
     project_id: int,
     req: ProjectEpisodeScriptsGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     """Generate per-episode script drafts from Project Overview artifacts.
@@ -13253,7 +12250,7 @@ async def generate_project_episode_scripts_from_global_framework(
 def get_project_episode_scripts_generation_status(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -13279,7 +12276,7 @@ def get_project_episode_scripts_generation_status(
 def stop_project_episode_scripts_generation(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -13319,7 +12316,7 @@ def stop_project_episode_scripts_generation(
 def delete_episode(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -13760,7 +12757,9 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         dedup_keys.add(dedup_key)
 
         try:
-            parsed = json.loads(candidate)
+            # Fix trailing commas before loads
+            cleaned_candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
+            parsed = json.loads(cleaned_candidate, strict=False)
         except Exception:
             continue
 
@@ -13799,7 +12798,7 @@ def read_scenes(
     skip: int = 0,
     limit: int = 300,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     # Ownership check
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
@@ -13831,7 +12830,7 @@ def create_scene(
     episode_id: int,
     scene: SceneCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -13881,7 +12880,7 @@ def update_scene(
     scene_id: int,
     scene_in: SceneCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not db_scene:
@@ -13909,7 +12908,7 @@ def update_scene(
 def delete_scene(
     scene_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not db_scene:
@@ -13935,7 +12934,7 @@ async def regenerate_scene(
     scene_id: int,
     req: SceneRegenerateRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -14491,7 +13490,7 @@ def read_episode_shots(
     skip: int = 0,
     limit: int = 300,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -14565,7 +13564,7 @@ def read_episode_shots(
 def read_shot_detail(
     shot_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     shot = db.query(Shot).filter(Shot.id == shot_id).first()
     if not shot:
@@ -15212,7 +14211,7 @@ def _build_shot_regenerate_prompts(
 def ai_prompt_preview(
     scene_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not scene:
@@ -15252,7 +14251,7 @@ def ai_prompt_preview(
 
 
 @router.get("/prompts/shot-generation/features")
-async def get_shot_generation_feature_options(current_user: Any = Depends(get_current_user)):
+async def get_shot_generation_feature_options(current_user: User = Depends(get_current_user)):
     return get_shot_generation_feature_catalog()
 
 
@@ -15271,7 +14270,7 @@ def _shot_generation_slot_origin(slot_token: Any) -> str:
 async def preview_shot_generation_route(
     request: ShotGenerationRoutePreviewRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     scene = db.query(Scene).filter(Scene.id == request.scene_id).first()
     if not scene:
@@ -15767,7 +14766,7 @@ def start_scene_ai_shots_batch(
     episode_id: int,
     req: SceneAiShotsBatchStartRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -15847,7 +14846,7 @@ def get_scene_ai_shots_batch_status(
     episode_id: int,
     response: Response,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _apply_no_store_headers(response)
     response.headers["X-Poll-Interval-Ms"] = "2500"
@@ -15879,7 +14878,7 @@ def get_scene_ai_shots_batch_status(
 def stop_scene_ai_shots_batch(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -15920,7 +14919,7 @@ async def ai_generate_shots(
     scene_id: int,
     req: Optional[AIShotGenRequest] = None,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -16220,7 +15219,7 @@ async def ai_regenerate_shots(
     scene_id: int,
     req: Optional[AIShotRegenerateRequest] = None,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     if async_mode == "1":
@@ -16460,7 +15459,7 @@ async def ai_regenerate_shots(
 def get_scene_latest_ai_result(
     scene_id: int, 
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """Get the latest saved AI shot generation result for a scene.
 
@@ -16517,7 +15516,7 @@ def update_scene_latest_ai_result(
     scene_id: int,
     data: AnalysisContent, # Reusing this schema: { "content": ... }
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Update (Save/Edit) the latest shot generation result without applying it.
@@ -16550,7 +15549,7 @@ def apply_scene_ai_result(
     scene_id: int,
     data: Optional[AnalysisContent] = None, # Optional: apply provided content instead of stored
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Apply the stored (or provided) shot list to the actual Shots table.
@@ -16872,7 +15871,7 @@ def apply_scene_ai_result(
 def read_shots(
     scene_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not scene:
@@ -16897,7 +15896,7 @@ def create_shot(
     scene_id: int,
     shot: ShotCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     import os
     logger.info(f"[create_shot] START. scene_id={scene_id}")
@@ -16970,7 +15969,7 @@ def update_shot(
     shot_id: int,
     shot_in: ShotUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     db_shot = db.query(Shot).filter(Shot.id == shot_id).first()
     if not db_shot:
@@ -16999,7 +15998,7 @@ def update_shot(
 def delete_shot(
     shot_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     db_shot = db.query(Shot).filter(Shot.id == shot_id).first()
     if not db_shot:
@@ -17100,116 +16099,6 @@ class EntityOut(BaseModel):
         from_attributes = True
 
 
-def _upsert_entity_record(db: Session, project_id: int, entity: EntityCreate) -> Entity:
-    if entity.episode_id is not None:
-        episode = db.query(Episode).filter(Episode.id == entity.episode_id).first()
-        if not episode or int(getattr(episode, "project_id", 0) or 0) != int(project_id):
-            raise HTTPException(status_code=400, detail="episode_id does not belong to this project")
-
-    _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
-
-    normalized_name_candidates = set()
-    for raw_name in (entity.name, entity.name_en):
-        stable = str(raw_name or "").strip().lower()
-        if stable:
-            normalized_name_candidates.add(stable)
-
-    if not normalized_name_candidates:
-        raise HTTPException(status_code=400, detail="Entity name is required")
-
-    normalized_type = str(entity.type or "").strip().lower()
-    entity_name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
-    entity_name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
-
-    from sqlalchemy import or_
-    if entity.episode_id is None:
-        episode_scope_filter = Entity.episode_id.is_(None)
-    else:
-        episode_scope_filter = Entity.episode_id == entity.episode_id
-
-    existing_entity = db.query(Entity).filter(
-        Entity.project_id == project_id,
-        episode_scope_filter,
-        func.lower(func.trim(func.coalesce(Entity.type, ""))) == normalized_type,
-        or_(
-            entity_name_expr.in_(normalized_name_candidates),
-            entity_name_en_expr.in_(normalized_name_candidates),
-        ),
-    ).first()
-
-    if existing_entity:
-        update_values = {
-            "name": entity.name,
-            "type": entity.type,
-            "description": entity.description,
-            "image_url": entity.image_url,
-            "generation_prompt_en": entity.generation_prompt_en,
-            "generation_prompt_cn": entity.generation_prompt_cn,
-            "anchor_description": entity.anchor_description,
-            "name_en": entity.name_en,
-            "base_name_en": entity.base_name_en,
-            "gender": entity.gender,
-            "role": entity.role,
-            "archetype": entity.archetype,
-            "appearance_cn": entity.appearance_cn,
-            "clothing": entity.clothing,
-            "action_characteristics": entity.action_characteristics,
-            "atmosphere": entity.atmosphere,
-            "visual_params": entity.visual_params,
-            "narrative_description": entity.narrative_description,
-        }
-        for field_name, field_value in update_values.items():
-            if field_value is not None and str(field_value).strip() != "":
-                setattr(existing_entity, field_name, field_value)
-
-        if entity.episode_id is not None and existing_entity.episode_id is None:
-            existing_entity.episode_id = entity.episode_id
-
-        deps = _coerce_visual_dependencies(entity.visual_dependencies)
-        if deps:
-            existing_entity.visual_dependencies = deps
-        if isinstance(entity.dependency_strategy, dict) and entity.dependency_strategy:
-            existing_entity.dependency_strategy = entity.dependency_strategy
-        if isinstance(entity.custom_attributes, dict) and entity.custom_attributes:
-            merged_custom_attributes = dict(existing_entity.custom_attributes or {})
-            merged_custom_attributes.update(entity.custom_attributes)
-            existing_entity.custom_attributes = merged_custom_attributes
-
-        db.commit()
-        db.refresh(existing_entity)
-        return existing_entity
-
-    db_entity = Entity(
-        project_id=project_id,
-        episode_id=entity.episode_id,
-        name=entity.name,
-        type=entity.type,
-        description=entity.description,
-        image_url=entity.image_url,
-        generation_prompt_en=entity.generation_prompt_en,
-        generation_prompt_cn=entity.generation_prompt_cn,
-        anchor_description=entity.anchor_description,
-        name_en=entity.name_en,
-        base_name_en=entity.base_name_en,
-        gender=entity.gender,
-        role=entity.role,
-        archetype=entity.archetype,
-        appearance_cn=entity.appearance_cn,
-        clothing=entity.clothing,
-        action_characteristics=entity.action_characteristics,
-        atmosphere=entity.atmosphere,
-        visual_params=entity.visual_params,
-        narrative_description=entity.narrative_description,
-        visual_dependencies=_coerce_visual_dependencies(entity.visual_dependencies),
-        dependency_strategy=entity.dependency_strategy,
-        custom_attributes=entity.custom_attributes or {}
-    )
-    db.add(db_entity)
-    db.commit()
-    db.refresh(db_entity)
-    return db_entity
-
-
 def _coerce_visual_dependencies(value: Any) -> List[str]:
     candidates: List[Any] = []
     if isinstance(value, list):
@@ -17252,7 +16141,7 @@ def read_entities(
     episode_id: Optional[int] = None,
     include_project_null_episode: Optional[bool] = False,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -17319,10 +16208,94 @@ def create_entity(
     project_id: int,
     entity: EntityCreate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
-    _require_project_access(db, project_id, current_user)
-    return _upsert_entity_record(db, project_id, entity)
+    project = _require_project_access(db, project_id, current_user)
+
+    if entity.episode_id is not None:
+        episode = db.query(Episode).filter(Episode.id == entity.episode_id).first()
+        if not episode or int(getattr(episode, "project_id", 0) or 0) != int(project_id):
+            raise HTTPException(status_code=400, detail="episode_id does not belong to this project")
+
+    _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
+
+    normalized_name_candidates = set()
+    for raw_name in (entity.name, entity.name_en):
+        stable = str(raw_name or "").strip().lower()
+        if stable:
+            normalized_name_candidates.add(stable)
+
+    if not normalized_name_candidates:
+        raise HTTPException(status_code=400, detail="Entity name is required")
+
+    normalized_type = str(entity.type or "").strip().lower()
+    entity_name_expr = func.lower(func.trim(func.coalesce(Entity.name, "")))
+    entity_name_en_expr = func.lower(func.trim(func.coalesce(Entity.name_en, "")))
+
+    from sqlalchemy import or_
+    if entity.episode_id is None:
+        episode_scope_filter = Entity.episode_id.is_(None)
+    else:
+        episode_scope_filter = Entity.episode_id == entity.episode_id
+
+    existing_entity = db.query(Entity).filter(
+        Entity.project_id == project_id,
+        episode_scope_filter,
+        func.lower(func.trim(func.coalesce(Entity.type, ""))) == normalized_type,
+        or_(
+            entity_name_expr.in_(normalized_name_candidates),
+            entity_name_en_expr.in_(normalized_name_candidates),
+        ),
+    ).first()
+    
+    if existing_entity:
+        existing_entity.description = entity.description or existing_entity.description
+        existing_entity.image_url = entity.image_url or existing_entity.image_url
+        existing_entity.generation_prompt_en = entity.generation_prompt_en or existing_entity.generation_prompt_en
+        existing_entity.generation_prompt_cn = entity.generation_prompt_cn or existing_entity.generation_prompt_cn
+        existing_entity.anchor_description = entity.anchor_description or existing_entity.anchor_description
+        existing_entity.base_name_en = entity.base_name_en or existing_entity.base_name_en
+        existing_entity.role = entity.role or existing_entity.role
+        existing_entity.appearance_cn = entity.appearance_cn or existing_entity.appearance_cn
+        if entity.episode_id is not None and existing_entity.episode_id is None:
+            existing_entity.episode_id = entity.episode_id
+        db.commit()
+        db.refresh(existing_entity)
+        return existing_entity
+
+    # Create a new subject row if no duplicate exists.
+    db_entity = Entity(
+        project_id=project_id,
+        episode_id=entity.episode_id,
+        name=entity.name,
+        type=entity.type,
+        description=entity.description,
+        image_url=entity.image_url,
+        generation_prompt_en=entity.generation_prompt_en,
+        generation_prompt_cn=entity.generation_prompt_cn,
+        anchor_description=entity.anchor_description,
+        
+        name_en=entity.name_en,
+        base_name_en=entity.base_name_en,
+        gender=entity.gender,
+        role=entity.role,
+        archetype=entity.archetype,
+        appearance_cn=entity.appearance_cn,
+        clothing=entity.clothing,
+        action_characteristics=entity.action_characteristics,
+        
+        atmosphere=entity.atmosphere,
+        visual_params=entity.visual_params,
+        narrative_description=entity.narrative_description,
+        
+        visual_dependencies=_coerce_visual_dependencies(entity.visual_dependencies),
+        dependency_strategy=entity.dependency_strategy,
+        custom_attributes=entity.custom_attributes or {}
+    )
+    db.add(db_entity)
+    db.commit()
+    db.refresh(db_entity)
+    return db_entity
 
 
 class EntityCloneWithLLMRequest(BaseModel):
@@ -17331,9 +16304,53 @@ class EntityCloneWithLLMRequest(BaseModel):
 
 
 def _extract_first_json_payload(text: str):
+    import json
+    text = str(text or "")
+    
+    # Attempt 1: Try json5 if available
+    try:
+        import json5
+        has_json5 = True
+    except ImportError:
+        has_json5 = False
+
+    if has_json5:
+        try:
+            res = json5.loads(text)
+            if isinstance(res, (dict, list)):
+                return res
+        except Exception:
+            pass
+
+    # Attempt 2: Extract substring from first {/[ to last }/]
+    first_idx = -1
+    last_idx = -1
+    for i, ch in enumerate(text):
+        if ch in "{[":
+            first_idx = i
+            break
+    if first_idx >= 0:
+        for i in range(len(text) - 1, -1, -1):
+            if text[i] in "}]":
+                last_idx = i
+                break
+
+    if first_idx >= 0 and last_idx >= 0 and first_idx < last_idx:
+        sub_text = text[first_idx:last_idx + 1]
+        try:
+            if has_json5:
+                res = json5.loads(sub_text)
+            else:
+                res = json.loads(sub_text)
+            if isinstance(res, (dict, list)):
+                return res
+        except Exception:
+            pass
+
+    # Attempt 3: Fallback to old sequential candidate check
     decoder = json.JSONDecoder()
-    for idx, ch in enumerate(str(text or "")):
-        if ch not in "[{":
+    for idx, ch in enumerate(text):
+        if ch not in "{[":
             continue
         try:
             obj, _ = decoder.raw_decode(text[idx:])
@@ -17418,7 +16435,7 @@ async def clone_entity_with_llm(
     entity_id: int,
     req: EntityCloneWithLLMRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     project = _require_project_access(db, project_id, current_user)
 
@@ -17659,7 +16676,7 @@ def update_entity(
     entity_id: int,
     entity_in: EntityUpdate,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     entity = db.query(Entity).filter(Entity.id == entity_id).first()
     if not entity:
@@ -17765,7 +16782,7 @@ async def generate_sora_character(
     entity_id: int,
     req: SoraCharacterGenRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     """
@@ -17978,7 +16995,7 @@ async def generate_sora_character(
 def delete_entity(
     entity_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     entity = db.query(Entity).filter(Entity.id == entity_id).first()
     if not entity:
@@ -17994,7 +17011,7 @@ def delete_entity(
 def delete_project_entities(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
         
@@ -19126,30 +18143,9 @@ class AdminStorageUsageOut(BaseModel):
     users: List[AdminStorageUsageUserOut]
 
 
-
-from app.schemas.system_log import LLMCallLogOut
-
-@router.get("/admin/llm_logs", response_model=List[LLMCallLogOut])
-def get_llm_call_logs(
-    limit: int = 100,
-    offset: int = 0,
-    provider: Optional[str] = None,
-    tag: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_active_superuser)
-):
-    from app.models.all_models import LLMCallLog
-    query = db.query(LLMCallLog)
-    if provider:
-        query = query.filter(LLMCallLog.provider == provider)
-    if tag:
-        query = query.filter(LLMCallLog.tag == tag)
-    logs = query.order_by(LLMCallLog.id.desc()).offset(offset).limit(limit).all()
-    return logs
-
 @router.get("/admin/runtime-logs/files", response_model=List[RuntimeLogFileOut])
 def list_runtime_log_files(
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Only superuser can view runtime logs")
@@ -19181,7 +18177,7 @@ def view_runtime_log_file(
     action: Optional[str] = Query(None),
     start_time: Optional[str] = Query(None),
     end_time: Optional[str] = Query(None),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Only superuser can view runtime logs")
@@ -19232,7 +18228,7 @@ def view_runtime_log_file(
 
 @router.get("/admin/storage-usage", response_model=AdminStorageUsageOut)
 def get_admin_storage_usage(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -19308,7 +18304,7 @@ def get_admin_storage_usage(
 
 @router.get("/admin/storage-usage/expired", response_model=AdminExpiredFilesOut)
 def get_admin_expired_files(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -19357,7 +18353,7 @@ def get_admin_expired_files(
 @router.post("/admin/storage-usage/expired/remind", response_model=GenericMessageOut)
 def remind_admin_expired_files(
     req: AdminExpiredRemindRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -19414,7 +18410,7 @@ def remind_admin_expired_files(
 @router.post("/admin/storage-usage/expired/delete", response_model=GenericMessageOut)
 def delete_admin_expired_files(
     req: AdminExpiredDeleteRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -19691,7 +18687,7 @@ def _url_reference_tokens(raw_url: Any) -> set[str]:
     return {str(item).strip() for item in tokens if str(item or "").strip()}
 
 
-def _resolve_accessible_project_ids_for_user(db: Session, current_user: Any) -> List[int]:
+def _resolve_accessible_project_ids_for_user(db: Session, current_user: User) -> List[int]:
     owner_ids = [
         pid for (pid,) in db.query(Project.id).filter(Project.owner_id == current_user.id).all()
         if pid is not None
@@ -19706,7 +18702,7 @@ def _resolve_accessible_project_ids_for_user(db: Session, current_user: Any) -> 
 @router.get("/assets/unreferenced-ids", response_model=dict)
 def get_unreferenced_asset_ids(
     project_id: Optional[int] = None,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     # Base asset query for the user
@@ -19967,7 +18963,7 @@ def get_assets(
     scene_id: Optional[str] = None,
     skip: int = 0,
     limit: int = 120,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     safe_skip = max(int(skip or 0), 0)
@@ -20299,7 +19295,7 @@ def get_assets(
 
 def create_asset_url(
     asset_in: AssetCreate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     meta = asset_in.meta_info if asset_in.meta_info else {}
@@ -20335,7 +19331,7 @@ def upload_asset(
     asset_type: Optional[str] = None,
     source_asset_url: Optional[str] = None,
     idempotency_key: Optional[str] = None,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     max_upload_bytes = max(int(settings.MAX_ASSET_UPLOAD_MB or 100), 1) * 1024 * 1024
@@ -20489,7 +19485,7 @@ def upload_asset(
 @router.delete("/assets/{asset_id}")
 def delete_asset(
     asset_id: int,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
@@ -20518,7 +19514,7 @@ def delete_asset(
 @router.post("/assets/batch-delete")
 def batch_delete_assets(
     asset_ids: List[int] = Body(...),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     assets = db.query(Asset).filter(
@@ -20552,7 +19548,7 @@ def batch_delete_assets(
 def update_asset(
     asset_id: int,
     asset_update: AssetUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
@@ -20578,7 +19574,7 @@ def update_asset(
 @router.post("/assets/{asset_id}/mark-current", response_model=dict)
 def mark_asset_current_project_asset(
     asset_id: int,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
@@ -20597,7 +19593,7 @@ def mark_asset_current_project_asset(
 @router.post("/assets/rebind-shot-media", response_model=dict)
 def rebind_shot_media_from_assets(
     payload: AssetRebindShotMediaRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if payload.project_id:
@@ -21058,7 +20054,7 @@ def _wechat_config_to_dict(row: Optional[WechatPayConfig]) -> Dict[str, Any]:
 
 @router.get("/admin/payment-config", response_model=PaymentConfig)
 def get_payment_config(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -21081,7 +20077,7 @@ def get_payment_config(
 @router.post("/admin/payment-config", response_model=PaymentConfig)
 def update_payment_config(
     idx: PaymentConfig,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -21125,7 +20121,7 @@ def update_payment_config(
 
 @router.get("/admin/smtp-config", response_model=SMTPConfig)
 def get_smtp_config(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -21174,7 +20170,7 @@ def get_smtp_config(
 @router.post("/admin/smtp-config", response_model=SMTPConfig)
 def update_smtp_config(
     idx: SMTPConfig,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -21213,7 +20209,7 @@ def update_smtp_config(
 @router.post("/admin/smtp-config/test")
 def test_smtp_config(
     payload: SMTPTestRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -21241,7 +20237,7 @@ def test_smtp_config(
 @router.post("/admin/smtp-config/broadcast")
 def broadcast_email_to_all_users(
     payload: SMTPBroadcastRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -21319,7 +20315,7 @@ def get_maintenance_status(db: Session = Depends(get_db)):
 
 @router.get("/admin/maintenance-config", response_model=MaintenanceConfig)
 def get_maintenance_config(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -21336,7 +20332,7 @@ def get_maintenance_config(
 @router.post("/admin/maintenance-config", response_model=MaintenanceConfig)
 def update_maintenance_config(
     idx: MaintenanceConfig,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -21413,7 +20409,7 @@ def update_maintenance_config(
 
 
 @router.get("/admin/runtime-stats")
-def get_runtime_stats(current_user: Any = Depends(get_current_user)):
+def get_runtime_stats(current_user: User = Depends(get_current_user)):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -21476,7 +20472,7 @@ def get_runtime_stats(current_user: Any = Depends(get_current_user)):
 @router.get("/admin/upstream-diagnostics/grsai")
 def admin_diagnose_grsai_connectivity(
     timeout_seconds: int = 5,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -21585,7 +20581,7 @@ def get_recharge_plans(db: Session = Depends(get_db)):
 @router.post("/billing/recharge/create", response_model=PaymentOrderOut)
 def create_recharge_order(
     req: RechargeRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if req.amount <= 0:
@@ -21655,7 +20651,7 @@ def create_recharge_order(
 @router.get("/billing/recharge/status/{order_no}")
 def check_order_status(
     order_no: str,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     order = db.query(PaymentOrder).filter(PaymentOrder.order_no == order_no).first()
@@ -21820,7 +20816,7 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
 @router.post("/billing/recharge/mock_pay/{order_no}")
 def mock_pay_order(
     order_no: str,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Dev only or check config?
@@ -21896,7 +20892,7 @@ def mock_pay_order(
 
 @router.get("/billing/options")
 def get_billing_options(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Return provider/model dropdown options for Pricing Rules.
@@ -21962,7 +20958,7 @@ def get_billing_options(
 
 @router.get("/billing/feature-pricing", response_model=FeaturePricingOut)
 def get_billing_feature_pricing(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -21974,7 +20970,7 @@ def get_billing_feature_pricing(
 @router.put("/billing/feature-pricing", response_model=FeaturePricingOut)
 def update_billing_feature_pricing(
     payload: FeaturePricingUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -21986,7 +20982,7 @@ def update_billing_feature_pricing(
 
 @router.get("/billing/default-api-pricing", response_model=DefaultApiPricingOut)
 def get_billing_default_api_pricing(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -22002,7 +20998,7 @@ def get_billing_default_api_pricing(
 @router.put("/billing/default-api-pricing", response_model=DefaultApiPricingOut)
 def update_billing_default_api_pricing(
     payload: DefaultApiPricingUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -22022,7 +21018,7 @@ def update_billing_default_api_pricing(
 
 @router.get("/billing/taxonomy/preview")
 def get_billing_taxonomy_preview(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -22053,7 +21049,7 @@ def get_billing_taxonomy_preview(
 @router.get("/billing/project/{project_id}/stats")
 def get_project_billing_stats(
     project_id: int,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Return credit consumption stats for a project.
@@ -22114,7 +21110,7 @@ def get_transactions(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     limit: int = 100,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser and (user_id and user_id != current_user.id):
@@ -22186,7 +21182,7 @@ class CreditUpdate(BaseModel):
 def update_user_credits(
     user_id: int,
     credit_update: CreditUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -22242,9 +21238,7 @@ class GenerationRequest(BaseModel):
     background: Optional[str] = None
     ref_image_url: Optional[Union[str, List[str]]] = None
     image_urls: Optional[List[str]] = None
-    entity_url_map: Optional[Dict[str, str]] = None
     imageUrls: Optional[List[str]] = None
-    entity_url_map: Optional[Dict[str, str]] = None
     project_id: Optional[int] = None
     episode_id: Optional[int] = None
     scene_id: Optional[int] = None
@@ -22315,6 +21309,7 @@ class VideoGenerationRequest(BaseModel):
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
     seed: Optional[int] = None
+    use_prev_video: Optional[bool] = False
 
 
 class VoiceGenerationRequest(BaseModel):
@@ -23521,17 +22516,9 @@ def _find_existing_asset_for_registration(
     idempotency_key: Optional[str] = None,
     meta_info: Optional[Dict[str, Any]] = None,
 ) -> Optional[Asset]:
-    # Flush session to see commits from other background threads/callbacks
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        
     normalized_key = _normalize_asset_idempotency_key(idempotency_key)
     normalized_meta = dict(meta_info) if isinstance(meta_info, dict) else {}
-    normalized_url = str(url or "").strip()
 
-    # Priority 1: Search by idempotency_key (most reliable for deduplication)
     if normalized_key:
         keyed_candidates = (
             db.query(Asset)
@@ -23546,7 +22533,7 @@ def _find_existing_asset_for_registration(
                 continue
             return candidate
 
-    # Priority 2: Search by URL (if URL matches, treat as duplicate even if meta_info differs slightly)
+    normalized_url = str(url or "").strip()
     if not normalized_url:
         return None
 
@@ -23557,20 +22544,11 @@ def _find_existing_asset_for_registration(
         .limit(50)
         .all()
     )
-    if not url_candidates:
-        return None
-
-    # If URL matches, return the most recent asset instead of requiring strict meta_info match
-    # This prevents duplicate registration of the same file with different meta_info contexts
-    most_recent = url_candidates[0]
-    
-    # But still try to find one with matching meta if available
-    for candidate in url_candidates:
-        if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
-            return candidate
-    
-    # Fall back to most recent if no perfect match
-    return most_recent
+    if url_candidates:
+        for candidate in url_candidates:
+            if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
+                return candidate
+    return None
 
 
 def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta_info: Dict[str, Any]) -> Optional[str]:
@@ -23906,24 +22884,8 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
             is_image_inferred = is_image
             is_video_inferred = is_video
             is_audio_inferred = is_audio
-            
-            # Priority 1: Use explicit asset_type if provided
-            explicit_asset_type = str(meta.get("asset_type") or "").strip().lower()
-            if explicit_asset_type == "video":
-                is_video_inferred = True
-                is_image_inferred = False
-                is_audio_inferred = False
-            elif explicit_asset_type == "audio":
-                is_audio_inferred = True
-                is_video_inferred = False
-                is_image_inferred = False
-            elif explicit_asset_type in ("image", "subject", "start_frame", "end_frame", "keyframe"):
-                is_image_inferred = True
-                is_video_inferred = False
-                is_audio_inferred = False
-            
-            # Priority 2: Fallback based on metadata provider/model if type still uncertain
-            if not is_image_inferred and not is_video_inferred and not is_audio_inferred:
+            if not is_image and not is_video and not is_audio:
+                # Fallback based on metadata provider/model if possible
                 provider_str = str(meta.get("provider", "")).lower()
                 model_str = str(meta.get("model", "")).lower()
                 if "video" in model_str or "video" in provider_str or any(k in provider_str for k in ("luma", "runway", "kling", "minimax")):
@@ -24121,7 +23083,7 @@ def _reservation_tx_id(reservation_tx: Any) -> Optional[int]:
 def _finalize_model_invocation_billing(
     *,
     db: Session,
-    current_user: Any,
+    current_user: User,
     task_type: str,
     provider: Optional[str],
     model: Optional[str],
@@ -24234,7 +23196,7 @@ def _resolve_latest_asset_provider_model(
 
 def _log_api_switch_regenerate_if_needed(
     db: Session,
-    current_user: Any,
+    current_user: User,
     req: Any,
     result: Any,
     media_type: str,
@@ -24291,7 +23253,7 @@ def _log_api_switch_regenerate_if_needed(
 
 def _bind_generated_media_to_shot(
     db: Session,
-    current_user: Any,
+    current_user: User,
     req: Any,
     media_url: Optional[str],
     oss_uploaded_success: Optional[bool] = None,
@@ -24418,7 +23380,7 @@ def _bind_generated_media_to_shot(
     )
 
 
-def _bind_generated_media_to_entity(db: Session, current_user: Any, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
+def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, media_url: Optional[str], oss_uploaded_success: Optional[bool] = None) -> None:
     if not media_url:
         return
 
@@ -24548,7 +23510,7 @@ def _bind_generated_media_to_entity(db: Session, current_user: Any, req: Any, me
 @router.post("/generate/image")
 async def generate_image_endpoint(
     req: GenerationRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
@@ -24665,7 +23627,7 @@ def _resolve_media_runtime_target(
 
 async def _run_generate_image(
     req: GenerationRequest,
-    current_user: Any,
+    current_user: User,
     db: Session,
     job_progress_callback: Any = None,
     job_id: Optional[str] = None,
@@ -26029,7 +24991,7 @@ def _maybe_finalize_stuck_job(
 async def submit_generate_image_endpoint(
     req: GenerationRequest,
     request: Request,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     callback_url = _resolve_callback_url_from_payload(req)
     explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
@@ -26297,7 +25259,7 @@ class UserPasswordUpdate(BaseModel):
 
 @router.get("/users/me", response_model=UserOut)
 def read_users_me(
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -26336,7 +25298,7 @@ def read_users_me(
 @router.put("/users/me/profile", response_model=UserOut)
 def update_my_profile(
     payload: UserProfileUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.id == current_user.id).first()
@@ -26355,7 +25317,7 @@ def update_my_profile(
 @router.put("/users/me/password")
 def update_my_password(
     payload: UserPasswordUpdate,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.id == current_user.id).first()
@@ -26377,7 +25339,7 @@ def update_my_password(
 @router.post("/users/me/avatar", response_model=UserOut)
 async def update_my_avatar(
     file: UploadFile = File(...),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.id == current_user.id).first()
@@ -26438,7 +25400,7 @@ async def update_my_avatar(
 def get_users(
     skip: int = 0, 
     limit: int = 100, 
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -26451,7 +25413,7 @@ def get_users(
 def get_users_page(
     page: int = 1,
     page_size: int = 20,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not current_user.is_superuser:
@@ -26507,7 +25469,7 @@ def get_users_page(
 def update_user(
     user_id: int, 
     user_in: UserUpdate, 
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
@@ -26577,7 +25539,7 @@ def update_user(
 @router.post("/generate/video")
 async def generate_video_endpoint(
     req: VideoGenerationRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     dedup_key = _build_video_dedup_key(req, current_user.id)
@@ -26647,7 +25609,7 @@ async def generate_video_endpoint(
 @router.post("/generate/voice")
 async def generate_voice_endpoint(
     req: VoiceGenerationRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     reservation_tx = None
@@ -27190,7 +26152,7 @@ async def generate_voice_endpoint(
 
 async def _run_generate_video(
     req: VideoGenerationRequest,
-    current_user: Any,
+    current_user: User,
     db: Session,
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
@@ -27396,7 +26358,7 @@ async def _run_generate_video(
             "supports_audio",
         )
         if sound_capability is False:
-            resolved_sound = True
+            resolved_sound = False
             sound_source = "system_api_capability"
 
         normalized_mode = str(req.mode or "").strip().lower() or None
@@ -27900,6 +26862,9 @@ async def _run_generate_video(
             req.keyframes,
             req.ref_video_urls,
             entity_lookup=entity_lookup if is_reference_image_mode else None,
+            use_prev_video=getattr(req, "use_prev_video", False),
+            provider=resolved_video_provider,
+            model=resolved_video_model,
         )
 
         try:
@@ -27979,9 +26944,9 @@ async def _run_generate_video(
         if resolved_video_image_size:
             video_provider_options["image_size"] = resolved_video_image_size
         if "sound" not in video_provider_options and resolved_sound is not None:
-            video_provider_options["sound"] = True
+            video_provider_options["sound"] = bool(resolved_sound)
         if sound_capability is False:
-            video_provider_options["sound"] = True
+            video_provider_options["sound"] = False
         multi_shots_capability = _read_api_capability_bool(
             pre_api_cfg,
             "multi_shots_supported",
@@ -28094,68 +27059,7 @@ async def _run_generate_video(
             media_type="video",
         )
 
-        # Keep video path aligned with image path: persist/register/bind immediately
-        # for direct generate flow (non-submit or submit paths that already have final URL).
-        try:
-            final_result_url = str((result or {}).get("url") or "").strip()
-            if final_result_url:
-                persist_context: Dict[str, Any] = {
-                    "prompt": req.prompt,
-                    "negative_prompt": req.negative_prompt,
-                    "provider": req.provider,
-                    "model": req.model,
-                    "aspect_ratio": aspect_ratio,
-                    "duration": req.duration,
-                    "project_id": resolved_project_id,
-                    "episode_id": resolved_episode_id,
-                    "shot_id": resolved_shot_id,
-                    "shot_number": getattr(req, "shot_number", None),
-                    "shot_name": getattr(req, "shot_name", None),
-                    "asset_type": "video",
-                    "seed": explicit_seed or project_seed,
-                    "ref_image_url": getattr(req, "ref_image_url", None),
-                    "ref_video_urls": getattr(req, "ref_video_urls", None),
-                    "last_frame_url": getattr(req, "last_frame_url", None),
-                    "keyframes": getattr(req, "keyframes", None),
-                    "ref_mode": normalized_ref_mode,
-                }
-                persist_context = {k: v for k, v in persist_context.items() if v not in (None, "")}
-
-                final_meta_for_persist = dict(final_meta if isinstance(final_meta, dict) else {})
-                callback_job_id = _extract_generation_job_id_from_ticket("video", provider_callback_ticket or "")
-                if callback_job_id:
-                    final_meta_for_persist["idempotency_key"] = callback_job_id
-
-                persisted_url, persisted_meta = _persist_remote_image_result(current_user, final_result_url, final_meta_for_persist)
-                if persisted_meta is None:
-                    persisted_meta = final_meta_for_persist
-
-                stable_video_url = str(persisted_url or final_result_url or "").strip()
-                if stable_video_url:
-                    result["url"] = stable_video_url
-                if isinstance(persisted_meta, dict):
-                    result["metadata"] = persisted_meta
-
-                if stable_video_url and not _is_ephemeral_provider_media_url(stable_video_url):
-                    _register_asset_helper(
-                        db,
-                        current_user.id,
-                        stable_video_url,
-                        persist_context,
-                        persisted_meta,
-                    )
-                    _bind_generated_media_to_shot(
-                        db,
-                        current_user,
-                        persist_context,
-                        stable_video_url,
-                        oss_uploaded_success=bool((persisted_meta or {}).get("oss")) if isinstance(persisted_meta, dict) else None,
-                        media_metadata=persisted_meta if isinstance(persisted_meta, dict) else None,
-                    )
-        except Exception as persist_exc:
-            logger.warning("[GenerateVideo] persistence/register/bind skipped due to error: %s", persist_exc)
-
-        # Video asset registration is handled above (direct path) and in callback finalize path.
+        # Register Asset - For videos, wait until finalize persistence OR callback
 
         if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}
@@ -28618,7 +27522,7 @@ async def submit_generate_video_endpoint(
     req: VideoGenerationRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     callback_url = _resolve_callback_url_from_payload(req)
     explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
@@ -28658,15 +27562,6 @@ async def submit_generate_video_endpoint(
                             resolved_project_id = _to_positive_int_or_none(getattr(submit_episode, "project_id", None))
 
             submit_entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else None
-            
-            # Apply temporary URL map overrides from frontend request
-            if submit_entity_lookup and getattr(req, "entity_url_map", None):
-                for k, v in req.entity_url_map.items():
-                    k_str = str(k).strip()
-                    for norm_name, row in submit_entity_lookup.items():
-                        if str(row.get("entity_id", "")) == k_str or norm_name == _normalize_entity_anchor_token(k_str):
-                            row["image_url"] = str(v).strip()
-
             req_payload["prompt"] = _append_video_api_ref_mapping(
                 submit_prompt,
                 submit_refs,
@@ -28675,6 +27570,9 @@ async def submit_generate_video_endpoint(
                 submit_keyframes,
                 submit_ref_video_urls,
                 entity_lookup=submit_entity_lookup,
+                use_prev_video=req_payload.get("use_prev_video", False),
+                provider=req_payload.get("provider", ""),
+                model=req_payload.get("model", ""),
             )
     except Exception as e:
         logger.warning("[VideoSubmit] prompt mapping pre-process skipped: %s", e)
@@ -28768,11 +27666,6 @@ async def submit_generate_video_endpoint(
         shot_number=req_payload.get("shot_number"),
         shot_name=req_payload.get("shot_name"),
         asset_type=req_payload.get("asset_type"),
-        ref_mode=req_payload.get("ref_mode"),
-        ref_image_url=req_payload.get("ref_image_url"),
-        ref_video_urls=req_payload.get("ref_video_urls"),
-        last_frame_url=req_payload.get("last_frame_url"),
-        keyframes=req_payload.get("keyframes"),
         provider_callback_ticket=provider_callback_ticket,
         created_at=now,
         started_at=None,
@@ -29003,7 +27896,7 @@ def get_generation_job_pool(
     limit: int = 200,
     shot_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "all").strip().lower()
     allowed_kinds = {
@@ -29400,7 +28293,7 @@ def repair_generation_job_history(
     older_than_minutes: int = 120,
     dry_run: bool = True,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "all").strip().lower()
     allowed_kinds = {"all", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}
@@ -29552,7 +28445,7 @@ def stop_generation_job(
     job_id: str,
     force: bool = False,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "").strip().lower()
     if safe_kind not in {"image", "video", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}:
@@ -29702,7 +28595,7 @@ def delete_generation_job(
     kind: str,
     job_id: str,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     is_superuser = bool(getattr(current_user, "is_superuser", False))
 
@@ -29868,7 +28761,7 @@ def stop_all_generation_jobs(
     kind: str = "all",
     force: bool = False,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     safe_kind = str(kind or "all").strip().lower()
     allowed_kinds = {"all", "image", "video", "episode-scenes", "episode-scripts", "scene-ai-shots-batch", "shot-media-batch"}
@@ -30712,7 +29605,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
             continue
 
         entity_type = str(row.get("entity_type") or "").strip().lower()
-        if entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
+        if entity_type not in {"subject", "character", "char"}:
             continue
 
         image_url = str(row.get("image_url") or "").strip()
@@ -30737,19 +29630,14 @@ def _append_video_api_ref_mapping(
     keyframes: Optional[List[str]] = None,
     reference_video_urls: Optional[List[str]] = None,
     entity_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+    use_prev_video: bool = False,
+    provider: str = "",
+    model: str = "",
 ) -> str:
-    import json
-    try:
-        with open('c:/AS/AIStory/debug_append.txt', 'a', encoding='utf-8') as df:
-            df.write(json.dumps({
-                "prompt": prompt,
-                "refs": refs,
-                "ref_image_url": ref_image_url,
-                "last_frame_url": last_frame_url,
-                "entity_lookup": entity_lookup
-            }, ensure_ascii=False) + "\n================\n")
-    except Exception as e:
-        pass
+    is_seedance = "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower()
+    original_use_prev_video = use_prev_video
+    if is_seedance:
+        use_prev_video = True
 
     text = str(prompt or "").strip()
     if not text:
@@ -30776,7 +29664,10 @@ def _append_video_api_ref_mapping(
             if entity_type and entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
                 continue
 
-            entity_name = raw_name.lstrip("@").strip()
+            raw_entity_name = str(row.get("name") or "").strip()
+            entity_name = raw_entity_name[1:] if raw_entity_name.startswith("@") else raw_entity_name
+            if not entity_name:
+                entity_name = raw_name.lstrip("@").strip()
             if not entity_name:
                 continue
 
@@ -30818,6 +29709,9 @@ def _append_video_api_ref_mapping(
     )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
+    if not use_prev_video:
+        return text
+
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
     if not ordered_refs and not isinstance(reference_video_urls, list):
         return text
@@ -30856,14 +29750,14 @@ def _append_video_api_ref_mapping(
     video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
     media_slots = image_slots + video_slots
 
-    pairs: List[Tuple[str, str, str]] = []
+    pairs: List[Tuple[int, str, str]] = []
 
     # First, always show explicit start/end images if they are mapped and if desired?
     # Usually this is primarily for mapping entities to reference images for API consumption.
 
     seen_urls: set[str] = set()
 
-    mentioned_entity_map = {normalized: raw_name for normalized, raw_name in _collect_prompt_entity_mentions(text)}
+    mentioned_entity_keys = {normalized for normalized, _ in _collect_prompt_entity_mentions(text)}
     if entity_lookup:
         # Relaxed matching to map any entity in ordered_refs
         for key, row in entity_lookup.items():
@@ -30884,29 +29778,64 @@ def _append_video_api_ref_mapping(
             if not image_url or mapped_idx is None:
                 continue
 
-            matched = norm_key in mentioned_entity_map
+            matched = norm_key in mentioned_entity_keys
 
             if matched and image_url not in seen_urls:
                 seen_urls.add(image_url)
-                # Use the exact string that appeared in the prompt for accurate replacing
-                char_name = mentioned_entity_map[norm_key]
+                raw_name = str(row.get('name') or '')
+                char_name = raw_name[1:] if raw_name.startswith('@') else raw_name
+                if not char_name:
+                    char_name = norm_key
+                # Anchor injection should follow the asset-level Anchor Description for the matched entity.
                 anchor_text = str(row.get("anchor_description") or "").strip()
-                pairs.append((f"@Image{mapped_idx}", char_name, anchor_text))
+                pairs.append((mapped_idx, char_name, anchor_text))
+    pairs.sort(key=lambda x: x[0])
 
-    # Sequential fallback for unmatched images to unmatched entities (e.g. ENV/PROP with multiple images)
-    # This guarantees that Image2, Image3, etc. are injected at the actual positions in the prompt.
-    used_indexes = set()
-    for prefix_str, _, _ in pairs:
-        for m in re.finditer(r'@Image(\d+)', prefix_str):
-            used_indexes.add(int(m.group(1)))
+    if not pairs:
+        pure_multi_entity_ref_mode = (
+            len(start_urls) >= 2
+            and not end_url
+            and not keyframe_urls
+            and not reference_video_urls
+        )
+        if not pure_multi_entity_ref_mode:
+            return text
 
-    if not pairs and not reference_video_urls:
+        fallback_mentions = _collect_prompt_entity_mentions(text)
+        if not fallback_mentions:
+            return text
+
+        used_indexes: set[int] = set()
+        next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
+        for (_, entity_name), mapped_idx in zip(fallback_mentions, next_ref_indexes):
+            pairs.append((mapped_idx, entity_name, ""))
+
+    elif (
+        len(start_urls) >= 2
+        and not end_url
+        and not keyframe_urls
+        and not reference_video_urls
+        and len(pairs) < len(ordered_refs)
+    ):
+        fallback_mentions = _collect_prompt_entity_mentions(text)
+        paired_names = {name for _, name, _ in pairs}
+        used_indexes = {idx for idx, _, _ in pairs}
+        next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
+        for (_, entity_name), mapped_idx in zip(
+            [item for item in fallback_mentions if item[1] not in paired_names],
+            next_ref_indexes,
+        ):
+            pairs.append((mapped_idx, entity_name, ""))
+
+    if not pairs:
         return text
 
+    pairs.sort(key=lambda x: x[0])
+
     updated_text = text
-    for prefix_str, entity_name, anchor_text in pairs:
-        prefix = f"{prefix_str} "
-        if prefix.lower() in updated_text.lower() and entity_name.lower() in updated_text.lower():
+    for mapped_idx, entity_name, anchor_text in pairs:
+        prefix = f"@Image{mapped_idx} "
+        if prefix in updated_text and entity_name in updated_text:
             continue
 
         escaped_entity = re.escape(entity_name)
@@ -30923,6 +29852,7 @@ def _append_video_api_ref_mapping(
                     return token
                 return f"{prefix}{token}"
 
+            # Replace ALL occurrences instead of just 1
             replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
             if count > 0:
                 updated_text = replaced_text
@@ -30932,7 +29862,7 @@ def _append_video_api_ref_mapping(
         if replaced:
             continue
 
-        # Fallback: prepend marker directly before the first plain entity mention.
+        # Fallback: prepend marker directly before plain entity mentions.
         plain_pattern = rf"(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])"
 
         def _prepend_marker(match: re.Match[str]) -> str:
@@ -30941,29 +29871,28 @@ def _append_video_api_ref_mapping(
                 return token
             return f"{prefix}{token}"
 
+        # Replace ALL occurrences instead of just 1
         replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
         if count > 0:
             updated_text = replaced_text
 
-    if reference_video_urls:
+    if reference_video_urls and is_seedance:
+        if original_use_prev_video:
+            vid_tag = "@Video 1"
+            vid_tag_nospace = "@Video1"
+            if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
+                updated_text = f"延长\n\n{vid_tag}\n，一镜到底运镜。\n\n{updated_text.strip()}"
+        
         added_videos = False
         for idx in range(1, len(reference_video_urls) + 1):
-            vid_tag = f"@Video{idx}"
-            if not re.search(r'@[Vv]ideo\s*' + str(idx) + r'|@[Vv]edie\s*' + str(idx) + r'|@[Vv]edio\s*' + str(idx), updated_text):
+            vid_tag = f"@Video {idx}"
+            vid_tag_nospace = f"@Video{idx}"
+            if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
                 if not added_videos:
-                    if idx == 1:
-                        updated_text = f"对视频{vid_tag}进行延长续写，继承该视频角色，道具在环境的布局(不用参考运镜与动作），并从该视频的尾帧开始，严格按以下提示词重新开始续写新视频：{updated_text.strip()}"
-                    else:
-                        updated_text = f"{vid_tag} {updated_text.strip()}"
+                    updated_text = f"{updated_text.strip()}，参考视频是 {vid_tag}"
                     added_videos = True
                 else:
-                    updated_text = f"{vid_tag} {updated_text.strip()}"
-
-    try:
-        with open('c:/AS/AIStory/debug_append_out.txt', 'a', encoding='utf-8') as df:
-            df.write(updated_text + "\n================\n")
-    except Exception as e:
-        pass
+                    updated_text = f"{updated_text.strip()} {vid_tag}"
 
     return updated_text
 
@@ -31142,12 +30071,23 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             ordered_video_refs.append(str(normalized_last_frame_url).strip())
         ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
 
+        system_api_id_val = system_api_id
+        if not system_api_id_val and getattr(episode, "system_api_id", None):
+            system_api_id_val = episode.system_api_id
+            
+        is_seedance_batch = False
+        if system_api_id_val:
+            pre_api_cfg = _fetch_system_api_config(item_db, system_api_id_val, "video")
+            if "seedance" in str(pre_api_cfg.get("provider") or "").lower() or "seedance" in str(pre_api_cfg.get("model") or "").lower():
+                is_seedance_batch = True
+
         video_prompt = _append_video_api_ref_mapping(
             video_prompt,
             ordered_video_refs,
             normalized_refs,
             normalized_last_frame_url,
             None,
+            provider="seedance" if is_seedance_batch else None,
             entity_lookup=entity_lookup,
         )
 
@@ -31162,6 +30102,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 normalized_refs,
                 normalized_last_frame_url,
                 None,
+                provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
                 entity_lookup=entity_lookup,
             )
             tech["video_prompt_cn"] = video_prompt_cn
@@ -31589,16 +30530,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                 tech = _parse_shot_tech(shot)
                 end_frame_url = str(tech.get("end_frame_url") or "").strip()
 
-                shot_entity_lookup = entity_lookup
-                if tech.get("entity_url_map"):
-                    import copy
-                    shot_entity_lookup = copy.deepcopy(entity_lookup)
-                    for k_str, v in tech.get("entity_url_map").items():
-                        k_str = str(k_str).strip()
-                        for norm_name, row in shot_entity_lookup.items():
-                            if str(row.get("entity_id", "")) == k_str or norm_name == _normalize_entity_anchor_token(k_str):
-                                row["image_url"] = str(v).strip()
-
                 need_start = overwrite_existing or not str(shot.image_url or "").strip()
                 need_end = overwrite_existing or not end_frame_url
 
@@ -31644,16 +30575,16 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             _persist_shot_media_batch_status(db, episode, latest)
                             _release_db_connection(db, "shot_media_batch_start_status")
 
-                            start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, shot_entity_lookup)
+                            start_ref_index_map = _compute_subject_ref_index_map(start_prompt_raw, entity_lookup)
                             logger.info(
                                 "[shot_media_batch] subject_ref_index_map asset=start_frame shot_id=%s shot_label=%s map=%s",
                                 shot.id,
                                 shot_label,
                                 start_ref_index_map,
                             )
-                            start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, shot_entity_lookup, global_style, start_ref_index_map)
+                            start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
                             auto_matches = []
-                            auto_matches.extend([x for x in _collect_prompt_entity_ref_images(start_prompt_raw, shot_entity_lookup) if x not in auto_matches])
+                            auto_matches.extend([x for x in _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup) if x not in auto_matches])
                             start_refs: List[str] = []
                             if isinstance(tech.get("ref_image_urls"), list):
                                 saved_refs = [str(x).strip() for x in tech.get("ref_image_urls") or [] if str(x).strip()]
@@ -31738,19 +30669,19 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             _persist_shot_media_batch_status(db, episode, latest)
                             _release_db_connection(db, "shot_media_batch_end_status")
 
-                            end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, shot_entity_lookup)
+                            end_ref_index_map = _compute_subject_ref_index_map(end_prompt_raw, entity_lookup)
                             logger.info(
                                 "[shot_media_batch] subject_ref_index_map asset=end_frame shot_id=%s shot_label=%s map=%s",
                                 shot.id,
                                 shot_label,
                                 end_ref_index_map,
                             )
-                            end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, shot_entity_lookup, global_style, end_ref_index_map)
+                            end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, entity_lookup, global_style, end_ref_index_map)
                             refs: List[str] = []
                             if isinstance(tech.get("end_ref_image_urls"), list):
                                 refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
                             else:
-                                refs.extend([x for x in _collect_prompt_entity_ref_images(end_prompt_raw, shot_entity_lookup) if x not in refs])
+                                refs.extend([x for x in _collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup) if x not in refs])
 
                             deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
                             start_image = str(shot.image_url or "").strip()
@@ -31795,14 +30726,14 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         _release_db_connection(db, "shot_media_batch_video_status")
 
                         video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
-                        video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, shot_entity_lookup)
+                        video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
                         logger.info(
                             "[shot_media_batch] subject_ref_index_map asset=video shot_id=%s shot_label=%s map=%s",
                             shot.id,
                             shot_label,
                             video_ref_index_map,
                         )
-                        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, shot_entity_lookup, global_style, video_ref_index_map)
+                        video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
 
                         def _resolve_video_mode(payload: Dict[str, Any]) -> str:
                             raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "start"
@@ -31846,7 +30777,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             refs,
                             ref_mode=video_mode,
                             prompt_candidates=video_prompt_candidates,
-                            entity_lookup=shot_entity_lookup,
+                            entity_lookup=entity_lookup,
                             manual_override=bool(tech.get("video_ref_image_urls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
                             associated_entities=shot.associated_entities,
                         )
@@ -31873,21 +30804,23 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             normalized_refs,
                             normalized_last_frame_url,
                             None,
-                            entity_lookup=shot_entity_lookup,
+                            entity_lookup=entity_lookup,
+                            use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
                         )
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
                         video_prompt_cn = ""
                         if video_prompt_cn_raw:
-                            video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, shot_entity_lookup)
-                            video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, shot_entity_lookup, global_style, video_cn_ref_index_map)
+                            video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, entity_lookup)
+                            video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, entity_lookup, global_style, video_cn_ref_index_map)
                             video_prompt_cn = _append_video_api_ref_mapping(
                                 video_prompt_cn,
                                 ordered_video_refs,
                                 normalized_refs,
                                 normalized_last_frame_url,
                                 None,
-                                entity_lookup=shot_entity_lookup,
+                                entity_lookup=entity_lookup,
+                                use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
                             )
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
@@ -32083,7 +31016,7 @@ def start_shot_media_batch_job(
     episode_id: int,
     req: ShotMediaBatchStartRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -32180,7 +31113,7 @@ def start_shot_media_batch_job(
 def get_shot_media_batch_job_status(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     cached_status = _get_cached_shot_media_batch_status(int(episode_id))
     try:
@@ -32245,7 +31178,7 @@ def get_shot_media_batch_job_status(
 def stop_shot_media_batch_job(
     episode_id: int,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
@@ -32309,7 +31242,7 @@ async def generate_montage(
     project_id: int,
     request: MontageRequest,
     async_mode: bool = Query(False),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     try:
         items_payload = [item.dict() for item in request.items]
@@ -32347,7 +31280,7 @@ async def generate_montage(
 async def delete_montage(
     project_id: int,
     request: MontageDeleteRequest,
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     _require_project_access(db, int(project_id), current_user)
@@ -32393,7 +31326,7 @@ class AnalyzeImageRequest(BaseModel):
 async def analyze_asset_image(
     request: AnalyzeImageRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Analyzes an asset image to extract style and prompt descriptions.
@@ -32627,7 +31560,7 @@ async def analyze_entity_image(
     system_api_id: Optional[int] = Query(None),
     feature_name: Optional[str] = Query(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Analyzes an entity (subject) image using Vision model and updates its attributes based on visual content.
@@ -32988,15 +31921,53 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         content = re.sub(r"\s*```$", "", content, flags=re.IGNORECASE).strip()
 
         def _extract_first_json_payload(text: str):
-            decoder = json.JSONDecoder()
-            candidates = []
-            for idx, ch in enumerate(text):
-                if ch in "[{":
-                    candidates.append(idx)
+            import json
+            text = str(text or "")
+            
+            try:
+                import json5
+                has_json5 = True
+            except ImportError:
+                has_json5 = False
 
-            for start in candidates:
+            if has_json5:
                 try:
-                    obj, _end = decoder.raw_decode(text[start:])
+                    res = json5.loads(text)
+                    if isinstance(res, (dict, list)):
+                        return res
+                except Exception:
+                    pass
+
+            first_idx = -1
+            last_idx = -1
+            for i, ch in enumerate(text):
+                if ch in "{[":
+                    first_idx = i
+                    break
+            if first_idx >= 0:
+                for i in range(len(text) - 1, -1, -1):
+                    if text[i] in "}]":
+                        last_idx = i
+                        break
+
+            if first_idx >= 0 and last_idx >= 0 and first_idx < last_idx:
+                sub_text = text[first_idx:last_idx + 1]
+                try:
+                    if has_json5:
+                        res = json5.loads(sub_text)
+                    else:
+                        res = json.loads(sub_text)
+                    if isinstance(res, (dict, list)):
+                        return res
+                except Exception:
+                    pass
+
+            decoder = json.JSONDecoder()
+            for idx, ch in enumerate(text):
+                if ch not in "{[":
+                    continue
+                try:
+                    obj, _end = decoder.raw_decode(text[idx:])
                     if isinstance(obj, (dict, list)):
                         return obj
                 except Exception:
@@ -33240,7 +32211,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
 def get_entity_latest_analysis(
     entity_id: int, 
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get the latest saved analysis result for an entity.
@@ -33265,7 +32236,7 @@ def update_entity_latest_analysis(
     entity_id: int,
     data: AnalysisContent,
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Update (Save/Edit) the latest analysis result without applying it.
@@ -33299,7 +32270,7 @@ def apply_entity_analysis(
     entity_id: int,
     data: Optional[AnalysisContent] = None, # Optional payload to override stored
     db: Session = Depends(get_db), 
-    current_user: Any = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Apply the stored (or provided) analysis result to update Entity fields.
@@ -33373,7 +32344,7 @@ def apply_entity_analysis(
 
 
 @router.post("/analyze_scene/stream")
-async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_user: Any = Depends(get_current_user), db: Session = Depends(get_db)):
+async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     _release_db_connection(db, "stream_analyze_scene_before_delegate")
     return await analyze_scene(request=request, current_user=current_user, db=db, async_mode="0", is_stream=True)
 
@@ -33382,13 +32353,13 @@ class QueueConfigBase(BaseModel):
     callback_threads: int
 
 @router.get("/admin/queue/config", response_model=QueueConfigBase)
-async def admin_get_queue_config(current_user: Any = Depends(get_current_user)):
+async def admin_get_queue_config(current_user: User = Depends(get_current_user)):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     return QueueConfigBase(**_load_queue_config())
 
 @router.put("/admin/queue/config", response_model=QueueConfigBase)
-async def admin_update_queue_config(config: QueueConfigBase, current_user: Any = Depends(get_current_user)):
+async def admin_update_queue_config(config: QueueConfigBase, current_user: User = Depends(get_current_user)):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
@@ -33411,7 +32382,7 @@ async def split_script(
     episode_id: int,
     req: ScriptSplitRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     async_mode: str = Query("0"),
 ):
     project = _require_project_access(db, project_id, current_user)
@@ -33619,97 +32590,6 @@ def _extract_first_json_object(raw_text: str) -> Dict[str, Any]:
     return {}
 
 
-def _normalize_generated_entity_bucket(bucket_name: Optional[str], fallback_type: str = "character") -> str:
-    stable = str(bucket_name or fallback_type or "character").strip().lower()
-    if stable in {"character", "characters"}:
-        return "character"
-    if stable in {"prop", "props"}:
-        return "prop"
-    if stable in {"environment", "environments"}:
-        return "environment"
-    if stable in {"poster", "posters", "cover_poster", "cover poster"}:
-        return "poster"
-    return "character"
-
-
-def _extract_generated_entity_item(
-    payload: Any,
-    *,
-    forced_name: Optional[str] = None,
-    fallback_type: str = "character",
-) -> Dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {}
-
-    sections = [
-        ("characters", "character"),
-        ("props", "prop"),
-        ("environments", "environment"),
-        ("posters", "poster"),
-    ]
-    candidates: List[Tuple[str, str, Dict[str, Any]]] = []
-    for section_name, inferred_type in sections:
-        raw_items = payload.get(section_name)
-        if not isinstance(raw_items, list):
-            continue
-        for item in raw_items:
-            if isinstance(item, dict):
-                normalized = dict(item)
-                normalized["__entity_bucket__"] = inferred_type
-                candidates.append((section_name, inferred_type, normalized))
-
-    if not candidates:
-        if isinstance(payload.get("dependency_strategy"), dict) or payload.get("name") or payload.get("name_en"):
-            normalized = dict(payload)
-            normalized["__entity_bucket__"] = _normalize_generated_entity_bucket(payload.get("type"), fallback_type)
-            return normalized
-        return {}
-
-    stable_forced_name = str(forced_name or "").strip()
-    preferred_type = _normalize_generated_entity_bucket(fallback_type, fallback_type)
-
-    if stable_forced_name:
-        for _, _, candidate in candidates:
-            candidate_name = str(candidate.get("name") or "").strip()
-            if candidate_name == stable_forced_name:
-                return candidate
-
-    for _, inferred_type, candidate in candidates:
-        if inferred_type == preferred_type:
-            return candidate
-
-    return candidates[0][2]
-
-
-def _build_ai_generated_entity_schema_prompt(preferred_type: Optional[str] = None) -> str:
-    preferred = _normalize_generated_entity_bucket(preferred_type, "character") if preferred_type else None
-    target_hint = {
-        "character": "characters",
-        "prop": "props",
-        "environment": "environments",
-        "poster": "posters",
-    }.get(preferred or "", "")
-    section_line = (
-        f"Put the single generated entity in `{target_hint}` and keep the other three arrays empty. "
-        if target_hint else
-        "Put the single generated entity in the correct array by category and keep the other arrays empty. "
-    )
-    return (
-        "You are an entity designer. Return ONLY one JSON object wrapped by no extra prose. "
-        "The root object must always contain exactly four keys: characters, props, environments, posters. "
-        "Exactly one entity item may exist across those arrays in total. "
-        f"{section_line}"
-        "Follow the entity-design import schema used by the system. "
-        "For a character item include: subject_no, name, name_en, base_name_en, description_cn, gender, role, archetype, appearance_cn, clothing, action_characteristics, generation_prompt_cn, generation_prompt_en, negative_prompt_en, anchor_description, visual_dependencies, dependency_strategy. "
-        "For a prop item include: subject_no, name, name_en, base_name_en, type, description_cn, generation_prompt_cn, generation_prompt_en, negative_prompt_en, anchor_description, visual_dependencies, dependency_strategy. "
-        "For an environment item include: subject_no, name, name_en, base_name_en, atmosphere, visual_params, description_cn, generation_prompt_cn, generation_prompt_en, negative_prompt_en, anchor_description, visual_dependencies, dependency_strategy. "
-        "For a poster item include: subject_no, name, name_en, base_name_en, atmosphere, visual_params, description_cn, generation_prompt_cn, generation_prompt_en, negative_prompt_en, anchor_description, visual_dependencies, dependency_strategy. "
-        "All *_cn fields must be Chinese. All *_en fields must be English. anchor_description must be English phrases. "
-        "visual_dependencies must be an array. dependency_strategy must be an object with type and logic. "
-        "Do not omit required fields."
-    )
-
-
 def _create_generated_entity_from_payload(
     db: Session,
     project_id: int,
@@ -33717,67 +32597,36 @@ def _create_generated_entity_from_payload(
     *,
     fallback_name: str,
     fallback_type: str = "character",
-    forced_name: Optional[str] = None,
 ) -> Entity:
-    entity_payload = _extract_generated_entity_item(payload, forced_name=forced_name, fallback_type=fallback_type)
-    if not entity_payload:
-        raise HTTPException(status_code=500, detail="LLM returned no importable entity payload")
+    name = str(payload.get("name") or fallback_name or "Generated Entity").strip()
+    ent_type = str(payload.get("type") or fallback_type or "character").strip().lower()
+    if ent_type not in {"character", "environment", "prop", "poster"}:
+        ent_type = "character"
 
-    ent_type = _normalize_generated_entity_bucket(entity_payload.get("__entity_bucket__") or fallback_type, fallback_type)
-    name = str(forced_name or entity_payload.get("name") or fallback_name or "Generated Entity").strip()
-    name_en = str(entity_payload.get("name_en") or "").strip() or None
-    base_name_en = str(entity_payload.get("base_name_en") or entity_payload.get("name_en") or "").strip() or None
-    description_cn = str(entity_payload.get("description_cn") or entity_payload.get("description") or entity_payload.get("bio") or "").strip()
-    narrative_description = str(entity_payload.get("narrative_description") or description_cn or entity_payload.get("bio") or "").strip() or None
-    custom_attributes = dict(entity_payload.get("custom_attributes") or {}) if isinstance(entity_payload.get("custom_attributes"), dict) else {}
-    if description_cn:
-        custom_attributes["description_cn"] = description_cn
-    custom_attributes.setdefault("source", "ai_entity_create")
-    if entity_payload.get("negative_prompt_en"):
-        custom_attributes["negative_prompt_en"] = str(entity_payload.get("negative_prompt_en")).strip()
-    if entity_payload.get("subject_no"):
-        custom_attributes["subject_no"] = str(entity_payload.get("subject_no")).strip()
-    original_name = str(entity_payload.get("name") or "").strip()
-    if original_name and original_name != name:
-        custom_attributes["llm_generated_name"] = original_name
-
-    prop_mode = str(entity_payload.get("type") or "").strip()
-    if ent_type == "prop" and prop_mode and prop_mode.lower() not in {"character", "characters", "prop", "props", "environment", "environments", "poster", "posters"}:
-        custom_attributes["prop_type"] = prop_mode
-
-    entity_create = EntityCreate(
+    new_entity = Entity(
+        project_id=project_id,
         name=name,
         type=ent_type,
-        description=description_cn or fallback_name,
-        generation_prompt_cn=str(entity_payload.get("generation_prompt_cn") or "").strip() or None,
-        generation_prompt_en=str(entity_payload.get("generation_prompt_en") or "").strip() or None,
-        anchor_description=str(entity_payload.get("anchor_description") or "").strip() or None,
-        name_en=name_en,
-        base_name_en=base_name_en,
-        gender=str(entity_payload.get("gender") or "").strip() or None,
-        role=str(entity_payload.get("role") or "").strip() or None,
-        archetype=str(entity_payload.get("archetype") or "").strip() or None,
-        appearance_cn=str(entity_payload.get("appearance_cn") or entity_payload.get("features") or "").strip() or None,
-        clothing=str(entity_payload.get("clothing") or "").strip() or None,
-        action_characteristics=str(entity_payload.get("action_characteristics") or "").strip() or None,
-        atmosphere=str(entity_payload.get("atmosphere") or entity_payload.get("personality") or "").strip() or None,
-        visual_params=str(entity_payload.get("visual_params") or "").strip() or None,
-        narrative_description=narrative_description,
-        visual_dependencies=_coerce_visual_dependencies(entity_payload.get("visual_dependencies")),
-        dependency_strategy=entity_payload.get("dependency_strategy") if isinstance(entity_payload.get("dependency_strategy"), dict) else {},
-        custom_attributes=custom_attributes,
+        name_en=str(payload.get("name_en") or "").strip() or None,
+        base_name_en=str(payload.get("base_name_en") or payload.get("name_en") or "").strip() or None,
+        description=str(payload.get("description") or payload.get("bio") or "").strip() or None,
+        atmosphere=str(payload.get("atmosphere") or payload.get("personality") or "").strip() or None,
+        appearance_cn=str(payload.get("appearance_cn") or payload.get("features") or "").strip() or None,
+        narrative_description=str(payload.get("narrative_description") or payload.get("bio") or "").strip() or None,
     )
-    return _upsert_entity_record(db, project_id, entity_create)
+    db.add(new_entity)
+    db.commit()
+    db.refresh(new_entity)
+    return new_entity
 
 
 @router.post("/projects/{project_id}/entities/llm-text", response_model=EntityOut)
 async def api_generate_entity_from_text(
     project_id: int,
-    entity_name: str = Form(...),
     text_desc: str = Form(...),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
 
@@ -33794,26 +32643,21 @@ async def api_generate_entity_from_text(
     if model:
         llm_config = {**llm_config, "model": model}
 
-    system_prompt = _build_ai_generated_entity_schema_prompt()
+    system_prompt = (
+        "You are an entity designer. Return ONLY JSON with fields: "
+        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
+    )
     user_prompt = (
         "根据用户输入生成一个可入库的新实体。\n"
-        "必须按实体导入示例输出一个顶层 JSON，对象内仅允许 characters、props、environments、posters 四个数组键。\n"
-        "四个数组里总共只能有 1 个实体，其他数组必须为空数组。\n"
-        f"实体中文名：{entity_name}\n"
+        "要求 type 仅可为 character/environment/prop/poster 之一。\n"
         "用户输入：\n"
         f"{text_desc}"
     )
 
     try:
         resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
-        payload = _extract_first_json_payload(llm_service.sanitize_text_output(str(resp.get("content") or ""))) or {}
-        return _create_generated_entity_from_payload(
-            db,
-            project_id,
-            payload,
-            fallback_name=entity_name,
-            forced_name=entity_name,
-        )
+        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
+        return _create_generated_entity_from_payload(db, project_id, payload, fallback_name="文本生成实体")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM text generation failed: {e}")
 
@@ -33821,11 +32665,10 @@ async def api_generate_entity_from_text(
 @router.post("/projects/{project_id}/entities/llm-image", response_model=EntityOut)
 async def api_generate_entity_from_image(
     project_id: int,
-    entity_name: str = Form(...),
     file: UploadFile = File(...),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
 
@@ -33850,13 +32693,11 @@ async def api_generate_entity_from_image(
     img_b64 = base64.b64encode(image_bytes).decode("utf-8")
     data_url = f"data:{mime};base64,{img_b64}"
 
-    system_prompt = _build_ai_generated_entity_schema_prompt()
-    user_prompt = (
-        "请根据图片反推一个可入库的新实体。\n"
-        "必须按实体导入示例输出一个顶层 JSON，对象内仅允许 characters、props、environments、posters 四个数组键。\n"
-        "四个数组里总共只能有 1 个实体，其他数组必须为空数组。\n"
-        f"实体中文名固定为：{entity_name}"
+    system_prompt = (
+        "You are a vision entity designer. Return ONLY JSON with fields: "
+        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
     )
+    user_prompt = "请根据图片反推一个可入库的新实体。"
 
     try:
         resp = await llm_service.generate_content_with_fallback(
@@ -33865,14 +32706,8 @@ async def api_generate_entity_from_image(
             llm_config,
             image_urls=[data_url],
         )
-        payload = _extract_first_json_payload(llm_service.sanitize_text_output(str(resp.get("content") or ""))) or {}
-        return _create_generated_entity_from_payload(
-            db,
-            project_id,
-            payload,
-            fallback_name=entity_name,
-            forced_name=entity_name,
-        )
+        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
+        return _create_generated_entity_from_payload(db, project_id, payload, fallback_name="图片反推实体")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM image generation failed: {e}")
 
@@ -33880,12 +32715,11 @@ async def api_generate_entity_from_image(
 @router.post("/projects/{project_id}/entities/llm-derive", response_model=EntityOut)
 async def api_generate_entity_from_derive(
     project_id: int,
-    entity_name: str = Form(...),
     base_entity_id: int = Form(...),
     derive_desc: str = Form(""),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
 
@@ -33906,12 +32740,12 @@ async def api_generate_entity_from_derive(
     if model:
         llm_config = {**llm_config, "model": model}
 
-    system_prompt = _build_ai_generated_entity_schema_prompt(str(base_entity.type or "character"))
+    system_prompt = (
+        "You are an entity variation designer. Return ONLY JSON with fields: "
+        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
+    )
     user_prompt = (
         "基于已有实体生成一个新的衍生实体，不要覆盖原实体。\n"
-        "必须按实体导入示例输出一个顶层 JSON，对象内仅允许 characters、props、environments、posters 四个数组键。\n"
-        "四个数组里总共只能有 1 个实体，其他数组必须为空数组。\n"
-        f"新实体中文名: {entity_name}\n"
         f"基础实体名称: {base_entity.name}\n"
         f"基础实体类型: {base_entity.type}\n"
         f"基础描述: {base_entity.description or ''}\n"
@@ -33921,14 +32755,33 @@ async def api_generate_entity_from_derive(
 
     try:
         resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
-        payload = _extract_first_json_payload(llm_service.sanitize_text_output(str(resp.get("content") or ""))) or {}
+        payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
         return _create_generated_entity_from_payload(
             db,
             project_id,
             payload,
-            fallback_name=entity_name,
+            fallback_name=f"{base_entity.name}-变体",
             fallback_type=str(base_entity.type or "character"),
-            forced_name=entity_name,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM derive generation failed: {e}")
+
+from app.models.all_models import LLMCallLog
+@router.get('/admin/llm_logs')
+def get_llm_logs(
+    limit: int = 100, 
+    offset: int = 0, 
+    provider: str = None, 
+    tag: str = None, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superusers can view LLM Call Logs")
+    query = db.query(LLMCallLog).order_by(LLMCallLog.timestamp.desc())
+    if provider:
+        query = query.filter(LLMCallLog.provider == provider)
+    if tag:
+        query = query.filter(LLMCallLog.tag == tag)
+    logs = query.offset(offset).limit(limit).all()
+    return logs
