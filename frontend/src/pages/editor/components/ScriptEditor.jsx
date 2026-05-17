@@ -184,6 +184,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isLoadingSubjectAssets, setIsLoadingSubjectAssets] = useState(false);
     const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
+    const [analysisFlowStatusHistory, setAnalysisFlowStatusHistory] = useState([]);
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
@@ -610,10 +611,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ? `${t('分析返回告警：', 'Analysis warning: ')}${warningSummary} (+${uniqueWarnings.length - 1})`
                 : `${t('分析返回告警：', 'Analysis warning: ')}${warningSummary}`,
         });
-        setTimeout(() => {
-            setAnalysisFlowStatus(prev => (prev?.phase === 'warning' ? { phase: 'idle', message: '' } : prev));
-        }, 8000);
     }, [t]);
+
+    useEffect(() => {
+        const phase = String(analysisFlowStatus?.phase || '').trim();
+        const message = String(analysisFlowStatus?.message || '').trim();
+
+        if (!phase || phase === 'idle' || !message) return;
+
+        setAnalysisFlowStatusHistory((prev) => {
+            const lastItem = prev[prev.length - 1];
+            if (lastItem && lastItem.phase === phase && lastItem.message === message) {
+                return prev;
+            }
+            return [...prev, { id: `${Date.now()}-${prev.length}`, phase, message, createdAt: Date.now() }];
+        });
+    }, [analysisFlowStatus]);
+
+    useEffect(() => {
+        if (!isAnalyzing && analysisFlowStatus?.phase === 'idle' && !analysisUiReport) {
+            setAnalysisFlowStatusHistory([]);
+        }
+    }, [analysisFlowStatus?.phase, analysisUiReport, isAnalyzing]);
 
     useEffect(() => {
         if (isAnalyzing) return;
@@ -5550,10 +5569,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!ok) {
                     return;
                 }
-                // User confirmed full regeneration — bypass resume logic and clear stale data
-                forceRegenerateRef.current = true;
             }
         }
+
+        forceRegenerateRef.current = true;
+        await clearAnalysisOutputsForRestart();
 
         const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
         
@@ -5616,6 +5636,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (onLog) onLog(`Script auto-save failed (analysis continues): ${saveError.message}`, 'warning');
         }
     };
+
+    async function clearAnalysisOutputsForRestart() {
+        if (!activeEpisode?.id) return;
+
+        try {
+            if (onLog) onLog('AI Script Analysis restart: clearing existing outputs and scenes...', 'process');
+
+            const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+            if (existingScenes && existingScenes.length > 0) {
+                await Promise.all(existingScenes.map((sc) => deleteScene(sc.id)));
+                if (onLog) onLog(`AI Script Analysis restart: deleted ${existingScenes.length} existing scene(s).`, 'info');
+            }
+
+            if (typeof onUpdateEpisodeInfo === 'function') {
+                await onUpdateEpisodeInfo(activeEpisode.id, {
+                    ai_scene_analysis_result: '',
+                    ai_scene_analysis_subject_index: '',
+                    ai_scene_analysis_adaptation: '',
+                    ai_entity_design_result: '',
+                    ai_stage_outputs: '',
+                });
+            }
+
+            setLlmRawResultContent('');
+            setLlmResultContent('');
+            setLlmAssetRawResultContent('');
+            setSubjectIndexText('');
+            setAdaptationText('');
+            setAnalysisRuntimeMeta(null);
+            setAnalysisUiReport(null);
+            setAnalysisFlowStatus({ phase: 'idle', message: '' });
+            lastLoadedAnalysisRef.current = null;
+        } catch (clearErr) {
+            if (onLog) onLog(`AI Script Analysis restart clear warning: ${clearErr?.message || clearErr}`, 'warning');
+        }
+    }
 
     const prepareSceneAnalysisResumeState = useCallback(async () => {
         const sceneAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
@@ -5866,25 +5922,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // When force-regenerating, clear existing scenes and episode analysis fields so
         // the new results are imported fresh rather than merged onto stale data.
         if (forceRegenerate && activeEpisode?.id) {
-            try {
-                if (onLog) onLog('Force-regenerate: clearing existing scenes and analysis data...', 'process');
-                const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-                if (existingScenes && existingScenes.length > 0) {
-                    await Promise.all(existingScenes.map((sc) => deleteScene(sc.id)));
-                    if (onLog) onLog(`Force-regenerate: deleted ${existingScenes.length} existing scene(s).`, 'info');
-                }
-                await Promise.all([
-                    persistLlmResultContent('', 'ai_scene_analysis_result'),
-                    persistLlmResultContent('', 'ai_scene_analysis_subject_index'),
-                    persistLlmResultContent('', 'ai_entity_design_result'),
-                ]).catch((e) => onLog?.(`Force-regenerate: episode field clear warning: ${e?.message || e}`, 'warning'));
-                setLlmRawResultContent('');
-                setLlmResultContent('');
-                setSubjectIndexText('');
-                lastLoadedAnalysisRef.current = null;
-            } catch (clearErr) {
-                if (onLog) onLog(`Force-regenerate: clear warning (continuing): ${clearErr?.message || clearErr}`, 'warning');
-            }
+            await clearAnalysisOutputsForRestart();
         }
 
         let llmReturned = false;
@@ -6273,25 +6311,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         // When force-regenerating, clear existing scenes and episode analysis fields.
         if (forceRegenerate && activeEpisode?.id) {
-            try {
-                if (onLog) onLog('Force-regenerate: clearing existing scenes and analysis data...', 'process');
-                const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-                if (existingScenes && existingScenes.length > 0) {
-                    await Promise.all(existingScenes.map((sc) => deleteScene(sc.id)));
-                    if (onLog) onLog(`Force-regenerate: deleted ${existingScenes.length} existing scene(s).`, 'info');
-                }
-                await Promise.all([
-                    persistLlmResultContent('', 'ai_scene_analysis_result'),
-                    persistLlmResultContent('', 'ai_scene_analysis_subject_index'),
-                    persistLlmResultContent('', 'ai_entity_design_result'),
-                ]).catch((e) => onLog?.(`Force-regenerate: episode field clear warning: ${e?.message || e}`, 'warning'));
-                setLlmRawResultContent('');
-                setLlmResultContent('');
-                setSubjectIndexText('');
-                lastLoadedAnalysisRef.current = null;
-            } catch (clearErr) {
-                if (onLog) onLog(`Force-regenerate: clear warning (continuing): ${clearErr?.message || clearErr}`, 'warning');
-            }
+            await clearAnalysisOutputsForRestart();
         }
 
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
@@ -7207,7 +7227,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 </div>
             </div>
 
-            {(analysisFlowStatus.phase !== 'idle' || analysisUiReport) && (
+            {(analysisFlowStatus.phase !== 'idle' || analysisUiReport || analysisFlowStatusHistory.length > 0) && (
                 <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
                     analysisFlowStatus.phase === 'failed'
                         ? 'border-red-500/30 bg-red-500/10 text-red-100'
@@ -7227,6 +7247,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 type="button"
                                 onClick={() => {
                                     setAnalysisFlowStatus({ phase: 'idle', message: '' });
+                                    setAnalysisFlowStatusHistory([]);
                                     setAnalysisUiReport(null);
                                 }}
                                 className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
@@ -7278,8 +7299,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         })}
                     </div>
 
-                    {analysisFlowStatus.message && (
-                        <div className="mb-2 text-xs opacity-95">{analysisFlowStatus.message}</div>
+                    {analysisFlowStatusHistory.length > 0 && (
+                        <div className="mb-2 space-y-1.5">
+                            {analysisFlowStatusHistory.map((item, index) => {
+                                const isLatest = index === analysisFlowStatusHistory.length - 1;
+                                return (
+                                    <div key={item.id} className={`text-xs rounded-md px-2.5 py-2 border ${isLatest ? 'border-white/20 bg-black/20 opacity-100' : 'border-white/10 bg-black/10 opacity-90'}`}>
+                                        <div className="flex items-start justify-between gap-3">
+                                            <span className="font-semibold uppercase tracking-wide text-[10px] opacity-75">{item.phase}</span>
+                                            <span className="text-[10px] opacity-60">#{index + 1}</span>
+                                        </div>
+                                        <div className="mt-1 opacity-95">{item.message}</div>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     )}
 
                     {isAnalyzing && analysisFlowStatus.phase === 'analyzing' && analysisHeartbeatElapsedMs >= 5000 && (

@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
 import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
 import Footer from '../components/Footer';
+import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
+import UserEditModal from '../components/UserEditModal';
 import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
@@ -9866,72 +9868,17 @@ const UserAdmin = () => {
                 </div>
             )}
 
-            {/* User Edit Modal */}
-            {userEditModal && (
-                <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50" onClick={() => setUserEditModal(null)}>
-                    <div className="bg-gray-900 border border-gray-700 p-6 rounded-xl w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
-                        <h3 className="text-xl font-bold mb-4">{t('编辑用户', 'Edit User')} #{userEditModal.id}</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <input className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.username} placeholder={t('用户名', 'Username')} onChange={(e) => setUserEditModal((p) => ({ ...p, username: e.target.value }))} />
-                            <input className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.email} placeholder={t('邮箱', 'Email')} onChange={(e) => setUserEditModal((p) => ({ ...p, email: e.target.value }))} />
-                            <input className="md:col-span-2 bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.full_name} placeholder={t('姓名', 'Full Name')} onChange={(e) => setUserEditModal((p) => ({ ...p, full_name: e.target.value }))} />
-                            <input className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" inputMode="numeric" value={normalizeUserActiveLevel(userEditModal.is_active, 1)} placeholder={t('启用级别', 'Active Level')} onChange={(e) => setUserEditModal((p) => ({ ...p, is_active: normalizeUserActiveLevel(e.target.value, p?.is_active ?? 1) }))} />
-                            <select className="bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm" value={userEditModal.account_status} onChange={(e) => setUserEditModal((p) => ({ ...p, account_status: Number(e.target.value) }))}>
-                                <option value={1}>{t('正常', 'Active')}</option>
-                                <option value={0}>{t('禁用', 'Disabled')}</option>
-                                <option value={-1}>{t('待邮箱校验', 'Pending Verify')}</option>
-                            </select>
-                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={isUserEnabled(userEditModal.is_active)} onChange={(e) => setUserEditModal((p) => ({ ...p, is_active: e.target.checked ? Math.max(1, normalizeUserActiveLevel(p?.is_active, 1)) : 0 }))} />{t('启用', 'Enabled')}</label>
-                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.email_verified} onChange={(e) => setUserEditModal((p) => ({ ...p, email_verified: e.target.checked }))} />{t('邮箱已验证', 'Email Verified')}</label>
-                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_authorized} onChange={(e) => setUserEditModal((p) => ({ ...p, is_authorized: e.target.checked }))} />{t('授权', 'Authorized')}</label>
-                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_system} onChange={(e) => setUserEditModal((p) => ({ ...p, is_system: e.target.checked }))} />{t('系统密钥提供方', 'System Key Provider')}</label>
-                            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!userEditModal.is_superuser} onChange={(e) => setUserEditModal((p) => ({ ...p, is_superuser: e.target.checked }))} />{t('超级管理员', 'Superuser')}</label>
-                        </div>
-                        <div className="mt-6 flex justify-end gap-2">
-                            <button onClick={() => setUserEditModal(null)} className="px-4 py-2 hover:bg-gray-800 rounded">{t('取消', 'Cancel')}</button>
-                            <button onClick={handleSaveUserModal} disabled={isSavingUserEditModal} className="px-4 py-2 bg-primary hover:bg-primary/90 text-white font-bold rounded disabled:opacity-50">{isSavingUserEditModal ? t('保存中...', 'Saving...') : t('保存', 'Save')}</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <UserEditModal
+                draft={userEditModal}
+                setDraft={setUserEditModal}
+                onClose={() => setUserEditModal(null)}
+                onSave={handleSaveUserModal}
+                isSaving={isSavingUserEditModal}
+                normalizeUserActiveLevel={normalizeUserActiveLevel}
+                isUserEnabled={isUserEnabled}
+            />
             
-            {/* LLM Log Detail Modal */}
-            {selectedLlmLog && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-                    <div className="bg-gray-900 border border-white/10 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[85vh]">
-                        <div className="flex justify-between items-center p-4 border-b border-white/10">
-                            <h3 className="text-lg font-bold">{t('LLM 调用日志详情', 'LLM Call Log Details')} #{selectedLlmLog.id}</h3>
-                            <button onClick={() => setSelectedLlmLog(null)} className="text-gray-400 hover:text-white"><X className="w-5 h-5" /></button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                <div className="bg-white/5 p-3 rounded-xl"><div className="text-gray-500 text-xs">Provider</div><div>{selectedLlmLog.provider}</div></div>
-                                <div className="bg-white/5 p-3 rounded-xl"><div className="text-gray-500 text-xs">Model</div><div>{selectedLlmLog.model}</div></div>
-                                <div className="bg-white/5 p-3 rounded-xl"><div className="text-gray-500 text-xs">Tag</div><div>{selectedLlmLog.tag}</div></div>
-                                <div className="bg-white/5 p-3 rounded-xl"><div className="text-gray-500 text-xs">Latency</div><div>{selectedLlmLog.latency_ms ? `${selectedLlmLog.latency_ms}ms` : '-'}</div></div>
-                            </div>
-                            <div className="space-y-1">
-                                <div className="text-gray-500 text-xs">API URL</div>
-                                <div className="bg-white/5 p-3 rounded-xl break-all">{selectedLlmLog.api_url || '-'}</div>
-                            </div>
-                            {selectedLlmLog.error_msg && (
-                                <div className="space-y-1">
-                                    <div className="text-red-400 text-xs">Error Message</div>
-                                    <div className="bg-red-500/10 text-red-200 border border-red-500/20 p-3 rounded-xl whitespace-pre-wrap break-words">{selectedLlmLog.error_msg}</div>
-                                </div>
-                            )}
-                            <div className="space-y-1">
-                                <div className="text-gray-500 text-xs">Payload JSON</div>
-                                <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{selectedLlmLog.payload_json}</pre>
-                            </div>
-                            <div className="space-y-1">
-                                <div className="text-gray-500 text-xs">Response JSON</div>
-                                <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{selectedLlmLog.response_json}</pre>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <LlmLogViewer log={selectedLlmLog} onClose={() => setSelectedLlmLog(null)} />
             
         </div>
     );
