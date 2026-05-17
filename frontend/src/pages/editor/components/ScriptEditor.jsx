@@ -188,6 +188,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+    const [analysisModalMode, setAnalysisModalMode] = useState('stage1');
     const [subjectIndexText, setSubjectIndexText] = useState('');
     const [adaptationText, setAdaptationText] = useState('');
     const [isEditingSubjectIndex, setIsEditingSubjectIndex] = useState(false);
@@ -301,8 +302,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             const endMarkerMatch = candidate.match(/^\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)/im);
+            const fallbackEndMarkerMatch = candidate.match(/^\s*(?:###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*"project_visual_backfill"\s*:)/im);
             if (endMarkerMatch?.index >= 0) {
                 candidate = candidate.slice(0, endMarkerMatch.index).trim();
+            } else if (fallbackEndMarkerMatch?.index >= 0) {
+                candidate = candidate.slice(0, fallbackEndMarkerMatch.index).trim();
             }
 
             return candidate;
@@ -386,10 +390,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段“资产分析提取”。以下“修改后的剧本”与 Stage 1 已产出的 `Project Visual Backfill` 是唯一权威输入来源；如与原始剧本存在任何差异，一律以上游 Stage 1 结果为准。',
+            '请执行第二阶段“场景分析结果 / 资产清单”生成。以下“优化后剧本”与第一阶段产出的“全局风格”是唯一权威输入来源；如与原始剧本存在任何差异，一律以上游结果为准。',
         ];
 
-        if (project?.global_info && typeof project.global_info === 'object' && Object.keys(project.global_info).length > 0) {
+        const shouldBackfillProjectMetadata = Boolean(
+            project?.global_info
+            && typeof project.global_info === 'object'
+            && Object.keys(project.global_info).length > 0
+            && !String(adaptedScriptText || '').trim()
+            && !String(stage1VisualBackfillJson || '').trim()
+        );
+
+        if (shouldBackfillProjectMetadata) {
             try {
                 stage2InputParts.push(`[Project Metadata]\n${JSON.stringify(project.global_info, null, 2)}`);
             } catch {
@@ -417,9 +429,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        stage2InputParts.push(`[Stage 1 Adapted Script - Authoritative Input]\n${adaptedScriptText || String(stage1Text || '').trim()}`);
+        stage2InputParts.push(`[优化后剧本 - 第二阶段权威输入]\n${adaptedScriptText || String(stage1Text || '').trim()}`);
         if (stage1VisualBackfillJson) {
-            stage2InputParts.push(`[Stage 1 Project Visual Backfill - Authoritative Input]\n${stage1VisualBackfillJson}`);
+            stage2InputParts.push(`[全局风格 - 第二阶段权威输入]\n${stage1VisualBackfillJson}`);
         }
 
         return {
@@ -3112,19 +3124,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             stages: {
                 stage1: {
                     key: 'stage1',
-                    title: 'Script Adaptation',
+                    title: '第一阶段：剧本修改说明 / 优化后剧本 / 全局风格',
                     restartable: true,
                     inputs: {
                         script_content: {
                             key: 'script_content',
                             kind: 'markdown',
-                            title: 'Episode Script',
+                            title: '原始剧本',
                             content: stage1ScriptInput,
                         },
                         project_context: {
                             key: 'project_context',
                             kind: 'json',
-                            title: 'Project Context',
+                            title: '项目上下文',
                             content: projectContextJson,
                         },
                     },
@@ -3132,38 +3144,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         adapted_script: {
                             key: 'adapted_script',
                             kind: 'markdown',
-                            title: 'Adapted Script',
+                            title: '优化后剧本',
                             content: stage1AdaptedScript,
                         },
                         project_visual_backfill: {
                             key: 'project_visual_backfill',
                             kind: 'json',
-                            title: 'Project Visual Backfill',
+                            title: '全局风格',
                             content: stage1VisualBackfillJson,
                         },
                         raw_text: {
                             key: 'raw_text',
                             kind: 'text',
-                            title: 'Raw Stage 1 Output',
+                            title: '第一阶段完整结果',
                             content: resolvedStage1RawText,
                         },
                     },
                 },
                 stage2: {
                     key: 'stage2',
-                    title: 'Beats and Assets',
+                    title: '第二阶段：场景分析结果 / 资产清单',
                     restartable: true,
                     inputs: {
                         adapted_script: {
                             key: 'adapted_script',
                             kind: 'markdown',
-                            title: 'Stage 1 Adapted Script',
+                            title: '优化后剧本',
                             content: stage1AdaptedScript,
                         },
                         project_visual_backfill: {
                             key: 'project_visual_backfill',
                             kind: 'json',
-                            title: 'Stage 1 Project Visual Backfill',
+                            title: '全局风格',
                             content: stage1VisualBackfillJson,
                         },
                     },
@@ -3171,44 +3183,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         scene_markdown: {
                             key: 'scene_markdown',
                             kind: 'markdown',
-                            title: 'Scene Markdown',
+                            title: '场景分析结果',
                             content: stage2SceneMarkdown,
                         },
                         subject_index: {
                             key: 'subject_index',
                             kind: 'markdown',
-                            title: 'Subject Index',
+                            title: '资产清单',
                             content: stage2SubjectIndexText,
                         },
                         project_visual_backfill: {
                             key: 'project_visual_backfill',
                             kind: 'json',
-                            title: 'Project Visual Backfill',
+                            title: '全局风格',
                             content: stage2VisualBackfillJson,
                         },
                         raw_text: {
                             key: 'raw_text',
                             kind: 'text',
-                            title: 'Raw Stage 2 Output',
+                            title: '第二阶段完整结果',
                             content: resolvedStage2RawText || resolvedAnalysisRawText,
                         },
                     },
                 },
                 stage3: {
                     key: 'stage3',
-                    title: 'Asset Design',
+                    title: '第三阶段：资产设计',
                     restartable: true,
                     inputs: {
                         subject_index: {
                             key: 'subject_index',
                             kind: 'markdown',
-                            title: 'Stage 2 Subject Index',
+                            title: '资产清单',
                             content: stage2SubjectIndexText,
                         },
                         project_visual_backfill: {
                             key: 'project_visual_backfill',
                             kind: 'json',
-                            title: 'Stage 2 Project Visual Backfill',
+                            title: '全局风格',
                             content: stage2VisualBackfillJson,
                         },
                     },
@@ -3216,13 +3228,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         asset_design_json: {
                             key: 'asset_design_json',
                             kind: 'json',
-                            title: 'Asset Design JSON',
+                            title: '资产设计',
                             content: String(stage3AssetDesignJson || '').trim(),
                         },
                         raw_text: {
                             key: 'raw_text',
                             kind: 'text',
-                            title: 'Raw Stage 3 Output',
+                            title: '第三阶段完整结果',
                             content: resolvedAssetRawText,
                         },
                     },
@@ -3951,7 +3963,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
         if (phase2GenerationInFlightRef.current) {
-            onLog?.('Skipped duplicate Phase 2 asset generation trigger while one is already running.', 'warning');
+            onLog?.('Skipped duplicate Stage 3 asset-design trigger while one is already running.', 'warning');
             return {
                 checkedSceneCount: 0,
                 missingSceneCount: 0,
@@ -3978,10 +3990,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
         };
 
-        onLog?.(`[Phase 2 Debug] checking early return condition: projectId=${projectId}, importedSceneRows count=${importedSceneRows.length}`);
+        onLog?.(`[Stage 3 Debug] checking early return condition: projectId=${projectId}, importedSceneRows count=${importedSceneRows.length}`);
 
         if (!projectId) {
-            onLog?.(`[Phase 2 Debug] aborting! Because projectId is empty.`);
+            onLog?.(`[Stage 3 Debug] aborting because projectId is empty.`);
             return emptyReport;
         }
 
@@ -3994,27 +4006,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
 
                 if (adaptationBodyText) {
-                    onLog?.(`[Asset Gen Tracking] Extracted Script Adaptation (length: ${adaptationBodyText.length})`);
+                    onLog?.(`[Stage 2 Scene Analysis] Extracted optimized script (length: ${adaptationBodyText.length})`);
                 }
 
-          onLog?.(`[Asset Gen Tracking] Initial authoritativeText length: ${authoritativeSubjectText.length}`);
+          onLog?.(`[Stage 3 Asset Design] Initial authoritative text length: ${authoritativeSubjectText.length}`);
 
         // Try to match the block wrapped by at least 5 dashes: ---------
         if (options?.isRetryPhase2) {
-            onLog?.(`[Asset Gen Tracking] Phase 2 Retry mode. Bypassing Subject Index structural check.`);
+            onLog?.(`[Stage 3 Asset Design] Retry mode enabled. Bypassing asset-index structural check.`);
             // When explicitly retrying Phase 2, we assume authoritativeSubjectText/subjectIndexText is already the correct content.
             // If the parser returned empty because it failed to find a header, use the explicit text instead.
             if (!subjectIndexText.trim() && explicitText) {
                 subjectIndexText = explicitText;
             }
         } else if (extractedSections.hasStructuredSubjectIndex) {
-            onLog?.(`[Asset Gen Tracking] Extracted Subject Index (length: ${subjectIndexText.length})`);
+            onLog?.(`[Stage 2 Asset Index] Extracted asset index (length: ${subjectIndexText.length})`);
         } else {
-            onLog?.(`[Asset Gen Tracking] Error: Failed to find Subject Index header or dashes! Aborting asset generation.`, 'error');
+            onLog?.(`[Stage 3 Asset Design] Error: Failed to find the Stage 2 asset index block. Aborting asset design.`, 'error');
             throw new Error(SUBJECT_INDEX_PARSE_ERROR);
         }
 
-        // Phase 2 Preparation: Save extracted subjectIndexText to episode and set UI state
+        // Persist authoritative Stage 2 outputs so Stage 3 uses the optimized script and asset index as inputs.
         if (subjectIndexText.trim() || adaptationBodyText.trim()) {
               if (subjectIndexText.trim()) setSubjectIndexText(subjectIndexText);
               if (adaptationBodyText.trim()) setAdaptationText(adaptationBodyText);
@@ -4024,9 +4036,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
               
               try {
                   await updateEpisode(activeEpisode.id, updatePayload);
-                  onLog?.(`[Phase 2] Saved analysis meta (index len: ${subjectIndexText.length}, adaptation len: ${adaptationBodyText.length})`);
+                  onLog?.(`[Stage 2 Outputs] Saved asset index and optimized script (asset_index_len=${subjectIndexText.length}, optimized_script_len=${adaptationBodyText.length})`);
               } catch (error) {
-                  onLog?.(`[Phase 2] Warning: Failed to save analysis meta to episode: ${error.message}`);
+                  onLog?.(`[Stage 2 Outputs] Warning: Failed to save asset index / optimized script: ${error.message}`);
               }
           }
 
@@ -4039,21 +4051,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatus({
             phase: "generating_assets",
-            message: t("✨ 正在为您生成对应的人物和场景资产...", "Generating design assets from Subject Index..."),
+            message: t("✨ 正在执行第三阶段资产设计...", "Running Stage 3 asset design from the Stage 2 asset index..."),
         });
 
         try {
-            onLog?.(`[Asset Gen Tracking] Preparing to fetch 'entity_design.md'`);
+            onLog?.(`[Stage 3 Asset Design] Preparing to fetch 'entity_design.md'`);
             const promptRes = await fetchPrompt("skills/scene_analysis_feature_stack/entity_design.md").catch(() => null);
             let promptContent = promptRes?.content || "";
             if (!promptContent) {
-                onLog?.(`[Asset Gen Tracking] Warning: 'entity_design.md' prompt is empty or failed to load.`);
+                onLog?.(`[Stage 3 Asset Design] Warning: 'entity_design.md' prompt is empty or failed to load.`);
             }
 
             let finalPromptContent = promptContent;
             let finalSubjectIndexText = subjectIndexText;
 
-            // Inject Project Info Context for Phase 2
+            // Inject project context ahead of the Stage 2 asset index for Stage 3 asset design.
             const projectInfo = (project?.global_info && typeof project?.global_info === 'object') ? project.global_info : {};
             const normalizeInfoKey = (key) => String(key || '').toLowerCase().replace(/[\s\-]/g, '_').trim();
             const getInfoValue = (aliases = []) => {
@@ -4151,23 +4163,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             metaParts.push('Use this project context as first-class constraints before generating the subjects.');
 
             if (Object.keys(projectInfo).length > 0) {
-                finalSubjectIndexText = `${metaParts.join('\n')}\n\n[Subject Index extracted from Phase 1]\n${finalSubjectIndexText}`;
+                finalSubjectIndexText = `${metaParts.join('\n')}\n\n[第二阶段资产清单 - 第三阶段权威输入]\n${finalSubjectIndexText}`;
             }
 
             const isUserSuper = isSuperuser || isSuperuserRef.current; // Capture current state or use ref if we had one
             if (isUserSuper) {
+                setAnalysisModalMode('stage3');
                 setSystemPrompt(finalPromptContent);
                 setUserPrompt(finalSubjectIndexText);
                 setShowAnalysisModal(true);
                 
-                onLog?.(`[Asset Gen Tracking] Waiting for Superuser to confirm entity_design prompt...`);
+                onLog?.(`[Stage 3 Asset Design] Waiting for superuser to confirm the asset-design prompt...`);
                 // Wait for the modal submit
                 const confirmed = await new Promise(resolve => {
                     phase2ResolverRef.current = resolve;
                 });
                 
                 if (!confirmed || typeof confirmed !== 'object') {
-                    onLog?.(`[Asset Gen Tracking] Superuser aborted second pass phase.`);
+                    onLog?.(`[Stage 3 Asset Design] Superuser aborted the asset-design stage.`);
                     return emptyReport;
                 }
                 
@@ -4175,15 +4188,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 finalSubjectIndexText = confirmed.userPrompt || finalSubjectIndexText;
             }
 
-            onLog?.('[Asset Gen Tracking] Launching Phase 2 entity-design LLM call');
+            onLog?.('[Stage 3 Asset Design] Launching asset-design LLM call');
 
             const phase1SystemApiId = Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
                 || Number(localStorage.getItem('func_api_script_analysis') || 0)
                 || null;
             if (phase1SystemApiId) {
-                onLog?.(`[Phase 2] Reusing Phase 1 system_api_id=${phase1SystemApiId} for script_analysis routing.`, 'info');
+                onLog?.(`[Stage 3 Asset Design] Reusing Stage 1 system_api_id=${phase1SystemApiId} for script_analysis routing.`, 'info');
             } else {
-                onLog?.('[Phase 2] Phase 1 system_api_id is missing; fallback routing may select a different API.', 'warning');
+                onLog?.('[Stage 3 Asset Design] Stage 1 system_api_id is missing; fallback routing may select a different API.', 'warning');
             }
 
             const phase2StartedAt = Date.now();
@@ -4216,13 +4229,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             try {
                 if (!savedByBackend) {
-                    onLog?.('[Asset Gen Tracking] Persisting second-pass raw output to ai_entity_design_result...', 'process');
+                    onLog?.('[Stage 3 Asset Design] Persisting raw asset-design output to ai_entity_design_result...', 'process');
                     await persistLlmResultContent(analyzedText || '', 'ai_entity_design_result');
                 } else {
                     await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
                 }
             } catch (persistErr) {
-                onLog?.(`[Asset Gen Tracking] Phase 2 raw output save warning: ${persistErr?.message || persistErr}`, 'warning');
+                onLog?.(`[Stage 3 Asset Design] Raw output save warning: ${persistErr?.message || persistErr}`, 'warning');
             }
 
             if (analyzedText) {
@@ -4231,7 +4244,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const backendSubjectsJson = result?.subjects_json;
                 
                 if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
-                    onLog?.(`[Asset Gen Tracking] Warning: AI did not return a valid Entities JSON block. Skipping import to prevent overwriting index.`, "warning");
+                    onLog?.(`[Stage 3 Asset Design] Warning: AI did not return a valid asset-design JSON block. Skipping import to prevent overwriting the Stage 2 asset index.`, "warning");
                     throw new Error("AI 引擎在整理出场名单时开小差了，未能返回标准数据表。请点击查阅原文检查，是否可以手动重新生成。");
                 } else {
                     // Automatically import the generated subjects
@@ -4249,7 +4262,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                     const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
                     const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
-                    onLog?.(`[Asset Gen Tracking] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+                    onLog?.(`[Stage 3 Asset Design] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
 
                     return {
                         checkedSceneCount: importedSceneRows.length,
@@ -4313,7 +4326,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             setAnalysisFlowStatus({
                 phase: 'generating_assets',
-                message: t("✨ 发现有个没完成的第二阶段任务，正在为您继续生成对应的人物和场景资产...", "Resuming Phase 2 asset generation..."),
+                message: t("✨ 发现有个未完成的第三阶段任务，正在继续执行资产设计...", "Resuming Stage 3 asset design..."),
             });
             try {
                 const result = await awaitAnalyzeSceneWithRecovery(
@@ -4331,14 +4344,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
                     }
                 } catch (persistErr) {
-                    onLog?.(`[Asset Gen Tracking] Phase 2 recovery save warning: ${persistErr?.message || persistErr}`, 'warning');
+                    onLog?.(`[Stage 3 Asset Design] Recovery save warning: ${persistErr?.message || persistErr}`, 'warning');
                 }
 
                 if (analyzedText) {
                     const hasValidSubjectJsonBlock = /"characters"s*:s*\[|"props"s*:s*\[|"environments"s*:s*\[|"posters"s*:s*\[/i.test(analyzedText);
                     const backendSubjectsJson = result?.subjects_json;
                     if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
-                        onLog?.(`[Asset Gen Tracking] Warning: AI did not return a valid Entities JSON block during Phase 2 recovery.`);
+                        onLog?.(`[Stage 3 Asset Design] Warning: AI did not return a valid asset-design JSON block during recovery.`);
                     } else {
                         const sceneImportReport = await importSubjectsJsonWithDedupe(analyzedText, {
                             reason: 'phase2-entity-design',
@@ -4384,13 +4397,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         });
                     }
                 } else {
-                    setAnalysisFlowStatus({ phase: 'warning', message: t('恢复第二阶段分析失败：未返回有效内容', 'Failed to resume phase 2: returned no content') });
+                    setAnalysisFlowStatus({ phase: 'warning', message: t('恢复第三阶段资产设计失败：未返回有效内容', 'Failed to resume Stage 3 asset design: returned no content') });
                 }
                 clearAnalysisTaskMarker(activeEpisode.id);
             } catch (e) {
-                console.error("Phase 2 recovery error:", e);
+                console.error("Stage 3 recovery error:", e);
                 const friendlyRecoveryError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
-                setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第二阶段分析任务失败：${friendlyRecoveryError}`, `Failed to resume Phase 2 analysis task: ${friendlyRecoveryError}`) });
+                setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第三阶段资产设计任务失败：${friendlyRecoveryError}`, `Failed to resume Stage 3 asset design task: ${friendlyRecoveryError}`) });
                   setAnalysisUiReport(prev => ({ ...prev, status: 'error', error: friendlyRecoveryError }));
                   clearAnalysisTaskMarker(activeEpisode.id);
             } finally {
@@ -5639,6 +5652,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // Fetch default prompt
             try {
                 const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
+                setAnalysisModalMode('stage1');
                 setSystemPrompt(res.content);
 
                 setUserPrompt(stage1Input);
@@ -5647,6 +5661,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } catch (e) {
                 console.error("Failed to fetch system prompt", e);
                 // Fallback if fails
+                setAnalysisModalMode('stage1');
                 setSystemPrompt("Error loading system prompt.");
                 setUserPrompt(stage1Input);
                 setShowAnalysisModal(true);
@@ -6297,6 +6312,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // superuser previews/edits prompt first, then manually runs submission.
         if (isSuperuser) {
             setAnalysisFlowStatus({ phase: 'idle', message: '' });
+            setAnalysisModalMode('supplement');
             setSystemPrompt(supplementPrompt);
             setUserPrompt(supplementInput);
             setShowAnalysisModal(true);
@@ -6501,10 +6517,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (onLog) onLog('Stage 1 split prompt detected. Running Stage 2 asset extraction before Subject Index validation.', 'info');
 
                 const stage2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_beats_and_assets.md');
+                let finalStage2Prompt = stage2PromptRes?.content || '';
+                let finalStage2UserInput = stage2UserInput;
+
+                if (isSuperuser || isSuperuserRef.current) {
+                    setAnalysisModalMode('stage2');
+                    setSystemPrompt(finalStage2Prompt);
+                    setUserPrompt(finalStage2UserInput);
+                    setShowAnalysisModal(true);
+                    if (onLog) onLog('Superuser Stage 2 submit: prompt preview opened before submission.', 'info');
+
+                    const confirmedStage2 = await new Promise(resolve => {
+                        phase2ResolverRef.current = resolve;
+                    });
+
+                    if (!confirmedStage2 || typeof confirmedStage2 !== 'object') {
+                        throw new Error('Superuser canceled Stage 2 prompt confirmation.');
+                    }
+
+                    finalStage2Prompt = confirmedStage2.systemPrompt || finalStage2Prompt;
+                    finalStage2UserInput = confirmedStage2.userPrompt || finalStage2UserInput;
+                }
+
                 const stage2Result = await awaitAnalyzeSceneWithRecovery(
                     () => analyzeScene(
-                        stage2UserInput,
-                        stage2PromptRes?.content || '',
+                        finalStage2UserInput,
+                        finalStage2Prompt,
                         null,
                         null,
                         analysisAttentionNotes,
@@ -6907,7 +6945,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsRetryingPhase2(true);
         try {
             resetAutoSubjectsImportCache();
-            onLog?.('Retrying Phase 2 (Asset Generation)...', 'process');
+            onLog?.('Retrying Stage 3 asset design...', 'process');
             // Re-run the second pass with the (potentially edited) subjectIndexText
             // It will also bust deduplication cache by using sceneAnalysisMode = "2_pass_generate_assets" internally
             const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(
@@ -6940,11 +6978,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...prev,
                     importReport: newImportReport,
                 }));
-                
+                    onLog?.('Stage 3 asset design retry completed.', 'success');
                 const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
-                const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
-                const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
-                const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+                console.error("Retry Stage 3 asset design failed:", error);
+                onLog?.(`Retry Stage 3 asset design failed: ${error.message || String(error)}`, 'error');
+                alert(`Retry Stage 3 asset design failed: ${error.message}`);
                 
                 setAnalysisFlowStatus({
                     phase: 'completed',
@@ -6957,12 +6995,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         : t('重试✅ 工作圆满完成！未发现缺失的资产。', 'Retry completed: no missing entities detected, workflow finished.'),
                 });
                 
-                onLog?.('Phase 2 Asset Generation Retry Completed.', 'success');
+                onLog?.('Stage 3 asset design retry completed.', 'success');
             }
         } catch (error) {
-            console.error("Retry Phase 2 failed:", error);
-            onLog?.(`Retry Phase 2 failed: ${error.message || String(error)}`, 'error');
-            alert(`Retry Phase 2 failed: ${error.message}`);
+            console.error("Retry Stage 3 asset design failed:", error);
+            onLog?.(`Retry Stage 3 asset design failed: ${error.message || String(error)}`, 'error');
+            alert(`Retry Stage 3 asset design failed: ${error.message}`);
         } finally {
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsRetryingPhase2(false);
@@ -6995,41 +7033,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [analysisUiReport, analysisFlowStatus]);
 
     const stage1StageCards = useMemo(() => {
-        const stage1ScriptInput = getStageInputContent('stage1', 'script_content');
-        const stage1ProjectContext = getStageInputContent('stage1', 'project_context');
         const adaptedScript = getStageOutputContent('stage1', 'adapted_script');
         const visualBackfillJson = getStageOutputContent('stage1', 'project_visual_backfill');
 
         return [
             {
-                key: 'stage1-input-script',
-                eyebrow: t('第一阶段输入', 'Stage 1 Input'),
-                title: t('原始剧本', 'Source Script'),
-                status: stage1ScriptInput ? 'completed' : 'idle',
-                badge: stage1ScriptInput ? t('输入', 'Input') : t('缺失', 'Missing'),
-                summary: t('第一阶段重跑时使用的当前分集剧本。', 'Episode script used as the authoritative Stage 1 input.'),
-                content: stage1ScriptInput,
-                actions: [],
-                placeholder: t('当前分集还没有可用剧本输入。', 'No source script is available for Stage 1 yet.'),
-            },
-            {
-                key: 'stage1-input-project-context',
-                eyebrow: t('第一阶段输入', 'Stage 1 Input'),
-                title: t('项目上下文 JSON', 'Project Context JSON'),
-                status: stage1ProjectContext ? 'completed' : 'idle',
-                badge: stage1ProjectContext ? t('输入', 'Input') : t('缺失', 'Missing'),
-                summary: t('第一阶段约束使用的项目上下文。', 'Project context consumed by Stage 1.'),
-                content: formatArtifactContent(stage1ProjectContext, 'json'),
-                actions: [],
-                placeholder: t('当前项目还没有可用上下文输入。', 'No project context is available for Stage 1 yet.'),
-            },
-            {
                 key: 'stage1-adapted-script',
                 eyebrow: t('第一阶段', 'Stage 1'),
-                title: t('剧本改编正文', 'Adapted Script'),
+                title: t('优化后剧本', 'Optimized Script'),
                 status: adaptedScript ? 'completed' : (String(llmRawResultContent || '').trim() ? 'warning' : 'idle'),
                 badge: adaptedScript ? t('可回填', 'Re-importable') : t('待输出', 'Pending'),
-                summary: t('单独保存第一阶段产出的改编剧本正文，可直接回填到当前剧本编辑区。', 'Stores the Stage 1 adapted script body separately and can restore it back into the script editor.'),
+                summary: t('单独保存第一阶段产出的优化后剧本，可直接回填到当前剧本编辑区。', 'Stores the Stage 1 optimized script separately and can restore it back into the script editor.'),
                 content: adaptedScript,
                 actions: [
                     {
@@ -7054,10 +7068,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             {
                 key: 'stage1-visual-backfill',
                 eyebrow: t('第一阶段', 'Stage 1'),
-                title: t('Project Visual Backfill JSON', 'Project Visual Backfill JSON'),
+                title: t('全局风格', 'Global Style'),
                 status: visualBackfillJson ? 'completed' : 'idle',
                 badge: visualBackfillJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
-                summary: t('单独保存第一阶段产出的项目视觉回填 JSON，可重新导入项目视觉约束。', 'Stores the Stage 1 project visual backfill JSON separately for re-import.'),
+                summary: t('单独保存第一阶段产出的全局风格，可重新导入项目视觉约束。', 'Stores the Stage 1 global style separately for re-import.'),
                 content: formatArtifactContent(visualBackfillJson, 'json'),
                 actions: [
                     {
@@ -7073,10 +7087,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         loading: false,
                     },
                 ],
-                placeholder: t('第一阶段尚未产出 Project Visual Backfill JSON。', 'No Stage 1 Project Visual Backfill JSON yet.'),
+                placeholder: t('第一阶段尚未产出全局风格。', 'No Stage 1 global style yet.'),
             },
         ];
-    }, [formatArtifactContent, getStageInputContent, getStageOutputContent, handleAnalysisClick, handleImportStageArtifact, handleRestoreAdaptedScript, isAnalyzing, llmRawResultContent, t]);
+    }, [formatArtifactContent, getStageOutputContent, handleAnalysisClick, handleImportStageArtifact, handleRestoreAdaptedScript, isAnalyzing, llmRawResultContent, t]);
 
     const stage2StageCards = useMemo(() => {
         const stage2AdaptedScriptInput = getStageInputContent('stage2', 'adapted_script');
@@ -7089,18 +7103,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             {
                 key: 'stage2-input-adapted-script',
                 eyebrow: t('第二阶段输入', 'Stage 2 Input'),
-                title: t('第一阶段改编剧本', 'Stage 1 Adapted Script'),
+                title: t('优化后剧本', 'Optimized Script'),
                 status: stage2AdaptedScriptInput ? 'completed' : 'idle',
                 badge: stage2AdaptedScriptInput ? t('输入', 'Input') : t('缺失', 'Missing'),
-                summary: t('第二阶段重跑时读取的第一阶段改编剧本。', 'Stage 1 adapted script reused by Stage 2.'),
+                summary: t('第二阶段重跑时读取第一阶段的优化后剧本。', 'Stage 1 optimized script reused by Stage 2.'),
                 content: stage2AdaptedScriptInput,
                 actions: [],
-                placeholder: t('缺少第一阶段改编剧本输入。', 'Stage 2 is missing the Stage 1 adapted script input.'),
+                placeholder: t('缺少第一阶段优化后剧本输入。', 'Stage 2 is missing the Stage 1 optimized script input.'),
             },
             {
                 key: 'stage2-input-visual-backfill',
                 eyebrow: t('第二阶段输入', 'Stage 2 Input'),
-                title: t('第一阶段 Visual Backfill', 'Stage 1 Visual Backfill'),
+                title: t('全局风格', 'Global Style'),
                 status: stage2VisualBackfillInput ? 'completed' : 'idle',
                 badge: stage2VisualBackfillInput ? t('输入', 'Input') : t('缺失', 'Missing'),
                 summary: t('第二阶段继承的第一阶段 Project Visual Backfill。', 'Stage 1 Project Visual Backfill inherited by Stage 2.'),
@@ -7111,7 +7125,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             {
                 key: 'stage2-scene-markdown',
                 eyebrow: t('第二阶段', 'Stage 2'),
-                title: t('场景 Markdown', 'Scene Markdown'),
+                title: t('场景分析结果', 'Scene Analysis Result'),
                 status: sceneMarkdown ? 'completed' : 'idle',
                 badge: sceneMarkdown ? t('可导入', 'Importable') : t('待输出', 'Pending'),
                 summary: t('单独保存第二阶段的场景 Markdown 表，可直接重新导入场景工作区。', 'Stores the Stage 2 scene markdown table separately for re-import.'),
@@ -7143,10 +7157,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             {
                 key: 'stage2-subject-index',
                 eyebrow: t('第二阶段', 'Stage 2'),
-                title: t('Subject Index', 'Subject Index'),
+                title: t('资产清单', 'Asset Index'),
                 status: subjectIndex ? 'completed' : 'idle',
                 badge: subjectIndex ? t('可导入', 'Importable') : t('待输出', 'Pending'),
-                summary: t('单独保存第二阶段的 Subject Index，可按当前索引结果重新导入。', 'Stores the Stage 2 Subject Index separately for re-import.'),
+                summary: t('单独保存第二阶段的资产清单，可按当前结果重新导入。', 'Stores the Stage 2 asset index separately for re-import.'),
                 content: subjectIndex,
                 actions: [
                     {
@@ -7162,15 +7176,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         loading: false,
                     },
                 ],
-                placeholder: t('第二阶段尚未生成 Subject Index。', 'No Stage 2 Subject Index yet.'),
+                placeholder: t('第二阶段尚未生成资产清单。', 'No Stage 2 asset index yet.'),
             },
             {
                 key: 'stage2-visual-backfill',
                 eyebrow: t('第二阶段', 'Stage 2'),
-                title: t('Project Visual Backfill JSON', 'Project Visual Backfill JSON'),
+                title: t('全局风格', 'Global Style'),
                 status: visualBackfillJson ? 'completed' : 'idle',
                 badge: visualBackfillJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
-                summary: t('第二阶段默认继承并必要时校准的 Project Visual Backfill JSON。', 'Stage 2 inherited and calibrated Project Visual Backfill JSON.'),
+                summary: t('第二阶段默认继承并必要时校准的全局风格。', 'Stage 2 inherited and calibrated the global style.'),
                 content: formatArtifactContent(visualBackfillJson, 'json'),
                 actions: [
                     {
@@ -7186,7 +7200,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         loading: false,
                     },
                 ],
-                placeholder: t('第二阶段尚未产出 Project Visual Backfill JSON。', 'No Stage 2 Project Visual Backfill JSON yet.'),
+                placeholder: t('第二阶段尚未产出全局风格。', 'No Stage 2 global style yet.'),
             },
         ];
     }, [formatArtifactContent, getStageInputContent, getStageOutputContent, handleImportStageArtifact, handleRestartStage2, isAnalyzing, t]);
@@ -7201,18 +7215,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             {
                 key: 'stage3-input-subject-index',
                 eyebrow: t('第三阶段输入', 'Stage 3 Input'),
-                title: t('第二阶段 Subject Index', 'Stage 2 Subject Index'),
+                title: t('第二阶段资产清单', 'Stage 2 Asset Index'),
                 status: stage3SubjectIndexInput ? 'completed' : 'idle',
                 badge: stage3SubjectIndexInput ? t('输入', 'Input') : t('缺失', 'Missing'),
-                summary: t('第三阶段资产设计使用的第二阶段 Subject Index。', 'Stage 2 Subject Index consumed by Stage 3.'),
+                summary: t('第三阶段资产设计使用的第二阶段资产清单。', 'Stage 2 asset index consumed by Stage 3.'),
                 content: stage3SubjectIndexInput,
                 actions: [],
-                placeholder: t('缺少第二阶段 Subject Index 输入。', 'Stage 3 is missing the Stage 2 Subject Index input.'),
+                placeholder: t('缺少第二阶段资产清单输入。', 'Stage 3 is missing the Stage 2 asset index input.'),
             },
             {
                 key: 'stage3-input-visual-backfill',
                 eyebrow: t('第三阶段输入', 'Stage 3 Input'),
-                title: t('第二阶段 Visual Backfill', 'Stage 2 Visual Backfill'),
+                title: t('全局风格', 'Global Style'),
                 status: stage3VisualBackfillInput ? 'completed' : 'idle',
                 badge: stage3VisualBackfillInput ? t('输入', 'Input') : t('缺失', 'Missing'),
                 summary: t('第三阶段资产设计继承的 Project Visual Backfill。', 'Project Visual Backfill inherited by Stage 3.'),
@@ -7223,10 +7237,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             {
                 key: 'stage3-asset-design-json',
                 eyebrow: t('第三阶段', 'Stage 3'),
-                title: t('资产设计 JSON', 'Asset Design JSON'),
+                title: t('资产设计', 'Asset Design'),
                 status: assetDesignJson ? 'completed' : 'idle',
                 badge: assetDesignJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
-                summary: t('展示第三阶段的结构化资产设计 JSON，可重新导入角色、道具、场景与海报。', 'Shows Stage 3 structured asset design JSON and supports re-import.'),
+                summary: t('展示第三阶段的资产设计结果，可重新导入角色、道具、场景与海报。', 'Shows the Stage 3 asset-design result and supports re-import.'),
                 content: formatArtifactContent(assetDesignJson, 'json'),
                 actions: [
                     {
@@ -7606,7 +7620,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         {/* Stage 1 Panel */}
         <div className="flex-1 overflow-hidden">
             <LLMResultPanel
-                title={t('第一阶段：剧本改编', 'Stage 1: Script Adaptation')}
+                title={t('第一阶段：剧本修改说明 / 优化后剧本 / 全局风格', 'Stage 1: Script Notes / Optimized Script / Global Style')}
                 t={t}
                 stageCards={stage1StageCards}
                 placeholder={t('第一阶段产物...', 'Stage 1 outputs...')}
@@ -7615,7 +7629,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         {/* Stage 2 Panel */}
         <div className="flex-1 overflow-hidden">
             <LLMResultPanel
-                title={t('第二阶段：资产分析提取', 'Stage 2: Beats and Assets')}
+                title={t('第二阶段：场景分析结果 / 资产清单', 'Stage 2: Scene Analysis Result / Asset Index')}
                 t={t}
                 stageCards={stage2StageCards}
                 placeholder={t('第二阶段产物...', 'Stage 2 outputs...')}
@@ -7755,7 +7769,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
                             <h3 className="text-lg font-bold flex items-center gap-2">
                                 <Wand2 className="w-5 h-5 text-purple-500" />
-                                {phase2ResolverRef.current ? "Asset Generation Prompt Preview (Superuser)" : "Advanced AI Analysis (Superuser)"}
+                                {phase2ResolverRef.current
+                                    ? (analysisModalMode === 'stage3'
+                                        ? t('第三阶段提示词预览（超级用户）', 'Stage 3 Prompt Preview (Superuser)')
+                                        : analysisModalMode === 'stage2'
+                                            ? t('第二阶段提示词预览（超级用户）', 'Stage 2 Prompt Preview (Superuser)')
+                                            : t('提示词预览（超级用户）', 'Prompt Preview (Superuser)'))
+                                    : t('高级 AI 剧本分析（超级用户）', 'Advanced AI Analysis (Superuser)')}
                             </h3>
                             <button onClick={() => {
                                 if (phase2ResolverRef.current) {
@@ -7772,7 +7792,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="flex flex-col h-full">
                                 <label className="text-sm font-bold text-muted-foreground mb-2 flex items-center justify-between">
                                     System Prompt
-                                    <span className="text-xs font-normal opacity-70">{t('定义 AI 角色与规则', 'Define the AI persona & rules')}</span>
+                                    <span className="text-xs font-normal opacity-70">{t('定义当前阶段的 AI 角色与规则', 'Define the AI role and rules for this stage')}</span>
                                 </label>
                                 <textarea
                                     className="flex-1 w-full bg-black/30 border border-white/10 text-white/90 p-3 font-mono text-xs leading-relaxed rounded-lg focus:outline-none focus:border-purple-500/50 resize-none custom-scrollbar"
@@ -7783,8 +7803,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
                             <div className="flex flex-col h-full">
                                 <label className="text-sm font-bold text-muted-foreground mb-2 flex items-center justify-between">
-                                    User Input (Script)
-                                    <span className="text-xs font-normal opacity-70">{t('需要处理的内容', 'The content to act upon')}</span>
+                                    {analysisModalMode === 'stage3'
+                                        ? t('User Input (Stage 2 Asset Index)', 'User Input (Stage 2 Asset Index)')
+                                        : analysisModalMode === 'stage2'
+                                            ? t('User Input (Optimized Script)', 'User Input (Optimized Script)')
+                                            : t('User Input (Script)', 'User Input (Script)')}
+                                    <span className="text-xs font-normal opacity-70">{t('当前阶段需要处理的权威输入', 'The authoritative input for the current stage')}</span>
                                 </label>
                                 <textarea
                                     className="flex-1 w-full bg-black/30 border border-white/10 text-white/90 p-3 font-mono text-sm leading-relaxed rounded-lg focus:outline-none focus:border-purple-500/50 resize-none custom-scrollbar"
@@ -7832,7 +7856,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                              >
                                 {(isAnalyzing && !phase2ResolverRef.current) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                                          {phase2ResolverRef.current ? t('确认并继续', 'Confirm & Continue') : t('开始提取场景', 'Run Analysis')}
+                                          {phase2ResolverRef.current ? t('确认并继续', 'Confirm & Continue') : t('开始执行第一阶段', 'Run Stage 1')}
                              </button>
                         </div>
                     </div>

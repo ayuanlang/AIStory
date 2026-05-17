@@ -5372,7 +5372,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                     candidate = candidate[scene_heading_match.start():].strip()
 
                 end_marker_match = re.search(
-                    r"(?im)^\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)",
+                    r"(?im)^\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*\"project_visual_backfill\"|\[Project Metadata\]|\[Reusable Subject Assets)",
                     candidate,
                 )
                 if end_marker_match:
@@ -5416,11 +5416,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                     "scene_heading_count": scene_heading_count,
                 }
 
+            fallback_text = trimmed_scene_blocks or text
             return {
-                "script_text": text,
-                "method": "full_text_fallback",
+                "script_text": fallback_text,
+                "method": "full_text_fallback_trimmed" if fallback_text != text else "full_text_fallback",
                 "has_explicit_section": False,
-                "scene_heading_count": _count_scene_headings(text),
+                "scene_heading_count": _count_scene_headings(fallback_text),
             }
 
         def _extract_stage1_project_visual_backfill_json(stage1_output: str) -> str:
@@ -5572,11 +5573,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                 "content": str(content or "").strip(),
             }
 
-        def _build_stage_outputs_bundle(existing_bundle_text: str, *, analysis_raw_text: str = "", asset_raw_text: str = "", script_input_text: str = "", project_context: Any = None) -> str:
+        def _build_stage_outputs_bundle(existing_bundle_text: str, *, analysis_raw_text: str = "", asset_raw_text: str = "", script_input_text: str = "", project_context: Any = None, stage1_raw_text: str = "", stage2_raw_text: str = "") -> str:
             bundle = _load_stage_outputs_bundle(existing_bundle_text)
             analysis_text = str(analysis_raw_text or "").strip()
             asset_text = str(asset_raw_text or "").strip()
             script_text = str(script_input_text or "").strip()
+            stage1_text = str(stage1_raw_text or "").strip()
+            stage2_text = str(stage2_raw_text or "").strip()
             project_context_text = ""
             if project_context is not None:
                 try:
@@ -5585,68 +5588,76 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                     project_context_text = str(project_context)
 
             if analysis_text:
-                adapted_payload = _extract_stage1_adapted_script_payload(analysis_text)
+                stage1_authoritative_text = stage1_text or analysis_text
+                stage2_authoritative_text = stage2_text or analysis_text
+
+                adapted_payload = _extract_stage1_adapted_script_payload(stage1_authoritative_text)
                 adapted_script = str(adapted_payload.get("script_text") or "").strip()
-                visual_backfill_json = _extract_stage1_project_visual_backfill_json(analysis_text)
-                subject_index_text = _extract_subject_index_text(analysis_text)
-                scene_markdown = _extract_scene_markdown_table(analysis_text)
+                visual_backfill_json = _extract_stage1_project_visual_backfill_json(stage1_authoritative_text)
+                subject_index_text = _extract_subject_index_text(stage2_authoritative_text)
+                scene_markdown = _extract_scene_markdown_table(stage2_authoritative_text)
 
                 bundle = _upsert_stage_output(
                     bundle,
                     "stage1",
-                    title="Script Adaptation",
+                    title="第一阶段：剧本修改说明 / 优化后剧本 / 全局风格",
                     inputs={
-                        "script_content": _artifact_payload("script_content", "Episode Script", "markdown", script_text),
-                        "project_context": _artifact_payload("project_context", "Project Context", "json", project_context_text),
+                        "script_content": _artifact_payload("script_content", "原始剧本", "markdown", script_text),
+                        "project_context": _artifact_payload("project_context", "项目上下文", "json", project_context_text),
                     },
                     outputs={
-                        "adapted_script": _artifact_payload("adapted_script", "Adapted Script", "markdown", adapted_script),
-                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "Project Visual Backfill", "json", visual_backfill_json),
-                        "raw_text": _artifact_payload("raw_text", "Raw Stage 1 Output", "text", analysis_text),
+                        "adapted_script": _artifact_payload("adapted_script", "优化后剧本", "markdown", adapted_script),
+                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "全局风格", "json", visual_backfill_json),
+                        "raw_text": _artifact_payload("raw_text", "第一阶段完整结果", "text", stage1_authoritative_text),
                     },
                 )
                 bundle = _upsert_stage_output(
                     bundle,
                     "stage2",
-                    title="Beats and Assets",
+                    title="第二阶段：场景分析结果 / 资产清单",
                     inputs={
-                        "adapted_script": _artifact_payload("adapted_script", "Stage 1 Adapted Script", "markdown", adapted_script),
-                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "Stage 1 Project Visual Backfill", "json", visual_backfill_json),
+                        "adapted_script": _artifact_payload("adapted_script", "优化后剧本", "markdown", adapted_script),
+                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "全局风格", "json", visual_backfill_json),
                     },
                     outputs={
-                        "scene_markdown": _artifact_payload("scene_markdown", "Scene Markdown", "markdown", scene_markdown),
-                        "subject_index": _artifact_payload("subject_index", "Subject Index", "markdown", subject_index_text),
-                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "Project Visual Backfill", "json", visual_backfill_json),
-                        "raw_text": _artifact_payload("raw_text", "Raw Stage 2 Output", "text", analysis_text),
+                        "scene_markdown": _artifact_payload("scene_markdown", "场景分析结果", "markdown", scene_markdown),
+                        "subject_index": _artifact_payload("subject_index", "资产清单", "markdown", subject_index_text),
+                        "project_visual_backfill": _artifact_payload("project_visual_backfill", "全局风格", "json", visual_backfill_json),
+                        "raw_text": _artifact_payload("raw_text", "第二阶段完整结果", "text", stage2_authoritative_text),
                     },
                 )
 
             if asset_text:
+                stage2_subject_index_text = str((((bundle.get("stages") or {}).get("stage2") or {}).get("outputs") or {}).get("subject_index", {}).get("content") or "")
+                stage2_visual_backfill_json = str((((bundle.get("stages") or {}).get("stage2") or {}).get("outputs") or {}).get("project_visual_backfill", {}).get("content") or "")
                 bundle = _upsert_stage_output(
                     bundle,
                     "stage3",
-                    title="Asset Design",
+                    title="第三阶段：资产设计",
                     inputs={
                         "subject_index": _artifact_payload(
                             "subject_index",
-                            "Stage 2 Subject Index",
+                            "资产清单",
                             "markdown",
-                            _extract_subject_index_text(analysis_text) or str((((bundle.get("stages") or {}).get("stage2") or {}).get("outputs") or {}).get("subject_index", {}).get("content") or ""),
+                            stage2_subject_index_text or _extract_subject_index_text(stage2_text or analysis_text),
                         ),
                         "project_visual_backfill": _artifact_payload(
                             "project_visual_backfill",
-                            "Stage 2 Project Visual Backfill",
+                            "全局风格",
                             "json",
-                            _extract_stage1_project_visual_backfill_json(analysis_text) or str((((bundle.get("stages") or {}).get("stage2") or {}).get("outputs") or {}).get("project_visual_backfill", {}).get("content") or ""),
+                            stage2_visual_backfill_json or _extract_stage1_project_visual_backfill_json(stage2_text or analysis_text),
                         ),
                     },
                     outputs={
-                        "asset_design_json": _artifact_payload("asset_design_json", "Asset Design JSON", "json", asset_text),
-                        "raw_text": _artifact_payload("raw_text", "Raw Stage 3 Output", "text", asset_text),
+                        "asset_design_json": _artifact_payload("asset_design_json", "资产设计", "json", asset_text),
+                        "raw_text": _artifact_payload("raw_text", "第三阶段完整结果", "text", asset_text),
                     },
                 )
 
             return json.dumps(bundle, ensure_ascii=False, indent=2)
+
+        stage1_bundle_text = ""
+        stage2_bundle_text = ""
 
         if use_split_scene_analysis_flow:
             stage1_prompt_filename = "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
@@ -5669,6 +5680,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             ]
             loop1_res = await _run_loop(stage1_messages)
             raw_stage1_result = loop1_res.get("result_content", "")
+            stage1_bundle_text = str(raw_stage1_result or "")
             adapted_script_payload = _extract_stage1_adapted_script_payload(raw_stage1_result)
             adapted_script_text = str(adapted_script_payload.get("script_text") or "")
             project_visual_backfill_json = _extract_stage1_project_visual_backfill_json(raw_stage1_result)
@@ -5676,7 +5688,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             stage2_input_parts = [
                 "请执行第二阶段“资产分析提取”。以下‘修改后的剧本’与 Stage 1 已产出的 `Project Visual Backfill` 是唯一权威输入来源；如与原始剧本存在任何差异，一律以上游 Stage 1 结果为准。",
             ]
-            if isinstance(request.project_metadata, dict) and request.project_metadata:
+            should_backfill_stage2_project_metadata = (
+                isinstance(request.project_metadata, dict)
+                and bool(request.project_metadata)
+                and not str(adapted_script_text or "").strip()
+                and not str(project_visual_backfill_json or "").strip()
+            )
+            if should_backfill_stage2_project_metadata:
                 try:
                     stage2_input_parts.append(
                         "[Project Metadata]\n" + json.dumps(request.project_metadata, ensure_ascii=False, indent=2)
@@ -5724,6 +5742,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
             if script_hash:
                 result_content_1 = f"<!-- script_hash: {script_hash} -->\n" + result_content_1
             result_content_2 = loop2_res.get("result_content", "")
+            stage2_bundle_text = str(result_content_2 or "")
             result_content = result_content_1 + "\n\n" + result_content_2
 
             segments_meta = list(loop1_res.get("segments_meta", [])) + list(loop2_res.get("segments_meta", []))
@@ -5864,7 +5883,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                     project_context=getattr(getattr(episode, "project", None), "global_info", None),
                 )
                 logger.info(
-                    "[analyze_scene] Persisted raw phase2 output to ai_entity_design_result episode_id=%s chars=%s stage_bundle_chars=%s",
+                    "[analyze_scene] Persisted 第三阶段资产设计到 ai_entity_design_result episode_id=%s chars=%s stage_bundle_chars=%s",
                     episode_id,
                     len(result_content or ""),
                     len(str(getattr(episode, "ai_stage_outputs", "") or "")),
@@ -5890,9 +5909,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: Any = Depend
                     asset_raw_text=getattr(episode, "ai_entity_design_result", "") or "",
                     script_input_text=getattr(episode, "script_content", "") or "",
                     project_context=getattr(getattr(episode, "project", None), "global_info", None),
+                    stage1_raw_text=stage1_bundle_text,
+                    stage2_raw_text=stage2_bundle_text,
                 )
                 logger.info(
-                    "[analyze_scene] Persisted scene analysis output to ai_scene_analysis_result episode_id=%s chars=%s subject_index_chars=%s adaptation_chars=%s split_flow=%s subject_index_source=%s adaptation_source=%s stage_bundle_chars=%s",
+                    "[analyze_scene] Persisted 第一二阶段业务结果到 ai_scene_analysis_result episode_id=%s chars=%s asset_index_chars=%s optimized_script_chars=%s split_flow=%s asset_index_source=%s optimized_script_source=%s stage_bundle_chars=%s",
                     episode_id,
                     len(result_content or ""),
                     len(persisted_subject_index or ""),
