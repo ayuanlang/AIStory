@@ -4526,11 +4526,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     <Trash2 size={16} />
                                 </button>
                             </div>
-                            {isEntityAnalyzed(entity) && (
-                                <div className="absolute bottom-2 right-2 z-30 px-2 py-1 rounded-md bg-emerald-500/20 border border-emerald-400/40 text-emerald-100 text-[10px] font-bold pointer-events-none">
-                                    {t('已分析', 'Analyzed')}
-                                </div>
-                            )}
                         </div>
 
                         <div className="p-3 border-t border-white/10 flex-1 flex flex-col">
@@ -4540,10 +4535,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     const dependencies = parseVisualDependencies(entity.visual_dependencies);
                                     const hasDependencies = dependencies && dependencies.length > 0;
                                     const isDependedOn = dependedKeys.has(normalizeSubjectKeyForDeps(entity.name)) || (entity.name_en && dependedKeys.has(normalizeSubjectKeyForDeps(entity.name_en)));
+                                    const analyzed = isEntityAnalyzed(entity);
                                     const isCharacter = entity.type === 'character';
 
-                                    return (hasDependencies || isDependedOn) ? (
-                                        <div className="flex items-center gap-1.5 shrink-0 overflow-hidden">
+                                    return (hasDependencies || isDependedOn || analyzed) ? (
+                                        <div className="flex items-center gap-1.5 shrink-0 overflow-hidden flex-wrap justify-end max-w-[65%]">
+                                            {analyzed && (
+                                                <span className="shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-emerald-300/40 text-emerald-200 bg-emerald-500/20" title={t('该实体已完成图片分析', 'This entity has completed image analysis')}>
+                                                    <Sparkles size={10} />
+                                                    {t('已分析', 'Analyzed')}
+                                                </span>
+                                            )}
                                             {hasDependencies && (
                                                 <span className={`shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${isCharacter ? 'border-amber-300/40 text-amber-200 bg-amber-500/20' : 'border-sky-300/40 text-sky-200 bg-sky-500/20'}`} title={dependencies.join(', ')}>
                                                     <LinkIcon size={10} />
