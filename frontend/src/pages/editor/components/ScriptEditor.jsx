@@ -209,6 +209,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const looksLikeSubjectIndex = (candidateText) => {
             const candidate = String(candidateText || '');
             return /subject_no\s*=|subject_type\s*=|subject_name_(?:zh|en|exact)\s*=|subject_type\s*\|/i.test(candidate)
+            || /(?:^|\n)\s*[A-Z]?\d{3,}\s*\|\s*(?:character|prop|environment|cover_poster)\b/i.test(candidate)
                 || /(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)/i.test(candidate);
         };
 
@@ -291,8 +292,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     } else if (hasDownstreamMarker && looksLikeSubjectIndex(authoritativeSubjectText)) {
                         extractedText = trimSubjectIndexSection(authoritativeSubjectText);
                         hasStructuredSubjectIndex = !!extractedText;
-                    } else {
-                        extractedText = authoritativeSubjectText;
                     }
                 }
             }
@@ -310,7 +309,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         return {
             authoritativeSubjectText,
-            subjectIndexText: extractedText,
+            subjectIndexText: hasStructuredSubjectIndex ? extractedText : '',
             adaptationText: extractedAdaptationText,
             hasStructuredSubjectIndex,
         };
@@ -4055,10 +4054,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Try to match the block wrapped by at least 5 dashes: ---------
         if (options?.isRetryPhase2) {
             onLog?.(`[Stage 3 Asset Design] Retry mode enabled. Bypassing asset-index structural check.`);
-            // When explicitly retrying Stage 3, we assume authoritativeSubjectText/subjectIndexText is already the correct content.
-            // If the parser returned empty because it failed to find a header, use the explicit text instead.
+            // Retry may receive a manually edited Subject Index block without the original Stage 2 wrapper.
             if (!subjectIndexText.trim() && explicitText) {
-                subjectIndexText = explicitText;
+                const explicitSections = extractAnalysisSections(explicitText);
+                subjectIndexText = explicitSections?.hasStructuredSubjectIndex
+                    ? String(explicitSections.subjectIndexText || '').trim()
+                    : '';
             }
         } else if (extractedSections.hasStructuredSubjectIndex) {
             onLog?.(`[Stage 2 Asset Index] Extracted asset index (length: ${subjectIndexText.length})`);

@@ -88,43 +88,56 @@ export default function LlmLogViewer({ log, onClose }) {
           <span><strong className="text-gray-200">Date:</strong> {new Date(log.created_at).toLocaleString()}</span>
         </div>
 
-        <div className="space-y-6 overflow-y-auto pr-2 custom-scrollbar flex-1">
+        <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
           {messages.length > 0 ? messages.map((m, i) => (
-            <div key={i} className={`rounded-xl p-4 border ${m.role === 'system' ? 'bg-purple-500/10 border-purple-500/20' : m.role === 'user' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-emerald-500/10 border-emerald-500/20'} relative group`}>
-              <div className="flex justify-between items-start mb-2">
-                  <div className="text-xs font-bold uppercase tracking-wider opacity-50">
-                     {m.role === 'system' ? t('System 提示词', 'System Prompt') : m.role === 'user' ? t('User 提示词', 'User Prompt') : m.role === 'assistant' ? t('Assistant 助手', 'Assistant') : m.role}
+            <details key={i} className={`rounded-xl border ${m.role === 'system' ? 'bg-purple-500/10 border-purple-500/20' : m.role === 'user' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-emerald-500/10 border-emerald-500/20'} relative group`}>
+              <summary className="flex justify-between items-center p-4 cursor-pointer outline-none select-none list-none [&::-webkit-details-marker]:hidden">
+                  <div className="text-xs font-bold uppercase tracking-wider opacity-60 flex items-center space-x-2">
+                     <span className="text-gray-500 transition-transform group-open:rotate-90">▶</span>
+                     <span>{m.role === 'system' ? t('System 提示词', 'System Prompt') : m.role === 'user' ? t('User 提示词', 'User Prompt') : m.role === 'assistant' ? t('Assistant 助手', 'Assistant') : m.role}</span>
                   </div>
-                  <button onClick={() => handleCopy(typeof m.content === 'string' ? m.content : JSON.stringify(m.content))} className="text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Copy">
+                  <button onClick={(e) => { e.preventDefault(); handleCopy(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)); }} className="text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Copy">
                      <Copy size={14} />
                   </button>
+              </summary>
+              <div className="px-4 pb-4 overflow-x-auto break-words border-t border-white/10 pt-4">
+                {renderMessageContent(m.content)}
               </div>
-              <div className="mt-2 overflow-x-auto break-words">{renderMessageContent(m.content)}</div>
-            </div>
+            </details>
           )) : (
-             <div className="space-y-1 relative group">
-               <div className="flex justify-between items-center text-gray-500 text-xs mb-1">
-                 <span>Payload JSON</span>
-                 <button onClick={() => handleCopy(log.payload_json)} className="hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"><Copy size={14}/></button>
+             <details className="rounded-xl border bg-gray-500/10 border-gray-500/20 relative group">
+               <summary className="flex justify-between items-center p-4 cursor-pointer outline-none select-none list-none [&::-webkit-details-marker]:hidden">
+                 <div className="text-xs font-bold uppercase tracking-wider opacity-60 flex items-center space-x-2">
+                   <span className="text-gray-500 transition-transform group-open:rotate-90">▶</span>
+                   <span>Payload JSON</span>
+                 </div>
+                 <button onClick={(e) => { e.preventDefault(); handleCopy(log.payload_json); }} className="text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Copy size={14}/>
+                 </button>
+               </summary>
+               <div className="px-4 pb-4 overflow-x-auto break-words border-t border-white/10 pt-4">
+                 <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{log.payload_json}</pre>
                </div>
-               <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{log.payload_json}</pre>
-             </div>
+             </details>
           )}
 
-          {(completionContent || log.response_json) && (
-            <div className="rounded-xl p-4 border bg-gray-500/10 border-gray-500/20 relative group">
-              <div className="flex justify-between items-start mb-2">
-                  <div className="text-xs font-bold uppercase tracking-wider opacity-50">{t('模型回复结果', 'Model Response')}</div>
-                  <button onClick={() => handleCopy(completionContent || log.response_json)} className="text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Copy">
+          {(completionContent || (log.tag !== 'LLM_REQUEST' && log.response_json)) && (
+            <details className="rounded-xl border bg-gray-500/10 border-gray-500/20 relative group">
+              <summary className="flex justify-between items-center p-4 cursor-pointer outline-none select-none list-none [&::-webkit-details-marker]:hidden">
+                  <div className="text-xs font-bold uppercase tracking-wider opacity-60 flex items-center space-x-2">
+                    <span className="text-gray-500 transition-transform group-open:rotate-90">▶</span>
+                    <span>{t('模型回复结果', 'Model Response')}</span>
+                  </div>
+                  <button onClick={(e) => { e.preventDefault(); handleCopy(completionContent || log.response_json) }} className="text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Copy">
                        <Copy size={14} />
                   </button>
-              </div>
-              <div className="mt-2 overflow-x-auto break-words">
+              </summary>
+              <div className="px-4 pb-4 overflow-x-auto break-words border-t border-white/10 pt-4">
                 {completionContent ? <div className="prose prose-invert max-w-none prose-sm"><Markdown>{completionContent}</Markdown></div> : (
                    <pre className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-words overflow-x-auto border border-white/5 text-xs text-gray-300">{log.response_json}</pre>
                 )}
               </div>
-            </div>
+            </details>
           )}
         </div>
       </div>
