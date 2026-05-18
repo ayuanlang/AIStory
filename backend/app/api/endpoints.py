@@ -363,19 +363,44 @@ def _cleanup_video_dedup_cache(now_ts: float) -> None:
         for key, _ in ordered[:overflow]:
             _VIDEO_RECENT_RESULTS_BY_KEY.pop(key, None)
 
-ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, List[str]]] = {
+ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, Any]] = {
     "characters": {
-        "en_required": ["character sheet", "Front", "Back", "Side", "Close-up", "white"],
-        "cn_required": []
+        "required_text_fields": [
+            "subject_no", "name", "name_en", "base_name_en", "description_cn",
+            "gender", "role", "archetype", "appearance_cn", "clothing",
+            "action_characteristics", "generation_prompt_cn", "generation_prompt_en",
+            "negative_prompt_en", "anchor_description",
+        ],
+        "required_present_fields": ["visual_dependencies", "dependency_strategy"],
+        "dependency_strategy_required_keys": ["type", "logic"],
     },
     "props": {
-        "en_required": ["prop sheet", "Front", "Back", "Side", "Close-up", "white"],
-        "cn_required": []
+        "required_text_fields": [
+            "subject_no", "name", "name_en", "base_name_en", "type",
+            "description_cn", "generation_prompt_cn", "generation_prompt_en",
+            "negative_prompt_en", "anchor_description",
+        ],
+        "required_present_fields": ["visual_dependencies", "dependency_strategy"],
+        "dependency_strategy_required_keys": ["type", "logic"],
     },
     "environments": {
-        "en_required": [],
-        "cn_required": []
-    }
+        "required_text_fields": [
+            "subject_no", "name", "name_en", "base_name_en", "atmosphere",
+            "visual_params", "description_cn", "generation_prompt_cn",
+            "generation_prompt_en", "negative_prompt_en", "anchor_description",
+        ],
+        "required_present_fields": ["visual_dependencies", "dependency_strategy"],
+        "dependency_strategy_required_keys": ["type", "logic"],
+    },
+    "posters": {
+        "required_text_fields": [
+            "subject_no", "name", "name_en", "base_name_en", "atmosphere",
+            "visual_params", "description_cn", "generation_prompt_cn",
+            "generation_prompt_en", "negative_prompt_en", "anchor_description",
+        ],
+        "required_present_fields": ["visual_dependencies", "dependency_strategy"],
+        "dependency_strategy_required_keys": ["type", "logic"],
+    },
 }
 
 _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "360")))
@@ -4626,13 +4651,40 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             warnings: List[str] = []
             mismatches: List[Dict[str, Any]] = []
 
-            for section in ("characters", "props", "environments", "covers"):
+            def _missing_text_field(value: Any) -> bool:
+                return not str(value or "").strip()
+
+            def _missing_present_field(field_name: str, item: Dict[str, Any]) -> bool:
+                if field_name not in item:
+                    return True
+                value = item.get(field_name)
+                if field_name == "visual_dependencies":
+                    return not isinstance(value, list)
+                if field_name == "dependency_strategy":
+                    return not isinstance(value, dict)
+                return value is None
+
+            section_aliases = {
+                "characters": ["characters"],
+                "props": ["props"],
+                "environments": ["environments"],
+                "posters": ["posters", "covers"],
+            }
+
+            for section, payload_keys in section_aliases.items():
                 rules = syntax_rules.get(section) if isinstance(syntax_rules, dict) else None
                 if not isinstance(rules, dict):
                     continue
-                en_required = [str(x).strip() for x in (rules.get("en_required") or []) if str(x).strip()]
-                cn_required = [str(x).strip() for x in (rules.get("cn_required") or []) if str(x).strip()]
-                items = entities_payload.get(section) or []
+                required_text_fields = [str(x).strip() for x in (rules.get("required_text_fields") or []) if str(x).strip()]
+                required_present_fields = [str(x).strip() for x in (rules.get("required_present_fields") or []) if str(x).strip()]
+                dependency_strategy_required_keys = [str(x).strip() for x in (rules.get("dependency_strategy_required_keys") or []) if str(x).strip()]
+
+                items: Any = []
+                for payload_key in payload_keys:
+                    candidate_items = entities_payload.get(payload_key)
+                    if isinstance(candidate_items, list):
+                        items = candidate_items
+                        break
                 if not isinstance(items, list):
                     continue
 
@@ -4640,20 +4692,24 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     if not isinstance(item, dict):
                         continue
                     name = str(item.get("name") or item.get("name_en") or "").strip() or "(unnamed)"
-                    prompt_en = str(item.get("generation_prompt_en") or "")
-                    prompt_cn = str(item.get("generation_prompt_cn") or "")
+                    missing_text_fields = [field for field in required_text_fields if _missing_text_field(item.get(field))]
+                    missing_present_fields = [field for field in required_present_fields if _missing_present_field(field, item)]
 
-                    missing_en = [m for m in en_required if m not in prompt_en]
-                    missing_cn = [m for m in cn_required if m not in prompt_cn]
+                    missing_dependency_strategy_keys: List[str] = []
+                    dependency_strategy = item.get("dependency_strategy")
+                    if isinstance(dependency_strategy, dict):
+                        missing_dependency_strategy_keys = [
+                            field for field in dependency_strategy_required_keys
+                            if _missing_text_field(dependency_strategy.get(field))
+                        ]
 
-                    if not prompt_en.strip() or not prompt_cn.strip() or missing_en or missing_cn:
+                    if missing_text_fields or missing_present_fields or missing_dependency_strategy_keys:
                         mismatches.append({
                             "section": section,
                             "name": name,
-                            "missing_en_markers": missing_en,
-                            "missing_cn_markers": missing_cn,
-                            "missing_generation_prompt_en": not bool(prompt_en.strip()),
-                            "missing_generation_prompt_cn": not bool(prompt_cn.strip()),
+                            "missing_text_fields": missing_text_fields,
+                            "missing_present_fields": missing_present_fields,
+                            "missing_dependency_strategy_keys": missing_dependency_strategy_keys,
                         })
 
             if mismatches:
@@ -4664,12 +4720,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     for it in preview
                 ])
                 warnings.append(
-                    "Prompt template syntax warning: generation_prompt_cn/en must match fixed template markers for characters/props/environments/covers. "
+                    "Entity design schema warning: some assets are missing required fields or have empty prompt/schema values. "
                     f"Examples: {summary}"
                 )
 
             return {
-                "checked_sections": ["characters", "props", "environments", "covers"],
+                "checked_sections": ["characters", "props", "environments", "posters"],
                 "mismatch_count": len(mismatches),
                 "mismatches": mismatches,
                 "warning_codes": warning_codes,
