@@ -162,7 +162,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
-export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes = [], uiLang = 'en', mode = 'overview' }) => {
+export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onJumpToEpisode, episodes = [], uiLang = 'en', mode = 'overview' }) => {
     const functionApiConfigs = useFunctionApis();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const resolveVideoSoundFromInfo = (payload) => {
@@ -186,7 +186,9 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
         if (!Number.isFinite(parsed) || parsed <= 0) return "";
         return String(Math.trunc(parsed));
     };
-    const [project, setProject] = useState(null);
+    const [project, setProject] = useState(() => (
+        initialProject && String(initialProject.id) === String(id) ? initialProject : null
+    ));
     const { addLog } = useLog();
     const [info, setInfo] = useState({
         script_title: "",
@@ -322,7 +324,10 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
         entity_required: true,
         shot_required: true,
     });
-    const [costEstimation, setCostEstimation] = useState(null);
+    const [costEstimation, setCostEstimation] = useState(() => {
+        const cached = initialProject?.global_info?.cost_estimation;
+        return cached && typeof cached === 'object' ? cached : null;
+    });
     const [isCostLoading, setIsCostLoading] = useState(false);
     const [isCostRefreshing, setIsCostRefreshing] = useState(false);
     const [costError, setCostError] = useState('');
@@ -400,7 +405,13 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
     }, []);
 
     useEffect(() => {
-        if (!id) return;
+        if (!id || mode !== 'generator') {
+            if (episodeScriptsStatusTimerRef.current && !isGeneratingEpisodeScripts) {
+                clearInterval(episodeScriptsStatusTimerRef.current);
+                episodeScriptsStatusTimerRef.current = null;
+            }
+            return;
+        }
         let cancelled = false;
 
         const hydrateEpisodeScriptsStatus = async () => {
@@ -422,20 +433,15 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
         return () => {
             cancelled = true;
         };
-    }, [id, pollEpisodeScriptsStatus, isGeneratingEpisodeScripts]);
+    }, [id, mode, pollEpisodeScriptsStatus, isGeneratingEpisodeScripts]);
 
     useEffect(() => {
-        if (!id || mode !== 'overview') return;
+        if (!id || mode !== 'overview' || !expandedSections.review) return;
         loadProjectReviewPanel();
-    }, [id, mode, loadProjectReviewPanel]);
+    }, [expandedSections.review, id, mode, loadProjectReviewPanel]);
 
     useEffect(() => {
-        if (!id || mode !== 'overview') return;
-        loadProjectCost({ forceRecompute: false });
-    }, [id, mode, loadProjectCost]);
-
-    useEffect(() => {
-        if (!id || mode !== 'overview') return undefined;
+        if (!id || mode !== 'overview' || !expandedSections.review) return undefined;
 
         const refreshIfVisible = () => {
             if (document.visibilityState !== 'visible') return;
@@ -451,9 +457,10 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
             document.removeEventListener('visibilitychange', refreshIfVisible);
             window.removeEventListener('focus', refreshIfVisible);
         };
-    }, [id, mode, loadProjectReviewPanel]);
+    }, [expandedSections.review, id, mode, loadProjectReviewPanel]);
 
     useEffect(() => {
+        if (!expandedSections.review) return;
         fetchMe()
             .then((user) => {
                 setCurrentUserId(Number(user?.id || 0) || null);
@@ -461,7 +468,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
             .catch(() => {
                 setCurrentUserId(null);
             });
-    }, []);
+    }, [expandedSections.review]);
 
     const quickReviewUnreadCount = useMemo(
         () => projectReviewThreads.filter((thread) => !!thread?.has_unread).length,
@@ -854,16 +861,16 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
     };
 
     useEffect(() => {
-    // ... no changes to rest
+        const cachedInitialProject = initialProject && String(initialProject.id) === String(id) ? initialProject : null;
 
         const load = async () => {
             try {
-                const data = await fetchProject(id);
+                const data = cachedInitialProject || await fetchProject(id);
                 setProject(data);
 
                 try {
                     const missing = Array.isArray(data?.missing_basic_fields) ? data.missing_basic_fields : [];
-                    if (missing.length > 0) {
+                    if (!cachedInitialProject && missing.length > 0) {
                         const labels = missing.map((field) => {
                             if (field === 'type') return t('类型', 'Type');
                             if (field === 'country_region') return t('国家地域', 'Country/Region');
@@ -1071,7 +1078,7 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
             }
         };
         load();
-    }, [id]);
+    }, [id, initialProject, t]);
 
     // Auto-save Character Canon tag/identity categories (debounced) when in edit mode
     useEffect(() => {
@@ -1857,14 +1864,16 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
         setInfo(prev => ({ ...prev, borrowed_films: arr }));
     };
 
-    const episodeScriptResults = Array.isArray(episodeScriptsProgress?.results) ? episodeScriptsProgress.results : [];
-    const episodesInRun = Number(episodeScriptsProgress?.episodes_in_run || 0);
-    const processedCount = Number(episodeScriptsProgress?.processed || 0);
+    const isGeneratorMode = mode === 'generator';
+    const episodeScriptResults = isGeneratorMode && Array.isArray(episodeScriptsProgress?.results) ? episodeScriptsProgress.results : [];
+    const episodesInRun = isGeneratorMode ? Number(episodeScriptsProgress?.episodes_in_run || 0) : 0;
+    const processedCount = isGeneratorMode ? Number(episodeScriptsProgress?.processed || 0) : 0;
     const progressPercent = episodesInRun > 0 ? Math.min(100, Math.round((processedCount / episodesInRun) * 100)) : 0;
     const episodeScriptsRunning = Boolean(episodeScriptsProgress?.running) || isGeneratingEpisodeScripts;
     const episodeScriptsStopRequested = Boolean(episodeScriptsProgress?.stop_requested);
 
     const episodeTitleByNumber = useMemo(() => {
+        if (!isGeneratorMode) return new Map();
         const titleMap = new Map();
         (Array.isArray(episodes) ? episodes : []).forEach((ep, index) => {
             const parsedNumber = Number(ep?.episode_number) > 0
@@ -1874,10 +1883,10 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
             titleMap.set(parsedNumber, String(ep?.title || '').trim());
         });
         return titleMap;
-    }, [episodes]);
+    }, [episodes, isGeneratorMode]);
 
     const episodeResultRows = useMemo(() => {
-        if (!episodeScriptsProgress || episodesInRun <= 0) return [];
+        if (!isGeneratorMode || !episodeScriptsProgress || episodesInRun <= 0) return [];
         const byEpisodeNumber = new Map();
         for (const item of episodeScriptResults) {
             const num = Number(item?.episode_number || 0);
@@ -1908,11 +1917,17 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
             }
         }
         return rows;
-    }, [episodeScriptsProgress, episodeScriptResults, episodesInRun, episodeTitleByNumber, t]);
+    }, [episodeScriptsProgress, episodeScriptResults, episodesInRun, episodeTitleByNumber, isGeneratorMode, t]);
 
-    const failedEpisodeRows = episodeResultRows.filter(item => item?.status === 'failed' && item?.episode_id);
+    const failedEpisodeRows = useMemo(() => {
+        if (!isGeneratorMode || episodeResultRows.length === 0) return [];
+        return episodeResultRows.filter(item => item?.status === 'failed' && item?.episode_id);
+    }, [episodeResultRows, isGeneratorMode]);
+
+    const shouldComputeCostPanel = mode === 'overview' && expandedSections.cost;
 
     const episodeCostChart = useMemo(() => {
+        if (!shouldComputeCostPanel) return { rows: [], maxStage: 0 };
         const rows = (costEstimation && typeof costEstimation === 'object' && Array.isArray(costEstimation.episode_costs))
             ? costEstimation.episode_costs
             : [];
@@ -1935,21 +1950,23 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
         });
         const maxStage = normalized.reduce((acc, row) => Math.max(acc, row.overview_cost, row.suggested_cost, row.budget_cost), 0);
         return { rows: normalized, maxStage };
-    }, [costEstimation]);
+    }, [costEstimation, shouldComputeCostPanel]);
 
     const costExecutionSuggestions = useMemo(() => {
+        if (!shouldComputeCostPanel) return [];
         const suggestions = (costEstimation && typeof costEstimation === 'object' && Array.isArray(costEstimation.execution_suggestions))
             ? costEstimation.execution_suggestions
             : [];
         return suggestions.filter((item) => typeof item === 'string' && item.trim().length > 0);
-    }, [costEstimation]);
+    }, [costEstimation, shouldComputeCostPanel]);
 
     const hasNewCostSchema = useMemo(() => {
+        if (!shouldComputeCostPanel) return false;
         if (!costEstimation || typeof costEstimation !== 'object') return false;
         if (Object.prototype.hasOwnProperty.call((costEstimation?.summary || {}), 'suggested_estimate')) return true;
         const firstRow = Array.isArray(costEstimation?.episode_costs) ? costEstimation.episode_costs[0] : null;
         return !!(firstRow && Object.prototype.hasOwnProperty.call(firstRow, 'suggested_cost'));
-    }, [costEstimation]);
+    }, [costEstimation, shouldComputeCostPanel]);
 
     const costStageLabel = useCallback((stageKey) => {
         const key = String(stageKey || '').trim();
@@ -2203,17 +2220,29 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                                 <div className="p-4 sm:p-6 space-y-6">
                                     <div className="flex flex-wrap items-center justify-between gap-3">
                                         <div className="text-sm text-muted-foreground">
-                                            {t('当前阶段估算', 'Current Stage Estimate')}: <span className="text-white font-semibold">{Number(costEstimation?.summary?.current_estimate || 0).toLocaleString()}</span>
-                                            <span className="ml-3">{t('当前阶段', 'Current Stage')}: <span className="text-white font-semibold">{costStageLabel(costEstimation?.summary?.current_stage || 'overview')}</span></span>
-                                            <span className="ml-3">{t('总倍率', 'Total Multiplier')}: <span className="text-white font-semibold">{Number(costEstimation?.project_multiplier || 1).toFixed(3)}x</span></span>
+                                            {costEstimation ? (
+                                                <>
+                                                    {t('当前阶段估算', 'Current Stage Estimate')}: <span className="text-white font-semibold">{Number(costEstimation?.summary?.current_estimate || 0).toLocaleString()}</span>
+                                                    <span className="ml-3">{t('当前阶段', 'Current Stage')}: <span className="text-white font-semibold">{costStageLabel(costEstimation?.summary?.current_stage || 'overview')}</span></span>
+                                                    <span className="ml-3">{t('总倍率', 'Total Multiplier')}: <span className="text-white font-semibold">{Number(costEstimation?.project_multiplier || 1).toFixed(3)}x</span></span>
+                                                </>
+                                            ) : (
+                                                t('当前未缓存成本快照，可按需加载或重算。', 'No cached cost snapshot yet. Load or recompute on demand.')
+                                            )}
                                         </div>
                                         <button
-                                            onClick={() => loadProjectCost({ forceRecompute: true })}
+                                            onClick={() => loadProjectCost({ forceRecompute: !!costEstimation })}
                                             disabled={isCostRefreshing || isCostLoading}
                                             className={`px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 ${(isCostRefreshing || isCostLoading) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                         >
-                                            {isCostRefreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                            {isCostRefreshing ? t('重算中...', 'Recomputing...') : t('重算成本', 'Recompute Cost')}
+                                            {(isCostRefreshing || isCostLoading) ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                            {isCostRefreshing
+                                                ? t('重算中...', 'Recomputing...')
+                                                : isCostLoading
+                                                    ? t('加载中...', 'Loading...')
+                                                    : costEstimation
+                                                        ? t('重算成本', 'Recompute Cost')
+                                                        : t('加载成本', 'Load Cost')}
                                         </button>
                                     </div>
 
@@ -2226,6 +2255,12 @@ export const ProjectOverview = ({ id, onProjectUpdate, onJumpToEpisode, episodes
                                     {isCostLoading && !costEstimation && (
                                         <div className="text-sm text-muted-foreground flex items-center gap-2">
                                             <Loader2 className="w-4 h-4 animate-spin" /> {t('加载成本评估中...', 'Loading cost estimation...')}
+                                        </div>
+                                    )}
+
+                                    {!isCostLoading && !costEstimation && !costError && (
+                                        <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm text-muted-foreground">
+                                            {t('当前展示优先使用项目已保存的成本快照；如需最新值，请点击“加载成本”或直接“重算成本”。', 'The panel prefers a saved project cost snapshot. Click "Load Cost" for the cached snapshot or recompute for the latest values.')}
                                         </div>
                                     )}
 

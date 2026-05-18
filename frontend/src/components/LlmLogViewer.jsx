@@ -52,6 +52,8 @@ export default function LlmLogViewer({ log, onClose }) {
     completionContent = responseObj.content;
   } else if (responseObj && responseObj.choices && responseObj.choices[0] && responseObj.choices[0].text) {
     completionContent = responseObj.choices[0].text;
+  } else if (responseObj && responseObj.partial_content !== undefined) {
+    completionContent = responseObj.partial_content;
   }
 
   const renderMessageContent = (content) => {
@@ -109,7 +111,7 @@ export default function LlmLogViewer({ log, onClose }) {
              </div>
           )}
 
-          {(completionContent || (!messages.length && log.response_json)) && (
+          {(completionContent || log.response_json) && (
             <div className="rounded-xl p-4 border bg-gray-500/10 border-gray-500/20 relative group">
               <div className="flex justify-between items-start mb-2">
                   <div className="text-xs font-bold uppercase tracking-wider opacity-50">{t('模型回复结果', 'Model Response')}</div>

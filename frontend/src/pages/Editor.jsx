@@ -189,6 +189,7 @@ const ShotsView = lazyWithRetry(() => import('./editor/components/ShotsView').th
 const VideoStudio = lazyWithRetry(() => import('../components/VideoStudio'));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
+const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots', 'montage']);
 
 const Editor = ({
     projectId,
@@ -203,10 +204,12 @@ const Editor = ({
     const params = useParams();
     const id = projectId || params.id;
     const navigate = useNavigate();
+    const cachedInitialProject = initialProject && String(initialProject.id) === String(id) ? initialProject : null;
 
-    const [isInitializing, setIsInitializing] = useState(!initialProject);
-    const [project, setProject] = useState(initialProject || null);
+    const [isInitializing, setIsInitializing] = useState(!cachedInitialProject);
+    const [project, setProject] = useState(cachedInitialProject || null);
     const [episodes, setEpisodes] = useState([]);
+    const [isEpisodesLoading, setIsEpisodesLoading] = useState(false);
     const [activeEpisodeId, setActiveEpisodeId] = useState(initialEpisodeId);
     const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
     const [activeTab, setActiveTab] = useState(
@@ -249,6 +252,7 @@ const Editor = ({
 
     // Global Logging Context
     const { addLog } = useLog();
+    const episodesLoadPromiseRef = useRef(null);
 
     const loadProjectData = async () => {
         if (!id) return;
@@ -277,6 +281,46 @@ const Editor = ({
             if (stats) setProjectBillingStats({ user_cost: stats.user_cost || 0, total_cost: stats.total_cost || 0 });
         }).catch(() => {});
     }, [id]);
+
+    const hydrateEpisodesState = useCallback((eps) => {
+        const normalized = Array.isArray(eps) ? eps : [];
+        setEpisodes(normalized);
+        if (normalized.length > 0) {
+            setActiveEpisodeId((prev) => {
+                const hasActiveEpisode = !!prev && normalized.some((ep) => String(ep.id) === String(prev));
+                return hasActiveEpisode ? prev : normalized[0].id;
+            });
+        } else {
+            setActiveEpisodeId(null);
+        }
+        return normalized;
+    }, []);
+
+    const loadEpisodesForEditor = useCallback(async (projectSnapshot = null) => {
+        if (!id) return [];
+        if (episodesLoadPromiseRef.current) {
+            return episodesLoadPromiseRef.current;
+        }
+
+        setIsEpisodesLoading(true);
+        const loadPromise = (async () => {
+            let eps = await fetchEpisodes(id).catch(() => []);
+            if (eps.length === 0 && projectSnapshot) {
+                const newEp = await createEpisode(id, { title: "Episode 1" });
+                eps = [newEp];
+            }
+            return hydrateEpisodesState(eps);
+        })();
+
+        episodesLoadPromiseRef.current = loadPromise;
+
+        try {
+            return await loadPromise;
+        } finally {
+            episodesLoadPromiseRef.current = null;
+            setIsEpisodesLoading(false);
+        }
+    }, [hydrateEpisodesState, id]);
 
     useEffect(() => {
         const handler = () => refreshProjectBillingStats();
@@ -378,12 +422,14 @@ const Editor = ({
         let isStale = false;
         const initEditor = async () => {
             if (!id) return;
-            if (!initialProject) {
+            if (!cachedInitialProject) {
                 setIsInitializing(true);
             }
             try {
                 const [p, user] = await Promise.all([
-                    fetchProject(id).catch(e => { console.error(e); return null; }),
+                    cachedInitialProject
+                        ? Promise.resolve(cachedInitialProject)
+                        : fetchProject(id).catch(e => { console.error(e); return null; }),
                     fetchMe().catch(() => null)
                 ]);
                 
@@ -407,24 +453,6 @@ const Editor = ({
                     if (stats) setProjectBillingStats({ user_cost: stats.user_cost || 0, total_cost: stats.total_cost || 0 });
                 }).catch(() => {});
 
-                let eps = await fetchEpisodes(id).catch(() => []);
-                if (isStale) return;
-                
-                if (eps.length === 0 && p) {
-                     const newEp = await createEpisode(id, { title: "Episode 1" });
-                     eps = [newEp];
-                }
-                
-                setEpisodes(eps);
-                if (eps.length > 0) {
-                    const hasActiveEpisode = !!activeEpisodeId && eps.some((ep) => String(ep.id) === String(activeEpisodeId));
-                    if (!hasActiveEpisode) {
-                        setActiveEpisodeId(eps[0].id);
-                    }
-                } else if (activeEpisodeId) {
-                    setActiveEpisodeId(null);
-                }
-
                 const currentStage = p?.global_info?.workflow_stage || 'script';
                 let startTab = initialActiveTab || 'overview';
                 
@@ -435,6 +463,13 @@ const Editor = ({
                 
                 if (isStale) return;
                 setActiveTab(startTab);
+
+                if (EPISODE_REQUIRED_TABS.has(startTab)) {
+                    await loadEpisodesForEditor(p);
+                    if (isStale) return;
+                } else {
+                    void loadEpisodesForEditor(p);
+                }
 
             } catch (err) {
                 console.error("Initialization error:", err);
@@ -451,7 +486,13 @@ const Editor = ({
             isStale = true;
             window.removeEventListener('aistory:workflow_stage_check', handleStageRefresh);
         };
-    }, [id]);
+    }, [cachedInitialProject, id, initialActiveTab, loadEpisodesForEditor]);
+
+    useEffect(() => {
+        if (!EPISODE_REQUIRED_TABS.has(activeTab)) return;
+        if (episodes.length > 0 || isEpisodesLoading) return;
+        void loadEpisodesForEditor(project);
+    }, [activeTab, episodes.length, isEpisodesLoading, loadEpisodesForEditor, project]);
 
     useEffect(() => {
         try {
@@ -3403,10 +3444,22 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                             </div>
                         ) : (
                         <React.Suspense fallback={<div className="flex-1 flex items-center justify-center h-[50vh]"><Loader2 className="h-8 w-8 text-primary animate-spin" /></div>}>
+                            {EPISODE_REQUIRED_TABS.has(activeTab) && !activeEpisode && isEpisodesLoading ? (
+                                <div className="flex-1 flex flex-col items-center justify-center h-[50vh]">
+                                    <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.2, ease: "linear" }} className="mb-4">
+                                        <Loader2 className="h-8 w-8 text-primary opacity-80" />
+                                    </motion.div>
+                                    <div className="text-white/60 text-sm font-medium tracking-wide uppercase animate-pulse">
+                                        {t('正在加载分集', 'Loading episodes')}...
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
                             {activeTab === 'overview' && (
                                 <>
                                     <ProjectOverview
                                         id={id}
+                                        project={project}
                                         key={refreshKey}
                                         episodes={episodes}
                                         uiLang={uiLang}
@@ -3430,6 +3483,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                             {activeTab === 'generator' && (
                                 <ProjectOverview
                                     id={id}
+                                    project={project}
                                     key={`generator-${refreshKey}`}
                                     episodes={episodes}
                                     uiLang={uiLang}
@@ -3451,6 +3505,8 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                             }} uiLang={uiLang} />}
                             {activeTab === 'shots' && <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
                             {activeTab === 'montage' && <VideoStudio key={`montage-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
+                                </>
+                            )}
                         </React.Suspense>
                         )}
                     </div>

@@ -2271,8 +2271,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             const updated = await analyzeEntityImage(entity.id, 'script_analysis');
             setSelectedEntity(prev => (prev?.id === updated.id ? updated : prev));
             setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
-            setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
-            setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+            setEntities(prev => prev.map(e => String(e.id) === String(updated.id) ? updated : e));
+            setAllEntities(prev => prev.map(e => String(e.id) === String(updated.id) ? updated : e));
             if (onLog) onLog("Subject updated from analysis.", "success");
             return updated;
         } catch (e) {
@@ -2389,17 +2389,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             return false;
         }
 
-        const content = analysisResult.content;
-        if (typeof content === 'string') {
-            return content.trim().length > 0;
-        }
-        if (Array.isArray(content)) {
-            return content.length > 0;
-        }
-        if (content && typeof content === 'object') {
-            return Object.keys(content).length > 0;
-        }
-
+        // As long as analysis_result is an object with keys (e.g. timestamp, content), it is considered analyzed.
         return Object.keys(analysisResult).length > 0;
     }, [getEntityCustomAttributes]);
 
@@ -2480,8 +2470,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         if (shouldStopBatchAnalyze()) {
                             continue;
                         }
-                        setAllEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
-                        setEntities(prev => prev.map(e => e.id === updated.id ? updated : e));
+                        setAllEntities(prev => prev.map(e => String(e.id) === String(updated.id) ? updated : e));
+                        setEntities(prev => prev.map(e => String(e.id) === String(updated.id) ? updated : e));
                         setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
                         successCount += 1;
                     } catch (error) {
@@ -2555,8 +2545,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             throw new Error('__subject_batch_stop__');
         }
         setViewingEntity(prev => (prev?.id === analyzed.id ? analyzed : prev));
-        setEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
-        setAllEntities(prev => prev.map(e => e.id === analyzed.id ? analyzed : e));
+        setEntities(prev => prev.map(e => String(e.id) === String(analyzed.id) ? analyzed : e));
+        setAllEntities(prev => prev.map(e => String(e.id) === String(analyzed.id) ? analyzed : e));
 
         setStep('prompt', '正在整理新的提示词...', 'Refining prompt...', 55);
 
@@ -2901,8 +2891,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             const updated = { ...viewingEntity, [field]: value };
             
             // Optimistic Update
-            setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-            setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+            setEntities(prev => prev.map(ent => String(ent.id) === String(updated.id) ? updated : ent));
+            setAllEntities(prev => prev.map(ent => String(ent.id) === String(updated.id) ? updated : ent));
             
             updateEntity(updated.id, { [field]: value }).catch(console.error);
         }
@@ -4430,13 +4420,26 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         isOssTemp = true;
                                     }
                                 }
-                                return isOssTemp ? (
-                                    <div 
-                                        className="absolute bottom-2 left-2 z-30 inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow" 
-                                        title={t('图片未持久化到OSS，目前为临时地址。', 'Image not yet persisted to OSS, using temporary link.')}
-                                    >
-                                        <AlertTriangle size={12} />
-                                        <span>{t('临时图片', 'Temp')}</span>
+                                return (isOssTemp || isEntityAnalyzed(entity)) ? (
+                                    <div className="absolute bottom-2 left-2 z-30 flex items-center gap-1">
+                                        {isEntityAnalyzed(entity) && (
+                                            <div 
+                                                className="inline-flex items-center gap-1 rounded bg-emerald-500/90 text-emerald-950 px-1.5 py-0.5 text-[10px] font-bold shadow" 
+                                                title={t('该实体已完成图片分析', 'This entity has completed image analysis')}
+                                            >
+                                                <Sparkles size={12} />
+                                                <span>{t('已分析', 'Analyzed')}</span>
+                                            </div>
+                                        )}
+                                        {isOssTemp && (
+                                            <div 
+                                                className="inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow" 
+                                                title={t('图片未持久化到OSS，目前为临时地址。', 'Image not yet persisted to OSS, using temporary link.')}
+                                            >
+                                                <AlertTriangle size={12} />
+                                                <span>{t('临时图片', 'Temp')}</span>
+                                            </div>
+                                        )}
                                     </div>
                                 ) : null;
                             })()}
@@ -4535,17 +4538,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     const dependencies = parseVisualDependencies(entity.visual_dependencies);
                                     const hasDependencies = dependencies && dependencies.length > 0;
                                     const isDependedOn = dependedKeys.has(normalizeSubjectKeyForDeps(entity.name)) || (entity.name_en && dependedKeys.has(normalizeSubjectKeyForDeps(entity.name_en)));
-                                    const analyzed = isEntityAnalyzed(entity);
                                     const isCharacter = entity.type === 'character';
 
-                                    return (hasDependencies || isDependedOn || analyzed) ? (
+                                    return (hasDependencies || isDependedOn) ? (
                                         <div className="flex items-center gap-1.5 shrink-0 overflow-hidden flex-wrap justify-end max-w-[65%]">
-                                            {analyzed && (
-                                                <span className="shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-emerald-300/40 text-emerald-200 bg-emerald-500/20" title={t('该实体已完成图片分析', 'This entity has completed image analysis')}>
-                                                    <Sparkles size={10} />
-                                                    {t('已分析', 'Analyzed')}
-                                                </span>
-                                            )}
                                             {hasDependencies && (
                                                 <span className={`shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${isCharacter ? 'border-amber-300/40 text-amber-200 bg-amber-500/20' : 'border-sky-300/40 text-sky-200 bg-sky-500/20'}`} title={dependencies.join(', ')}>
                                                     <LinkIcon size={10} />
@@ -5094,8 +5090,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         const updated = { ...viewingEntity };
                                                                         delete updated[key];
                                                                         setViewingEntity(updated);
-                                                                        setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                                        setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+                                                                        setEntities(prev => prev.map(ent => String(ent.id) === String(updated.id) ? updated : ent));
+                                                                        setAllEntities(prev => prev.map(ent => String(ent.id) === String(updated.id) ? updated : ent));
                                                                         // For API, we might need to send null or special flag if backend handles it, 
                                                                         // but typically PUT replaces. If PATCH, we might need to set to null.
                                                                         // Assuming partial update, set to null to delete? Or backend ignores missing?
@@ -5120,8 +5116,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         try { val = JSON.parse(val); } catch(err) {} 
                                                                     }
                                                                     const updated = { ...viewingEntity, [key]: val };
-                                                                    setEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
-                                                                    setAllEntities(prev => prev.map(ent => ent.id === updated.id ? updated : ent));
+                                                                    setEntities(prev => prev.map(ent => String(ent.id) === String(updated.id) ? updated : ent));
+                                                                    setAllEntities(prev => prev.map(ent => String(ent.id) === String(updated.id) ? updated : ent));
                                                                     updateEntity(updated.id, { [key]: val });
                                                                 }}
                                                                 className="w-full bg-transparent border-none focus:bg-black/20 focus:ring-1 focus:ring-primary rounded p-1 outline-none font-mono resize-y min-h-[40px]" 

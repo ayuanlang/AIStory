@@ -1199,8 +1199,13 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                                                 <SafeImage src={asset.url} className="w-full h-full object-cover" alt={resolveAssetContextLabel(asset)} />
                                                             )}
                                                         </div>
-                                                        <div className="px-1.5 py-1 text-[10px] text-white/85 truncate bg-black/55">
-                                                            {resolveAssetContextLabel(asset)}
+                                                        <div className="px-1.5 py-1 bg-black/55 flex flex-col justify-center">
+                                                            <div className="text-[10px] text-white/85 truncate" title={resolveAssetContextLabel(asset)}>
+                                                                {resolveAssetContextLabel(asset)}
+                                                            </div>
+                                                            <div className="text-[9px] text-white/50 truncate" title={resolveAssetDisplayName(asset)}>
+                                                                {resolveAssetDisplayName(asset)}
+                                                            </div>
                                                         </div>
                                                         {(checked || isSelected) && (
                                                             <div className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-primary" />

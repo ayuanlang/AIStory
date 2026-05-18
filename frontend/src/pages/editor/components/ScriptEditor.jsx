@@ -7104,7 +7104,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [activeEpisode?.ai_scene_analysis_subject_index, getStageOutputContent, handleImportStageArtifact, handleRestartStage2, isAnalyzing, subjectIndexText, t]);
 
     const stage3StageCards = useMemo(() => {
-        const assetDesignJson = getStageOutputContent('stage3', 'asset_design_json');
+        const stage3ArtifactJson = getStageOutputContent('stage3', 'asset_design_json');
+        const liveStage3RawText = String(llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '').trim();
+        const liveStage3Payload = getAnalysisEntitiesPayloadFromJsonText(liveStage3RawText);
+        const assetDesignJson = String(
+            stage3ArtifactJson
+            || (liveStage3Payload ? JSON.stringify(liveStage3Payload, null, 2) : liveStage3RawText)
+            || ''
+        ).trim();
         const assetDesignPayload = getAnalysisEntitiesPayloadFromJsonText(assetDesignJson);
 
         return [
@@ -7145,7 +7152,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
             },
         ];
-    }, [formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, handleRetryPhase2, isAnalyzing, isRetryingPhase2, t]);
+    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, t]);
 
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
