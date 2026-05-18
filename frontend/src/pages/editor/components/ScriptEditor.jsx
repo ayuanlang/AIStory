@@ -3869,6 +3869,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } finally {
             setIsStoppingAnalysisTask(false);
             setIsAnalyzing(false);
+            setIsRetryingPhase2(false);
+            phase2GenerationInFlightRef.current = false;
+            analysisRunInFlightRef.current = false;
         }
     }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, loadAnalysisTaskMarker, onLog, t]);
     const refreshAnalysisFromDB = useCallback(async ({ resultField = 'ai_scene_analysis_result' } = {}) => {
@@ -6925,11 +6928,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...prev,
                     importReport: newImportReport,
                 }));
-                    onLog?.('Stage 3 asset design retry completed.', 'success');
                 const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
-                console.error("Retry Stage 3 asset design failed:", error);
-                onLog?.(`Retry Stage 3 asset design failed: ${error.message || String(error)}`, 'error');
-                alert(`Retry Stage 3 asset design failed: ${error.message}`);
+                const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+                const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+                const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
                 
                 setAnalysisFlowStatus({
                     phase: 'completed',

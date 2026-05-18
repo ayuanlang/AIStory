@@ -298,6 +298,7 @@ const err = new Error('Task polling received an invalid response format (not an 
             if (info.status === 'failed') {
                 const err = new Error(info.error || 'Task failed');
                 err.errorCode = info.error_code || 500;
+                err.isTaskFailure = true;
                 err.response = { status: info.error_code || 500, data: { detail: info.error } };
                 throw err;
             }
@@ -310,6 +311,9 @@ const err = new Error('Task polling received an invalid response format (not an 
             }
             await new Promise(r => setTimeout(r, interval));
         } catch (error) {
+            if (error.isTaskFailure || error.isCanceled) {
+                throw error;
+            }
             if (isTaskNotFoundPollingError(error)) {
                 const now = Date.now();
                 if (!notFoundSince) notFoundSince = now;

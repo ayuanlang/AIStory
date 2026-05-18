@@ -3806,11 +3806,92 @@ class LLMService:
         category: str = "LLM",
         modality: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """chat_completion with no retry and no fallback: fail immediately on first error."""
-        result = await self.chat_completion(messages, config)
-        result = await self._auto_continue_chat_completion_on_length(messages, config, result)
-        result = self._attach_routing_metadata(result, config)
-        return result
+        """chat_completion with active-config×2 retry + 3 fallback candidates."""
+        from app.services.agent_service import agent_service
+
+        def _is_empty_or_error(result_dict: Dict[str, Any]) -> bool:
+            if not isinstance(result_dict, dict):
+                return True
+            finish_reason = result_dict.get("finish_reason")
+            content_text = str(result_dict.get("content") or "").strip()
+            # If an error was raised and caught, the finish_reason might be 'incomplete' or 'error',
+            # or the content prefix might be 'Error:'
+            if finish_reason in ("error",):
+                return True
+            if finish_reason == "incomplete" and len(content_text) == 0:
+                return True
+            if content_text.startswith("Error:"):
+                return True
+            return False
+
+        active_setting_id = (config.get("config") or {}).get("__resolved_setting_id")
+        if user_id is None:
+            user_id = (config.get("config") or {}).get("__resolved_user_id") or 1
+        
+        last_result = None
+
+        # ── active config: 2 attempts ──
+        for attempt in range(1, 3):
+            result = await self.chat_completion(messages, config)
+            content = str(result.get("content") or "")
+            if not _is_empty_or_error(result):
+                result = await self._auto_continue_chat_completion_on_length(messages, config, result)
+                return self._attach_routing_metadata(result, config)
+            
+            last_result = result
+            if self._is_runtime_shutdown_text(content):
+                logger.warning(
+                    "[llm_fallback_chat] active attempt %d/2 aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
+                    attempt, config.get("provider"), config.get("model"),
+                )
+                return self._attach_routing_metadata(last_result, config)
+            logger.warning(
+                "[llm_fallback_chat] active attempt %d/2 failed | provider=%s model=%s finish_reason=%s err=%s",
+                attempt, config.get("provider"), config.get("model"), result.get("finish_reason"), content[:200],
+            )
+
+        # ── fallback candidates: up to 3 ──
+        active_cfg_obj = dict((config.get('config') or {}))
+        __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
+        if __override_fallback_candidates is not None:
+            override_ids = [int(x) for x in __override_fallback_candidates]
+            fallbacks = agent_service.get_fallback_configs_by_ids(override_ids)
+        else:
+            fallbacks = agent_service.get_fallback_configs(
+                user_id, category=category, exclude_setting_id=active_setting_id,
+                modality=modality, limit=3,
+            )
+        for idx, fb_cfg in enumerate(fallbacks, 1):
+            logger.info(
+                "[llm_fallback_chat] trying fallback %d/%d | provider=%s model=%s",
+                idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
+            )
+            result = await self.chat_completion(messages, fb_cfg)
+            content = str(result.get("content") or "")
+            if not _is_empty_or_error(result):
+                result = await self._auto_continue_chat_completion_on_length(messages, fb_cfg, result)
+                # Keep track of fallback warnings
+                warn_msg = f"Fallback {idx} ({fb_cfg.get('provider')}/{fb_cfg.get('model')}) used due to consecutive upstream failures."
+                fb_warnings = result.setdefault("fallback_warnings", [])
+                if warn_msg not in fb_warnings:
+                    fb_warnings.append(warn_msg)
+                return self._attach_routing_metadata(result, fb_cfg)
+            
+            last_result = result
+            if self._is_runtime_shutdown_text(content):
+                logger.warning(
+                    "[llm_fallback_chat] fallback %d/%d aborted: runtime shutting down | provider=%s model=%s",
+                    idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"),
+                )
+                return self._attach_routing_metadata(last_result, fb_cfg)
+            logger.warning(
+                "[llm_fallback_chat] fallback %d/%d failed | provider=%s model=%s finish_reason=%s err=%s",
+                idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), result.get("finish_reason"), content[:200],
+            )
+
+        if not last_result:
+            last_result = {"content": "Error: Empty LLM response", "usage": {}, "finish_reason": "error"}
+        return self._attach_routing_metadata(last_result, config)
 
     def _mock_fallback(self, query: str) -> Dict[str, Any]:
         if "analyze" in query.lower():
