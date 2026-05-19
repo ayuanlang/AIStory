@@ -2082,6 +2082,14 @@ class LLMService:
             usage = full_response.get("usage", {})
             token_limit_hints = full_response.get("_token_limit_hints", []) if isinstance(full_response, dict) else []
             extraction_diagnostics = self._build_extraction_diagnostics(full_response)
+            self._safe_log_json("LLM_RESPONSE", {
+                "provider": provider,
+                "model": model,
+                "response": {
+                    "content": content,
+                    "finish_reason": finish_reason,
+                }
+            })
             return {
                 "raw_content": raw_content,
                 "content": content,
@@ -2323,6 +2331,16 @@ class LLMService:
             "[COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s snippet=%r",
             parts_count, len(raw_content), len(content or ""), finish_reason, (content or "")[:120],
         )
+        provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
+        self._safe_log_json("LLM_RESPONSE", {
+            "provider": provider,
+            "category": str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper(),
+            "model": model,
+            "response": {
+                "content": content,
+                "finish_reason": finish_reason,
+            }
+        })
         return {
             "raw_content": raw_content,
             "content": content,

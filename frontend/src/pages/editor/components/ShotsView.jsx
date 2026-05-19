@@ -6404,6 +6404,68 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [editingShot, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
 
+    const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false);
+
+    const handleGenerateStoryboard = async () => {
+        if (!editingShot) return;
+        const shotSnapshot = editingShot;
+        const targetShotId = shotSnapshot.id;
+        
+        setIsGeneratingStoryboard(true);
+
+        try {
+            const resolvedEntities = await awaitShotGenerationEntities();
+            const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
+            const cnVideoPrompt = String(techNotes.video_prompt_cn || '').trim();
+            const rawVideoPrompt = (resolvedPromptSubmitLang === 'cn'
+                ? (cnVideoPrompt || getShotVideoPromptEn(shotSnapshot) || "Video motion")
+                : (getShotVideoPromptEn(shotSnapshot) || cnVideoPrompt || "Video motion"));
+            const isManual = techNotes.manual_video_prompt === true;
+
+            const { text: submitPrompt } = injectEntityFeatures(rawVideoPrompt, isManual, resolvedEntities);
+            const refs = resolveShotStartFrameRefs(shotSnapshot, rawVideoPrompt, resolvedEntities);
+
+            const storyboardInstruction = resolvedPromptSubmitLang === 'cn' 
+                ? "。参考分镜表文件 storyboard_prompt.md (请生成一个包含4个画面的四宫格分镜图，展示动作序列。)" 
+                : ". Please generate a 4-grid storyboard showing the sequence of actions across 4 panels.";
+            
+            onLog?.('Generating Storyboard...', 'info');
+
+            const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
+            const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + storyboardInstruction;
+            const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
+            const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
+
+            const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, { 
+                function_name: 'generate_shot_images',
+                project_id: projectId,
+                episode_id: activeEpisode?.id,
+                shot_id: targetShotId,
+                shot_number: shotSnapshot.shot_id,
+                shot_name: shotSnapshot.shot_name,
+                prompt_language: resolvedPromptSubmitLang,
+                asset_type: 'start_frame',
+                ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
+                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                negative_prompt: buildEntityNegativePrompt(finalPrompt, null, resolvedEntities),
+            });
+            
+            if (res && (res.url || res.result_url || res.image_url)) {
+                const finalUrl = res.url || res.result_url || res.image_url;
+                techNotes.storyboard_url = finalUrl;
+                const nextStr = JSON.stringify(techNotes);
+                await onUpdateShot(targetShotId, { technical_notes: nextStr });
+                setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, technical_notes: nextStr } : prev));
+                showNotification(t('分镜表生成成功', 'Storyboard generated successfully'), 'success');
+            }
+        } catch (e) {
+             onLog?.(`${t('生成分镜表失败', 'Failed to generate storyboard')}: ${e.message}`, 'error');
+             showNotification(`${t('生成分镜表失败', 'Failed to generate storyboard')}: ${e.message}`, 'error');
+        } finally {
+            setIsGeneratingStoryboard(false);
+        }
+    };
+
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
         const shotSnapshot = editingShot;
@@ -9750,6 +9812,28 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <pre className="mt-1 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(voicePlanMeta, null, 2)}</pre>
                                                                     </div>
                                                                 )}
+                                                                {tech.storyboard_url && (
+                                                                    <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3 mt-2">
+                                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('四宫格分镜图', '4-Grid Storyboard')}</div>
+                                                                        <SafeImage src={tech.storyboard_url} className="w-full rounded" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} />
+                                                                        <div className="flex flex-wrap gap-2 mt-2">
+                                                                            <button type="button" onClick={() => window.open(getFullUrl(tech.storyboard_url), '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10">
+                                                                                <LinkIcon size={12} />
+                                                                                {t('查看', 'View')}
+                                                                            </button>
+                                                                            <button type="button" onClick={async () => {
+                                                                                const nextTech = { ...tech };
+                                                                                delete nextTech.storyboard_url;
+                                                                                const nextStr = JSON.stringify(nextTech);
+                                                                                setEditingShot(prev => ({ ...(prev || {}), technical_notes: nextStr }));
+                                                                                await onUpdateShot(editingShot.id, { technical_notes: nextStr });
+                                                                            }} className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20">
+                                                                                <Trash2 size={12} />
+                                                                                {t('删除', 'Delete')}
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
                                                                 {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
@@ -9783,6 +9867,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'primary',
                                                                     })}
                                                                     {renderPromptLangMenu('video')}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('生成分镜表', 'Generate Storyboard'),
+                                                                        busyLabel: t('生成中...', 'Generating...'),
+                                                                        onClick: () => handleGenerateStoryboard(),
+                                                                        disabled: isGeneratingStoryboard,
+                                                                        busy: isGeneratingStoryboard,
+                                                                        variant: 'secondary',
+                                                                        title: t('按照当前的视频提示词生成一张四宫格分镜图', 'Generate a 4-grid storyboard image based on current video prompt'),
+                                                                    })}
                                                                     {renderDetailActionButton({
                                                                         label: t('强制停止', 'Force Stop'),
                                                                         busyLabel: t('停止中...', 'Stopping...'),

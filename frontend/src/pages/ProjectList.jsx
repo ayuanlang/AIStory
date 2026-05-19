@@ -1996,17 +1996,17 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('类型', 'Type')}</label>
-                                                <input list="list-newType" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newType} onChange={(e) => setNewType(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newType">
-                                                                {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newType} onChange={(e) => setNewType(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('国家地域', 'Country/Region')}</label>
-                                                <input list="list-newCountryRegion" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newCountryRegion} onChange={(e) => setNewCountryRegion(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newCountryRegion">
-                                                                {projectCreateOptions.country_region.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newCountryRegion} onChange={(e) => setNewCountryRegion(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.country_region.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('预期时长(秒)', 'Expected Duration (s)')}</label>
@@ -2021,53 +2021,53 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('语言', 'Language')}</label>
-                                                <input list="list-newLanguage" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newLanguage">
-                                                                {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('基础定位', 'Base Positioning')}</label>
-                                                <input list="list-newBasePositioning" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newBasePositioning} onChange={(e) => setNewBasePositioning(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newBasePositioning">
-                                                                {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newBasePositioning} onChange={(e) => setNewBasePositioning(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('画幅比例', 'Aspect Ratio')}</label>
-                                                <input list="list-newAspectRatio" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newAspectRatio} onChange={(e) => setNewAspectRatio(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newAspectRatio">
-                                                                {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newAspectRatio} onChange={(e) => setNewAspectRatio(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                             </div>
                                             
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('时代设定', 'Era')}</label>
-                                                <input list="list-newEra" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newEra} onChange={(e) => setNewEra(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newEra">
-                                                                {projectCreateOptions.era.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newEra} onChange={(e) => setNewEra(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.era.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('镜头偏好', 'Lens Preference')}</label>
-                                                <input list="list-newLensPreference" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newLensPreference} onChange={(e) => setNewLensPreference(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newLensPreference">
-                                                                {projectCreateOptions.lens_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newLensPreference} onChange={(e) => setNewLensPreference(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.lens_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('播出安全等级', 'Broadcast Safety Level')}</label>
-                                                <input list="list-newBroadcastSafetyLevel" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newBroadcastSafetyLevel} onChange={(e) => setNewBroadcastSafetyLevel(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newBroadcastSafetyLevel">
-                                                                {projectCreateOptions.broadcast_safety_level.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newBroadcastSafetyLevel} onChange={(e) => setNewBroadcastSafetyLevel(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.broadcast_safety_level.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                             </div>
                                                             <div>
                                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('创作力', 'Creativity')}</label>
-                                                                <input list="list-newCreativity" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newCreativity} onChange={(e) => setNewCreativity(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newCreativity">
-                                                                {projectCreateOptions.creativity.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newCreativity} onChange={(e) => setNewCreativity(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.creativity.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                                             </div>
                                             
                                         </div>
@@ -2181,18 +2181,18 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
                                                             <div>
                                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
-                                                                <input list="list-newImageSize" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newImageSize">
-                                                                {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                                             </div>
 
                                                             <div>
                                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('视频生成偏好', 'Video Gen Preference')}</label>
-                                                                <input list="list-newVideoGenerationPreference" className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newVideoGenerationPreference} onChange={(e) => setNewVideoGenerationPreference(e.target.value)} placeholder={t("选择或输入...", "Select or enter...")} />
-                                                            <datalist id="list-newVideoGenerationPreference">
-                                                                {projectCreateOptions.video_generation_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                            </datalist>
+                                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newVideoGenerationPreference} onChange={(e) => setNewVideoGenerationPreference(e.target.value)}>
+                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
+                                                    {projectCreateOptions.video_generation_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
+                                                </select>
                                                             </div>
                                                         </div>
                                                     </motion.div>
