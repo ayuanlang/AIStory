@@ -10878,10 +10878,10 @@ Negative prompt constraints: {neg_prompt}"""
 
         if is_seedance_video_model:
             seedance_refs: List[str] = []
-            if isinstance(payload_input.get("input_urls"), list):
-                seedance_refs.extend([str(x).strip() for x in payload_input.get("input_urls") or [] if str(x).strip()])
             if isinstance(payload_input.get("image_urls"), list):
                 seedance_refs.extend([str(x).strip() for x in payload_input.get("image_urls") or [] if str(x).strip()])
+            if isinstance(payload_input.get("input_urls"), list):
+                seedance_refs.extend([str(x).strip() for x in payload_input.get("input_urls") or [] if str(x).strip()])
             single_ref = str(payload_input.get("image_url") or "").strip()
             if single_ref:
                 seedance_refs.append(single_ref)
