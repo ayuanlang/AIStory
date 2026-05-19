@@ -18936,14 +18936,22 @@ async def proxy_asset(url: str, request: Request):
         header_value = request.headers.get(header_name)
         if header_value:
             forward_headers[header_name] = header_value
+    forward_headers.setdefault("User-Agent", "Mozilla/5.0")
+    forward_headers.setdefault("Connection", "close")
 
-    timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=30.0)
+    timeout = (10, 90)
     last_error: Optional[Exception] = None
 
     for attempt in range(1, 4):
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                upstream = await client.get(url, headers=forward_headers)
+            upstream = await asyncio.to_thread(
+                requests.get,
+                url,
+                headers=forward_headers,
+                timeout=timeout,
+                allow_redirects=True,
+                stream=False,
+            )
 
             status_code = int(upstream.status_code or 502)
             if status_code >= 400:

@@ -1289,6 +1289,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return asText(result);
     }, []);
 
+    const buildCanonicalAssetDesignJsonText = useCallback((subjectsJson) => {
+        if (!subjectsJson || typeof subjectsJson !== 'object') return '';
+        try {
+            const rawJsonText = JSON.stringify(subjectsJson, null, 2);
+            const normalizedPayload = getAnalysisEntitiesPayloadFromJsonText(rawJsonText);
+            return JSON.stringify(normalizedPayload || subjectsJson, null, 2);
+        } catch (_) {
+            return '';
+        }
+    }, [getAnalysisEntitiesPayloadFromJsonText]);
+
     const llmEntityGroups = useMemo(() => {
         const payload = llmEntitiesPayload || {};
         const characters = Array.isArray(payload.characters) ? payload.characters : [];
@@ -4174,13 +4185,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
 
             const analyzedText = extractAnalysisTextFromResult(result);
-            setLlmAssetRawResultContent(analyzedText);
+            const backendSubjectsJson = result?.subjects_json;
+            const canonicalAssetDesignText = String(
+                buildCanonicalAssetDesignJsonText(backendSubjectsJson) || analyzedText || ''
+            ).trim();
+            setLlmAssetRawResultContent(canonicalAssetDesignText);
 
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             try {
-                if (!savedByBackend) {
+                if (!savedByBackend || (canonicalAssetDesignText && canonicalAssetDesignText !== String(analyzedText || '').trim())) {
                     onLog?.('[Stage 3 Asset Design] Persisting raw asset-design output to ai_entity_design_result...', 'process');
-                    await persistLlmResultContent(analyzedText || '', 'ai_entity_design_result');
+                    await persistLlmResultContent(canonicalAssetDesignText || '', 'ai_entity_design_result');
                 } else {
                     await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
                 }
@@ -4188,17 +4203,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 onLog?.(`[Stage 3 Asset Design] Raw output save warning: ${persistErr?.message || persistErr}`, 'warning');
             }
 
-            if (analyzedText) {
+            if (canonicalAssetDesignText) {
                 // Safeguard: make sure we are not importing plain text phase 1 by mistake
-                const hasValidSubjectJsonBlock = /"characters"\s*:\s*\[|"props"\s*:\s*\[|"environments"\s*:\s*\[|"posters"\s*:\s*\[/i.test(analyzedText);
-                const backendSubjectsJson = result?.subjects_json;
+                const hasValidSubjectJsonBlock = /"characters"\s*:\s*\[|"props"\s*:\s*\[|"environments"\s*:\s*\[|"posters"\s*:\s*\[|"covers"\s*:\s*\[/i.test(canonicalAssetDesignText);
                 
                 if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
                     onLog?.(`[Stage 3 Asset Design] Warning: AI did not return a valid asset-design JSON block. Skipping import to prevent overwriting the Stage 2 asset index.`, "warning");
                     throw new Error("AI 引擎在整理出场名单时开小差了，未能返回标准数据表。请点击查阅原文检查，是否可以手动重新生成。");
                 } else {
                     // Automatically import the generated subjects
-                        const sceneImportReport = await importSubjectsJsonWithDedupe(analyzedText, {
+                        const sceneImportReport = await importSubjectsJsonWithDedupe(canonicalAssetDesignText, {
                             reason: 'phase2-entity-design-recovery',
                             subjectsJson: backendSubjectsJson || null,
                             importOptions: {
@@ -4284,12 +4298,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     { startedAt, baselineText: activeEpisode?.ai_entity_design_result || '', resultField: 'ai_entity_design_result' }
                 );
                 const analyzedText = extractAnalysisTextFromResult(result);
-                setLlmAssetRawResultContent(analyzedText);
+                const backendSubjectsJson = result?.subjects_json;
+                const canonicalAssetDesignText = String(
+                    buildCanonicalAssetDesignJsonText(backendSubjectsJson) || analyzedText || ''
+                ).trim();
+                setLlmAssetRawResultContent(canonicalAssetDesignText);
 
                 const savedByBackend = !!(result?.meta?.saved_to_episode);
                 try {
-                    if (!savedByBackend) {
-                        await persistLlmResultContent(analyzedText || '', 'ai_entity_design_result');
+                    if (!savedByBackend || (canonicalAssetDesignText && canonicalAssetDesignText !== String(analyzedText || '').trim())) {
+                        await persistLlmResultContent(canonicalAssetDesignText || '', 'ai_entity_design_result');
                     } else {
                         await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
                     }
@@ -4297,13 +4315,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     onLog?.(`[Stage 3 Asset Design] Recovery save warning: ${persistErr?.message || persistErr}`, 'warning');
                 }
 
-                if (analyzedText) {
-                    const hasValidSubjectJsonBlock = /"characters"s*:s*\[|"props"s*:s*\[|"environments"s*:s*\[|"posters"s*:s*\[/i.test(analyzedText);
-                    const backendSubjectsJson = result?.subjects_json;
+                if (canonicalAssetDesignText) {
+                    const hasValidSubjectJsonBlock = /"characters"\s*:\s*\[|"props"\s*:\s*\[|"environments"\s*:\s*\[|"posters"\s*:\s*\[|"covers"\s*:\s*\[/i.test(canonicalAssetDesignText);
                     if (!hasValidSubjectJsonBlock && !backendSubjectsJson) {
                         onLog?.(`[Stage 3 Asset Design] Warning: AI did not return a valid asset-design JSON block during recovery.`);
                     } else {
-                        const sceneImportReport = await importSubjectsJsonWithDedupe(analyzedText, {
+                        const sceneImportReport = await importSubjectsJsonWithDedupe(canonicalAssetDesignText, {
                             reason: 'phase2-entity-design',
                             subjectsJson: backendSubjectsJson || null,
                             importOptions: {
