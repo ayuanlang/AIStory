@@ -29217,7 +29217,7 @@ def _build_auto_kling_elements(
     elements: List[Dict[str, Any]] = []
     for raw_name in mentions:
         row = entity_lookup.get(_normalize_entity_anchor_token(raw_name)) or {}
-        entity_type = str(row.get("entity_type") or "").strip().lower()
+        entity_type = str(row.get("entity_type") or "").strip().lower() if row else ""
         if entity_type not in allowed_types:
             continue
 
@@ -29668,7 +29668,7 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
         if not row:
             continue
 
-        entity_type = str(row.get("entity_type") or "").strip().lower()
+        entity_type = str(row.get("entity_type") or "").strip().lower() if row else ""
         if entity_type not in {"subject", "character", "char"}:
             continue
 
@@ -29707,7 +29707,7 @@ def _append_video_api_ref_mapping(
     if not text:
         return text
 
-    def _collect_prompt_entity_mentions(source_text: str) -> List[Tuple[str, str]]:
+    def _collect_prompt_entity_mentions(source_text: str, require_lookup: bool = True) -> List[Tuple[str, str]]:
         mentions: List[Tuple[str, str]] = []
         seen_entities: set[str] = set()
         mention_regex = re.compile(
@@ -29721,14 +29721,14 @@ def _append_video_api_ref_mapping(
             if not normalized or normalized in seen_entities:
                 continue
             row = entity_lookup.get(normalized) if entity_lookup else None
-            if not row:
+            if require_lookup and not row:
                 continue
 
-            entity_type = str(row.get("entity_type") or "").strip().lower()
+            entity_type = str(row.get("entity_type") or "").strip().lower() if row else ""
             if entity_type and entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
                 continue
 
-            raw_entity_name = str(row.get("name") or "").strip()
+            raw_entity_name = str(row.get("name") or "").strip() if row else ""
             entity_name = raw_entity_name[1:] if raw_entity_name.startswith("@") else raw_entity_name
             if not entity_name:
                 entity_name = raw_name.lstrip("@").strip()
@@ -29773,8 +29773,6 @@ def _append_video_api_ref_mapping(
     )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
-    if not use_prev_video:
-        return text
 
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
     if not ordered_refs and not isinstance(reference_video_urls, list):
@@ -29832,7 +29830,7 @@ def _append_video_api_ref_mapping(
                 continue
 
             allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
-            entity_type = str(row.get("entity_type") or "").strip().lower()
+            entity_type = str(row.get("entity_type") or "").strip().lower() if row else ""
             if entity_type and entity_type not in allowed_types:
                 continue
 
@@ -29855,40 +29853,15 @@ def _append_video_api_ref_mapping(
                 pairs.append((mapped_idx, char_name, anchor_text))
     pairs.sort(key=lambda x: x[0])
 
-    if not pairs:
-        pure_multi_entity_ref_mode = (
-            len(start_urls) >= 2
-            and not end_url
-            and not keyframe_urls
-            and not reference_video_urls
-        )
-        if not pure_multi_entity_ref_mode:
-            return text
-
-        fallback_mentions = _collect_prompt_entity_mentions(text)
-        if not fallback_mentions:
-            return text
-
-        used_indexes: set[int] = set()
-        next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
-        for (_, entity_name), mapped_idx in zip(fallback_mentions, next_ref_indexes):
-            pairs.append((mapped_idx, entity_name, ""))
-
-    elif (
-        len(start_urls) >= 2
-        and not end_url
-        and not keyframe_urls
-        and not reference_video_urls
-        and len(pairs) < len(ordered_refs)
-    ):
-        fallback_mentions = _collect_prompt_entity_mentions(text)
+    if len(pairs) < len(ordered_refs):
+        fallback_mentions = _collect_prompt_entity_mentions(text, require_lookup=False)
         paired_names = {name for _, name, _ in pairs}
         used_indexes = {idx for idx, _, _ in pairs}
         next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
-        for (_, entity_name), mapped_idx in zip(
-            [item for item in fallback_mentions if item[1] not in paired_names],
-            next_ref_indexes,
-        ):
+        
+        unpaired_mentions = [item for item in fallback_mentions if item[1] not in paired_names]
+        
+        for (_, entity_name), mapped_idx in zip(unpaired_mentions, next_ref_indexes):
             pairs.append((mapped_idx, entity_name, ""))
 
     if not pairs:
@@ -29904,6 +29877,7 @@ def _append_video_api_ref_mapping(
 
         escaped_entity = re.escape(entity_name)
         anchor_patterns = [
+            rf"[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
             rf"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
             rf"[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
         ]
@@ -29927,8 +29901,7 @@ def _append_video_api_ref_mapping(
             continue
 
         # Fallback: prepend marker directly before plain entity mentions.
-        plain_pattern = rf"(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])"
-
+        plain_pattern = rf'(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])'
         def _prepend_marker(match: re.Match[str]) -> str:
             token = str(match.group(0) or "")
             if token.startswith(prefix):
