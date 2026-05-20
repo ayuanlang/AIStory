@@ -4432,6 +4432,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const analyzedText = extractAnalysisTextFromResult(result);
             phaseMarks.llmReturnedAt = Date.now();
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            let rawResultPersistedEarly = false;
+
+            if (!savedByBackend) {
+                phaseMarks.persistStartedAt = Date.now();
+                try {
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'resume-analysis-immediate' });
+                    rawResultPersistedEarly = true;
+                } catch (persistErr) {
+                    onLog?.(`Resume immediate raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+                } finally {
+                    phaseMarks.persistFinishedAt = Date.now();
+                }
+            }
 
             if (result && result.meta) {
                 runtimeMeta = extractAnalysisRuntimeMeta(result.meta);
@@ -4486,12 +4500,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const savedByBackend = !!(result?.meta?.saved_to_episode);
-            phaseMarks.persistStartedAt = Date.now();
             try {
-                if (!savedByBackend) {
+                if (!savedByBackend && !rawResultPersistedEarly) {
+                    phaseMarks.persistStartedAt = Date.now();
                     await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'resume-analysis' });
                 } else {
+                    if (savedByBackend) {
+                        phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
+                    }
                     await refreshAnalysisFromDB();
                 }
             } finally {
@@ -5951,6 +5967,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let importReport = null;
         let postImportSceneSubjectReport = null;
         let importWarningMessage = '';
+        let rawResultPersistedEarly = false;
         const phaseMarks = {
             submitStartedAt: startedAt,
             analyzeStartedAt: 0,
@@ -6002,6 +6019,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            if (!savedByBackend) {
+                phaseMarks.persistStartedAt = Date.now();
+                try {
+                    if (onLog) onLog('Persisting raw LLM output immediately after return...', 'process');
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'standard-analysis-immediate' });
+                    rawResultPersistedEarly = true;
+                } catch (persistErr) {
+                    if (onLog) onLog(`Immediate raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+                } finally {
+                    phaseMarks.persistFinishedAt = Date.now();
+                }
+            }
             setAnalysisFlowStatus({
                 phase: 'processing_output_workspace',
                 message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
@@ -6059,13 +6089,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLlmResultContent(normalizeLlmMarkdownTable(analyzedText));
             lastLoadedAnalysisRef.current = analyzedText;
 
-            const savedByBackend = !!(result?.meta?.saved_to_episode);
-            phaseMarks.persistStartedAt = Date.now();
             try {
-                if (!savedByBackend) {
+                if (!savedByBackend && !rawResultPersistedEarly) {
+                    phaseMarks.persistStartedAt = Date.now();
                     if (onLog) onLog('Saving raw LLM output to episode analysis field...', 'process');
                     await persistLlmResultContent(analyzedText, 'ai_scene_analysis_result', { source: 'standard-analysis' });
                 } else {
+                    if (savedByBackend) {
+                        phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
+                    }
                     if (onLog) onLog('LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
                     await refreshAnalysisFromDB();
                 }
@@ -6378,6 +6410,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let importReport = null;
         let postImportSceneSubjectReport = null;
         let importWarningMessage = '';
+        let finalRawResultPersistedEarly = false;
         const phaseMarks = {
             submitStartedAt: startedAt,
             analyzeStartedAt: 0,
@@ -6428,6 +6461,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            if (!splitStage1Flow && !savedByBackend) {
+                phaseMarks.persistStartedAt = Date.now();
+                try {
+                    if (onLog) onLog('Persisting advanced raw LLM output immediately after return...', 'process');
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'advanced-analysis-immediate' });
+                    finalRawResultPersistedEarly = true;
+                } catch (persistErr) {
+                    if (onLog) onLog(`Immediate advanced raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+                } finally {
+                    phaseMarks.persistFinishedAt = Date.now();
+                }
+            }
 
             if (result && result.meta) {
                 try {
@@ -6530,6 +6576,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stage2PhaseRawText = String(stage2Text || '').trim();
                 finalAnalysisText = [String(analyzedText || '').trim(), String(stage2Text || '').trim()].filter(Boolean).join('\n\n');
                 importSourceText = finalAnalysisText;
+                phaseMarks.persistStartedAt = Date.now();
+                try {
+                    if (onLog) onLog('Persisting split-flow combined raw LLM output immediately after Stage 2 return...', 'process');
+                    await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
+                        source: 'advanced-analysis-split-combined-immediate',
+                        stage1RawText: stage1PhaseRawText,
+                        stage2RawText: stage2PhaseRawText,
+                    });
+                    finalRawResultPersistedEarly = true;
+                } catch (persistErr) {
+                    if (onLog) onLog(`Immediate split-flow raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+                } finally {
+                    phaseMarks.persistFinishedAt = Date.now();
+                }
                 analysisSections = extractAnalysisSections(finalAnalysisText);
             }
 
@@ -6542,10 +6602,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLlmResultContent(normalizeLlmMarkdownTable(finalAnalysisText || ''));
             lastLoadedAnalysisRef.current = finalAnalysisText || '';
 
-            const savedByBackend = !!(result?.meta?.saved_to_episode);
-            phaseMarks.persistStartedAt = Date.now();
             try {
-                if (splitStage1Flow || !savedByBackend) {
+                if (!savedByBackend && !finalRawResultPersistedEarly) {
+                    phaseMarks.persistStartedAt = Date.now();
                     if (onLog) onLog('Saving advanced raw LLM output to episode analysis field...', 'process');
                     await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
                         source: splitStage1Flow ? 'advanced-analysis-split-combined' : 'advanced-analysis',
@@ -6553,6 +6612,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         stage2RawText: stage2PhaseRawText,
                     });
                 } else {
+                    if (savedByBackend) {
+                        phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
+                    }
                     if (onLog) onLog('Advanced LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
                     await refreshAnalysisFromDB();
                     if (onUpdateEpisodeInfo && activeEpisode?.id) {

@@ -149,6 +149,43 @@ import {
     normalizeProjectEpisodeQuality,
 } from '../projectOptionConfig';
 
+const MULTI_PANEL_PRESET_OPTIONS = [
+    { key: '4panel', filename: 'multi_panel_image_preset_4panel.txt', labelZh: '四画格', labelEn: '4-Panel' },
+    { key: '6panel', filename: 'multi_panel_image_preset_6panel.txt', labelZh: '六画格', labelEn: '6-Panel' },
+    { key: '9panel', filename: 'multi_panel_image_preset_9panel.txt', labelZh: '九画格', labelEn: '9-Panel' },
+];
+
+const MULTI_PANEL_PRESET_FALLBACKS = {
+    '4panel': {
+        cn: '生成一张 2x2 排布、包含 4 个连续画面的多画格叙事图。四格需保持同一主体、服装、场景与镜头语言连续，展示该镜头的关键动作推进；不要添加标题、对白气泡、说明文字或无关装饰。',
+        en: 'Generate a 2x2 multi-panel narrative image with 4 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, showing the key action progression for this shot. Do not add titles, speech bubbles, captions, or unrelated decorations.',
+    },
+    '6panel': {
+        cn: '生成一张 3x2 排布、包含 6 个连续画面的多画格叙事图。六格需保持同一主体、服装、场景与镜头语言连续，清晰展示该镜头从起势、动作发展到收束的过程；不要添加标题、对白气泡、说明文字或无关装饰。',
+        en: 'Generate a 3x2 multi-panel narrative image with 6 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, clearly showing the shot progression from setup to action development to resolution. Do not add titles, speech bubbles, captions, or unrelated decorations.',
+    },
+    '9panel': {
+        cn: '生成一张 3x3 排布、包含 9 个连续画面的多画格叙事图。九格需保持同一主体、服装、场景与镜头语言连续，完整展示该镜头的节奏、动作变化与情绪推进；不要添加标题、对白气泡、说明文字或无关装饰。',
+        en: 'Generate a 3x3 multi-panel narrative image with 9 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, fully showing the shot rhythm, action changes, and emotional progression. Do not add titles, speech bubbles, captions, or unrelated decorations.',
+    },
+};
+
+const normalizeMultiPanelPresetKey = (value) => {
+    const raw = String(value || '').trim();
+    return MULTI_PANEL_PRESET_OPTIONS.some((item) => item.key === raw) ? raw : '4panel';
+};
+
+const getMultiPanelPresetOption = (value) => {
+    const stableKey = normalizeMultiPanelPresetKey(value);
+    return MULTI_PANEL_PRESET_OPTIONS.find((item) => item.key === stableKey) || MULTI_PANEL_PRESET_OPTIONS[0];
+};
+
+const getMultiPanelPresetFallbackInstruction = (value, lang = 'cn') => {
+    const stableKey = normalizeMultiPanelPresetKey(value);
+    const stableLang = lang === 'en' ? 'en' : 'cn';
+    return MULTI_PANEL_PRESET_FALLBACKS[stableKey]?.[stableLang] || MULTI_PANEL_PRESET_FALLBACKS['4panel'][stableLang];
+};
+
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../../../lib/promptUtils';
 import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../../../lib/entityToken';
@@ -1776,6 +1813,37 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return detail.includes('job not found') || detail.includes('not found');
     }, []);
 
+    const getReadableErrorDetail = useCallback((error, fallback = 'unknown error') => {
+        const rawDetail = error?.response?.data?.detail;
+        if (typeof rawDetail === 'string' && rawDetail.trim()) return rawDetail.trim();
+        if (Array.isArray(rawDetail) && rawDetail.length > 0) {
+            return rawDetail
+                .map((item) => {
+                    if (typeof item === 'string') return item.trim();
+                    if (item && typeof item === 'object') {
+                        const msg = item?.msg || item?.message || item?.detail;
+                        if (typeof msg === 'string' && msg.trim()) return msg.trim();
+                        try { return JSON.stringify(item); } catch { return ''; }
+                    }
+                    return String(item || '').trim();
+                })
+                .filter(Boolean)
+                .join('; ') || fallback;
+        }
+        if (rawDetail && typeof rawDetail === 'object') {
+            const msg = rawDetail?.message || rawDetail?.detail || rawDetail?.msg;
+            if (typeof msg === 'string' && msg.trim()) return msg.trim();
+            try {
+                const serialized = JSON.stringify(rawDetail);
+                if (serialized && serialized !== '{}') return serialized;
+            } catch {}
+        }
+
+        const message = error?.message;
+        if (typeof message === 'string' && message.trim()) return message.trim();
+        return fallback;
+    }, []);
+
     const isClientInterruptionError = useCallback((error) => {
         const detail = String(
             error?.code || error?.name || error?.message || error?.response?.data?.detail || ''
@@ -2957,7 +3025,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             });
         } catch(e) { 
             console.error("Update Shot Failed", e); 
-            onLog?.("Failed to save changes", "error");
+            onLog?.(`Failed to save changes: ${getReadableErrorDetail(e)}`, "error");
+            throw e;
         }
     }
 
@@ -6396,22 +6465,59 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             onLog?.(t('已从视频提取最后一帧并设置为结束帧。', 'Last video frame extracted and set as end frame.'), 'success');
             showNotification(t('已设置结束帧', 'End frame set from video'), 'success');
         } catch (e) {
-            const detail = e?.message || 'unknown error';
+            const detail = getReadableErrorDetail(e);
             onLog?.(`${t('提取视频尾帧失败', 'Failed to extract video last frame')}: ${detail}`, 'error');
-            showNotification(t('提取视频尾帧失败', 'Failed to extract video last frame'), 'error');
+            showNotification(`${t('提取视频尾帧失败', 'Failed to extract video last frame')}: ${detail}`, 'error');
         } finally {
             setShotGeneratingState(targetShotId, 'end', false);
         }
-    }, [editingShot, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
+    }, [editingShot, getReadableErrorDetail, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
 
-    const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false);
+    const [multiPanelPresetKey, setMultiPanelPresetKey] = useState('4panel');
+    const [multiPanelPresetInstruction, setMultiPanelPresetInstruction] = useState(() => getMultiPanelPresetFallbackInstruction('4panel', 'cn'));
+    const [isGeneratingMultiPanelImage, setIsGeneratingMultiPanelImage] = useState(false);
 
-    const handleGenerateStoryboard = async () => {
+    useEffect(() => {
         if (!editingShot) return;
+        let nextPresetKey = '4panel';
+        try {
+            const techNotes = JSON.parse(editingShot.technical_notes || '{}');
+            nextPresetKey = normalizeMultiPanelPresetKey(techNotes.multi_panel_image_preset || '4panel');
+        } catch (_) {}
+        setMultiPanelPresetKey((prev) => (prev === nextPresetKey ? prev : nextPresetKey));
+    }, [editingShot?.id, editingShot?.technical_notes]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const langKey = resolvedPromptSubmitLang === 'en' ? 'en' : 'cn';
+        const presetOption = getMultiPanelPresetOption(multiPanelPresetKey);
+        const fallbackInstruction = getMultiPanelPresetFallbackInstruction(multiPanelPresetKey, langKey);
+
+        setMultiPanelPresetInstruction(fallbackInstruction);
+
+        fetchPrompt(presetOption.filename)
+            .then((payload) => {
+                if (cancelled) return;
+                const content = String(payload?.content || '').trim();
+                setMultiPanelPresetInstruction(content || fallbackInstruction);
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                console.warn('Failed to load multi-panel preset from backend prompts:', error);
+                setMultiPanelPresetInstruction(fallbackInstruction);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [multiPanelPresetKey, resolvedPromptSubmitLang]);
+
+    const handleGenerateMultiPanelImage = async () => {
+        if (!editingShot) return; 
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
         
-        setIsGeneratingStoryboard(true);
+        setIsGeneratingMultiPanelImage(true);
 
         try {
             const resolvedEntities = await awaitShotGenerationEntities();
@@ -6425,14 +6531,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const { text: submitPrompt } = injectEntityFeatures(rawVideoPrompt, isManual, resolvedEntities);
             const refs = resolveShotStartFrameRefs(shotSnapshot, rawVideoPrompt, resolvedEntities);
 
-            const storyboardInstruction = resolvedPromptSubmitLang === 'cn' 
-                ? "。参考分镜表文件 storyboard_prompt.md (请生成一个包含4个画面的四宫格分镜图，展示动作序列。)" 
-                : ". Please generate a 4-grid storyboard showing the sequence of actions across 4 panels.";
-            
-            onLog?.('Generating Storyboard...', 'info');
+            const langKey = resolvedPromptSubmitLang === 'en' ? 'en' : 'cn';
+            const activePresetKey = normalizeMultiPanelPresetKey(multiPanelPresetKey);
+            const presetOption = getMultiPanelPresetOption(activePresetKey);
+            const baseInstruction = String(multiPanelPresetInstruction || '').trim() || getMultiPanelPresetFallbackInstruction(activePresetKey, langKey);
+            const promptInstruction = langKey === 'en'
+                ? `. ${baseInstruction.replace(/^[.。\s]+/, '')}`
+                : `。${baseInstruction.replace(/^[.。\s]+/, '')}`;
+
+            onLog?.(`Generating ${presetOption.labelEn} preset image...`, 'info');
 
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
-            const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + storyboardInstruction;
+            const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + promptInstruction;
             const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
             const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
 
@@ -6452,17 +6562,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             
             if (res && (res.url || res.result_url || res.image_url)) {
                 const finalUrl = res.url || res.result_url || res.image_url;
-                techNotes.storyboard_url = finalUrl;
+                techNotes.multi_panel_image_url = finalUrl;
+                techNotes.multi_panel_image_preset = activePresetKey;
                 const nextStr = JSON.stringify(techNotes);
                 await onUpdateShot(targetShotId, { technical_notes: nextStr });
                 setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, technical_notes: nextStr } : prev));
-                showNotification(t('分镜表生成成功', 'Storyboard generated successfully'), 'success');
+                showNotification(t('多画格图生成成功', 'Multi-panel image generated successfully'), 'success');
             }
         } catch (e) {
-             onLog?.(`${t('生成分镜表失败', 'Failed to generate storyboard')}: ${e.message}`, 'error');
-             showNotification(`${t('生成分镜表失败', 'Failed to generate storyboard')}: ${e.message}`, 'error');
+             onLog?.(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
+             showNotification(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
         } finally {
-            setIsGeneratingStoryboard(false);
+            setIsGeneratingMultiPanelImage(false);
         }
     };
 
@@ -8534,7 +8645,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 <button 
                                                     onClick={() => openMediaPicker((url) => {
                                                         const changes = { video_url: url };
-                                                        onUpdateShot(editingShot.id, changes);
+                                                        onUpdateShot(editingShot.id, changes).catch((e) => {
+                                                            console.error('Manual video apply failed:', e);
+                                                        });
                                                     }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video', desiredAssetType: 'video', lockAssetType: true, allowMultiSelect: false })}
                                                     className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
                                                     title={t('选择或上传视频', 'Select or Upload Video')}
@@ -9088,6 +9201,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 const videoPromptTextCn = String(tech.video_prompt_cn || '');
                                                 const videoPromptTextEn = getShotVideoPromptEn(editingShot);
                                                 const modalType = assetDetailModal.type;
+                                                const currentMultiPanelPresetOption = getMultiPanelPresetOption(tech.multi_panel_image_preset || multiPanelPresetKey);
                                                 const keyframe = modalType === 'keyframe' ? localKeyframes[assetDetailModal.keyframeIndex] : null;
                                                 const endFrameUrl = String(tech.end_frame_url || '');
                                                 const showImageCfgControl = modalType === 'start' || modalType === 'end' || modalType === 'keyframe';
@@ -9812,17 +9926,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <pre className="mt-1 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(voicePlanMeta, null, 2)}</pre>
                                                                     </div>
                                                                 )}
-                                                                {tech.storyboard_url && (
+                                                                {(tech.multi_panel_image_url || tech.storyboard_url) && (
                                                                     <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3 mt-2">
-                                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('四宫格分镜图', '4-Grid Storyboard')}</div>
-                                                                        <SafeImage src={tech.storyboard_url} className="w-full rounded" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} />
+                                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t(`${currentMultiPanelPresetOption.labelZh}预设图`, `${currentMultiPanelPresetOption.labelEn} Preset Image`)}</div>
+                                                                        <SafeImage src={tech.multi_panel_image_url || tech.storyboard_url} className="w-full rounded" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} />
                                                                         <div className="flex flex-wrap gap-2 mt-2">
-                                                                            <button type="button" onClick={() => window.open(getFullUrl(tech.storyboard_url), '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10">
+                                                                            <button type="button" onClick={() => window.open(getFullUrl(tech.multi_panel_image_url || tech.storyboard_url), '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10">
                                                                                 <LinkIcon size={12} />
                                                                                 {t('查看', 'View')}
                                                                             </button>
                                                                             <button type="button" onClick={async () => {
                                                                                 const nextTech = { ...tech };
+                                                                                delete nextTech.multi_panel_image_url;
+                                                                                delete nextTech.multi_panel_image_preset;
                                                                                 delete nextTech.storyboard_url;
                                                                                 const nextStr = JSON.stringify(nextTech);
                                                                                 setEditingShot(prev => ({ ...(prev || {}), technical_notes: nextStr }));
@@ -9867,14 +9983,37 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'primary',
                                                                     })}
                                                                     {renderPromptLangMenu('video')}
+                                                                    <select
+                                                                        value={multiPanelPresetKey}
+                                                                            onChange={async (e) => {
+                                                                                const nextPresetKey = normalizeMultiPanelPresetKey(e.target.value);
+                                                                                setMultiPanelPresetKey(nextPresetKey);
+                                                                                const nextTech = { ...tech, multi_panel_image_preset: nextPresetKey };
+                                                                                const nextTechNotes = JSON.stringify(nextTech);
+                                                                                setEditingShot((prev) => ({ ...(prev || {}), technical_notes: nextTechNotes }));
+                                                                                try {
+                                                                                    await onUpdateShot(editingShot.id, { technical_notes: nextTechNotes });
+                                                                                } catch (error) {
+                                                                                    onLog?.(`${t('保存多画格预设失败', 'Failed to save multi-panel preset')}: ${error?.message || 'unknown error'}`, 'error');
+                                                                                }
+                                                                            }}
+                                                                        className="h-9 rounded border border-white/10 bg-black/30 px-3 text-sm text-white"
+                                                                        title={t('选择多画格预设', 'Choose multi-panel preset')}
+                                                                    >
+                                                                        {MULTI_PANEL_PRESET_OPTIONS.map((option) => (
+                                                                            <option key={option.key} value={option.key}>
+                                                                                {t(option.labelZh, option.labelEn)}
+                                                                            </option>
+                                                                        ))}
+                                                                    </select>
                                                                     {renderDetailActionButton({
-                                                                        label: t('生成分镜表', 'Generate Storyboard'),
+                                                                        label: t('生成多画格图', 'Generate Panel Preset'),
                                                                         busyLabel: t('生成中...', 'Generating...'),
-                                                                        onClick: () => handleGenerateStoryboard(),
-                                                                        disabled: isGeneratingStoryboard,
-                                                                        busy: isGeneratingStoryboard,
+                                                                        onClick: () => handleGenerateMultiPanelImage(),
+                                                                        disabled: isGeneratingMultiPanelImage,
+                                                                        busy: isGeneratingMultiPanelImage,
                                                                         variant: 'secondary',
-                                                                        title: t('按照当前的视频提示词生成一张四宫格分镜图', 'Generate a 4-grid storyboard image based on current video prompt'),
+                                                                        title: t('按当前视频提示词生成所选多画格预设图', 'Generate the selected multi-panel preset image from the current video prompt'),
                                                                     })}
                                                                     {renderDetailActionButton({
                                                                         label: t('强制停止', 'Force Stop'),
