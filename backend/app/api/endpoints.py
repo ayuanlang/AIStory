@@ -15,7 +15,8 @@ def _load_queue_config():
 _q_conf = _load_queue_config()
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from starlette.background import BackgroundTask
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -79,6 +80,7 @@ import socket
 import sys
 import time
 import io
+import zipfile
 
 
 IMAGE_SYNC_TIMEOUT_SECONDS = min(300, max(55, int(os.getenv("IMAGE_SYNC_TIMEOUT_SECONDS", "180"))))
@@ -1797,6 +1799,65 @@ def _refresh_shot_media_urls(shot: Shot, db: Session) -> Shot:
         else:
             shot.technical_notes = json.dumps(notes, ensure_ascii=False)
     return shot
+
+
+def _resolve_local_upload_path_from_media_url(url: Any) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+
+    upload_suffix = ""
+    if raw.startswith("/uploads/"):
+        upload_suffix = raw[len("/uploads/"):].lstrip("/")
+    else:
+        try:
+            parsed = urllib.parse.urlparse(raw)
+            if parsed.path.startswith("/uploads/"):
+                upload_suffix = parsed.path[len("/uploads/"):].lstrip("/")
+        except Exception:
+            upload_suffix = ""
+
+    if not upload_suffix:
+        return ""
+
+    upload_root = os.path.abspath(settings.UPLOAD_DIR)
+    file_path = os.path.abspath(os.path.join(upload_root, upload_suffix))
+    try:
+        if os.path.commonpath([upload_root, file_path]) != upload_root:
+            return ""
+    except ValueError:
+        return ""
+    return file_path if os.path.exists(file_path) else ""
+
+
+def _sanitize_zip_entry_token(value: Any, fallback: str) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z._-]+", "_", str(value or "").strip()).strip("._-")
+    return normalized or fallback
+
+
+def _build_shot_video_zip_entry_name(shot: Shot, index: int, video_url: str) -> str:
+    scene_token = _sanitize_zip_entry_token(getattr(shot, "scene_code", None) or f"scene_{getattr(shot, 'scene_id', index) or index}", f"scene_{index}")
+    shot_token = _sanitize_zip_entry_token(getattr(shot, "shot_id", None) or getattr(shot, "shot_name", None) or f"shot_{index}", f"shot_{index}")
+    ext = ".mp4"
+    try:
+        parsed = urllib.parse.urlparse(str(video_url or "").strip())
+        candidate = os.path.splitext(parsed.path or "")[1].strip().lower()
+        if candidate and len(candidate) <= 8:
+            ext = candidate
+    except Exception:
+        ext = ".mp4"
+    return f"{index:03d}_{scene_token}_{shot_token}{ext}"
+
+
+def _cleanup_temp_download_file(file_path: str) -> None:
+    stable_path = str(file_path or "").strip()
+    if not stable_path:
+        return
+    try:
+        if os.path.exists(stable_path):
+            os.remove(stable_path)
+    except Exception as exc:
+        logger.warning("Failed to cleanup temporary download file path=%s error=%s", stable_path, exc)
 
 
 def _replace_legacy_temp_urls_in_shot_payload(
@@ -13614,6 +13675,97 @@ def read_episode_shots(
     shots = query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
     repaired = _repair_shots_media_urls_from_assets(db, current_user, project, shots)
     return [_refresh_shot_media_urls(shot, db) for shot in repaired]
+
+
+@router.get("/episodes/{episode_id}/shots/download-zip")
+def download_episode_shot_videos_zip(
+    episode_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    project = _require_project_access(db, episode.project_id, current_user)
+    shots = (
+        db.query(Shot)
+        .filter(Shot.project_id == project.id, Shot.episode_id == episode_id, Shot.video_url.isnot(None), Shot.video_url != "")
+        .order_by(Shot.id)
+        .all()
+    )
+    shots = _repair_shots_media_urls_from_assets(db, current_user, project, shots)
+
+    if not shots:
+        raise HTTPException(status_code=404, detail="No shot videos available for download")
+
+    archive_dir = os.path.join(settings.UPLOAD_DIR, "_downloads")
+    os.makedirs(archive_dir, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"episode_{episode_id}_shot_videos_{timestamp}.zip"
+    archive_path = os.path.join(archive_dir, archive_name)
+
+    success_count = 0
+    failure_count = 0
+    user_agent = {"User-Agent": "AIStoryShotZip/1.0"}
+
+    try:
+        with zipfile.ZipFile(archive_path, mode="w", compression=zipfile.ZIP_STORED) as archive:
+            for index, shot in enumerate(shots, start=1):
+                refreshed_shot = _refresh_shot_media_urls(shot, db)
+                raw_url = str(getattr(refreshed_shot, "video_url", "") or "").strip()
+                if not raw_url:
+                    continue
+
+                entry_name = _build_shot_video_zip_entry_name(refreshed_shot, index, raw_url)
+                local_path = _resolve_local_upload_path_from_media_url(raw_url)
+
+                try:
+                    if local_path:
+                        archive.write(local_path, arcname=entry_name)
+                    else:
+                        download_url = raw_url
+                        if download_url.startswith("/"):
+                            download_url = urllib.parse.urljoin(str(request.base_url), download_url.lstrip("/"))
+                        with requests.get(download_url, stream=True, timeout=(15, 180), headers=user_agent) as response:
+                            response.raise_for_status()
+                            with archive.open(entry_name, mode="w") as zipped_file:
+                                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                                    if chunk:
+                                        zipped_file.write(chunk)
+                    success_count += 1
+                except Exception as exc:
+                    failure_count += 1
+                    logger.warning(
+                        "Failed to package shot video episode_id=%s shot_id=%s url=%s error=%s",
+                        episode_id,
+                        getattr(refreshed_shot, "id", None),
+                        raw_url,
+                        exc,
+                    )
+
+        if success_count <= 0:
+            _cleanup_temp_download_file(archive_path)
+            raise HTTPException(status_code=502, detail="Failed to package shot videos")
+
+        headers = {
+            "X-AIStory-Download-Count": str(success_count),
+            "X-AIStory-Download-Failures": str(failure_count),
+        }
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename=archive_name,
+            headers=headers,
+            background=BackgroundTask(_cleanup_temp_download_file, archive_path),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _cleanup_temp_download_file(archive_path)
+        logger.error("Failed to build episode shot video zip episode_id=%s error=%s", episode_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to create shot video archive")
 
 
 @router.get("/shots/{shot_id}", response_model=ShotOut)

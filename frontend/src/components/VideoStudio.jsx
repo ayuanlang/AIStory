@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchScenes, fetchShots, api, waitForAsyncTask, stopAsyncTask, deleteMontageResult } from '../services/api';
+import { fetchScenes, fetchShots, api, waitForAsyncTask, stopAsyncTask, deleteMontageResult, downloadEpisodeShotVideosZip } from '../services/api';
 import { Loader2, Play, Plus, Trash2, Film, Save, Clock, Scissors, ChevronRight, GripVertical, Download, Check } from 'lucide-react';
 import { getUiLang, tUI } from '../lib/uiLang';
 
@@ -292,6 +292,11 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
 
     const handleDownloadAllShots = async () => {
         if (isDownloadingAllShots) return;
+        if (!activeEpisode?.id) {
+            onLog?.(t('当前剧集无效，无法下载分镜视频。', 'Active episode is invalid, unable to download shot videos.'), 'warning');
+            return;
+        }
+
         const uniqueUrls = Array.from(
             new Set(
                 (Array.isArray(shots) ? shots : [])
@@ -307,24 +312,38 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
 
         setIsDownloadingAllShots(true);
         try {
-            uniqueUrls.forEach((url, index) => {
-                window.setTimeout(() => {
-                    const anchor = document.createElement('a');
-                    anchor.href = url;
-                    anchor.target = '_blank';
-                    anchor.rel = 'noopener noreferrer';
-                    anchor.download = '';
-                    document.body.appendChild(anchor);
-                    anchor.click();
-                    document.body.removeChild(anchor);
-                }, index * 120);
-            });
+            const result = await downloadEpisodeShotVideosZip(
+                activeEpisode.id,
+                `episode_${activeEpisode.id}_shot_videos.zip`
+            );
+            const completedCount = Number(result?.count || uniqueUrls.length || 0);
+            const failureCount = Number(result?.failures || 0);
+
             onLog?.(
-                t(`已触发 ${uniqueUrls.length} 个分镜视频下载。`, `Triggered download for ${uniqueUrls.length} shot videos.`),
-                'success'
+                t(
+                    `已开始下载分镜视频压缩包，包含 ${completedCount} 个视频。`,
+                    `Started downloading the shot video archive with ${completedCount} videos.`
+                ),
+                failureCount > 0 ? 'warning' : 'success'
+            );
+
+            if (failureCount > 0) {
+                onLog?.(
+                    t(
+                        `${failureCount} 个分镜视频未能打包进压缩包。`,
+                        `${failureCount} shot videos could not be added to the archive.`
+                    ),
+                    'warning'
+                );
+            }
+        } catch (error) {
+            console.error(error);
+            onLog?.(
+                t('下载分镜视频压缩包失败：', 'Failed to download shot video archive: ') + (error.response?.data?.detail || error.message),
+                'error'
             );
         } finally {
-            window.setTimeout(() => setIsDownloadingAllShots(false), 500);
+            setIsDownloadingAllShots(false);
         }
     };
 

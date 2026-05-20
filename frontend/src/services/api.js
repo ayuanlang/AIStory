@@ -1135,6 +1135,51 @@ export const fetchEpisodeShots = async (episodeId, params = {}) => {
     return response.data;
 }
 
+const parseDownloadFilenameFromDisposition = (headerValue, fallbackName) => {
+    const rawHeader = String(headerValue || '').trim();
+    if (!rawHeader) return fallbackName;
+
+    const utf8Match = rawHeader.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+        try {
+            return decodeURIComponent(utf8Match[1]);
+        } catch {
+            return utf8Match[1];
+        }
+    }
+
+    const plainMatch = rawHeader.match(/filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/i);
+    const rawName = String(plainMatch?.[1] || plainMatch?.[2] || '').trim();
+    return rawName || fallbackName;
+};
+
+export const downloadEpisodeShotVideosZip = async (episodeId, fallbackName = null) => {
+    const response = await api.get(`/episodes/${episodeId}/shots/download-zip`, {
+        responseType: 'blob',
+    });
+    const disposition = response.headers?.['content-disposition'] || response.headers?.['Content-Disposition'];
+    const filename = parseDownloadFilenameFromDisposition(
+        disposition,
+        fallbackName || `episode_${episodeId}_shot_videos.zip`
+    );
+    const blob = response.data instanceof Blob
+        ? response.data
+        : new Blob([response.data], { type: 'application/zip' });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(objectUrl);
+    return {
+        filename,
+        count: Number(response.headers?.['x-aistory-download-count'] || 0),
+        failures: Number(response.headers?.['x-aistory-download-failures'] || 0),
+    };
+};
+
 export const fetchShot = async (shotId) => {
     const response = await api.get(`/shots/${shotId}`);
     return response.data;
@@ -1700,7 +1745,7 @@ const inferFilenameFromUrl = (url, fallbackName) => {
     return fallbackName;
 };
 
-const downloadMediaToLocal = async (url, fallbackName) => {
+export const downloadMediaToLocal = async (url, fallbackName) => {
     const downloadUrl = resolveMediaDownloadUrl(url);
     if (!downloadUrl) return;
     const response = await fetch(downloadUrl, { credentials: 'include' });
