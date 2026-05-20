@@ -3013,16 +3013,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ...changes,
             };
 
-            await updateShot(shotId, payload);
-            setShots(prev => prev.map((s) => (String(s?.id || '').trim() === stableShotId ? { ...s, ...changes } : s)));
+            const updatedShot = await updateShot(shotId, payload);
+            const nextShot = (updatedShot && typeof updatedShot === 'object')
+                ? updatedShot
+                : { ...(currentShot || editingBase || {}), ...changes };
+            setShots(prev => prev.map((s) => (String(s?.id || '').trim() === stableShotId ? { ...s, ...nextShot } : s)));
 
             // Sync editingShot safely
             setEditingShot(prev => {
                 if (prev && String(prev?.id || '').trim() === stableShotId) {
-                    return { ...prev, ...changes };
+                    return { ...prev, ...nextShot };
                 }
                 return prev;
             });
+            return nextShot;
         } catch(e) { 
             console.error("Update Shot Failed", e); 
             onLog?.(`Failed to save changes: ${getReadableErrorDetail(e)}`, "error");
@@ -3033,13 +3037,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const persistShotFields = async (updates = {}) => {
         if (!editingShot?.id) return;
         setEditingShot(prev => ({ ...(prev || {}), ...updates }));
-        await onUpdateShot(editingShot.id, updates);
+        return await onUpdateShot(editingShot.id, updates);
     };
 
     const persistEditingShotUpdates = async (updates = {}) => {
         if (!editingShot?.id) return;
         setEditingShot(prev => ({ ...(prev || {}), ...updates }));
-        await onUpdateShot(editingShot.id, updates);
+        return await onUpdateShot(editingShot.id, updates);
     };
 
     const buildAssetDetailSavePatch = useCallback((shotRecord, modalType) => {
@@ -6460,7 +6464,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const tech = JSON.parse(editingShot.technical_notes || '{}');
             tech.end_frame_url = extractedUrl;
             tech.video_gen_mode = 'start_end';
-            await persistEditingShotUpdates({ technical_notes: JSON.stringify(tech) });
+            const persistedShot = await persistEditingShotUpdates({ technical_notes: JSON.stringify(tech) });
+            const persistedEndFrameUrl = String(getShotEndFrameUrl(persistedShot || {}) || '').trim();
+            if (!persistedEndFrameUrl) {
+                throw new Error('end frame write did not persist');
+            }
 
             onLog?.(t('已从视频提取最后一帧并设置为结束帧。', 'Last video frame extracted and set as end frame.'), 'success');
             showNotification(t('已设置结束帧', 'End frame set from video'), 'success');
@@ -6471,7 +6479,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         } finally {
             setShotGeneratingState(targetShotId, 'end', false);
         }
-    }, [editingShot, getReadableErrorDetail, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
+    }, [editingShot, getReadableErrorDetail, getShotEndFrameUrl, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
 
     const [multiPanelPresetKey, setMultiPanelPresetKey] = useState('4panel');
     const [multiPanelPresetInstruction, setMultiPanelPresetInstruction] = useState(() => getMultiPanelPresetFallbackInstruction('4panel', 'cn'));
