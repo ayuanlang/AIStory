@@ -8799,6 +8799,50 @@ def is_valid_markdown_output(text: str, require_h1: bool = True) -> bool:
     return has_md_structure
 
 
+def _parse_episode_heading_from_markdown(text: str) -> Dict[str, Any]:
+    content = str(text or "").strip()
+    if not content:
+        return {}
+
+    first_line = ""
+    for line in content.splitlines():
+        candidate = str(line or "").strip()
+        if candidate:
+            first_line = candidate
+            break
+
+    if not first_line.startswith("#"):
+        return {}
+
+    heading = first_line.lstrip("#").strip()
+    if not heading:
+        return {"raw_heading": first_line}
+
+    patterns = (
+        r"^(?:EP\s*)?0*(\d+)\s*[-:：]\s*(.+)$",
+        r"^第\s*(\d+)\s*集\s*[-:：]\s*(.+)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, heading, flags=re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            episode_number = int(match.group(1))
+        except Exception:
+            episode_number = None
+        episode_title = str(match.group(2) or "").strip().strip("-:： ")
+        return {
+            "raw_heading": first_line,
+            "episode_number": episode_number,
+            "episode_title": episode_title,
+        }
+
+    return {
+        "raw_heading": first_line,
+        "episode_title": heading,
+    }
+
+
 async def generate_markdown_with_retry(
     user_prompt: str,
     sys_prompt: str,
@@ -12777,6 +12821,16 @@ async def generate_project_episode_scripts_from_global_framework(
             if not content:
                 raise RuntimeError("LLM returned empty content")
 
+            parsed_heading = _parse_episode_heading_from_markdown(content)
+            llm_episode_number = parsed_heading.get("episode_number")
+            llm_episode_title = str(parsed_heading.get("episode_title") or ep_title or "").strip()
+            llm_heading = str(parsed_heading.get("raw_heading") or "").strip()
+            title_mismatch = bool(llm_episode_number) and int(llm_episode_number) != int(idx)
+            if title_mismatch:
+                logger.warning(
+                    f"[generate_episode_scripts] EPISODE_TITLE_MISMATCH project_episode_number={idx} llm_episode_number={llm_episode_number} episode_id={ep_id} raw_heading={llm_heading!r}"
+                )
+
             usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
             if not usage:
                 usage = billing_service.estimate_input_output_tokens_from_messages(
@@ -12836,13 +12890,20 @@ async def generate_project_episode_scripts_from_global_framework(
                 "episode_number": idx,
                 "episode_id": ep_id,
                 "episode_title": ep_title,
+                "llm_episode_number": llm_episode_number,
+                "llm_episode_title": llm_episode_title,
+                "title_mismatch": title_mismatch,
                 "output_chars": len(content),
             })
 
             results.append({
                 "episode_id": ep_id,
                 "episode_number": idx,
-                "episode_title": ep_title,
+                "project_episode_title": ep_title,
+                "episode_title": llm_episode_title,
+                "llm_episode_number": llm_episode_number,
+                "llm_episode_title": llm_episode_title,
+                "title_mismatch": title_mismatch,
                 "generated": True,
                 "skipped": False,
                 "output_chars": len(content),
@@ -12853,7 +12914,11 @@ async def generate_project_episode_scripts_from_global_framework(
             run_status["results"].append({
                 "episode_id": ep_id,
                 "episode_number": idx,
-                "episode_title": ep_title,
+                "project_episode_title": ep_title,
+                "episode_title": llm_episode_title,
+                "llm_episode_number": llm_episode_number,
+                "llm_episode_title": llm_episode_title,
+                "title_mismatch": title_mismatch,
                 "status": "generated",
                 "output_chars": len(content),
             })
@@ -12963,6 +13028,7 @@ async def generate_project_episode_scripts_from_global_framework(
         "generation_success": len(errors) == 0,
         "project_id": project_id,
         "episodes_target": target_n,
+        "episodes_generated": sum(1 for r in results if r.get("generated")),
         "episodes_created": len(created_episodes),
         "created_episode_ids": created_episodes,
         "results": results,

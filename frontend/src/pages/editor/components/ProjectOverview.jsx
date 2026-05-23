@@ -1675,6 +1675,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 `[DEBUG][After API] response summary: ${JSON.stringify({
                     project_id: res?.project_id,
                     episodes_target: res?.episodes_target,
+                    episodes_generated: res?.episodes_generated,
                     episodes_created: res?.episodes_created,
                     results_count: Array.isArray(res?.results) ? res.results.length : 0,
                     errors_count: Array.isArray(res?.errors) ? res.errors.length : 0,
@@ -1692,7 +1693,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             const created = Number(res?.episodes_created ?? 0);
             const errors = Array.isArray(res?.errors) ? res.errors : [];
             const results = Array.isArray(res?.results) ? res.results : [];
-            const generated = results.filter(r => r?.generated === true).length;
+            const generatedCount = Number(res?.episodes_generated ?? results.filter(r => r?.generated === true).length);
+            const generated = Number.isFinite(generatedCount) ? generatedCount : results.filter(r => r?.generated === true).length;
             const skipped = results.filter(r => r?.skipped === true).length;
             const summary = `Generated: ${generated}, Skipped: ${skipped}, Created Episodes: ${created}, Errors: ${errors.length}`;
             if (errors.length > 0) {
@@ -1940,7 +1942,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 rows.push({
                     episode_number: i,
                     episode_id: row?.episode_id,
+                    project_episode_title: row?.project_episode_title || knownTitle || t(`第 ${i} 集`, `Episode ${i}`),
                     episode_title: row?.episode_title || knownTitle || t(`第 ${i} 集`, `Episode ${i}`),
+                    llm_episode_number: row?.llm_episode_number,
+                    title_mismatch: Boolean(row?.title_mismatch),
                     status: row?.status || (row?.generated ? 'generated' : row?.skipped ? 'skipped' : row?.error ? 'failed' : 'unknown'),
                     output_chars: row?.output_chars,
                     error: row?.error,
@@ -3333,6 +3338,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                                 ? 'bg-yellow-500/20 text-yellow-200 border-yellow-500/30'
                                                                 : 'bg-white/10 text-white/80 border-white/20';
                                                 const resultText = row?.error || row?.reason || (row?.output_chars ? `${row.output_chars} ${t('字符', 'chars')}` : (status === 'pending' ? t('等待中', 'Waiting') : '-'));
+                                                const titleMismatchSuffix = row?.title_mismatch ? ` · ${t('标题/编号不一致', 'Title/number mismatch')}` : '';
                                                 const statusLabel =
                                                     status === 'generated'
                                                         ? t('已生成', 'Generated')
@@ -3352,13 +3358,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                                 episodeNumber: row?.episode_number,
                                                                 title: row?.episode_title,
                                                                 fallbackNumber: Number(row?.episode_number || 0) || null,
-                                                            })}
+                                                            })}{titleMismatchSuffix}`}
                                                         >
                                                             {buildEpisodeDisplayLabel({
                                                                 episodeNumber: row?.episode_number,
                                                                 title: row?.episode_title,
                                                                 fallbackNumber: Number(row?.episode_number || 0) || null,
-                                                            })}
+                                                            })}{titleMismatchSuffix}
                                                         </div>
                                                         <div className="col-span-2">
                                                             <span className={`px-2 py-0.5 rounded text-xs border ${statusClass}`}>{statusLabel}</span>
