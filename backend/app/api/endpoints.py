@@ -8996,7 +8996,7 @@ async def generate_project_story_dna_global(
 
     user_prompt = (
         f"Mode: global\n"
-        f"Project Title: {project.title}\n"
+        f"Project Title: {project_title}\n"
         f"Note: Project Overview / Basic Information and Character Canon may be empty; do not fail, infer sensible defaults and continue.\n"
         f"\n"
         f"[Project Overview / Basic Information]\n"
@@ -9018,7 +9018,7 @@ async def generate_project_story_dna_global(
         f"Extra Notes: {req.extra_notes or ''}\n"
     )
 
-    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
+    llm_config = agent_service.get_active_llm_config(user_id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     llm_config = _inject_project_creativity_temperature(
@@ -9515,7 +9515,8 @@ async def analyze_project_novel_to_story_generator_fields(
         logger.error("Analyze novel prompt not found: story_generator_analyze_novel.txt")
         raise HTTPException(status_code=404, detail="Prompt file 'story_generator_analyze_novel.txt' not found.")
 
-    user_prompt = f"Project Title: {project.title}\n\nNovel/Script Text:\n{novel_text}"
+    project_title_str = str(project.title or "")
+    user_prompt = f"Project Title: {project_title_str}\n\nNovel/Script Text:\n{novel_text}"
 
     function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
@@ -11358,9 +11359,12 @@ async def generate_episode_scenes_from_story(
     except Exception:
         episode_md = ""
 
+    project_title_str = str(project.title or "")
+    episode_title_str = str(episode.title or "")
+
     user_prompt = (
-        f"Project Title: {project.title}\n"
-        f"Episode Title: {episode.title}\n"
+        f"Project Title: {project_title_str}\n"
+        f"Episode Title: {episode_title_str}\n"
         f"Scene Count Target: {req.scene_count or ''}\n"
         f"Background: {req.background or ''}\n"
         f"Setup: {req.setup or ''}\n"
@@ -11702,18 +11706,23 @@ async def generate_project_episode_scripts_from_global_framework(
         )
         raise
 
+    user_id = int(current_user.id)
+    user_name = str(current_user.username or "").strip()
+    project_title = str(project.title or "").strip()
+    project_global_info = dict(project.global_info or {})
+
     try:
         log_action(
             db,
-            user_id=current_user.id,
-            user_name=current_user.username,
+            user_id=user_id,
+            user_name=user_name,
             action="GENERATE_EPISODE_SCRIPTS_START",
             details=json.dumps(call_meta, ensure_ascii=False),
         )
     except Exception as e:
         logger.warning(f"[generate_episode_scripts] failed to write START system log: {e}")
 
-    gi = dict(project.global_info or {})
+    gi = dict(project_global_info)
     status_key = "episode_script_generation_status"
 
     def _persist_run_status(status_payload: Dict[str, Any]) -> None:
@@ -11805,8 +11814,8 @@ async def generate_project_episode_scripts_from_global_framework(
             try:
                 log_action(
                     db,
-                    user_id=current_user.id,
-                    user_name=current_user.username,
+                    user_id=user_id,
+                    user_name=user_name,
                     action="GENERATE_EPISODE_SCRIPTS_FAILED",
                     details=f"project_id={project_id}; reason=invalid_episodes_count; req={req.episodes_count}",
                 )
@@ -11826,8 +11835,8 @@ async def generate_project_episode_scripts_from_global_framework(
         try:
             log_action(
                 db,
-                user_id=current_user.id,
-                user_name=current_user.username,
+                user_id=user_id,
+                user_name=user_name,
                 action="GENERATE_EPISODE_SCRIPTS_FAILED",
                 details=f"project_id={project_id}; reason=missing_global_framework",
             )
@@ -11860,7 +11869,7 @@ async def generate_project_episode_scripts_from_global_framework(
 
     relationships = str(gi.get("character_relationships") or "").strip()
     constraints_key = "promo_global_style_constraints" if generator_kind == "promo" else "global_style_constraints"
-    constraints_obj = (project.global_info or {}).get(constraints_key)
+    constraints_obj = project_global_info.get(constraints_key)
     has_constraints = bool(constraints_obj)
     has_relationships = bool(relationships)
     if str(gi.get("character_canon_md") or "").strip():
@@ -12003,7 +12012,7 @@ async def generate_project_episode_scripts_from_global_framework(
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     llm_config = _inject_project_creativity_temperature(
         llm_config,
-        project.global_info,
+        project_global_info,
         context="generate_episode_scripts",
     )
     provider = llm_config.get("provider") if llm_config else None
@@ -12016,8 +12025,8 @@ async def generate_project_episode_scripts_from_global_framework(
         try:
             log_action(
                 db,
-                user_id=current_user.id,
-                user_name=current_user.username,
+                user_id=user_id,
+                user_name=user_name,
                 action=action,
                 details=json.dumps(payload, ensure_ascii=False),
             )
@@ -12120,7 +12129,7 @@ async def generate_project_episode_scripts_from_global_framework(
             relationships_block = f"Character Relationships (Plain Text):\n{relationships}\n\n"
 
         user_prompt = (
-            f"Project Title: {project.title}\n"
+            f"Project Title: {project_title}\n"
             f"Episode Number: {idx}\n"
             f"Episode Title: {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
@@ -12146,7 +12155,7 @@ async def generate_project_episode_scripts_from_global_framework(
             )
             reservation_tx = billing_service.reserve_credits(
                 db,
-                current_user.id,
+                user_id,
                 "llm_chat",
                 provider,
                 model,
@@ -12162,7 +12171,7 @@ async def generate_project_episode_scripts_from_global_framework(
                 },
             )
         else:
-            billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+            billing_service.check_balance(db, user_id, "llm_chat", provider, model)
 
         try:
             logger.info(
@@ -12218,7 +12227,7 @@ async def generate_project_episode_scripts_from_global_framework(
             if reservation_tx:
                 billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
             else:
-                billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
+                billing_service.deduct_credits(db, user_id, "llm_chat", provider, model, billing_details)
 
             ep_db = db.query(Episode).get(ep_id)
             if not ep_db:
@@ -12342,7 +12351,7 @@ async def generate_project_episode_scripts_from_global_framework(
 
     duration_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
     logger.info(
-        f"[generate_episode_scripts] END project_id={project_id} user_id={current_user.id} "
+        f"[generate_episode_scripts] END project_id={project_id} user_id={user_id} "
         f"target={target_n} created={len(created_episodes)} generated={sum(1 for r in results if r.get('generated'))} "
         f"errors={len(errors)} duration_ms={duration_ms}"
     )
@@ -12358,8 +12367,8 @@ async def generate_project_episode_scripts_from_global_framework(
         }
         log_action(
             db,
-            user_id=current_user.id,
-            user_name=current_user.username,
+            user_id=user_id,
+            user_name=user_name,
             action="GENERATE_EPISODE_SCRIPTS_END",
             details=json.dumps(summary, ensure_ascii=False),
         )
@@ -13123,6 +13132,8 @@ async def regenerate_scene(
             raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
 
     project_global_info = project.global_info if isinstance(project.global_info, dict) else {}
+    project_title_str = str(project.title or "")
+    episode_title_str = str(episode.title or "")
 
     def _project_info_str(key: str) -> str:
         value = project_global_info.get(key)
@@ -13133,8 +13144,8 @@ async def regenerate_scene(
         return str(value or "").strip()
 
     project_context_lines = [
-        f"Project Title: {project.title}",
-        f"Episode Title: {episode.title}",
+        f"Project Title: {project_title_str}",
+        f"Episode Title: {episode_title_str}",
     ]
     for key, label in (
         ("script_title", "Script Title"),
@@ -27115,7 +27126,7 @@ async def _run_generate_video(
             resolved_video_provider or None,
             resolved_video_model or None,
         )
-        is_reference_image_mode = bool(normalized_ref_mode == "entity_refs")
+        is_reference_image_mode = bool(normalized_ref_mode in {"entity_refs", "keyframes_entity_refs"})
         has_explicit_visual_refs = False
         if isinstance(req.ref_image_url, list):
             has_explicit_visual_refs = any(str(x).strip() for x in req.ref_image_url)
@@ -29766,6 +29777,8 @@ def _normalize_video_ref_mode(value: Any) -> str:
     refs_aliases = {"entity_refs", "entity-refs", "refs_video", "refs-video", "reference", "reference_image", "reference_images"}
     if mode in refs_aliases:
         return "entity_refs"
+    if mode in {"keyframes_entity_refs", "keyframe_entity_refs", "keyframes-entity-refs", "keyframe-entity-refs"}:
+        return "keyframes_entity_refs"
     if mode in {"start", "start_only", "start-only", "only_start", "only-start"}:
         return "start"
     if mode in {"start_end", "start-end", "start+end", "both", "both_ends"}:
@@ -29874,7 +29887,7 @@ def _normalize_video_request_refs(
         "had_last_frame_before": bool(end_ref),
     }
 
-    if normalized_mode == "entity_refs":
+    if normalized_mode in {"entity_refs", "keyframes_entity_refs"}:
         info["start_count_after"] = len(start_refs)
         info["had_last_frame_after"] = False
         return (start_refs or None), None, info
@@ -29933,7 +29946,7 @@ def _merge_entity_refs_for_video_mode(
 ) -> Tuple[List[str], List[str]]:
     normalized_mode = _normalize_video_ref_mode(ref_mode)
     current_refs = _dedupe_media_ref_urls(base_refs)
-    if normalized_mode != "entity_refs" or manual_override:
+    if normalized_mode not in {"entity_refs", "keyframes_entity_refs"} or manual_override:
         return current_refs, []
 
     auto_entity_refs: List[str] = []
@@ -29947,9 +29960,29 @@ def _merge_entity_refs_for_video_mode(
     if not auto_entity_refs:
         return current_refs, []
 
+    if normalized_mode == "keyframes_entity_refs":
+        return _dedupe_media_ref_urls([*current_refs, *auto_entity_refs]), auto_entity_refs
+
     # If entity_refs mode is selected, we ONLY return the entity refs and ignore the base_refs
     # to avoid mixing first frame/last frame/keyframes into the entity reference list sent to the provider.
     return _dedupe_media_ref_urls(auto_entity_refs), auto_entity_refs
+
+
+def _prepend_keyframe_story_progression_instruction(prompt: Any, keyframe_ref_count: int, *, language: str = "en") -> str:
+    base_prompt = str(prompt or "").strip()
+    if keyframe_ref_count <= 0:
+        return base_prompt
+
+    ref_labels = [f"@Image{idx}" for idx in range(1, keyframe_ref_count + 1)]
+    normalized_language = str(language or "en").strip().lower()
+    if normalized_language.startswith("zh") or normalized_language.startswith("cn"):
+        prefix = f"参考{'，'.join(ref_labels)}的情节走向进行视频生成。"
+    else:
+        prefix = f"Generate the video by following the story progression in {', '.join(ref_labels)}."
+
+    if not base_prompt:
+        return prefix
+    return f"{prefix} {base_prompt}" if not prefix.endswith("。") else f"{prefix}{base_prompt}"
 
 def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
     text = str(prompt or "")
@@ -30176,9 +30209,6 @@ def _append_video_api_ref_mapping(
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:
         prefix = f"@Image{mapped_idx} "
-        if prefix in updated_text and entity_name in updated_text:
-            continue
-
         escaped_entity = re.escape(entity_name)
         anchor_patterns = [
             rf"[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
@@ -30188,6 +30218,10 @@ def _append_video_api_ref_mapping(
 
         replaced = False
         for pattern in anchor_patterns:
+            if re.search(rf"{re.escape(prefix)}{pattern}", updated_text, flags=re.IGNORECASE):
+                replaced = True
+                break
+
             def _prepend_prefix(match: re.Match[str]) -> str:
                 token = str(match.group(0) or "")
                 if token.startswith(prefix):
@@ -30206,6 +30240,9 @@ def _append_video_api_ref_mapping(
 
         # Fallback: prepend marker directly before plain entity mentions.
         plain_pattern = rf'(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])'
+        if re.search(rf"{re.escape(prefix)}{plain_pattern}", updated_text, flags=re.IGNORECASE):
+            continue
+
         def _prepend_marker(match: re.Match[str]) -> str:
             token = str(match.group(0) or "")
             if token.startswith(prefix):
@@ -30379,7 +30416,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 if start_frame_url:
                     refs.append(start_frame_url)
 
-                if shot_mode == "entity_refs":
+                if shot_mode in {"entity_refs", "keyframes_entity_refs"}:
                     keyframes = tech.get("keyframes")
                     if isinstance(keyframes, list):
                         refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
@@ -30412,6 +30449,17 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             ordered_video_refs.append(str(normalized_last_frame_url).strip())
         ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
 
+        keyframe_priority_refs: List[str] = []
+        if video_mode == "keyframes_entity_refs":
+            keyframe_priority_refs = _dedupe_media_ref_urls([
+                str(x).strip() for x in (tech.get("keyframes") or []) if str(x).strip()
+            ])
+            if keyframe_priority_refs:
+                ordered_video_refs = [
+                    *[ref for ref in keyframe_priority_refs if ref in ordered_video_refs],
+                    *[ref for ref in ordered_video_refs if ref not in keyframe_priority_refs],
+                ]
+
         system_api_id_val = system_api_id
         if not system_api_id_val and getattr(episode, "system_api_id", None):
             system_api_id_val = episode.system_api_id
@@ -30431,6 +30479,9 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             provider="seedance" if is_seedance_batch else None,
             entity_lookup=entity_lookup,
         )
+        if video_mode == "keyframes_entity_refs":
+            keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
+            video_prompt = _prepend_keyframe_story_progression_instruction(video_prompt, keyframe_ref_count, language="en")
 
         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
         video_prompt_cn = ""
@@ -30446,6 +30497,9 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
                 entity_lookup=entity_lookup,
             )
+            if video_mode == "keyframes_entity_refs":
+                keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
+                video_prompt_cn = _prepend_keyframe_story_progression_instruction(video_prompt_cn, keyframe_ref_count, language="zh")
             tech["video_prompt_cn"] = video_prompt_cn
             item_db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
             item_db.commit()
@@ -31106,7 +31160,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 if str(shot.image_url or "").strip():
                                     refs.append(str(shot.image_url).strip())
 
-                                if shot_mode == "entity_refs":
+                                if shot_mode in {"entity_refs", "keyframes_entity_refs"}:
                                     keyframes = tech.get("keyframes")
                                     if isinstance(keyframes, list):
                                         refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
@@ -31139,6 +31193,17 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             ordered_video_refs.append(str(normalized_last_frame_url).strip())
                         ordered_video_refs = [x for x in dict.fromkeys(ordered_video_refs) if x]
 
+                        keyframe_priority_refs: List[str] = []
+                        if video_mode == "keyframes_entity_refs":
+                            keyframe_priority_refs = _dedupe_media_ref_urls([
+                                str(x).strip() for x in (tech.get("keyframes") or []) if str(x).strip()
+                            ])
+                            if keyframe_priority_refs:
+                                ordered_video_refs = [
+                                    *[ref for ref in keyframe_priority_refs if ref in ordered_video_refs],
+                                    *[ref for ref in ordered_video_refs if ref not in keyframe_priority_refs],
+                                ]
+
                         video_prompt = _append_video_api_ref_mapping(
                             video_prompt,
                             ordered_video_refs,
@@ -31148,6 +31213,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             entity_lookup=entity_lookup,
                             use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
                         )
+                        if video_mode == "keyframes_entity_refs":
+                            keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
+                            video_prompt = _prepend_keyframe_story_progression_instruction(video_prompt, keyframe_ref_count, language="en")
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
                         video_prompt_cn = ""
@@ -31163,6 +31231,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 entity_lookup=entity_lookup,
                                 use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
                             )
+                            if video_mode == "keyframes_entity_refs":
+                                keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
+                                video_prompt_cn = _prepend_keyframe_story_progression_instruction(video_prompt_cn, keyframe_ref_count, language="zh")
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
                             db.commit()
@@ -31661,7 +31732,10 @@ async def delete_montage(
 
 
 class AnalyzeImageRequest(BaseModel):
-    asset_id: int
+    asset_id: Optional[int] = None
+    image_url: Optional[str] = None
+    system_api_id: Optional[int] = None
+    function_name: Optional[str] = None
 
 @router.post("/assets/analyze", response_model=Dict[str, str])
 async def analyze_asset_image(
@@ -31672,39 +31746,45 @@ async def analyze_asset_image(
     """
     Analyzes an asset image to extract style and prompt descriptions.
     """
-    # 1. Fetch Asset
-    asset = db.query(Asset).filter(Asset.id == request.asset_id).first()
-    if not asset:
-        raise HTTPException(status_code=404, detail="Asset not found")
-        
-    # Check permissions
-    if asset.user_id != current_user.id and not current_user.is_superuser:
-         raise HTTPException(status_code=403, detail="Not authorized")
+    asset = None
+    image_url_raw = str(getattr(request, "image_url", "") or "").strip()
+    if request.asset_id is not None:
+        asset = db.query(Asset).filter(Asset.id == request.asset_id).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
 
-    # 2. Get Vision Tool Config
-    # If not found, fallback to LLM (assuming LLM might support vision e.g. GPT-4o)
-    api_setting = get_effective_api_setting(db, current_user, category="Vision")
-    if not api_setting:
-         # Fallback to LLM as backup, but log warning
-         logger.warning("Vision tool not configured, falling back to LLM setting.")
-         api_setting = get_effective_api_setting(db, current_user, category="LLM")
-    
-    if not api_setting:
-         raise HTTPException(status_code=400, detail="Vision Tool (or LLM) not configured. Please configure 'Vision / Image Recognition Tool' in Settings.")
-    
+        if asset.user_id != current_user.id and not current_user.is_superuser:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+        image_url_raw = str(asset.url or "").trim() if False else str(asset.url or "").strip()
+
+    if not image_url_raw:
+        raise HTTPException(status_code=400, detail="Asset id or image_url is required")
+
+    function_name = str(getattr(request, "function_name", "") or "").strip() or "script_analysis"
+    llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        system_api_id=getattr(request, "system_api_id", None),
+        function_name=function_name,
+    )
+    api_provider = str(llm_config.get("provider") or "").strip()
+    api_model = str(llm_config.get("model") or "").strip()
+    if not api_provider or not api_model:
+        raise HTTPException(status_code=400, detail="Vision Tool or LLM not configured. Please configure the routed model first.")
+
     reservation_tx = None
     # Billing Check (token rules will be reserved later once we have final prompt/messages)
-    if not billing_service.is_token_pricing(db, "analysis", api_setting.provider, api_setting.model):
-        cost = billing_service.estimate_cost(db, "analysis", api_setting.provider, api_setting.model)
+    if not billing_service.is_token_pricing(db, "analysis", api_provider, api_model):
+        cost = billing_service.estimate_cost(db, "analysis", api_provider, api_model)
         billing_service.check_can_proceed(current_user, cost)
 
     llm_config = {
-        "provider": api_setting.provider,
-        "api_key": api_setting.api_key,
-        "base_url": api_setting.base_url,
-        "model": api_setting.model,
+        "provider": api_provider,
+        "api_key": llm_config.get("api_key"),
+        "base_url": llm_config.get("base_url"),
+        "model": api_model,
         "config": {
-            **(api_setting.config or {}),
+            **((llm_config.get("config") if isinstance(llm_config.get("config"), dict) else {}) or {}),
             "response_format": {"type": "json_object"},
             "include_thoughts": False,
         }
@@ -31719,7 +31799,6 @@ async def analyze_asset_image(
     # 4. Construct Image URL
     base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000").rstrip("/")
     
-    image_url_raw = asset.url
     if image_url_raw and image_url_raw.startswith("http"):
          # Check if it is localhost and we are not in a local env (heuristic)
          # If the backend is local and the LLM is remote, the LLM cannot see 'localhost'.
@@ -31816,8 +31895,8 @@ async def analyze_asset_image(
                 db,
                 current_user.id,
                 "analysis",
-                api_setting.provider,
-                api_setting.model,
+                api_provider,
+                api_model,
                 reserve_details,
             )
 
@@ -31860,8 +31939,8 @@ async def analyze_asset_image(
             db=db,
             current_user=current_user,
             task_type="analysis",
-            provider=api_setting.provider,
-            model=api_setting.model,
+            provider=api_provider,
+            model=api_model,
             reservation_tx=reservation_tx,
             item="asset_analysis",
             usage_payload=usage if isinstance(usage, dict) else None,
@@ -31878,15 +31957,15 @@ async def analyze_asset_image(
         # Save to Asset Meta (Analysis Result)? 
         # Requirement: "Analyzes an asset...". User might expect persistence.
         # We'll save a snippet to 'remark' or 'meta_info.analysis'
-        asset = db.merge(asset)
-        if not asset.meta_info: asset.meta_info = {}
-        if isinstance(asset.meta_info, dict):
-            # Only save short version or full?
-            # Save full in a new key
-            meta = dict(asset.meta_info)
-            meta["analysis_result"] = result
-            asset.meta_info = meta
-            db.commit()
+        if asset is not None:
+            asset = db.merge(asset)
+            if not asset.meta_info:
+                asset.meta_info = {}
+            if isinstance(asset.meta_info, dict):
+                meta = dict(asset.meta_info)
+                meta["analysis_result"] = result
+                asset.meta_info = meta
+                db.commit()
 
         return {"result": result}
     except Exception as e:
