@@ -4793,6 +4793,505 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "warnings": warnings,
             }
 
+        def _bucket_from_subject_type(raw_type: Any) -> str:
+            text = str(raw_type or "").strip().lower()
+            if text in {"character", "characters", "char", "人物", "角色"}:
+                return "characters"
+            if text in {"prop", "props", "道具", "物件"}:
+                return "props"
+            if text in {"environment", "environments", "env", "场景", "环境"}:
+                return "environments"
+            if text in {"cover", "covers", "cover_poster", "poster", "posters", "封面", "封面海报"}:
+                return "covers"
+            return ""
+
+        def _extract_expected_subjects_from_subject_index(text: str) -> Dict[str, Any]:
+            expected: Dict[str, Dict[str, str]] = {
+                "characters": {},
+                "props": {},
+                "environments": {},
+                "covers": {},
+            }
+            raw = str(text or "")
+            if not raw:
+                return {"expected": expected, "total": 0}
+
+            # Supports rows like:
+            # S001 | prop | 中文名 | English Name | ...
+            for line in raw.splitlines():
+                stripped = str(line or "").strip()
+                if not stripped:
+                    continue
+                if not re.match(r"^S\d+\s*\|", stripped, flags=re.IGNORECASE):
+                    continue
+                parts = [p.strip() for p in stripped.split("|")]
+                if len(parts) < 4:
+                    continue
+
+                bucket = _bucket_from_subject_type(parts[1])
+                if not bucket:
+                    continue
+
+                display_name = _normalize_subject_name(parts[2])
+                name_en = _normalize_subject_name(parts[3]) if len(parts) > 3 else ""
+
+                for candidate in (display_name, name_en):
+                    key = _normalize_subject_compare_key(candidate)
+                    if key and key not in expected[bucket]:
+                        expected[bucket][key] = candidate
+
+            total = sum(len(v) for v in expected.values())
+            return {"expected": expected, "total": total}
+
+        def _extract_subject_index_records(source_text: str) -> List[Dict[str, str]]:
+            records: List[Dict[str, str]] = []
+            raw = str(source_text or "")
+            if not raw:
+                return records
+
+            for line in raw.splitlines():
+                stripped = str(line or "").strip()
+                if not stripped:
+                    continue
+                if not re.match(r"^S\d+\s*\|", stripped, flags=re.IGNORECASE):
+                    continue
+
+                parts = [p.strip() for p in stripped.split("|")]
+                if len(parts) < 4:
+                    continue
+
+                bucket = _bucket_from_subject_type(parts[1])
+                if not bucket:
+                    continue
+
+                subject_no = str(parts[0] or "").strip()
+                name = str(parts[2] or "").strip()
+                name_en = str(parts[3] or "").strip()
+                if not subject_no or (not name and not name_en):
+                    continue
+
+                records.append({
+                    "subject_no": subject_no,
+                    "bucket": bucket,
+                    "name": name,
+                    "name_en": name_en,
+                })
+
+            return records
+
+        def _build_subject_placeholder(record: Dict[str, str]) -> Dict[str, Any]:
+            bucket = str(record.get("bucket") or "")
+            subject_no = str(record.get("subject_no") or "").strip()
+            name = str(record.get("name") or "").strip()
+            name_en = str(record.get("name_en") or "").strip()
+
+            base_obj: Dict[str, Any] = {
+                "subject_no": subject_no,
+                "name": name,
+                "name_en": name_en,
+                "base_name_en": name_en,
+                "description_cn": "",
+                "visual_dependencies": [],
+                "dependency_strategy": {
+                    "type": "Original",
+                    "logic": "Recovered from Subject Index because the LLM output missed this entity.",
+                },
+            }
+
+            if bucket == "characters":
+                base_obj.update({
+                    "gender": "",
+                    "role": "",
+                    "archetype": "",
+                    "appearance_cn": "",
+                    "clothing": "",
+                    "action_characteristics": "",
+                    "generation_prompt_cn": "",
+                    "generation_prompt_en": "",
+                    "negative_prompt_en": "",
+                    "anchor_description": "",
+                })
+            elif bucket == "props":
+                base_obj.update({
+                    "type": "",
+                    "generation_prompt_cn": "",
+                    "generation_prompt_en": "",
+                    "negative_prompt_en": "",
+                    "anchor_description": "",
+                })
+            elif bucket in {"environments", "covers"}:
+                base_obj.update({
+                    "atmosphere": "",
+                    "visual_params": "",
+                    "generation_prompt_cn": "",
+                    "generation_prompt_en": "",
+                    "negative_prompt_en": "",
+                    "anchor_description": "",
+                })
+
+            return base_obj
+
+        def _reconcile_subjects_json_with_subject_index(source_text: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+            normalized: Dict[str, List[Dict[str, Any]]] = {
+                "characters": [x for x in (payload.get("characters") or []) if isinstance(x, dict)],
+                "props": [x for x in (payload.get("props") or []) if isinstance(x, dict)],
+                "environments": [x for x in (payload.get("environments") or []) if isinstance(x, dict)],
+                "covers": [x for x in ((payload.get("covers") or payload.get("posters") or [])) if isinstance(x, dict)],
+            }
+
+            records = _extract_subject_index_records(source_text)
+            if not records:
+                return {
+                    "subjects_json": normalized,
+                    "meta": {
+                        "expected_total": 0,
+                        "corrected_bucket_moves": 0,
+                        "filled_missing": 0,
+                        "name_aligned": 0,
+                        "remaining_missing": 0,
+                        "missing_samples": [],
+                        "notes": ["subject_index_not_found_or_unparseable"],
+                    },
+                    "warning_codes": [],
+                    "warnings": [],
+                }
+
+            item_refs: List[Dict[str, Any]] = []
+            for bucket in ("characters", "props", "environments", "covers"):
+                for idx, item in enumerate(normalized.get(bucket) or []):
+                    item_refs.append({"bucket": bucket, "index": idx, "item": item})
+
+            used_item_indexes: set = set()
+            corrected_bucket_moves = 0
+            filled_missing = 0
+            name_aligned = 0
+            remaining_missing = 0
+            missing_samples: List[str] = []
+
+            reconciled: Dict[str, List[Dict[str, Any]]] = {
+                "characters": [],
+                "props": [],
+                "environments": [],
+                "covers": [],
+            }
+
+            def _find_match(record: Dict[str, str]) -> Optional[Dict[str, Any]]:
+                rec_no = str(record.get("subject_no") or "").strip().lower()
+                rec_name_key = _normalize_subject_compare_key(record.get("name") or "")
+                rec_name_en_key = _normalize_subject_compare_key(record.get("name_en") or "")
+                expected_keys = {k for k in (rec_name_key, rec_name_en_key) if k}
+
+                # Highest priority: subject_no exact match.
+                for i, ref in enumerate(item_refs):
+                    if i in used_item_indexes:
+                        continue
+                    item = ref.get("item") or {}
+                    item_no = str(item.get("subject_no") or "").strip().lower()
+                    if rec_no and item_no and item_no == rec_no:
+                        return {"ref_idx": i, "ref": ref, "matched_by": "subject_no"}
+
+                # Fallback: name/name_en normalized match.
+                if expected_keys:
+                    for i, ref in enumerate(item_refs):
+                        if i in used_item_indexes:
+                            continue
+                        item = ref.get("item") or {}
+                        item_keys = {
+                            _normalize_subject_compare_key(item.get("name") or ""),
+                            _normalize_subject_compare_key(item.get("name_en") or ""),
+                        }
+                        item_keys = {k for k in item_keys if k}
+                        if item_keys & expected_keys:
+                            return {"ref_idx": i, "ref": ref, "matched_by": "name"}
+                return None
+
+            for record in records:
+                target_bucket = str(record.get("bucket") or "")
+                if target_bucket not in reconciled:
+                    continue
+
+                match = _find_match(record)
+                if not match:
+                    placeholder = _build_subject_placeholder(record)
+                    reconciled[target_bucket].append(placeholder)
+                    filled_missing += 1
+                    sample_name = str(record.get("name") or record.get("name_en") or record.get("subject_no") or "").strip()
+                    if sample_name and len(missing_samples) < 12:
+                        missing_samples.append(sample_name)
+                    continue
+
+                ref_idx = int(match.get("ref_idx"))
+                used_item_indexes.add(ref_idx)
+
+                ref = match.get("ref") or {}
+                source_bucket = str(ref.get("bucket") or "")
+                item = dict(ref.get("item") or {})
+
+                if source_bucket != target_bucket:
+                    corrected_bucket_moves += 1
+
+                expected_subject_no = str(record.get("subject_no") or "").strip()
+                expected_name = str(record.get("name") or "").strip()
+                expected_name_en = str(record.get("name_en") or "").strip()
+
+                if expected_subject_no and str(item.get("subject_no") or "").strip() != expected_subject_no:
+                    item["subject_no"] = expected_subject_no
+                    name_aligned += 1
+
+                if expected_name and str(item.get("name") or "").strip() != expected_name:
+                    item["name"] = expected_name
+                    name_aligned += 1
+
+                if expected_name_en and str(item.get("name_en") or "").strip() != expected_name_en:
+                    item["name_en"] = expected_name_en
+                    name_aligned += 1
+
+                if expected_name_en and not str(item.get("base_name_en") or "").strip():
+                    item["base_name_en"] = expected_name_en
+
+                reconciled[target_bucket].append(item)
+
+            # Keep unmatched generated items so data is not silently dropped.
+            for i, ref in enumerate(item_refs):
+                if i in used_item_indexes:
+                    continue
+                bucket = str(ref.get("bucket") or "")
+                item = ref.get("item")
+                if bucket in reconciled and isinstance(item, dict):
+                    reconciled[bucket].append(item)
+
+            expected_total = len(records)
+            reconciled_subject_keys = _collect_subject_keys_by_bucket(reconciled)
+            expected_by_bucket: Dict[str, set] = {"characters": set(), "props": set(), "environments": set(), "covers": set()}
+            for record in records:
+                bucket = str(record.get("bucket") or "")
+                if bucket not in expected_by_bucket:
+                    continue
+                for candidate in (record.get("name"), record.get("name_en")):
+                    key = _normalize_subject_compare_key(candidate)
+                    if key:
+                        expected_by_bucket[bucket].add(key)
+
+            for bucket in ("characters", "props", "environments", "covers"):
+                actual_keys = set((reconciled_subject_keys.get(bucket) or {}).keys())
+                for key in expected_by_bucket.get(bucket) or set():
+                    if key not in actual_keys:
+                        remaining_missing += 1
+
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            if corrected_bucket_moves > 0:
+                warning_codes.append("ANALYSIS_SUBJECT_INDEX_BUCKET_CORRECTED")
+                warnings.append(
+                    f"Subject Index alignment applied: moved {corrected_bucket_moves} entities to their canonical buckets."
+                )
+            if filled_missing > 0:
+                warning_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING_FILLED")
+                msg = f"Subject Index alignment applied: auto-filled {filled_missing} missing entities from Subject Index"
+                if missing_samples:
+                    msg += f" (examples: {', '.join(missing_samples[:8])})"
+                warnings.append(msg + ".")
+            if name_aligned > 0:
+                warning_codes.append("ANALYSIS_SUBJECT_INDEX_NAME_ALIGNED")
+                warnings.append(
+                    f"Subject Index alignment applied: normalized {name_aligned} subject_no/name/name_en fields to Subject Index values."
+                )
+            if remaining_missing > 0:
+                warning_codes.append("ANALYSIS_SUBJECT_INDEX_REMAINING_GAP")
+                warnings.append(
+                    f"Subject Index alignment warning: {remaining_missing} expected entities are still missing after reconciliation."
+                )
+
+            return {
+                "subjects_json": reconciled,
+                "meta": {
+                    "expected_total": expected_total,
+                    "corrected_bucket_moves": corrected_bucket_moves,
+                    "filled_missing": filled_missing,
+                    "name_aligned": name_aligned,
+                    "remaining_missing": remaining_missing,
+                    "missing_samples": missing_samples,
+                    "notes": [
+                        "subject_index_is_source_of_truth_for_bucket_routing",
+                        "subject_index_is_source_of_truth_for_subject_identity",
+                    ],
+                },
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
+        def _detect_subject_index_coverage_warnings(source_text: str, subjects_payload: Dict[str, Any]) -> Dict[str, Any]:
+            expected_meta = _extract_expected_subjects_from_subject_index(source_text)
+            expected = expected_meta.get("expected") or {}
+            expected_total = int(expected_meta.get("total") or 0)
+
+            if expected_total <= 0:
+                return {
+                    "expected_total": 0,
+                    "expected_by_bucket": {
+                        "characters": 0,
+                        "props": 0,
+                        "environments": 0,
+                        "covers": 0,
+                    },
+                    "missing_total": 0,
+                    "missing_by_bucket": {
+                        "characters": [], "props": [], "environments": [], "covers": []
+                    },
+                    "warning_codes": [],
+                    "warnings": [],
+                }
+
+            generated_keys: Dict[str, set] = {
+                "characters": set(),
+                "props": set(),
+                "environments": set(),
+                "covers": set(),
+            }
+
+            for bucket in ("characters", "props", "environments", "covers"):
+                for item in (subjects_payload.get(bucket) or []):
+                    if not isinstance(item, dict):
+                        continue
+                    for raw_name in (item.get("name"), item.get("name_en")):
+                        key = _normalize_subject_compare_key(raw_name)
+                        if key:
+                            generated_keys[bucket].add(key)
+
+            missing_by_bucket: Dict[str, List[str]] = {
+                "characters": [],
+                "props": [],
+                "environments": [],
+                "covers": [],
+            }
+            for bucket in ("characters", "props", "environments", "covers"):
+                expected_bucket = expected.get(bucket) or {}
+                for key, display in expected_bucket.items():
+                    if key not in generated_keys[bucket]:
+                        missing_by_bucket[bucket].append(display)
+
+            missing_total = sum(len(v) for v in missing_by_bucket.values())
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+
+            if missing_total > 0:
+                warning_codes.append("ANALYSIS_SUBJECT_INDEX_COVERAGE_INCOMPLETE")
+                parts: List[str] = []
+                if missing_by_bucket["characters"]:
+                    parts.append(f"characters缺失{len(missing_by_bucket['characters'])}项")
+                if missing_by_bucket["props"]:
+                    parts.append(f"props缺失{len(missing_by_bucket['props'])}项")
+                if missing_by_bucket["environments"]:
+                    parts.append(f"environments缺失{len(missing_by_bucket['environments'])}项")
+                if missing_by_bucket["covers"]:
+                    parts.append(f"posters/covers缺失{len(missing_by_bucket['covers'])}项")
+
+                preview_items = (
+                    missing_by_bucket["props"][:5]
+                    + missing_by_bucket["characters"][:5]
+                    + missing_by_bucket["environments"][:5]
+                    + missing_by_bucket["covers"][:5]
+                )
+                preview = ", ".join([str(x or "").strip() for x in preview_items if str(x or "").strip()])
+                warnings.append(
+                    "Subject Index coverage warning: "
+                    + "；".join(parts)
+                    + (f"。示例缺失: {preview}" if preview else "")
+                )
+
+            return {
+                "expected_total": expected_total,
+                "expected_by_bucket": {
+                    "characters": len(expected.get("characters") or {}),
+                    "props": len(expected.get("props") or {}),
+                    "environments": len(expected.get("environments") or {}),
+                    "covers": len(expected.get("covers") or {}),
+                },
+                "missing_total": missing_total,
+                "missing_by_bucket": missing_by_bucket,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
+        def _collect_subject_keys_by_bucket(payload: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+            collected: Dict[str, Dict[str, str]] = {
+                "characters": {},
+                "props": {},
+                "environments": {},
+                "covers": {},
+            }
+            for bucket in ("characters", "props", "environments", "covers"):
+                for item in (payload.get(bucket) or []):
+                    if not isinstance(item, dict):
+                        continue
+                    for raw_name in (item.get("name"), item.get("name_en")):
+                        display = _normalize_subject_name(raw_name)
+                        key = _normalize_subject_compare_key(display)
+                        if key and key not in collected[bucket]:
+                            collected[bucket][key] = display or str(raw_name or "").strip()
+            return collected
+
+        def _detect_subjects_json_extraction_gap(raw_text: str, selected_payload: Dict[str, Any]) -> Dict[str, Any]:
+            # Aggregate all JSON candidates in raw output; this helps diagnose parser-selection loss.
+            aggregated_payload = _extract_entities_from_json_candidates(raw_text)
+            selected_keys = _collect_subject_keys_by_bucket(selected_payload)
+            aggregated_keys = _collect_subject_keys_by_bucket(aggregated_payload)
+
+            missing_in_selected_by_bucket: Dict[str, List[str]] = {
+                "characters": [],
+                "props": [],
+                "environments": [],
+                "covers": [],
+            }
+            for bucket in ("characters", "props", "environments", "covers"):
+                for key, display in (aggregated_keys.get(bucket) or {}).items():
+                    if key not in (selected_keys.get(bucket) or {}):
+                        missing_in_selected_by_bucket[bucket].append(display)
+
+            missing_total = sum(len(v) for v in missing_in_selected_by_bucket.values())
+            warnings: List[str] = []
+            warning_codes: List[str] = []
+            diagnosis: List[str] = []
+
+            if missing_total > 0:
+                warning_codes.append("ANALYSIS_SUBJECTS_JSON_EXTRACT_PARTIAL")
+                warning_text_parts: List[str] = []
+                for bucket in ("characters", "props", "environments", "covers"):
+                    count = len(missing_in_selected_by_bucket.get(bucket) or [])
+                    if count > 0:
+                        warning_text_parts.append(f"{bucket}差异{count}项")
+                sample = (
+                    (missing_in_selected_by_bucket.get("props") or [])[:6]
+                    + (missing_in_selected_by_bucket.get("characters") or [])[:6]
+                    + (missing_in_selected_by_bucket.get("environments") or [])[:6]
+                )
+                warnings.append(
+                    "Subjects JSON extraction warning: 当前返回的 subjects_json 可能只命中了部分 JSON 候选。"
+                    + ("；" + "，".join(warning_text_parts) if warning_text_parts else "")
+                    + (f"。示例: {', '.join(sample)}" if sample else "")
+                )
+                diagnosis.append("raw_output_contains_more_subjects_than_selected_subjects_json")
+
+            return {
+                "selected_counts": {
+                    "characters": len(selected_keys.get("characters") or {}),
+                    "props": len(selected_keys.get("props") or {}),
+                    "environments": len(selected_keys.get("environments") or {}),
+                    "covers": len(selected_keys.get("covers") or {}),
+                },
+                "aggregated_counts": {
+                    "characters": len(aggregated_keys.get("characters") or {}),
+                    "props": len(aggregated_keys.get("props") or {}),
+                    "environments": len(aggregated_keys.get("environments") or {}),
+                    "covers": len(aggregated_keys.get("covers") or {}),
+                },
+                "missing_in_selected_by_bucket": missing_in_selected_by_bucket,
+                "missing_total": missing_total,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+                "diagnosis": diagnosis,
+            }
+
         requested_scene_analysis_mode = str(getattr(request, "scene_analysis_mode", "") or "").strip() or None
         effective_scene_analysis_mode = requested_scene_analysis_mode
         if not effective_scene_analysis_mode:
@@ -5707,12 +6206,27 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
             cleaned_for_json = sanitize_llm_markdown_output(result_content)
             subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
+
+        subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(getattr(request, "text", None), subjects_json)
+        subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
+        subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or {}
+        subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
+        subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
+
         response_payload["subjects_json"] = subjects_json
         response_payload["subjects_json_count"] = {
             "characters": len(subjects_json.get("characters") or []),
             "props": len(subjects_json.get("props") or []),
             "environments": len(subjects_json.get("environments") or []),
+            "covers": len(subjects_json.get("covers") or []),
         }
+
+        extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
+        debug_meta["subjects_json_extraction_gap"] = extraction_gap_meta
+
+        subject_index_coverage_meta = _detect_subject_index_coverage_warnings(getattr(request, "text", None), subjects_json)
+        debug_meta["subject_index_coverage"] = subject_index_coverage_meta
+        debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
 
         subject_consistency_meta = _detect_subject_consistency_warnings(result_content)
         debug_meta["subject_consistency"] = subject_consistency_meta
@@ -5722,10 +6236,49 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
         debug_meta["prompt_template_syntax"] = prompt_template_meta
 
+        diagnosis_hints: List[str] = []
+        if (extraction_gap_meta.get("missing_total") or 0) > 0:
+            diagnosis_hints.append("subjects_json_parser_selected_partial_candidate")
+
+        expected_by_bucket = subject_index_coverage_meta.get("expected_by_bucket") or {}
+        missing_by_bucket = subject_index_coverage_meta.get("missing_by_bucket") or {}
+        expected_props = int(expected_by_bucket.get("props") or 0)
+        missing_props_count = len(missing_by_bucket.get("props") or [])
+
+        if expected_props > 0 and missing_props_count > 0 and not diagnosis_hints:
+            if bool(output_char_cap_reached) or bool((integrity_meta or {}).get("truncation_detected")):
+                diagnosis_hints.append("llm_output_truncated_under_token_or_char_pressure")
+            elif str(finish_reason or "").strip().lower().replace("-", "_") in {"length", "incomplete", "max_tokens"}:
+                diagnosis_hints.append("llm_stopped_early_before_prop_sections")
+            else:
+                diagnosis_hints.append("llm_subject_bucket_collapse_or_instruction_conflict")
+
+        if expected_props > 0 and missing_props_count == expected_props:
+            diagnosis_hints.append("all_expected_props_missing")
+        elif missing_props_count > 0:
+            diagnosis_hints.append("partial_props_missing")
+
+        if diagnosis_hints:
+            debug_meta["entity_design_diagnosis_hints"] = list(dict.fromkeys(diagnosis_hints))
+
         sc_warning_codes = subject_consistency_meta.get("warning_codes") or []
         sc_warnings = subject_consistency_meta.get("warnings") or []
         template_warning_codes = prompt_template_meta.get("warning_codes") or []
         template_warnings = prompt_template_meta.get("warnings") or []
+        coverage_warning_codes = subject_index_coverage_meta.get("warning_codes") or []
+        coverage_warnings = subject_index_coverage_meta.get("warnings") or []
+        extraction_gap_warning_codes = extraction_gap_meta.get("warning_codes") or []
+        extraction_gap_warnings = extraction_gap_meta.get("warnings") or []
+        if subject_index_reconcile_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(subject_index_reconcile_warnings),
+            ]
+        if subject_index_reconcile_warning_codes:
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                *list(subject_index_reconcile_warning_codes),
+            ]
 
         if integrity_meta.get("warnings"):
             response_payload["warnings"] = integrity_meta.get("warnings")
@@ -5762,6 +6315,28 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             response_payload["warning_codes"] = [
                 *list(response_payload.get("warning_codes") or []),
                 *list(template_warning_codes),
+            ]
+
+        if coverage_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(coverage_warnings),
+            ]
+        if coverage_warning_codes:
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                *list(coverage_warning_codes),
+            ]
+
+        if extraction_gap_warnings:
+            response_payload["warnings"] = [
+                *list(response_payload.get("warnings") or []),
+                *list(extraction_gap_warnings),
+            ]
+        if extraction_gap_warning_codes:
+            response_payload["warning_codes"] = [
+                *list(response_payload.get("warning_codes") or []),
+                *list(extraction_gap_warning_codes),
             ]
 
         if llm_fallback_warnings:
@@ -5807,6 +6382,42 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     template_warning_codes,
                     template_warnings,
                     (prompt_template_meta or {}).get("mismatch_count", 0),
+                )
+            except Exception:
+                pass
+
+        if coverage_warning_codes or coverage_warnings:
+            try:
+                logger.warning(
+                    "[analyze_scene] subject index coverage warning episode_id=%s codes=%s warnings=%s missing_total=%s",
+                    getattr(request, "episode_id", None),
+                    coverage_warning_codes,
+                    coverage_warnings,
+                    (subject_index_coverage_meta or {}).get("missing_total", 0),
+                )
+            except Exception:
+                pass
+
+        if extraction_gap_warning_codes or extraction_gap_warnings:
+            try:
+                logger.warning(
+                    "[analyze_scene] subjects_json extraction gap episode_id=%s codes=%s selected=%s aggregated=%s",
+                    getattr(request, "episode_id", None),
+                    extraction_gap_warning_codes,
+                    (extraction_gap_meta or {}).get("selected_counts") or {},
+                    (extraction_gap_meta or {}).get("aggregated_counts") or {},
+                )
+            except Exception:
+                pass
+
+        if subject_index_reconcile_warning_codes or subject_index_reconcile_warnings:
+            try:
+                logger.warning(
+                    "[analyze_scene] subject index reconciliation episode_id=%s codes=%s meta=%s warnings=%s",
+                    getattr(request, "episode_id", None),
+                    subject_index_reconcile_warning_codes,
+                    subject_index_reconcile_meta,
+                    subject_index_reconcile_warnings,
                 )
             except Exception:
                 pass
@@ -11785,6 +12396,8 @@ async def generate_project_episode_scripts_from_global_framework(
 
     relationships = str(gi.get("character_relationships") or "").strip()
     has_relationships = bool(relationships)
+    constraints_obj: Dict[str, Any] = {}
+    constraints_block = ""
     if str(gi.get("character_canon_md") or "").strip():
         character_canon_source = "character_canon_md"
     elif character_canon_md:
