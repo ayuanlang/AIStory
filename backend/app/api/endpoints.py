@@ -8994,6 +8994,9 @@ async def generate_project_story_dna_global(
         logger.error("Story generator prompt not found: %s", prompt_filename)
         raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
 
+    user_id = int(current_user.id)
+    project_title = str(project.title or "").strip()
+
     user_prompt = (
         f"Mode: global\n"
         f"Project Title: {project_title}\n"
@@ -11899,9 +11902,55 @@ async def generate_project_episode_scripts_from_global_framework(
         )
         raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
 
-    # Ensure episodes exist (match by title "Episode X"; create missing)
-    existing_eps = db.query(Episode).filter(Episode.project_id == project_id).all()
-    by_title: Dict[str, Episode] = {str(e.title or ""): e for e in existing_eps}
+    # Ensure episodes exist with stable numeric mapping.
+    # Priority: explicit episode_info number -> parse from title -> create missing.
+    existing_eps = (
+        db.query(Episode)
+        .filter(Episode.project_id == project_id)
+        .order_by(Episode.id.asc())
+        .all()
+    )
+
+    def _safe_positive_int(value: Any) -> Optional[int]:
+        try:
+            num = int(value)
+            return num if num > 0 else None
+        except Exception:
+            return None
+
+    def _extract_episode_index(ep: Episode) -> Optional[int]:
+        ep_info = _episode_info_from_episode(ep)
+        for key in (
+            "episode_script_episode_number",
+            "story_dna_episode_number",
+            "episode_number",
+            "index",
+        ):
+            num = _safe_positive_int(ep_info.get(key) if isinstance(ep_info, dict) else None)
+            if num:
+                return num
+
+        title = str(ep.title or "")
+        m = re.search(r"(?:Episode|EP)\s*[-_#]?\s*(\d+)", title, flags=re.IGNORECASE)
+        if m:
+            return _safe_positive_int(m.group(1))
+
+        m = re.search(r"第\s*(\d+)\s*集", title)
+        if m:
+            return _safe_positive_int(m.group(1))
+
+        return None
+
+    by_idx: Dict[int, Episode] = {}
+    by_title: Dict[str, Episode] = {}
+    for ep in existing_eps:
+        title_key = str(ep.title or "").strip().lower()
+        if title_key and title_key not in by_title:
+            by_title[title_key] = ep
+
+        idx_num = _extract_episode_index(ep)
+        if idx_num and idx_num not in by_idx:
+            by_idx[idx_num] = ep
 
     created_episodes: List[int] = []
     episodes_in_order: List[Episode] = []
@@ -11911,14 +11960,30 @@ async def generate_project_episode_scripts_from_global_framework(
     loop_limit = target_n if target_n != 999 else 0
     for i in range(1, loop_limit + 1):
         title = f"Episode {i}"
-        ep = by_title.get(title)
+        ep = by_idx.get(i)
+        if not ep:
+            ep = by_title.get(title.strip().lower())
+        if not ep:
+            ep = by_title.get(f"第{i}集")
         if not ep:
             ep = Episode(project_id=project_id, title=title, script_content="")
+            ep_info = _episode_info_from_episode(ep)
+            ep_info["episode_script_episode_number"] = int(i)
+            ep.episode_info = ep_info
             db.add(ep)
             db.commit()
             db.refresh(ep)
             created_episodes.append(ep.id)
-            by_title[title] = ep
+            by_title[title.strip().lower()] = ep
+            by_idx[i] = ep
+        else:
+            ep_info = _episode_info_from_episode(ep)
+            if _safe_positive_int(ep_info.get("episode_script_episode_number") if isinstance(ep_info, dict) else None) is None:
+                ep_info["episode_script_episode_number"] = int(i)
+                ep.episode_info = ep_info
+                db.add(ep)
+                db.commit()
+                db.refresh(ep)
         episodes_in_order.append(ep)
 
     previous_status = gi.get(status_key) if isinstance(gi.get(status_key), dict) else {}
@@ -11952,13 +12017,11 @@ async def generate_project_episode_scripts_from_global_framework(
             # Maybe the episode is not in the first N episodes but exists in DB
             target_ep = db.query(Episode).filter(Episode.id == req.episode_id, Episode.project_id == project_id).first()
             if target_ep:
-                # Try to parse index from title "Episode X"
-                import re
-                m = re.search(r"Episode\s+(\d+)", target_ep.title or "")
+                parsed_idx = _extract_episode_index(target_ep)
                 fallback_idx = 1
                 if isinstance(target_n, int) and target_n != 999:
                     fallback_idx = target_n + 1
-                idx = int(m.group(1)) if m else fallback_idx
+                idx = int(parsed_idx) if parsed_idx else fallback_idx
                 episodes_data = [{"idx": idx, "id": target_ep.id, "title": target_ep.title, "script_content": target_ep.script_content}]
             else:
                 raise HTTPException(status_code=404, detail="Target episode not found in this project.")
@@ -12236,6 +12299,7 @@ async def generate_project_episode_scripts_from_global_framework(
             ep_script_content = content
             ei = _episode_info_from_episode(ep_db)
             ei["episode_script_generated_at"] = now_bj_iso()
+            ei["episode_script_episode_number"] = int(idx)
             if prompt_filename == "promo_generator_episode_script.txt":
                 ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
             else:
