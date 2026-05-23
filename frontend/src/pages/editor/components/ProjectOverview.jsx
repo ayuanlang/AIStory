@@ -290,14 +290,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             if (!hasSetDefaultEp) {
                 setTargetEpisodeNumberForGen(String(defaultEp));
                 setHasSetDefaultEp(true);
-            } else if (targetEpisodeNumberForGen) {
-                const currentEpTarget = episodes.find((e, i) => String(getEpNum(e, i)) === String(targetEpisodeNumberForGen));
-                if (currentEpTarget && currentEpTarget.script_content && String(currentEpTarget.script_content).trim() !== '') {
-                    setTargetEpisodeNumberForGen(String(defaultEp));
-                }
             }
         }
-    }, [episodes, targetEpisodeNumberForGen, hasSetDefaultEp]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [episodes, hasSetDefaultEp]);
 
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);

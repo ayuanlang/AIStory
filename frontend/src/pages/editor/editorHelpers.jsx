@@ -883,6 +883,7 @@ export const resolveUnifiedVideoMode = (techObj = {}) => {
     const rawMode = String(techObj?.video_mode_unified || techObj?.video_ref_submit_mode || techObj?.video_gen_mode || 'start_end').trim().toLowerCase();
     if (rawMode === 'refs_video' || rawMode === 'entity_refs') return 'entity_refs';
     if (rawMode === 'entity_refs_start_end') return 'entity_refs_start_end';
+    if (rawMode === 'keyframes_entity_refs' || rawMode === 'keyframe_entity_refs') return 'keyframes_entity_refs';
     return rawMode || 'start_end';
 };
 
@@ -902,6 +903,12 @@ export const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode 
         const combined = [...(entityRefUrls || [])];
         if (startRef && !combined.includes(startRef)) combined.push(startRef);
         if (endRef && !combined.includes(endRef)) combined.push(endRef);
+        return normalizeMediaRefList(combined);
+    }
+
+    if (mode === 'keyframes_entity_refs') {
+        const combined = [...keyframes, ...(entityRefUrls || [])];
+        if (combined.length === 0 && startRef) combined.push(startRef);
         return normalizeMediaRefList(combined);
     }
 

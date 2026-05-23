@@ -3104,8 +3104,11 @@ export const markAssetAsCurrentProjectAsset = async (id) => {
     return response.data;
 };
 
-export const analyzeAssetImage = async (asset_id) => {
-    const response = await api.post('/assets/analyze', { asset_id });
+export const analyzeAssetImage = async (input) => {
+    const payload = (input && typeof input === 'object' && !Array.isArray(input))
+        ? input
+        : { asset_id: input };
+    const response = await api.post('/assets/analyze', payload);
     return response.data;
 };
 

@@ -6675,15 +6675,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [multiPanelPresetInstruction, setMultiPanelPresetInstruction] = useState(() => getMultiPanelPresetFallbackInstruction('4panel', 'cn'));
     const [isGeneratingMultiPanelImage, setIsGeneratingMultiPanelImage] = useState(false);
     const [isResplittingMultiPanelImage, setIsResplittingMultiPanelImage] = useState(false);
+    const [usePrevEndFrameAsMultiPanelStart, setUsePrevEndFrameAsMultiPanelStart] = useState(false);
 
     useEffect(() => {
         if (!editingShot) return;
         let nextPresetKey = '4panel';
+        let nextUsePrevEndFrameStart = false;
         try {
             const techNotes = JSON.parse(editingShot.technical_notes || '{}');
             nextPresetKey = normalizeMultiPanelPresetKey(techNotes.multi_panel_image_preset || '4panel');
+            nextUsePrevEndFrameStart = techNotes.multi_panel_start_from_prev_end === true;
         } catch (_) {}
         setMultiPanelPresetKey((prev) => (prev === nextPresetKey ? prev : nextPresetKey));
+        setUsePrevEndFrameAsMultiPanelStart((prev) => (prev === nextUsePrevEndFrameStart ? prev : nextUsePrevEndFrameStart));
     }, [editingShot?.id, editingShot?.technical_notes]);
 
     useEffect(() => {
@@ -6728,7 +6732,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const isManual = techNotes.manual_video_prompt === true;
 
             const { text: submitPrompt } = injectEntityFeatures(rawVideoPrompt, isManual, resolvedEntities);
-            const refs = resolveShotStartFrameRefs(shotSnapshot, rawVideoPrompt, resolvedEntities);
+            let refs = resolveShotStartFrameRefs(shotSnapshot, rawVideoPrompt, resolvedEntities);
 
             const langKey = resolvedPromptSubmitLang === 'en' ? 'en' : 'cn';
             const activePresetKey = normalizeMultiPanelPresetKey(multiPanelPresetKey);
@@ -6738,10 +6742,57 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ? `. ${baseInstruction.replace(/^[.。\s]+/, '')}`
                 : `。${baseInstruction.replace(/^[.。\s]+/, '')}`;
 
+            let prevEndFrameRefUrl = '';
+            let prevEndFrameSummary = '';
+            if (usePrevEndFrameAsMultiPanelStart) {
+                prevEndFrameRefUrl = String(findPrevShotEndFrameUrl(targetShotId) || '').trim();
+                if (!prevEndFrameRefUrl) {
+                    throw new Error(t('上一镜不存在可用的结束帧，无法作为多画格起始分镜参考图。', 'The previous shot does not have an end frame available for the multi-panel opening panel.'));
+                }
+
+                onLog?.(t('正在分析上一镜结束帧，并将其作为多画格第一格参考...', 'Analyzing the previous shot end frame and using it as panel-one reference...'), 'info');
+                const analysisResp = await analyzeAssetImage({
+                    image_url: prevEndFrameRefUrl,
+                    function_name: 'script_analysis',
+                    system_api_id: Number(localStorage.getItem('func_api_script_analysis') || 0) || null,
+                });
+
+                const analysisText = String(analysisResp?.result || '').trim();
+                const normalizeSummary = (value) => {
+                    let text = String(value || '').trim();
+                    if (!text) return '';
+                    try {
+                        const parsed = JSON.parse(text);
+                        if (parsed && typeof parsed === 'object') {
+                            text = [
+                                parsed.summary,
+                                parsed.visual_summary,
+                                parsed.description,
+                                parsed.style,
+                                parsed.result,
+                            ].filter((item) => typeof item === 'string' && item.trim()).join('，') || JSON.stringify(parsed);
+                        }
+                    } catch (_) {}
+                    text = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').replace(/^["'“”]+|["'“”]+$/g, '').trim();
+                    return Array.from(text).slice(0, 30).join('');
+                };
+                prevEndFrameSummary = normalizeSummary(analysisText);
+                if (!prevEndFrameSummary) {
+                    throw new Error(t('上一镜结束帧图片分析结果为空，无法注入多画格提示词。', 'The previous-shot end-frame analysis returned empty, so it cannot be injected into the multi-panel prompt.'));
+                }
+
+                refs = [prevEndFrameRefUrl, ...refs.filter((url) => String(url || '').trim() && String(url || '').trim() !== prevEndFrameRefUrl)];
+            }
+
             onLog?.(`Generating ${presetOption.labelEn} preset image...`, 'info');
 
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
-            const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + promptInstruction;
+            const prevEndFrameInstruction = usePrevEndFrameAsMultiPanelStart
+                ? (langKey === 'en'
+                    ? `\n\nUse reference image #1 as the opening storyboard panel. Panel 1 must begin from that image's same subject identity, framing, camera position, costume, environment, and lighting, then continue the action in later panels. Visual summary for reference image #1: ${prevEndFrameSummary}.`
+                    : `\n\n参考图 #1 必须作为本次多画格分镜的开始分镜。第一格需从该图的主体身份、构图、机位、服装、环境与光线直接起步，再在后续分格继续推进动作。参考图 #1 视觉特征：${prevEndFrameSummary}。`)
+                : '';
+            const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + prevEndFrameInstruction + promptInstruction;
             const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
             const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
 
@@ -6763,6 +6814,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const finalUrl = res.url || res.result_url || res.image_url;
                 techNotes.multi_panel_image_url = finalUrl;
                 techNotes.multi_panel_image_preset = activePresetKey;
+                techNotes.multi_panel_start_from_prev_end = usePrevEndFrameAsMultiPanelStart;
+                if (usePrevEndFrameAsMultiPanelStart) {
+                    techNotes.multi_panel_prev_end_ref_url = prevEndFrameRefUrl;
+                    techNotes.multi_panel_prev_end_ref_summary = prevEndFrameSummary;
+                } else {
+                    delete techNotes.multi_panel_prev_end_ref_url;
+                    delete techNotes.multi_panel_prev_end_ref_summary;
+                }
                 const nextStr = JSON.stringify(techNotes);
                 await onUpdateShot(targetShotId, { technical_notes: nextStr });
                 setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, technical_notes: nextStr } : prev));
@@ -6933,13 +6992,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 return url;
             };
 
+            const apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
             const resolvedUniqueRefs = await Promise.all(uniqueRefs.map(resolveBlobUrlIfAny));
+            const resolvedKeyframeRefs = effectiveVideoMode === 'keyframes_entity_refs'
+                ? normalizeMediaRefList(await Promise.all((Array.isArray(apiKeyframes) ? apiKeyframes : []).map(resolveBlobUrlIfAny)))
+                : [];
+            const prioritizedResolvedRefs = effectiveVideoMode === 'keyframes_entity_refs'
+                ? [
+                    ...resolvedKeyframeRefs,
+                    ...resolvedUniqueRefs.filter((url) => !resolvedKeyframeRefs.includes(url)),
+                ]
+                : resolvedUniqueRefs;
 
             let apiRefImageUrl = null;
             let apiRefVideoUrls = null;
             let apiLastFrameUrl;
-            const apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
-            const { imageRefs, videoRefs } = splitReferenceMediaUrls(resolvedUniqueRefs);
+            const { imageRefs, videoRefs } = splitReferenceMediaUrls(prioritizedResolvedRefs);
             apiRefImageUrl = null;
             apiRefVideoUrls = videoRefs.length > 0 ? videoRefs : null;
             apiLastFrameUrl = null;
@@ -6987,14 +7055,27 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
             let finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
+            if (effectiveVideoMode === 'keyframes_entity_refs' && resolvedKeyframeRefs.length > 0) {
+                const keyframeRefLabels = resolvedKeyframeRefs
+                    .map((url) => imageRefs.findIndex((imageUrl) => imageUrl === url))
+                    .filter((index) => index >= 0)
+                    .map((index) => `@Image${index + 1}`);
+                if (keyframeRefLabels.length > 0) {
+                    const keyframeLead = resolvedPromptSubmitLang === 'cn'
+                        ? `参考${keyframeRefLabels.join('，')}的情节走向进行视频生成。`
+                        : `Generate the video by following the story progression in ${keyframeRefLabels.join(', ')}. `;
+                    finalPrompt = `${keyframeLead}${finalPrompt}`;
+                }
+            }
+
             if (effectiveVideoMode === 'entity_refs_start_end') {
                 const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
                 const endRefUrl = String(tech.end_frame_url || '').trim();
                 const resolvedStartUrl = await resolveBlobUrlIfAny(currentStartFrameUrl);
                 const resolvedEndUrl = await resolveBlobUrlIfAny(endRefUrl);
                 
-                const startIdx = resolvedUniqueRefs.indexOf(resolvedStartUrl) + 1;
-                const endIdx = resolvedUniqueRefs.indexOf(resolvedEndUrl) + 1;
+                const startIdx = prioritizedResolvedRefs.indexOf(resolvedStartUrl) + 1;
+                const endIdx = prioritizedResolvedRefs.indexOf(resolvedEndUrl) + 1;
 
                 if (startIdx > 0 && endIdx > 0) {
                     finalPrompt = `@Image${startIdx} 作为第一帧, ` + finalPrompt + `, @Image${endIdx} 作为最后一帧`;
@@ -7006,7 +7087,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
 
             onLog?.(
-                `Video API payload mode=${effectiveVideoMode}, visible_refs=${uniqueRefs.length}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
+                `Video API payload mode=${effectiveVideoMode}, visible_refs=${prioritizedResolvedRefs.length}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
                 'info'
             );
 
@@ -8916,6 +8997,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     <option value="start_end">{t('起始+结束', 'Start+End')}</option>
                                                     <option value="start">{t('仅起始', 'Start Only')}</option>
                                                     <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
+                                                    <option value="keyframes_entity_refs">{t('关键帧+实体参考', 'Keyframes+Entity Refs')}</option>
                                                     <option value="entity_refs_start_end">{t('参考图+首尾帧', 'Ref+StartEnd')}</option>
                                                 </select>
 
@@ -9129,6 +9211,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         } catch (e) {}
                                         const multiPanelUrl = String(tech.multi_panel_image_url || tech.storyboard_url || '').trim();
                                         const currentPresetOption = getMultiPanelPresetOption(tech.multi_panel_image_preset || multiPanelPresetKey);
+                                        const multiPanelStartsFromPrevEnd = tech.multi_panel_start_from_prev_end === true;
+                                        const multiPanelPrevEndRefUrl = String(tech.multi_panel_prev_end_ref_url || '').trim();
+                                        const multiPanelPrevEndRefSummary = String(tech.multi_panel_prev_end_ref_summary || '').trim();
 
                                         return (
                                             <>
@@ -9166,6 +9251,36 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 </option>
                                                             ))}
                                                         </select>
+                                                        <label
+                                                            className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 cursor-pointer hover:bg-white/5"
+                                                            title={t('选中后自动取上一镜结束帧作为首参考图，并先做图片分析，将摘要注入多画格提示词，要求第一格从该参考图开始。', 'Use the previous shot end frame as the first ref, analyze it, inject the summary into the prompt, and force panel 1 to start from that image.')}
+                                                        >
+                                                            <input
+                                                                type="checkbox"
+                                                                className="hidden"
+                                                                checked={usePrevEndFrameAsMultiPanelStart}
+                                                                onChange={async (e) => {
+                                                                    const checked = e.target.checked;
+                                                                    setUsePrevEndFrameAsMultiPanelStart(checked);
+                                                                    try {
+                                                                        const nextTech = { ...tech, multi_panel_start_from_prev_end: checked };
+                                                                        if (!checked) {
+                                                                            delete nextTech.multi_panel_prev_end_ref_url;
+                                                                            delete nextTech.multi_panel_prev_end_ref_summary;
+                                                                        }
+                                                                        const nextTechNotes = JSON.stringify(nextTech);
+                                                                        setEditingShot((prev) => ({ ...(prev || {}), technical_notes: nextTechNotes }));
+                                                                        await onUpdateShot(editingShot.id, { technical_notes: nextTechNotes });
+                                                                    } catch (error) {
+                                                                        onLog?.(`${t('保存多画格起始参考设置失败', 'Failed to save multi-panel opening ref setting')}: ${error?.message || 'unknown error'}`, 'error');
+                                                                    }
+                                                                }}
+                                                            />
+                                                            <div className={`flex h-3.5 w-3.5 items-center justify-center rounded-sm border ${usePrevEndFrameAsMultiPanelStart ? 'border-primary bg-primary text-black' : 'border-white/30 bg-black/20 text-transparent'}`}>
+                                                                <Check className="h-3 w-3" />
+                                                            </div>
+                                                            <span>{t('以上镜结束帧开始', 'Start From Prev End Frame')}</span>
+                                                        </label>
                                                         <button
                                                             type="button"
                                                             onClick={() => handleGenerateMultiPanelImage()}
@@ -9202,6 +9317,37 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         </button>
                                                     </div>
                                                 </div>
+                                                {multiPanelStartsFromPrevEnd ? (
+                                                    <div className="rounded-lg border border-sky-400/20 bg-sky-500/10 px-3 py-2.5 text-xs text-sky-50">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-sky-100">
+                                                                {t('首格参考', 'Opening Ref')}
+                                                            </span>
+                                                            <span className="text-sky-50/85">
+                                                                {t('当前多画格会以上一镜结束帧作为开始分镜。', 'This multi-panel run starts from the previous shot end frame.')}
+                                                            </span>
+                                                        </div>
+                                                        {multiPanelPrevEndRefSummary ? (
+                                                            <div className="mt-2 rounded border border-white/10 bg-black/15 px-2.5 py-2 text-white/85">
+                                                                <span className="mr-2 text-[10px] font-bold uppercase tracking-[0.1em] text-sky-100">{t('图片摘要', 'Image Summary')}</span>
+                                                                <span>{multiPanelPrevEndRefSummary}</span>
+                                                            </div>
+                                                        ) : null}
+                                                        {multiPanelPrevEndRefUrl ? (
+                                                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                                <span className="text-white/55 truncate max-w-full">{t('来源：上一镜结束帧', 'Source: previous shot end frame')}</span>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => window.open(getFullUrl(multiPanelPrevEndRefUrl), '_blank', 'noopener,noreferrer')}
+                                                                    className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10"
+                                                                >
+                                                                    <LinkIcon size={12} />
+                                                                    {t('查看参考图', 'View Ref')}
+                                                                </button>
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                ) : null}
                                                 {multiPanelUrl ? (
                                                     <div className="rounded-lg border border-white/10 bg-black/15 px-3 py-2">
                                                         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
@@ -10315,6 +10461,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <option value="start_end">{t('起始+结束', 'Start+End')}</option>
                                                                         <option value="start">{t('仅起始', 'Start Only')}</option>
                                                                         <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
+                                                                        <option value="keyframes_entity_refs">{t('关键帧+实体参考', 'Keyframes+Entity Refs')}</option>
                                                                         <option value="entity_refs_start_end">{t('参考图+首尾帧', 'Ref+StartEnd')}</option>
                                                                     </select>
                                                                 </div>
@@ -10356,7 +10503,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []} storageKey="video_ref_image_urls" strictPromptOnly={resolveVideoModeFromTech(tech) !== 'entity_refs'} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []} storageKey="video_ref_image_urls" strictPromptOnly={!resolveVideoModeFromTech(tech).includes('entity_refs')} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>
