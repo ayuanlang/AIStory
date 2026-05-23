@@ -7660,90 +7660,6 @@ def _extract_md_section(md: str, start_header_regex: str) -> Tuple[str, str]:
     return md[start:].strip(), md[:start].strip()
 
 
-def parse_global_style_constraints(global_md: str) -> Dict[str, Any]:
-    """Parse the '## -1) ...全局风格与硬约束...' section from Global Story DNA markdown.
-
-    Returns a dict suitable for persisting into project.global_info.
-    Parsing is best-effort; if the section is missing, returns an empty dict.
-    """
-    section, _ = _extract_md_section(global_md or "", r"^##\s*-1\)\s*.+$")
-    if not section:
-        return {}
-
-    result: Dict[str, Any] = {
-        "raw_section_md": section,
-        "project_overview": {},
-        "global_constraints": {},
-        "hard_no": [],
-        "extras": {},
-    }
-
-    current_block: Optional[str] = None
-    kv_re = re.compile(r"^(?P<k>[^:：]+)\s*[:：]\s*(?P<v>.*)$")
-
-    for raw_line in section.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("##"):
-            continue
-        if not line.startswith("-"):
-            continue
-
-        item = line.lstrip("-").strip()
-        if not item:
-            continue
-
-        # Block switches
-        if "项目基本信息" in item:
-            current_block = "project_overview"
-            continue
-        if item.startswith("全局风格"):
-            current_block = "global_constraints"
-            continue
-        if item.startswith("禁止") or "Hard No" in item:
-            current_block = "hard_no"
-            continue
-
-        if current_block == "hard_no":
-            result["hard_no"].append(item)
-            continue
-
-        m = kv_re.match(item)
-        if not m:
-            # store unstructured bullet under current block
-            bucket = current_block or "extras"
-            result.setdefault(bucket, [])
-            if isinstance(result[bucket], list):
-                result[bucket].append(item)
-            continue
-
-        key = m.group("k").strip()
-        val = m.group("v").strip()
-        if current_block == "project_overview":
-            key_map = {
-                "Script Title": "script_title",
-                "Type": "type",
-                "Language": "language",
-                "Base Positioning": "base_positioning",
-                "Global Style": "global_style",
-            }
-            normalized_key = key_map.get(key, key)
-            result["project_overview"][normalized_key] = val
-        elif current_block == "global_constraints":
-            key_map = {
-                "叙事口吻与节奏": "narration_pacing",
-                "现实度与尺度边界": "realism_and_rating",
-                "对白风格": "dialogue_style",
-                "场景与道具约束": "scene_and_props",
-                "人物数量与制作可行性": "production_scope",
-                "连贯性硬规则": "continuity_rules",
-            }
-            normalized_key = key_map.get(key, key)
-            result["global_constraints"][normalized_key] = val
-        else:
-            result["extras"][key] = val
-
-    return result
-
 
 def sanitize_llm_markdown_output(text: str) -> str:
     """Best-effort cleanup for markdown endpoints.
@@ -9110,8 +9026,6 @@ async def generate_project_story_dna_global(
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, settle_details)
 
-    extracted_constraints = parse_global_style_constraints(generated_md)
-
     # Persist both output and the inputs that produced it.
     # This ensures a successful generation is durable across refresh even
     # if the user doesn't click the separate "Save Changes" button.
@@ -9134,16 +9048,10 @@ async def generate_project_story_dna_global(
         gi["promo_generator_input_updated_at"] = now_iso
         gi["promo_dna_global_md"] = generated_md
         gi["promo_dna_global_updated_at"] = now_iso
-        if extracted_constraints:
-            gi["promo_global_style_constraints"] = extracted_constraints
-            gi["promo_global_style_constraints_updated_at"] = now_iso
     else:
         gi["story_generator_global_input"] = story_input
         gi["story_dna_global_md"] = generated_md
         gi["story_dna_global_updated_at"] = now_iso
-        if extracted_constraints:
-            gi["global_style_constraints"] = extracted_constraints
-            gi["global_style_constraints_updated_at"] = now_iso
     project.global_info = gi
 
     db.add(project)
@@ -9214,7 +9122,6 @@ class StoryGeneratorGlobalImportRequest(BaseModel):
     story_generator_global_structured: Optional[Dict[str, Any]] = None
     story_generator_global_input: Optional[Dict[str, Any]] = None
     story_dna_global_md: Optional[str] = None
-    global_style_constraints: Optional[Dict[str, Any]] = None
 
 
 @router.get("/projects/{project_id}/story_generator/global/export", response_model=Dict[str, Any])
@@ -9342,7 +9249,6 @@ def export_project_story_generator_global_package(
         if (
             str(key).startswith("story_generator_global")
             or str(key).startswith("story_dna_global")
-            or str(key).startswith("global_style_constraints")
         )
     }
 
@@ -9367,7 +9273,6 @@ def export_project_story_generator_global_package(
         "story_generator_global_structured": story_structured,
         "story_generator_global_input": story_input_export,
         "story_dna_global_md": gi.get("story_dna_global_md") or "",
-        "global_style_constraints": gi.get("global_style_constraints") or {},
     }
 
 
@@ -9440,7 +9345,6 @@ def import_project_story_generator_global_package(
             if (
                 k.startswith("story_generator_global")
                 or k.startswith("story_dna_global")
-                or k.startswith("global_style_constraints")
             ):
                 gi[k] = value
 
@@ -9467,9 +9371,6 @@ def import_project_story_generator_global_package(
         gi["story_dna_global_md"] = req.story_dna_global_md or ""
         gi["story_dna_global_updated_at"] = now_iso
 
-    if req.global_style_constraints is not None:
-        gi["global_style_constraints"] = req.global_style_constraints or {}
-        gi["global_style_constraints_updated_at"] = now_iso
 
     project.global_info = gi
     db.add(project)
@@ -10227,6 +10128,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
     episode_id: Optional[int] = None  # Optional. Generate a specific episode only
+    episode_number: Optional[int] = None  # Optional alias for single-episode generation
     overwrite_existing: bool = False
     retry_failed_only: bool = False
     extra_notes: Optional[str] = None
@@ -11692,6 +11594,7 @@ async def generate_project_episode_scripts_from_global_framework(
         "generator_kind": req.generator_kind,
         "episodes_count": req.episodes_count,
         "episode_id": req.episode_id,
+        "episode_number": req.episode_number,
         "overwrite_existing": req.overwrite_existing,
         "retry_failed_only": req.retry_failed_only,
         "strict_markdown": req.strict_markdown,
@@ -11787,6 +11690,14 @@ async def generate_project_episode_scripts_from_global_framework(
         return bool(latest_status.get("stop_requested"))
 
     generator_kind = _normalize_generator_kind(req.generator_kind) or "story"
+    requested_episode_number: Optional[int] = None
+    if req.episode_number is not None:
+        try:
+            requested_episode_number = int(req.episode_number)
+        except Exception:
+            raise HTTPException(status_code=400, detail="episode_number must be an integer")
+        if requested_episode_number <= 0:
+            raise HTTPException(status_code=400, detail="episode_number must be greater than 0")
 
     # Determine target episode count
     target_n: Optional[int] = None
@@ -11810,6 +11721,8 @@ async def generate_project_episode_scripts_from_global_framework(
     if not target_n or target_n <= 0:
         if req.episode_id:
             target_n = 999  # Dummy fallback if targeting single episode
+        elif requested_episode_number:
+            target_n = int(requested_episode_number)
         else:
             logger.warning(
                 f"[generate_episode_scripts] invalid episodes_count. project_id={project_id} user_id={current_user.id} req={req.episodes_count}"
@@ -11871,9 +11784,6 @@ async def generate_project_episode_scripts_from_global_framework(
         )
 
     relationships = str(gi.get("character_relationships") or "").strip()
-    constraints_key = "promo_global_style_constraints" if generator_kind == "promo" else "global_style_constraints"
-    constraints_obj = project_global_info.get(constraints_key)
-    has_constraints = bool(constraints_obj)
     has_relationships = bool(relationships)
     if str(gi.get("character_canon_md") or "").strip():
         character_canon_source = "character_canon_md"
@@ -11884,7 +11794,7 @@ async def generate_project_episode_scripts_from_global_framework(
 
     logger.info(
         "[generate_episode_scripts] INPUT_CONTEXT "
-        f"project_id={project_id} user_id={current_user.id} has_constraints={has_constraints} "
+        f"project_id={project_id} user_id={current_user.id} "
         f"has_relationships={has_relationships} global_md_len={len(global_md)} "
         f"character_canon_len={len(character_canon_md)} character_source={character_canon_source}"
     )
@@ -12011,11 +11921,18 @@ async def generate_project_episode_scripts_from_global_framework(
         {"idx": n, "id": ep.id, "title": ep.title, "script_content": ep.script_content}
         for n, ep in enumerate(episodes_in_order, start=1)
     ]
-    if req.episode_id:
-        episodes_data = [ed for ed in episodes_data if ed["id"] == req.episode_id]
+
+    target_episode_id: Optional[int] = int(req.episode_id) if req.episode_id else None
+    if not target_episode_id and requested_episode_number:
+        ep_by_number = by_idx.get(int(requested_episode_number))
+        if ep_by_number:
+            target_episode_id = int(ep_by_number.id)
+
+    if target_episode_id:
+        episodes_data = [ed for ed in episodes_data if ed["id"] == target_episode_id]
         if not episodes_data:
             # Maybe the episode is not in the first N episodes but exists in DB
-            target_ep = db.query(Episode).filter(Episode.id == req.episode_id, Episode.project_id == project_id).first()
+            target_ep = db.query(Episode).filter(Episode.id == target_episode_id, Episode.project_id == project_id).first()
             if target_ep:
                 parsed_idx = _extract_episode_index(target_ep)
                 fallback_idx = 1
@@ -12179,14 +12096,6 @@ async def generate_project_episode_scripts_from_global_framework(
 
         reservation_tx = None
 
-        constraints_block = ""
-        if constraints_obj:
-            constraints_block = (
-                "Extracted Global Style & Constraints (JSON-ish):\n"
-                + json.dumps(constraints_obj, ensure_ascii=False, indent=2)
-                + "\n\n"
-            )
-
         relationships_block = ""
         if relationships:
             relationships_block = f"Character Relationships (Plain Text):\n{relationships}\n\n"
@@ -12196,7 +12105,6 @@ async def generate_project_episode_scripts_from_global_framework(
             f"Episode Number: {idx}\n"
             f"Episode Title: {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
-            f"{constraints_block}"
             f"Global Story DNA (Markdown):\n{global_md}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
@@ -12449,7 +12357,6 @@ async def generate_project_episode_scripts_from_global_framework(
         "results": results,
         "errors": errors,
         "debug_context": {
-            "has_global_style_constraints": has_constraints,
             "has_character_relationships": has_relationships,
             "has_global_story_dna": bool(global_md),
             "character_canon_source": character_canon_source,

@@ -1521,7 +1521,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 story_generator_global_structured: parsed?.story_generator_global_structured || {},
                 story_generator_global_input: parsed?.story_generator_global_input || {},
                 story_dna_global_md: parsed?.story_dna_global_md || '',
-                global_style_constraints: parsed?.global_style_constraints || {},
             };
 
             const updated = await importProjectStoryGlobalPackage(id, payload);
@@ -1634,9 +1633,26 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 }
             }
 
+            let specificEpisodeId = null;
+            if (specificEpisode) {
+                const targetNo = Number(specificEpisode);
+                if (Number.isFinite(targetNo) && targetNo > 0) {
+                    const episodeList = Array.isArray(episodes) ? episodes : [];
+                    const matchedEpisode = episodeList.find((ep, index) => {
+                        const parsedNumber = Number(ep?.episode_number) > 0
+                            ? Number(ep?.episode_number)
+                            : (parseEpisodeNumberFromText(ep?.title) || (index + 1));
+                        return parsedNumber === targetNo;
+                    });
+                    if (matchedEpisode?.id) {
+                        specificEpisodeId = Number(matchedEpisode.id);
+                    }
+                }
+            }
+
             addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
             addLog?.(
-                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, script_mode: globalStoryInput.script_mode, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode })}`,
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, script_mode: globalStoryInput.script_mode, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode, episode_id: specificEpisodeId })}`,
                 'info'
             );
             const reqPayload = {
@@ -1647,6 +1663,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 retry_failed_only: retryFailedOnly,
             };
             if (specificEpisode) {
+                if (specificEpisodeId) {
+                    reqPayload.episode_id = Number(specificEpisodeId);
+                }
                 reqPayload.episode_number = Number(specificEpisode);
             }
             const res = await generateProjectEpisodeScripts(id, reqPayload);
@@ -1665,8 +1684,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
             const dbg = res?.debug_context || {};
             addLog?.(
-                `[DEBUG][Input Confirm] Global Style & Constraints imported: ${dbg.has_global_style_constraints ? 'YES' : 'NO'}; ` +
-                `Character relationships imported: ${dbg.has_character_relationships ? 'YES' : 'NO'}; ` +
+                `[DEBUG][Input Confirm] Character relationships imported: ${dbg.has_character_relationships ? 'YES' : 'NO'}; ` +
                 `Character source: ${dbg.character_canon_source || 'unknown'}; ` +
                 `Global DNA len: ${dbg.global_story_dna_length ?? 0}; Character canon len: ${dbg.character_canon_length ?? 0}`,
                 'info'
@@ -2993,16 +3011,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             value={info.story_dna_global_md || ''}
                             onChange={(e) => updateField('story_dna_global_md', e.target.value)}
                             placeholder={t('（生成后，全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, the global framework will appear here. You can edit it and Save Changes.)')}
-                        />
-                    </div>
-
-                    <div>
-                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('全局风格与约束（提取结果）', 'Global Style & Constraints (Extracted)')}</label>
-                        <textarea
-                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white w-full h-40 resize-none"
-                            value={info.global_style_constraints ? JSON.stringify(info.global_style_constraints, null, 2) : ''}
-                            readOnly
-                            placeholder={t('（生成后，这里会显示提取出的全局风格与硬性约束。）', '(After generation, extracted global style & hard constraints will appear here.)')}
                         />
                     </div>
                 </div>
