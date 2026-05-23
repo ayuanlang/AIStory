@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CheckCircle, ChevronDown } from 'lucide-react';
 import { getUiLang, tUI } from '../../../lib/uiLang';
 
-const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi = false, strict = true }) => {
+const InputGroup = ({ label, value, onChange, list, placeholder, idPrefix, multi = false, strict = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const wrapperRef = useRef(null);
 

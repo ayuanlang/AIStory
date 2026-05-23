@@ -8,7 +8,7 @@ import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import LLMResultPanel from './LLMResultPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -187,6 +187,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisFlowStatusHistory, setAnalysisFlowStatusHistory] = useState([]);
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isGeneratingScript, setIsGeneratingScript] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
     const [analysisModalMode, setAnalysisModalMode] = useState('stage1');
@@ -7293,6 +7294,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             {t('合并剧本', 'Merge Script')}
                         </button>
                     )}
+                    <button 
+                        onClick={async () => {
+                            if (!projectId || !activeEpisode?.id || isGeneratingScript) return;
+                            
+                            const ok = await confirmUiMessage(
+                                '此操作会根据项目设定的“全局剧本架构”(若有)与当前集设定，通过AI一键重写当前分集剧情，是否确定覆盖当前的内容？',
+                                'This will overwrite the current episode script using the global story framework and AI. Continue?'
+                            );
+                            if (!ok) return;
+
+                            setIsGeneratingScript(true);
+                            onLog?.(`Generating script for episode ${activeEpisode.id}...`, 'process');
+                            try {
+                                const res = await generateProjectEpisodeScripts(projectId, {
+                                    episode_id: activeEpisode.id,
+                                    overwrite_existing: true
+                                });
+                                onLog?.(`Generation response: ${JSON.stringify(res)}`, 'info');
+                                
+                                // Since we're in ScriptEditor, we might want to refresh the active episode from backend, 
+                                // or the user can just reload. `onLog` tells them it's done.
+                                onLog?.(`Current episode script generated successfully. Please wait a moment and refresh to see changes.`, 'success');
+                                alert('剧本生成任务已提交，可能需要几十秒时间。您可以在项目概览中查看分集生成状态，或稍后刷新本页查看结果。');
+                            } catch (e) {
+                                console.error('Failed to generate script', e);
+                                onLog?.(`Failed to generate script: ${e.response?.data?.detail || e.message}`, 'error');
+                                alert('生成失败: ' + (e.response?.data?.detail || e.message));
+                            } finally {
+                                setIsGeneratingScript(false);
+                            }
+                        }}
+                        disabled={isGeneratingScript || !activeEpisode?.id}
+                        className="px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-100 border border-blue-500/30 rounded-lg text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={t('根据故事线和人物设定AI生成当前集', 'Generate episode script using AI via Global Framework')}
+                    >
+                        {isGeneratingScript ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+                        {t('AI一键生成本集', 'AI Gen Episode')}
+                    </button>
                     <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90">{t('保存修改', 'Save Changes')}</button>
                     <button
                         onClick={async () => {

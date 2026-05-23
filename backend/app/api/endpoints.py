@@ -10222,6 +10222,7 @@ class EpisodeOut(BaseModel):
 class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
+    episode_id: Optional[int] = None  # Optional. Generate a specific episode only
     overwrite_existing: bool = False
     retry_failed_only: bool = False
     extra_notes: Optional[str] = None
@@ -11683,6 +11684,7 @@ async def generate_project_episode_scripts_from_global_framework(
         "user_id": current_user.id,
         "generator_kind": req.generator_kind,
         "episodes_count": req.episodes_count,
+        "episode_id": req.episode_id,
         "overwrite_existing": req.overwrite_existing,
         "retry_failed_only": req.retry_failed_only,
         "strict_markdown": req.strict_markdown,
@@ -11794,23 +11796,26 @@ async def generate_project_episode_scripts_from_global_framework(
             target_n = None
 
     if not target_n or target_n <= 0:
-        logger.warning(
-            f"[generate_episode_scripts] invalid episodes_count. project_id={project_id} user_id={current_user.id} req={req.episodes_count}"
-        )
-        try:
-            log_action(
-                db,
-                user_id=current_user.id,
-                user_name=current_user.username,
-                action="GENERATE_EPISODE_SCRIPTS_FAILED",
-                details=f"project_id={project_id}; reason=invalid_episodes_count; req={req.episodes_count}",
+        if req.episode_id:
+            target_n = 999  # Dummy fallback if targeting single episode
+        else:
+            logger.warning(
+                f"[generate_episode_scripts] invalid episodes_count. project_id={project_id} user_id={current_user.id} req={req.episodes_count}"
             )
-        except Exception as e:
-            logger.warning(f"[generate_episode_scripts] failed to write FAILED system log: {e}")
-        logger.info(
-            f"[generate_episode_scripts] RESPONSE success=False status_code=400 project_id={project_id} detail=episodes_count is required"
-        )
-        raise HTTPException(status_code=400, detail="episodes_count is required (or generate/save Global Story first)")
+            try:
+                log_action(
+                    db,
+                    user_id=current_user.id,
+                    user_name=current_user.username,
+                    action="GENERATE_EPISODE_SCRIPTS_FAILED",
+                    details=f"project_id={project_id}; reason=invalid_episodes_count; req={req.episodes_count}",
+                )
+            except Exception as e:
+                logger.warning(f"[generate_episode_scripts] failed to write FAILED system log: {e}")
+            logger.info(
+                f"[generate_episode_scripts] RESPONSE success=False status_code=400 project_id={project_id} detail=episodes_count is required"
+            )
+            raise HTTPException(status_code=400, detail="episodes_count is required (or generate/save Global Story first)")
 
     global_md_key = "promo_dna_global_md" if generator_kind == "promo" else "story_dna_global_md"
     global_md = str(gi.get(global_md_key) or "").strip()
@@ -11891,7 +11896,11 @@ async def generate_project_episode_scripts_from_global_framework(
 
     created_episodes: List[int] = []
     episodes_in_order: List[Episode] = []
-    for i in range(1, target_n + 1):
+    
+    # If episode_id is provided, we don't need to ensure target_n episodes exist
+    # unless we still want to. Let's just create up to target_n if target_n isn't a dummy 999.
+    loop_limit = target_n if target_n != 999 else 0
+    for i in range(1, loop_limit + 1):
         title = f"Episode {i}"
         ep = by_title.get(title)
         if not ep:
@@ -11919,14 +11928,33 @@ async def generate_project_episode_scripts_from_global_framework(
             if str(item.get("status") or "") != "failed":
                 continue
             try:
-                ep_id = int(item.get("episode_id"))
-                failed_episode_ids.add(ep_id)
+                ep_id_temp = int(item.get("episode_id"))
+                failed_episode_ids.add(ep_id_temp)
             except Exception:
                 continue
 
-    episodes_with_index: List[Tuple[int, Episode]] = list(enumerate(episodes_in_order, start=1))
-    if req.retry_failed_only:
-        episodes_with_index = [(n, ep) for n, ep in episodes_with_index if ep.id in failed_episode_ids]
+    episodes_data: List[Dict[str, Any]] = [
+        {"idx": n, "id": ep.id, "title": ep.title, "script_content": ep.script_content}
+        for n, ep in enumerate(episodes_in_order, start=1)
+    ]
+    if req.episode_id:
+        episodes_data = [ed for ed in episodes_data if ed["id"] == req.episode_id]
+        if not episodes_data:
+            # Maybe the episode is not in the first N episodes but exists in DB
+            target_ep = db.query(Episode).filter(Episode.id == req.episode_id, Episode.project_id == project_id).first()
+            if target_ep:
+                # Try to parse index from title "Episode X"
+                import re
+                m = re.search(r"Episode\s+(\d+)", target_ep.title or "")
+                fallback_idx = 1
+                if isinstance(target_n, int) and target_n != 999:
+                    fallback_idx = target_n + 1
+                idx = int(m.group(1)) if m else fallback_idx
+                episodes_data = [{"idx": idx, "id": target_ep.id, "title": target_ep.title, "script_content": target_ep.script_content}]
+            else:
+                raise HTTPException(status_code=404, detail="Target episode not found in this project.")
+    elif req.retry_failed_only:
+        episodes_data = [ed for ed in episodes_data if ed["id"] in failed_episode_ids]
 
     run_status = {
         "project_id": project_id,
@@ -11936,7 +11964,7 @@ async def generate_project_episode_scripts_from_global_framework(
         "started_at": started_at_iso,
         "updated_at": started_at_iso,
         "episodes_target": target_n,
-        "episodes_in_run": len(episodes_with_index),
+        "episodes_in_run": len(episodes_data),
         "processed": 0,
         "generated": 0,
         "failed": 0,
@@ -11947,7 +11975,7 @@ async def generate_project_episode_scripts_from_global_framework(
         "results": [],
     }
 
-    if req.retry_failed_only and len(episodes_with_index) == 0:
+    if req.retry_failed_only and len(episodes_data) == 0:
         run_status["running"] = False
         run_status["finished_at"] = now_bj_iso()
         run_status["message"] = "No failed episodes found from previous run"
@@ -11996,7 +12024,11 @@ async def generate_project_episode_scripts_from_global_framework(
         except Exception as e:
             logger.warning(f"[generate_episode_scripts] failed to write {action} system log: {e}")
 
-    for idx, ep in episodes_with_index:
+    for ep_data in episodes_data:
+        idx = ep_data["idx"]
+        ep_id = ep_data["id"]
+        ep_title = ep_data["title"]
+        ep_script_content = ep_data["script_content"]
         if _is_stop_requested():
             stopped_at = now_bj_iso()
             run_status["stop_requested"] = True
@@ -12007,12 +12039,13 @@ async def generate_project_episode_scripts_from_global_framework(
             run_status["stop_acknowledged_at"] = stopped_at
             run_status["message"] = "Stopped by user request"
 
-            remaining = [(n, ep_rest) for n, ep_rest in episodes_with_index if n >= idx]
-            for j, ep_rest in remaining:
+            remaining = [ed for ed in episodes_data if ed["idx"] >= idx]
+            for ep_rest in remaining:
+                j = ep_rest["idx"]
                 results.append({
-                    "episode_id": ep_rest.id,
+                    "episode_id": ep_rest["id"],
                     "episode_number": j,
-                    "episode_title": ep_rest.title,
+                    "episode_title": ep_rest["title"],
                     "generated": False,
                     "skipped": True,
                     "reason": "stopped by user request",
@@ -12020,9 +12053,9 @@ async def generate_project_episode_scripts_from_global_framework(
                 run_status["processed"] = int(run_status.get("processed") or 0) + 1
                 run_status["skipped"] = int(run_status.get("skipped") or 0) + 1
                 run_status["results"].append({
-                    "episode_id": ep_rest.id,
+                    "episode_id": ep_rest["id"],
                     "episode_number": j,
-                    "episode_title": ep_rest.title,
+                    "episode_title": ep_rest["title"],
                     "status": "skipped",
                     "reason": "stopped by user request",
                 })
@@ -12037,24 +12070,24 @@ async def generate_project_episode_scripts_from_global_framework(
             break
 
         should_write = True
-        if not req.retry_failed_only and not req.overwrite_existing and (ep.script_content or "").strip():
+        if not req.retry_failed_only and not req.overwrite_existing and (ep_script_content or "").strip():
             should_write = False
 
         if not should_write:
             logger.info(
-                f"[generate_episode_scripts] SKIP episode_number={idx} episode_id={ep.id} title={ep.title!r} reason=existing_script"
+                f"[generate_episode_scripts] SKIP episode_number={idx} episode_id={ep_id} title={ep_title!r} reason=existing_script"
             )
             _safe_log_episode("GENERATE_EPISODE_SCRIPT_SKIP", {
                 "project_id": project_id,
                 "episode_number": idx,
-                "episode_id": ep.id,
-                "episode_title": ep.title,
+                "episode_id": ep_id,
+                "episode_title": ep_title,
                 "reason": "script_content already exists",
             })
             results.append({
-                "episode_id": ep.id,
+                "episode_id": ep_id,
                 "episode_number": idx,
-                "episode_title": ep.title,
+                "episode_title": ep_title,
                 "generated": False,
                 "skipped": True,
                 "reason": "script_content already exists",
@@ -12063,9 +12096,9 @@ async def generate_project_episode_scripts_from_global_framework(
             run_status["skipped"] = int(run_status.get("skipped") or 0) + 1
             run_status["updated_at"] = now_bj_iso()
             run_status["results"].append({
-                "episode_id": ep.id,
+                "episode_id": ep_id,
                 "episode_number": idx,
-                "episode_title": ep.title,
+                "episode_title": ep_title,
                 "status": "skipped",
                 "reason": "script_content already exists",
             })
@@ -12089,7 +12122,7 @@ async def generate_project_episode_scripts_from_global_framework(
         user_prompt = (
             f"Project Title: {project.title}\n"
             f"Episode Number: {idx}\n"
-            f"Episode Title: {ep.title}\n"
+            f"Episode Title: {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
             f"{constraints_block}"
             f"Global Story DNA (Markdown):\n{global_md}\n\n"
@@ -12099,7 +12132,7 @@ async def generate_project_episode_scripts_from_global_framework(
         )
 
         try:
-            sys_prompt_episode = sys_prompt.format(episode_number=idx, episode_title=ep.title)
+            sys_prompt_episode = sys_prompt.format(episode_number=idx, episode_title=ep_title)
         except Exception:
             sys_prompt_episode = sys_prompt
 
@@ -12119,7 +12152,7 @@ async def generate_project_episode_scripts_from_global_framework(
                 model,
                 {
                     "item": "generate_episode_script",
-                    "episode_id": ep.id,
+                    "episode_id": ep_id,
                     "episode_number": idx,
                     "estimation_method": "prompt_tokens_ratio",
                     "estimated_output_ratio": 1.5,
@@ -12133,14 +12166,14 @@ async def generate_project_episode_scripts_from_global_framework(
 
         try:
             logger.info(
-                f"[generate_episode_scripts] GENERATE episode_number={idx} episode_id={ep.id} title={ep.title!r}"
+                f"[generate_episode_scripts] GENERATE episode_number={idx} episode_id={ep_id} title={ep_title!r}"
             )
             logger.info(
-                f"[generate_episode_scripts] REQUEST_PAYLOAD episode_number={idx} episode_id={ep.id} "
+                f"[generate_episode_scripts] REQUEST_PAYLOAD episode_number={idx} episode_id={ep_id} "
                 f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
                 f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)}"
             )
-            _release_db_connection(db, f"generate_episode_scripts_episode_{ep.id}_llm_call")
+            _release_db_connection(db, f"generate_episode_scripts_episode_{ep_id}_llm_call")
             generated_payload = await generate_markdown_with_retry(
                 user_prompt=user_prompt,
                 sys_prompt=sys_prompt_episode,
@@ -12165,7 +12198,7 @@ async def generate_project_episode_scripts_from_global_framework(
                 )
             billing_details = {
                 "item": "generate_episode_script",
-                "episode_id": ep.id,
+                "episode_id": ep_id,
                 "episode_number": idx,
                 "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
                 "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
@@ -12187,34 +12220,37 @@ async def generate_project_episode_scripts_from_global_framework(
             else:
                 billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
-            ep = db.merge(ep)
-            ep.script_content = content
-            ei = _episode_info_from_episode(ep)
+            ep_db = db.query(Episode).get(ep_id)
+            if not ep_db:
+                raise RuntimeError(f"Episode {ep_id} not found in database for update.")
+            ep_db.script_content = content
+            ep_script_content = content
+            ei = _episode_info_from_episode(ep_db)
             ei["episode_script_generated_at"] = now_bj_iso()
             if prompt_filename == "promo_generator_episode_script.txt":
                 ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
             else:
                 ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
-            ep.episode_info = ei
-            db.add(ep)
+            ep_db.episode_info = ei
+            db.add(ep_db)
             db.commit()
-            db.refresh(ep)
+            db.refresh(ep_db)
 
             logger.info(
-                f"[generate_episode_scripts] SUCCESS episode_number={idx} episode_id={ep.id} output_chars={len(content)}"
+                f"[generate_episode_scripts] SUCCESS episode_number={idx} episode_id={ep_id} output_chars={len(content)}"
             )
             _safe_log_episode("GENERATE_EPISODE_SCRIPT_SUCCESS", {
                 "project_id": project_id,
                 "episode_number": idx,
-                "episode_id": ep.id,
-                "episode_title": ep.title,
+                "episode_id": ep_id,
+                "episode_title": ep_title,
                 "output_chars": len(content),
             })
 
             results.append({
-                "episode_id": ep.id,
+                "episode_id": ep_id,
                 "episode_number": idx,
-                "episode_title": ep.title,
+                "episode_title": ep_title,
                 "generated": True,
                 "skipped": False,
                 "output_chars": len(content),
@@ -12223,9 +12259,9 @@ async def generate_project_episode_scripts_from_global_framework(
             run_status["generated"] = int(run_status.get("generated") or 0) + 1
             run_status["updated_at"] = now_bj_iso()
             run_status["results"].append({
-                "episode_id": ep.id,
+                "episode_id": ep_id,
                 "episode_number": idx,
-                "episode_title": ep.title,
+                "episode_title": ep_title,
                 "status": "generated",
                 "output_chars": len(content),
             })
@@ -12237,24 +12273,24 @@ async def generate_project_episode_scripts_from_global_framework(
         except Exception as e:
             if reservation_tx:
                 billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
-            logger.exception(f"[generate_episode_scripts] FAILED episode_number={idx} episode_id={ep.id} error={e}")
+            logger.exception(f"[generate_episode_scripts] FAILED episode_number={idx} episode_id={ep_id} error={e}")
             _safe_log_episode("GENERATE_EPISODE_SCRIPT_FAILED", {
                 "project_id": project_id,
                 "episode_number": idx,
-                "episode_id": ep.id,
-                "episode_title": ep.title,
+                "episode_id": ep_id,
+                "episode_title": ep_title,
                 "error": str(e),
             })
             errors.append({
                 "episode_number": idx,
-                "episode_id": ep.id,
-                "episode_title": ep.title,
+                "episode_id": ep_id,
+                "episode_title": ep_title,
                 "error": str(e),
             })
             results.append({
-                "episode_id": ep.id,
+                "episode_id": ep_id,
                 "episode_number": idx,
-                "episode_title": ep.title,
+                "episode_title": ep_title,
                 "generated": False,
                 "skipped": False,
                 "error": str(e),
@@ -12263,9 +12299,9 @@ async def generate_project_episode_scripts_from_global_framework(
             run_status["failed"] = int(run_status.get("failed") or 0) + 1
             run_status["updated_at"] = now_bj_iso()
             run_status["results"].append({
-                "episode_id": ep.id,
+                "episode_id": ep_id,
                 "episode_number": idx,
-                "episode_title": ep.title,
+                "episode_title": ep_title,
                 "status": "failed",
                 "error": str(e),
             })
@@ -12280,12 +12316,13 @@ async def generate_project_episode_scripts_from_global_framework(
                     "stopped_at_episode_number": idx,
                     "reason": "provider moderation block (PROHIBITED_CONTENT)",
                 })
-                remaining = [(n, ep_rest) for n, ep_rest in episodes_with_index if n > idx]
-                for j, ep_rest in remaining:
+                remaining = [ed for ed in episodes_data if ed["idx"] > idx]
+                for ep_rest in remaining:
+                    j = ep_rest["idx"]
                     results.append({
-                        "episode_id": ep_rest.id,
+                        "episode_id": ep_rest["id"],
                         "episode_number": j,
-                        "episode_title": ep_rest.title,
+                        "episode_title": ep_rest["title"],
                         "generated": False,
                         "skipped": True,
                         "reason": "aborted due to provider moderation block",
@@ -12293,9 +12330,9 @@ async def generate_project_episode_scripts_from_global_framework(
                     run_status["processed"] = int(run_status.get("processed") or 0) + 1
                     run_status["skipped"] = int(run_status.get("skipped") or 0) + 1
                     run_status["results"].append({
-                        "episode_id": ep_rest.id,
+                        "episode_id": ep_rest["id"],
                         "episode_number": j,
-                        "episode_title": ep_rest.title,
+                        "episode_title": ep_rest["title"],
                         "status": "skipped",
                         "reason": "aborted due to provider moderation block",
                     })
@@ -18748,6 +18785,7 @@ def _build_asset_current_group_key(asset: Asset, meta: Optional[Dict[str, Any]] 
     entity_id = _asset_optional_int(stable_meta.get("entity_id"))
     shot_id = _asset_optional_int(stable_meta.get("shot_id"))
     scene_id = _asset_optional_int(stable_meta.get("scene_id"))
+    shot_number = str(stable_meta.get("shot_number") or "").strip().lower()
     subject_name = str(stable_meta.get("subject_name") or stable_meta.get("entity_name") or "").strip().lower()
     subject_type = str(stable_meta.get("subject_type") or stable_meta.get("entity_type") or "").strip().lower()
 
@@ -18758,6 +18796,8 @@ def _build_asset_current_group_key(asset: Asset, meta: Optional[Dict[str, Any]] 
         parts.append(f"entity:{entity_id}")
     if shot_id:
         parts.append(f"shot:{shot_id}")
+    if frame_type == "keyframe" and shot_number:
+        parts.append(f"shot_number:{shot_number}")
     if scene_id:
         parts.append(f"scene:{scene_id}")
     if not entity_id and not shot_id and not scene_id and subject_name:
@@ -19562,6 +19602,11 @@ def upload_asset(
             idempotency_key=normalized_idempotency_key,
         )
         if existing_asset:
+            _sync_asset_denormalized_fields(existing_asset)
+            if getattr(existing_asset, "project_id", None):
+                _mark_asset_as_current_project_asset(db, existing_asset)
+                db.commit()
+                db.refresh(existing_asset)
             return _serialize_asset_row(existing_asset, db)
 
     # Ensure upload directory

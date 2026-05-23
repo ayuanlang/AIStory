@@ -40,12 +40,10 @@
       "type": "story",
       "prompts": [
         "story_generator_global.txt",
-        "story_generator_episode.txt",
         "story_generator_analyze_novel.txt"
       ],
       "legacy_refs": [
         "story_generator_global.txt",
-        "story_generator_episode.txt",
         "story_generator_analyze_novel.txt"
       ]
     },

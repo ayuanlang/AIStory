@@ -265,6 +265,7 @@ const Editor = ({
             if (user && typeof user.credits === 'number') {
                 setCurrentUserCredits(user.credits);
             }
+            void loadEpisodesForEditor(p);
         } catch (e) {
             console.error("Failed to load project data", e);
         }
@@ -3465,6 +3466,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                         uiLang={uiLang}
                                         mode="overview"
                                         onProjectUpdate={loadProjectData}
+                                        onTabChange={setActiveTab}
                                         onJumpToEpisode={(episodeId) => {
                                             setActiveEpisodeId(episodeId);
                                             setActiveTab('script');
@@ -3489,6 +3491,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                     uiLang={uiLang}
                                     mode="generator"
                                     onProjectUpdate={loadProjectData}
+                                    onTabChange={setActiveTab}
                                     onJumpToEpisode={(episodeId) => {
                                         setActiveEpisodeId(episodeId);
                                         setActiveTab('script');

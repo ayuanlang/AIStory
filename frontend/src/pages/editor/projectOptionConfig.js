@@ -107,6 +107,28 @@ export const PROJECT_EP_BASE_POSITIONING_OPTIONS = [
 
 
 
+export const PROJECT_STORY_SCRIPT_MODE_OPTIONS = [
+
+    "通用连续剧 / General Series",
+
+    "短剧快节奏 / Short Drama",
+
+    "动作片 / Action Feature",
+
+    "爱情情感 / Romance / Emotional",
+
+    "悬疑惊悚 / Mystery / Thriller",
+
+    "喜剧轻快 / Comedy / Light",
+
+    "仙侠奇幻 / Xianxia / Fantasy",
+
+    "青春成长 / Youth Coming-of-Age",
+
+];
+
+
+
 export const PROJECT_EP_GLOBAL_STYLE_OPTIONS = [
 
     "写实电影感，8k杰作 / Photorealistic, Cinematic Lighting, 8k, Masterpiece",

@@ -20,7 +20,6 @@ import {
     fetchProject, 
     updateProject,
     generateProjectStoryGlobal,
-    analyzeProjectNovel,
     generateProjectCharacterProfile,
     fetchEpisodes, 
     createEpisode, 
@@ -90,8 +89,6 @@ import {
     stopAllGenerationJobs,
     stopShotMediaBatch,
     saveProjectStoryGeneratorGlobalInput,
-    exportProjectStoryGlobalPackage,
-    importProjectStoryGlobalPackage,
     saveProjectCharacterCanonInput,
     saveProjectCharacterCanonCategories,
     updateProjectCharacterProfiles,
@@ -123,6 +120,7 @@ import {
     PROJECT_EP_COUNTRY_REGION_OPTIONS,
     PROJECT_EP_LANGUAGE_OPTIONS,
     PROJECT_EP_BASE_POSITIONING_OPTIONS,
+    PROJECT_STORY_SCRIPT_MODE_OPTIONS,
     PROJECT_EP_GLOBAL_STYLE_OPTIONS,
     PROJECT_EP_TONE_OPTIONS,
     PROJECT_EP_LIGHTING_OPTIONS,
@@ -162,9 +160,9 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
-export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onJumpToEpisode, episodes = [], uiLang = 'en', mode = 'overview' }) => {
+export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onJumpToEpisode, onTabChange, episodes = [], uiLang = 'en', mode = 'overview' }) => {
     const functionApiConfigs = useFunctionApis();
-    const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const resolveVideoSoundFromInfo = (payload) => {
         const src = (payload && typeof payload === 'object') ? payload : {};
         const visual = (src.tech_params && src.tech_params.visual_standard && typeof src.tech_params.visual_standard === 'object')
@@ -173,9 +171,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         const defaults = (src.project_generation_defaults && typeof src.project_generation_defaults === 'object')
             ? src.project_generation_defaults
             : {};
-        const candidate = (
-            src.video_sound ?? src.sound ?? defaults.sound ?? visual.sound
-        );
+        const candidate = src.video_sound ?? src.sound ?? defaults.sound ?? visual.sound;
         return candidate === false ? false : true;
     };
     const resolveProjectSeedFromInfo = (payload) => {
@@ -247,7 +243,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [isSceneAnalysisDimensionsCollapsed, setIsSceneAnalysisDimensionsCollapsed] = useState(true);
 
     const [globalStoryInput, setGlobalStoryInput] = useState({
-        episodes_count: 12,
+        episodes_count: 20,
+        script_mode: "短剧快节奏 / Short Drama",
+        target_audience: "男频路线 / Male-Oriented",
         background: "",
         setup: "",
         development: "",
@@ -272,6 +270,32 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         constraints: "",
     });
     const [promoFrameworkViewMode, setPromoFrameworkViewMode] = useState('preview');
+    const [targetEpisodeNumberForGen, setTargetEpisodeNumberForGen] = useState('');
+    const [hasSetDefaultEp, setHasSetDefaultEp] = useState(false);
+    
+    useEffect(() => {
+        if (episodes && episodes.length > 0) {
+            let defaultEp = 1;
+            const ungeneratedEps = episodes.filter(e => !e.script_content || String(e.script_content).trim() === '');
+            if (ungeneratedEps.length > 0) {
+                defaultEp = Math.min(...ungeneratedEps.map(e => e.episode_number || 1));
+            } else {
+                defaultEp = Math.max(...episodes.map(e => e.episode_number || 1));
+            }
+            
+            if (!hasSetDefaultEp) {
+                setTargetEpisodeNumberForGen(String(defaultEp));
+                setHasSetDefaultEp(true);
+            } else if (targetEpisodeNumberForGen) {
+                // 如果当前选中的集数已经生成了内容，自动跳转到下一个没生成的集数
+                const currentEpTarget = episodes.find(e => String(e.episode_number) === String(targetEpisodeNumberForGen));
+                if (currentEpTarget && currentEpTarget.script_content && String(currentEpTarget.script_content).trim() !== '') {
+                    setTargetEpisodeNumberForGen(String(defaultEp));
+                }
+            }
+        }
+    }, [episodes, targetEpisodeNumberForGen, hasSetDefaultEp]);
+
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
     const [isStoppingEpisodeScripts, setIsStoppingEpisodeScripts] = useState(false);
@@ -282,7 +306,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [novelImportText, setNovelImportText] = useState('');
     const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
     const [projectTab, setProjectTab] = useState(mode === 'generator' ? 'story_generator' : 'overview');
-    
+
     const [expandedSections, setExpandedSections] = useState({
         basic: true,
         cost: true,
@@ -882,6 +906,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             `${t('项目基本信息缺失，请先设置：', 'Project basic info is missing, please set: ')}${labels}\n${t('将为你自动跳转到项目概览页。', 'You will be redirected to Project Overview.')}`
                         );
                         setProjectTab('overview');
+                        if (onTabChange) onTabChange('overview');
                         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
                     }
                 } catch (healthErr) {
@@ -1078,7 +1103,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             }
         };
         load();
-    }, [id, initialProject, t]);
+    }, [id, t]);
 
     // Auto-save Character Canon tag/identity categories (debounced) when in edit mode
     useEffect(() => {
@@ -1185,6 +1210,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     mode: 'global',
                     generator_kind: 'story',
                     episodes_count: Number(globalStoryInput.episodes_count || 0) || 0,
+                    script_mode: globalStoryInput.script_mode,
+                    target_audience: globalStoryInput.target_audience,
                     background: globalStoryInput.background,
                     setup: globalStoryInput.setup,
                     development: globalStoryInput.development,
@@ -1390,6 +1417,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 mode: 'global',
                 generator_kind: 'story',
                 episodes_count: Number(globalStoryInput.episodes_count || 0),
+                script_mode: globalStoryInput.script_mode,
+                target_audience: globalStoryInput.target_audience,
                 // Project Overview / Basic Information (forward to LLM)
                 script_title: info.script_title,
                 expected_duration: info.expected_duration,
@@ -1439,56 +1468,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         } finally {
             setIsGeneratingGlobalStory(false);
             globalStoryGenerationInFlightRef.current = false;
-        }
-    };
-
-    const handleAnalyzeNovelToGlobalStory = async () => {
-        const text = String(novelImportText || '').trim();
-        if (!text) {
-            alert('Please paste novel/script text first.');
-            return;
-        }
-
-        setIsAnalyzingNovel(true);
-        try {
-            const analyzed = await analyzeProjectNovel(id, { novel_text: text, function_name: 'script_analysis' });
-            const mergedStoryInput = {
-                ...globalStoryInput,
-                background: analyzed?.background || '',
-                setup: analyzed?.setup || '',
-                development: analyzed?.development || '',
-                turning_points: analyzed?.turning_points || '',
-                climax: analyzed?.climax || '',
-                resolution: analyzed?.resolution || '',
-                suspense: analyzed?.suspense || '',
-                foreshadowing: analyzed?.foreshadowing || '',
-            };
-
-            // We persist immediately so users don't rely only on debounced autosave.
-            skipNextGlobalStoryAutosaveRef.current = true;
-            setGlobalStoryInput(mergedStoryInput);
-            await saveProjectStoryGeneratorGlobalInput(id, {
-                mode: 'global',
-                generator_kind: 'story',
-                episodes_count: Number(mergedStoryInput.episodes_count || 0) || 0,
-                background: mergedStoryInput.background,
-                setup: mergedStoryInput.setup,
-                development: mergedStoryInput.development,
-                turning_points: mergedStoryInput.turning_points,
-                climax: mergedStoryInput.climax,
-                resolution: mergedStoryInput.resolution,
-                suspense: mergedStoryInput.suspense,
-                foreshadowing: mergedStoryInput.foreshadowing,
-                extra_notes: mergedStoryInput.extra_notes,
-            });
-
-            alert('Imported text analyzed, fields auto-filled, and draft saved.');
-        } catch (e) {
-            console.error(e);
-            const detail = e?.response?.data?.detail || e?.message || String(e);
-            alert(`Failed to analyze imported text: ${detail}`);
-        } finally {
-            setIsAnalyzingNovel(false);
         }
     };
 
@@ -1602,7 +1581,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         }
     };
 
-    const handleGenerateEpisodeScripts = async ({ retryFailedOnly = false, forceStart = false } = {}) => {
+    const handleGenerateEpisodeScripts = async ({ retryFailedOnly = false, forceStart = false, specificEpisode = null } = {}) => {
         if (episodeScriptsGenerationInFlightRef.current || isGeneratingEpisodeScripts || isStoppingEpisodeScripts) return;
         episodeScriptsGenerationInFlightRef.current = true;
         if (!id) {
@@ -1611,12 +1590,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             episodeScriptsGenerationInFlightRef.current = false;
             return;
         }
+        const generatorKind = projectTab === 'promo_generator' ? 'promo' : 'story';
         const n = Number(
             projectTab === 'promo_generator'
                 ? (promoInput.episodes_count || 0)
                 : (globalStoryInput.episodes_count || 0)
         );
-        if (!n || Number.isNaN(n) || n <= 0) {
+        if (!specificEpisode && (!n || Number.isNaN(n) || n <= 0)) {
             alert('Please set a valid Episodes Count first.');
             episodeScriptsGenerationInFlightRef.current = false;
             return;
@@ -1635,31 +1615,42 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         pollEpisodeScriptsStatus();
 
         try {
-            const overwriteExisting = Boolean(forceStart);
-            const generatorKind = projectTab === 'promo_generator' ? 'promo' : 'story';
+            const overwriteExisting = Boolean(forceStart) || !!specificEpisode;
             const modeLabel = retryFailedOnly
                 ? 'retry-failed-only'
+                : specificEpisode ? `generate-episode-${specificEpisode}`
                 : (overwriteExisting ? 'force-generate-all' : 'generate-missing-only');
 
-            if (overwriteExisting) {
+            if (overwriteExisting && !specificEpisode) {
                 const ok = await confirmUiMessage('Force Start will overwrite existing episode scripts for all target episodes. Continue?');
                 if (!ok) {
                     addLog?.('Force Start canceled.', 'warning');
+                    return;
+                }
+            } else if (specificEpisode) {
+                const ok = await confirmUiMessage(`确定要单独生成第 ${specificEpisode} 集的剧本吗？这会覆盖已有内容。`, `Are you sure you want to regenerate episode ${specificEpisode}? This will overwrite existing script.`);
+                if (!ok) {
+                    addLog?.('Single Episode Generation canceled.', 'warning');
                     return;
                 }
             }
 
             addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
             addLog?.(
-                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly })}`,
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, script_mode: globalStoryInput.script_mode, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode })}`,
                 'info'
             );
-            const res = await generateProjectEpisodeScripts(id, {
+            const reqPayload = {
                 generator_kind: generatorKind,
                 episodes_count: n,
+                script_mode: globalStoryInput.script_mode,
                 overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,
-            });
+            };
+            if (specificEpisode) {
+                reqPayload.episode_number = Number(specificEpisode);
+            }
+            const res = await generateProjectEpisodeScripts(id, reqPayload);
 
             await pollEpisodeScriptsStatus();
             addLog?.(
@@ -1708,6 +1699,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 episodeScriptsStatusTimerRef.current = null;
             }
             setIsGeneratingEpisodeScripts(false);
+            setShowEpisodeScriptsProgressModal(false);
+            setEpisodeScriptsProgress(prev => {
+                if (prev) {
+                    return { ...prev, running: false };
+                }
+                return null;
+            });
             episodeScriptsGenerationInFlightRef.current = false;
         }
     };
@@ -1871,6 +1869,29 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const progressPercent = episodesInRun > 0 ? Math.min(100, Math.round((processedCount / episodesInRun) * 100)) : 0;
     const episodeScriptsRunning = Boolean(episodeScriptsProgress?.running) || isGeneratingEpisodeScripts;
     const episodeScriptsStopRequested = Boolean(episodeScriptsProgress?.stop_requested);
+    const storyGeneratorInheritedInfo = useMemo(() => {
+        const resolvedScriptTitle = String(info?.script_title || project?.title || '').trim();
+        const resolvedType = String(info?.type || '').trim();
+        const resolvedLanguage = String(info?.language || '').trim();
+        const resolvedBasePositioning = String(info?.base_positioning || '').trim();
+        const resolvedGlobalStyle = String(info?.Global_Style || '').trim();
+        return [
+            { label: t('剧本标题', 'Script Title'), value: resolvedScriptTitle },
+            { label: t('类型', 'Type'), value: resolvedType },
+            { label: t('语言', 'Language'), value: resolvedLanguage },
+            { label: t('基础定位', 'Base Positioning'), value: resolvedBasePositioning },
+            { label: t('全局风格', 'Global Style'), value: resolvedGlobalStyle },
+        ];
+    }, [info?.script_title, info?.type, info?.language, info?.base_positioning, info?.Global_Style, project?.title, t]);
+    const storyGeneratorMissingInfo = useMemo(() => {
+        const missing = [];
+        if (!String(info?.script_title || project?.title || '').trim()) missing.push(t('剧本标题', 'Script Title'));
+        if (!String(info?.type || '').trim()) missing.push(t('类型', 'Type'));
+        if (!String(info?.language || '').trim()) missing.push(t('语言', 'Language'));
+        if (!String(info?.base_positioning || '').trim()) missing.push(t('基础定位', 'Base Positioning'));
+        if (!String(info?.Global_Style || '').trim()) missing.push(t('全局风格', 'Global Style'));
+        return missing;
+    }, [info?.script_title, info?.type, info?.language, info?.base_positioning, info?.Global_Style, project?.title, t]);
 
     const episodeTitleByNumber = useMemo(() => {
         if (!isGeneratorMode) return new Map();
@@ -2771,36 +2792,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     <div className="flex items-center justify-between gap-3">
                         <h3 className="text-lg font-semibold text-primary">{t('故事生成器（全局 / 项目）', 'Story Generator (Global / Project)')}</h3>
                         <div className="flex items-center gap-2">
-                            <input
-                                ref={storyPackageFileInputRef}
-                                type="file"
-                                accept="application/json,.json"
-                                className="hidden"
-                                onChange={handleImportStoryGeneratorPackageFile}
-                            />
-                            <button
-                                onClick={handleOpenImportStoryGeneratorPackage}
-                                disabled={isImportingStoryPackage || isGeneratingGlobalStory || isGeneratingEpisodeScripts || isAnalyzingNovel}
-                                className={`px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isImportingStoryPackage || isGeneratingGlobalStory || isGeneratingEpisodeScripts || isAnalyzingNovel) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('从其他项目导入 Story Generator 包 JSON', 'Import Story Generator package JSON from another project')}
-                            >
-                                {isImportingStoryPackage ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('导入中...', 'Importing...')}</> : <><Upload className="w-4 h-4" /> {t('导入包', 'Import Package')}</>}
-                            </button>
-                            <button
-                                onClick={handleExportStoryGeneratorPackage}
-                                disabled={isGeneratingGlobalStory || isGeneratingEpisodeScripts || isAnalyzingNovel || isImportingStoryPackage}
-                                className={`px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isGeneratingGlobalStory || isGeneratingEpisodeScripts || isAnalyzingNovel || isImportingStoryPackage) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('导出 Story Generator 包 JSON 用于导入其他项目', 'Export Story Generator package JSON for import into another project')}
-                            >
-                                <Download className="w-4 h-4" /> {t('导出包', 'Export Package')}
-                            </button>
-                            <button
-                                onClick={() => setShowGlobalStoryGuide(v => !v)}
-                                className="px-3 py-2 rounded-lg text-sm font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-2"
-                                title={t('创作指引', 'Writing Guide')}
-                            >
-                                <Info className="w-4 h-4" /> {t('创作指引', 'Writing Guide')}
-                            </button>
                             <button
                                 onClick={handleGenerateGlobalStory}
                                 disabled={isGeneratingGlobalStory}
@@ -2816,8 +2807,27 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                                 title={t('从全局框架 + 项目角色设定生成分集剧本，自动创建缺失分集并写入对应分集', 'Generate episode scripts from Global Framework + Project Character Canon, create missing episodes, and save each script into its episode')}
                             >
-                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('生成分集剧本', 'Generate Episode Scripts')}</>}
+                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('全量生成分集', 'Generate All')}</>}
                             </button>
+                            <div className="flex items-center bg-white/5 rounded-lg overflow-hidden border border-white/10">
+                                <input
+                                    type="number"
+                                    min="1"
+                                    placeholder={t('单集', 'Ep#')}
+                                    className="w-16 px-2 py-2 bg-transparent text-sm text-center outline-none text-white placeholder-white/30"
+                                    value={targetEpisodeNumberForGen}
+                                    onChange={e => setTargetEpisodeNumberForGen(e.target.value)}
+                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                />
+                                <button
+                                    onClick={() => handleGenerateEpisodeScripts({ specificEpisode: targetEpisodeNumberForGen })}
+                                    disabled={!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                    className={`px-3 py-2 text-sm font-bold flex items-center bg-white/10 hover:bg-white/20 transition-colors ${(!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'opacity-50 cursor-not-allowed' : 'text-blue-300'}`}
+                                    title={t('仅生成填写的单个集数', 'Generate only the specified episode number')}
+                                >
+                                    {t('单集生成', 'Gen Single')}
+                                </button>
+                            </div>
                             <button
                                 onClick={() => handleGenerateEpisodeScripts({ forceStart: true })}
                                 disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
@@ -2890,249 +2900,89 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         </div>
                     )}
 
-                    {showGlobalStoryGuide && (
-                        <div className="border border-white/10 rounded-xl p-4 bg-white/[0.02] space-y-3">
-                            <div className="text-sm font-semibold text-white">创作指引 / Writing Guide</div>
-                            <div className="text-xs text-muted-foreground">
-                                中文：按“从世界观 → 角色关系 → 冲突升级 → 关键转折 → 结局回收”的顺序填写；每个字段尽量写“可拍的具体信息”。
-                                <br />
-                                English: Fill in order “World → Character dynamics → Escalation → Turning points → Payoffs”. Prefer concrete, filmable details.
-                            </div>
 
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">流程介绍 / Workflow</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>
-                                        中文（建议流程）：
-                                        <ol className="list-decimal ml-4 mt-1 space-y-1">
-                                            <li>先写 Background / World：世界规则、时代地点、核心矛盾来源。</li>
-                                            <li>再写 Setup：开场钩子 + 诱因事件 + 主角做出不可逆选择。</li>
-                                            <li>Development：障碍升级、信息揭露、情感推进，形成“必须继续”的链条。</li>
-                                            <li>Turning Points：低谷/背叛/反转 + 最终策略（怎么打、付出什么代价）。</li>
-                                            <li>Climax/Resolution：终极对决与代价、关系收束、伏笔回收。</li>
-                                        </ol>
-                                    </div>
-                                    <div>
-                                        English (suggested):
-                                        <ol className="list-decimal ml-4 mt-1 space-y-1">
-                                            <li>Background/World: rules, era, place, source of conflict.</li>
-                                            <li>Setup: hook + inciting incident + irreversible choice.</li>
-                                            <li>Development: escalating obstacles, reveals, emotional progression.</li>
-                                            <li>Turning Points: lowest point + reversal + final plan (and cost).</li>
-                                            <li>Climax/Resolution: final confrontation, payoff, new normal.</li>
-                                        </ol>
-                                    </div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Episodes Count（集数）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：你想要的总集数/章节数。短剧常见 10–24 集；越短越需要强钩子与快节奏升级。</div>
-                                    <div>English: Total number of episodes/chapters. Shorter seasons need stronger hooks and faster escalation.</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：12</div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Foreshadowing / Payoffs（伏笔/回收）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：列出你想“提前埋下、后期回收”的清单：道具、秘密、旧伤、承诺、规则漏洞、未说出口的真相。</div>
-                                    <div>English: A checklist of seeds to plant early and pay off later (props, secrets, promises, rule loopholes, hidden truths).</div>
-                                    <div className="text-xs text-muted-foreground">
-                                        样例 / Example：
-                                        <br />1) 女主手腕旧伤 → 第6集搏斗触发失手
-                                        <br />2) 男主从不喝酒 → 结局为她破例象征和解
-                                    </div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Background / World（世界观/背景）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：写清楚“世界规则 + 时代地点 + 这个世界为什么会产生冲突”。最好包含：规则、资源、禁忌、权力结构。</div>
-                                    <div>English: Define rules, time/place, and why conflict exists. Include constraints, resources, taboos, and power structure.</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：近未来都市，记忆可交易；黑市记忆改写引发连环案与身份危机。</div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Setup (Hook / Inciting Incident)（开场/诱因）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：观众为什么要继续看？写“开场钩子 + 诱因事件 + 主角必须做选择”。</div>
-                                    <div>English: Why keep watching? Give hook + inciting incident + forced choice.</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：女主醒来发现记忆被卖掉；警方认定她是凶手，她只能追查买家。</div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Development (Escalation / Midpoint)（发展/升级）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：障碍如何升级？关系如何变化？中点给一个重大揭露或立场反转。</div>
-                                    <div>English: How do obstacles escalate and relationships change? Add a midpoint reveal or reversal.</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：发现买家是男主；他却在保护她，因为她记忆里藏着更大的真相。</div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Turning Points (Low Point / Strategy)（转折/低谷/策略）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：主角遭遇“最糟时刻”（失败/背叛/代价），然后提出最终策略：怎么赢、要牺牲什么。</div>
-                                    <div>English: The lowest point, then the final strategy—how to win and what it costs.</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：男主身份暴露被追杀；二人决定用公开直播交换证据，逼幕后现身。</div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Climax（高潮）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：终极对抗发生在哪里？关键选择是什么？代价是什么？尽量写“可拍”的动作与情绪爆点。</div>
-                                    <div>English: Where is the final confrontation, what is the key choice, and what is the cost? Keep it filmable.</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：天台对峙；女主选择公开真相毁掉自己名誉换取他人安全。</div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Resolution（结局/回收）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：冲突如何收束？关系如何落点？哪些伏笔被回收？最后留什么余味/下一季种子（可选）。</div>
-                                    <div>English: How does conflict close, what’s the relationship end-state, which seeds are paid off, and what lingering hook remains?</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：真相曝光，黑市被清剿；女主保留一段空白记忆，暗示更深阴谋未完。</div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Suspense / Cliffhanger Engine（悬念引擎）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：用一句话描述“每集结束怎么让观众点下一集”：秘密、误会、延迟危险、倒计时、身份揭露。</div>
-                                    <div>English: The mechanism that pushes viewers to the next episode: secrets, delayed danger, countdowns, reveals.</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：每集末尾解锁一段新记忆，指向下一个嫌疑人。</div>
-                                </div>
-                            </details>
-
-                            <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                <summary className="cursor-pointer text-sm text-white font-semibold">Extra Notes（额外偏好/约束）</summary>
-                                <div className="mt-2 text-xs text-white/80 space-y-2">
-                                    <div>中文：风格偏好、禁忌清单、尺度、镜头语言、叙事节奏、想要的反转类型。</div>
-                                    <div>English: Preferences and constraints: tone, taboos, rating boundaries, visual language, pacing, twist style.</div>
-                                    <div className="text-xs text-muted-foreground">样例 / Example：节奏快、每集至少一个反转；情感线克制但高张力；避免血腥描写。</div>
-                                </div>
-                            </details>
-                        </div>
-                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('导入小说 / 剧本文本', 'Import Novel / Script Text')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-32 resize-y"
-                                value={novelImportText}
-                                onChange={(e) => setNovelImportText(e.target.value)}
-                                placeholder={t('将小说/剧本文本粘贴到这里，然后点击“分析并填充”自动补全全局故事字段。', 'Paste novel/script text here, then click Analyze & Fill to auto-complete Global Story fields.')}
-                            />
-                            <div className="mt-2 flex items-center justify-end gap-2">
-                                <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} />
-                                <button
-                                    onClick={handleAnalyzeNovelToGlobalStory}
-                                    disabled={isAnalyzingNovel || isGeneratingGlobalStory}
-                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(isAnalyzingNovel || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                    title={t('用 LLM 分析导入文本并自动填充故事生成字段', 'Analyze imported text with LLM and auto-fill Story Generator fields')}
-                                >
-                                    {isAnalyzingNovel ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('AI正在为您深度拆解剧本...', 'Analyzing...')}</> : <><Upload className="w-4 h-4" /> {t('分析并填充', 'Analyze & Fill')}</>}
-                                </button>
+                        <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <div className="text-sm font-semibold text-white">{t('自动继承的项目信息', 'Inherited Project Info')}</div>
+                                    <div className="text-xs text-muted-foreground mt-1">
+                                        {t('故事生成器会自动读取项目概览里的基础信息，这里只需要补故事骨架，不需要重复输入已有项目字段。', 'The Story Generator automatically reuses Project Overview info. Only fill the story skeleton here; no need to repeat existing project fields.')}
+                                    </div>
+                                </div>
+                                {storyGeneratorMissingInfo.length > 0 ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setProjectTab('overview');
+                                            if (onTabChange) onTabChange('overview');
+                                        }}
+                                        className="px-3 py-1.5 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20"
+                                    >
+                                        {t('去项目概览补齐', 'Complete in Overview')}
+                                    </button>
+                                ) : null}
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                                {storyGeneratorInheritedInfo.map(item => (
+                                    <div key={item.label} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{item.label}</div>
+                                        <div className={item.value ? 'text-white mt-1' : 'text-muted-foreground mt-1'}>
+                                            {item.value || t('未设置，将只在缺失时自动推断', 'Not set. It will only be inferred when still missing.')}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
-
                         <div>
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('集数', 'Episodes Count')}</label>
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('载体规格 / 集数', 'Format / Episodes')}</label>
                             <input
                                 type="number"
                                 min="1"
                                 className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
                                 value={globalStoryInput.episodes_count}
                                 onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, episodes_count: e.target.value }))}
-                                placeholder={t('例如：12', 'e.g. 12')}
+                                placeholder={t('例如：20', 'e.g. 20')}
                             />
                         </div>
-                        <div>
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('伏笔 / 回收', 'Foreshadowing / Payoffs')}</label>
-                            <input
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
-                                value={globalStoryInput.foreshadowing}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, foreshadowing: e.target.value }))}
-                                placeholder={t('伏笔、揭示与回收目标', 'Seeds, reveals, payoff targets')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('背景 / 世界观', 'Background / World')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={globalStoryInput.background}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, background: e.target.value }))}
-                                placeholder={t('世界规则、时代地点、驱动冲突的背景设定', 'World rules, era, location, backstory that drives conflict')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('开场（钩子 / 诱因事件）', 'Setup (Hook / Inciting Incident)')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={globalStoryInput.setup}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, setup: e.target.value }))}
-                                placeholder={t('开场钩子、诱因事件、不可回头的选择', 'Opening hook, inciting incident, point-of-no-return decision')}
-                            />
+                        <InputGroup
+                            idPrefix={prefix}
+                            label={t('产品规格与节奏', 'Product Format')}
+                            value={globalStoryInput.script_mode}
+                            onChange={v => setGlobalStoryInput(prev => ({ ...prev, script_mode: v }))}
+                            list={[
+                                '短剧快节奏 / Short Drama',
+                                '电影 / Feature Film',
+                                '通用连续剧 / General Series'
+                            ]}
+                        />
+                        <InputGroup
+                            idPrefix={prefix}
+                            label={t('受众定位', 'Target Audience')}
+                            value={globalStoryInput.target_audience}
+                            onChange={v => setGlobalStoryInput(prev => ({ ...prev, target_audience: v }))}
+                            list={[
+                                '男频路线 / Male-Oriented',
+                                '女频路线 / Female-Oriented',
+                                '全受众 / General Audience'
+                            ]}
+                        />
+                        <div className="sm:col-span-2 text-xs text-muted-foreground mb-1">
+                            {t('大模型将根据【产品规格】严格套用不同的工业化叙事节奏与起承转合结构，并针对【受众定位】极化核心看点与张力。', 'The AI will apply distinct rhythmic and structural pacing based on the chosen Product Format and polarize constraints based on target audience.')}
                         </div>
                         <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('发展（升级 / 中点）', 'Development (Escalation / Midpoint)')}</label>
+                            <div className="flex justify-between items-end mb-1">
+                                <label className="text-xs text-muted-foreground uppercase font-bold block">{t('天马行空的想法', 'Wild Ideas & Creative Prompt')}</label>
+                                <span className="text-[11px] text-muted-foreground/70">
+                                    {t('💡 引导：把脑海中的画面、台词或怪念头倒出来，AI会帮你结构化三幕剧与人物弧光！', '💡 Hint: Pour out the scenes, dialogues, or quirky ideas in your mind, and AI will structure the 3-act beats and arcs!')}
+                                </span>
+                            </div>
                             <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={globalStoryInput.development}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, development: e.target.value }))}
-                                placeholder={t('障碍升级、信息揭示、中点反转', 'Obstacle escalation, reveals, midpoint reversal')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('转折点（低谷 / 策略）', 'Turning Points (Low Point / Strategy)')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={globalStoryInput.turning_points}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, turning_points: e.target.value }))}
-                                placeholder={t('第二次重大转折、至暗时刻、最终计划', 'Second major turn, all-is-lost, final plan')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('高潮', 'Climax')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={globalStoryInput.climax}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, climax: e.target.value }))}
-                                placeholder={t('最终对抗、关键选择、代价', 'Final confrontation, key choice, cost')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('结局回收', 'Resolution')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={globalStoryInput.resolution}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, resolution: e.target.value }))}
-                                placeholder={t('结局收束与新常态', 'Denouement, new normal')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('悬念 / 钩子引擎', 'Suspense / Cliffhanger Engine')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
-                                value={globalStoryInput.suspense}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, suspense: e.target.value }))}
-                                placeholder={t('谜团/秘密、延迟危险、结尾钩子、季级伏笔', 'Mystery/secret, delayed danger, end hooks, season seeds')}
-                            />
-                        </div>
-                        <div className="sm:col-span-2">
-                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('额外说明', 'Extra Notes')}</label>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-20 resize-none"
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-32 resize-none"
                                 value={globalStoryInput.extra_notes}
                                 onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, extra_notes: e.target.value }))}
-                                placeholder={t('风格、约束、禁忌清单、反转类型、节奏偏好', 'Tone, constraints, taboo list, twist style, pacing preference')}
+                                placeholder={t('尽情输入，例如：\n我想写一个绝症杀手替女儿复仇的故事；\n主角是个有双重人格的天才，杀人前必听贝多芬；\n开头是一场从直升机上的反杀；\n某处大结局必须有一场雨中废弃工厂的宿命对决，兄弟反目，说“我们都回不去了”...', 'E.g.:\nA dying assassin takes revenge for his daughter;\nThe protagonist is a dual-personality genius who listens to Beethoven before killing;\nThe climax must feature a fated battle in an abandoned factory with the line "We can never go back".')}
                             />
                         </div>
                     </div>
@@ -3176,8 +3026,27 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
                                 className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
                             >
-                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('生成分集剧本', 'Generate Episode Scripts')}</>}
+                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Wand2 className="w-4 h-4" /> {t('全量生成分集', 'Generate All')}</>}
                             </button>
+                            <div className="flex items-center bg-white/5 rounded-lg overflow-hidden border border-white/10">
+                                <input
+                                    type="number"
+                                    min="1"
+                                    placeholder={t('单集', 'Ep#')}
+                                    className="w-16 px-2 py-2 bg-transparent text-sm text-center outline-none text-white placeholder-white/30"
+                                    value={targetEpisodeNumberForGen}
+                                    onChange={e => setTargetEpisodeNumberForGen(e.target.value)}
+                                    disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                />
+                                <button
+                                    onClick={() => handleGenerateEpisodeScripts({ specificEpisode: targetEpisodeNumberForGen })}
+                                    disabled={!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
+                                    className={`px-3 py-2 text-sm font-bold flex items-center bg-white/10 hover:bg-white/20 transition-colors ${(!targetEpisodeNumberForGen || episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'opacity-50 cursor-not-allowed' : 'text-blue-300'}`}
+                                    title={t('仅生成填写的单个集数', 'Generate only the specified episode number')}
+                                >
+                                    {t('单集生成', 'Gen Single')}
+                                </button>
+                            </div>
                         </div>
                     </div>
 

@@ -134,7 +134,21 @@ const AdvancedAnalysisResult = () => {
 
         setImporting(true);
         try {
-            await updateEpisode(episodeId, { script_content: resultText || '' });
+            const payload = { script_content: resultText || '' };
+            if (resultText) {
+                for (const line of resultText.split('\\n')) {
+                    const tline = line.trim();
+                    if (tline.startsWith('#')) {
+                        let t = tline.replace(/^#+\\s*/, '').trim();
+                        let t2 = t.replace(/^(?:(?:第\\s*\\d+\\s*[集章部分]|Episode\\s*\\d+|[Ee]p[.\\s]*\\d+|\\d+)\\s*[-:：\\s]*)+/i, '').trim();
+                        if (t2 || t) {
+                            payload.title = t2 || t;
+                        }
+                        break;
+                    }
+                }
+            }
+            await updateEpisode(episodeId, payload);
             alert(t('已导入到分集脚本。', 'Imported into episode script.'));
             navigate(`/editor/${projectId}`);
         } catch (e) {

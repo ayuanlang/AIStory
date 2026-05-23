@@ -33,6 +33,7 @@ import {
 } from '../services/api';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import Editor from './Editor';
+import InputGroup from './editor/components/InputGroup';
 import SettingsPage from './Settings';
 import AssetsLibrary from '../components/AssetsLibrary';
 import { 
@@ -1995,18 +1996,10 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('类型', 'Type')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newType} onChange={(e) => setNewType(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.type.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <InputGroup label={t("类型", "Type")} value={newType} onChange={setNewType} list={projectCreateOptions.type} />
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('国家地域', 'Country/Region')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newCountryRegion} onChange={(e) => setNewCountryRegion(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.country_region.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <InputGroup label={t("国家地域", "Country/Region")} value={newCountryRegion} onChange={setNewCountryRegion} list={projectCreateOptions.country_region} />
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('预期时长(秒)', 'Expected Duration (s)')}</label>
@@ -2020,54 +2013,26 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 />
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('语言', 'Language')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newLanguage} onChange={(e) => setNewLanguage(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.language.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <InputGroup label={t("语言", "Language")} value={newLanguage} onChange={setNewLanguage} list={projectCreateOptions.language} />
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('基础定位', 'Base Positioning')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newBasePositioning} onChange={(e) => setNewBasePositioning(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.base_positioning.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <InputGroup label={t("基础定位", "Base Positioning")} value={newBasePositioning} onChange={setNewBasePositioning} list={projectCreateOptions.base_positioning} />
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('画幅比例', 'Aspect Ratio')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newAspectRatio} onChange={(e) => setNewAspectRatio(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.aspect_ratio.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <InputGroup label={t("画幅比例", "Aspect Ratio")} value={newAspectRatio} onChange={setNewAspectRatio} list={projectCreateOptions.aspect_ratio || PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS} />
                                             </div>
                                             
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('时代设定', 'Era')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newEra} onChange={(e) => setNewEra(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.era.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <InputGroup label={t("时代设定", "Era")} value={newEra} onChange={setNewEra} list={projectCreateOptions.era} />
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('镜头偏好', 'Lens Preference')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newLensPreference} onChange={(e) => setNewLensPreference(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.lens_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <InputGroup label={t("镜头偏好", "Lens Preference")} value={newLensPreference} onChange={setNewLensPreference} list={projectCreateOptions.lens_preference} />
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('播出安全等级', 'Broadcast Safety Level')}</label>
-                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newBroadcastSafetyLevel} onChange={(e) => setNewBroadcastSafetyLevel(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.broadcast_safety_level.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                <InputGroup label={t("播出安全等级", "Broadcast Safety Level")} value={newBroadcastSafetyLevel} onChange={setNewBroadcastSafetyLevel} list={projectCreateOptions.broadcast_safety_level} />
                                             </div>
                                                             <div>
-                                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('创作力', 'Creativity')}</label>
-                                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newCreativity} onChange={(e) => setNewCreativity(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.creativity.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                                <InputGroup label={t("创作力", "Creativity")} value={newCreativity} onChange={setNewCreativity} list={projectCreateOptions.creativity} />
                                                             </div>
                                             
                                         </div>
@@ -2180,19 +2145,11 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                     <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
                                                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
                                                             <div>
-                                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('图像尺寸', 'Image Size')}</label>
-                                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newImageSize} onChange={(e) => setNewImageSize(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.image_size.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                                <InputGroup label={t("图像尺寸", "Image Size")} value={newImageSize} onChange={setNewImageSize} list={projectCreateOptions.image_size || PROJECT_CREATE_FALLBACK_IMAGE_SIZE_OPTIONS} />
                                                             </div>
 
                                                             <div>
-                                                                <label className="block text-xs font-semibold tracking-wide mb-1 text-primary/95">{t('视频生成偏好', 'Video Gen Preference')}</label>
-                                                                <select className="w-full px-3 py-2.5 bg-background border rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none" value={newVideoGenerationPreference} onChange={(e) => setNewVideoGenerationPreference(e.target.value)}>
-                                                    <option value="" disabled hidden>{t("请选择...", "Select...")}</option>
-                                                    {projectCreateOptions.video_generation_preference.map((opt) => <option key={opt} value={opt}>{opt.includes('/') ? t(opt.split('/')[0].trim(), opt.split('/')[1]?.trim() || opt.split('/')[0].trim()) : opt}</option>)}
-                                                </select>
+                                                                <InputGroup label={t("视频生成偏好", "Video Gen Preference")} value={newVideoGenerationPreference} onChange={setNewVideoGenerationPreference} list={projectCreateOptions.video_generation_preference} />
                                                             </div>
                                                         </div>
                                                     </motion.div>

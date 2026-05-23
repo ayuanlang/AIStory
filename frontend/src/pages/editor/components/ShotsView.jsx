@@ -150,9 +150,9 @@ import {
 } from '../projectOptionConfig';
 
 const MULTI_PANEL_PRESET_OPTIONS = [
-    { key: '4panel', filename: 'multi_panel_image_preset_4panel.txt', labelZh: '四画格', labelEn: '4-Panel' },
-    { key: '6panel', filename: 'multi_panel_image_preset_6panel.txt', labelZh: '六画格', labelEn: '6-Panel' },
-    { key: '9panel', filename: 'multi_panel_image_preset_9panel.txt', labelZh: '九画格', labelEn: '9-Panel' },
+    { key: '4panel', filename: 'multi_panel_image_preset_4panel.txt', labelZh: '四画格', labelEn: '4-Panel', columns: 2, rows: 2 },
+    { key: '6panel', filename: 'multi_panel_image_preset_6panel.txt', labelZh: '六画格', labelEn: '6-Panel', columns: 3, rows: 2 },
+    { key: '9panel', filename: 'multi_panel_image_preset_9panel.txt', labelZh: '九画格', labelEn: '9-Panel', columns: 3, rows: 3 },
 ];
 
 const MULTI_PANEL_PRESET_FALLBACKS = {
@@ -3015,7 +3015,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             const updatedShot = await updateShot(shotId, payload);
             const nextShot = (updatedShot && typeof updatedShot === 'object')
-                ? updatedShot
+                ? { ...(currentShot || editingBase || {}), ...updatedShot, ...changes }
                 : { ...(currentShot || editingBase || {}), ...changes };
             setShots(prev => prev.map((s) => (String(s?.id || '').trim() === stableShotId ? { ...s, ...nextShot } : s)));
 
@@ -3295,6 +3295,85 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             canvas.toBlob((blob) => {
                 if (!blob) {
                     reject(new Error('failed to encode split image'));
+                    return;
+                }
+                resolve(blob);
+            }, 'image/jpeg', 0.94);
+        });
+    }, []);
+
+    const cropGeneratedGridPanelToBlob = useCallback(async ({
+        image,
+        columns,
+        rows,
+        panelIndex,
+        targetAspectRatio,
+        exportSize,
+    }) => {
+        const sourceWidth = Number(image?.naturalWidth || image?.width || 0);
+        const sourceHeight = Number(image?.naturalHeight || image?.height || 0);
+        const targetRatio = parseAspectRatioValue(targetAspectRatio);
+
+        if (!sourceWidth || !sourceHeight || !targetRatio || !columns || !rows) {
+            throw new Error('invalid generated image dimensions for grid split crop');
+        }
+
+        const safeColumns = Math.max(1, Number(columns));
+        const safeRows = Math.max(1, Number(rows));
+        const safeIndex = Math.max(0, Math.min((safeColumns * safeRows) - 1, Number(panelIndex) || 0));
+        const rowIndex = safeIndex % safeRows;
+        const columnIndex = Math.floor(safeIndex / safeRows);
+        const cellWidth = sourceWidth / safeColumns;
+        const cellHeight = sourceHeight / safeRows;
+        const trimX = Math.min(12, Math.max(0, Math.round(cellWidth * 0.01)));
+        const trimY = Math.min(12, Math.max(0, Math.round(cellHeight * 0.01)));
+
+        const panelX = (columnIndex * cellWidth) + trimX;
+        const panelY = (rowIndex * cellHeight) + trimY;
+        const panelWidth = Math.max(1, cellWidth - (trimX * 2));
+        const panelHeight = Math.max(1, cellHeight - (trimY * 2));
+        const panelRatio = panelWidth / panelHeight;
+
+        let cropWidth = panelWidth;
+        let cropHeight = panelHeight;
+        let cropX = panelX;
+        let cropY = panelY;
+
+        if (panelRatio > targetRatio) {
+            cropWidth = panelHeight * targetRatio;
+            cropX = panelX + ((panelWidth - cropWidth) / 2);
+        } else if (panelRatio < targetRatio) {
+            cropHeight = panelWidth / targetRatio;
+            cropY = panelY + ((panelHeight - cropHeight) / 2);
+        }
+
+        const outputWidth = Number(exportSize?.width) > 0 ? Number(exportSize.width) : Math.max(1, Math.round(cropWidth));
+        const outputHeight = Number(exportSize?.height) > 0 ? Number(exportSize.height) : Math.max(1, Math.round(cropHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = outputWidth;
+        canvas.height = outputHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            throw new Error('canvas context unavailable during grid split crop');
+        }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(
+            image,
+            cropX,
+            cropY,
+            cropWidth,
+            cropHeight,
+            0,
+            0,
+            outputWidth,
+            outputHeight,
+        );
+
+        return new Promise((resolve, reject) => {
+            canvas.toBlob((blob) => {
+                if (!blob) {
+                    reject(new Error('failed to encode grid split image'));
                     return;
                 }
                 resolve(blob);
@@ -5791,6 +5870,117 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
          // Or rely on the fact that we are editing 'localKeyframes' state for text, and only syncing on Blur?
     };
 
+    const applyMultiPanelImageResult = useCallback(async ({ shotRecord, compositeUrl, presetKey, basePrompt = '', promptLanguage = 'cn' }) => {
+        const stableShot = shotRecord || editingShot || null;
+        const targetShotId = String(stableShot?.id || '').trim();
+        const stableCompositeUrl = String(compositeUrl || '').trim();
+        const presetOption = getMultiPanelPresetOption(presetKey);
+        const panelCount = Math.max(1, Number(presetOption?.columns || 1) * Number(presetOption?.rows || 1));
+        if (!targetShotId || !stableCompositeUrl) {
+            throw new Error('Missing shot context for multi-panel split');
+        }
+
+        const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
+        const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
+        const exportSize = resolveShotPanelExportResolution(preferredAspectRatio, preferredImageSize);
+        const directUrl = getFullUrl(stableCompositeUrl);
+        const isLocalOrigin = directUrl.startsWith(window.location.origin) || directUrl.startsWith('blob:') || directUrl.startsWith('data:');
+        const fetchUrl = isLocalOrigin
+            ? directUrl
+            : `${API_URL}/assets/proxy?url=${encodeURIComponent(directUrl)}`;
+
+        const compositeResp = await fetch(fetchUrl);
+        if (!compositeResp.ok) {
+            throw new Error(`Failed to download multi-panel image (${compositeResp.status})`);
+        }
+
+        const compositeBlob = await compositeResp.blob();
+        const compositeImage = await loadImageElementFromBlob(compositeBlob);
+        const durationValue = Number(stableShot?.duration || 0);
+        const effectiveDuration = Number.isFinite(durationValue) && durationValue > 0 ? durationValue : panelCount;
+        const autoPromptBase = String(basePrompt || '').trim() || (promptLanguage === 'en' ? 'Keyframe split from multi-panel preset' : '从多画格预设自动拆分的关键帧');
+        const nextList = [];
+        const nextCnMap = {};
+
+        for (let index = 0; index < panelCount; index += 1) {
+            const blob = await cropGeneratedGridPanelToBlob({
+                image: compositeImage,
+                columns: presetOption.columns,
+                rows: presetOption.rows,
+                panelIndex: index,
+                targetAspectRatio: preferredAspectRatio,
+                exportSize,
+            });
+
+            const inferredTime = `${Math.max(0.1, Number((((index + 1) * effectiveDuration) / (panelCount + 1)).toFixed(1)))}s`;
+            const timeKey = inferredTime;
+            const autoPrompt = `${autoPromptBase} #${index + 1}`;
+            const uploadIdempotencyKey = buildShotFrameAssetUploadIdempotencyKey({
+                operation: 'multi_panel_split',
+                shotId: targetShotId,
+                frameRole: `keyframe_${timeKey}`,
+                sourceUrl: stableCompositeUrl,
+            });
+
+            const uploaded = await uploadAsset(
+                new File([blob], `shot_${targetShotId}_keyframe_${index + 1}_${Date.now()}.jpg`, { type: 'image/jpeg' }),
+                {
+                    project_id: projectId,
+                    episode_id: activeEpisode?.id,
+                    shot_id: targetShotId,
+                    shot_number: `${stableShot?.shot_id}_KF_${timeKey}`,
+                    shot_name: stableShot?.shot_name,
+                    asset_type: 'keyframe',
+                    source_asset_url: stableCompositeUrl,
+                    idempotency_key: uploadIdempotencyKey,
+                    remark: `Multi-panel split keyframe ${index + 1}`,
+                }
+            );
+
+            const uploadedUrl = String(uploaded?.url || '').trim();
+            if (!uploadedUrl) {
+                throw new Error(`Failed to upload split keyframe ${index + 1}`);
+            }
+
+            nextList.push({
+                id: Date.now() + index,
+                time: timeKey,
+                prompt: autoPrompt,
+                url: uploadedUrl,
+            });
+
+            if (promptLanguage === 'cn' && !nextCnMap[timeKey]) {
+                nextCnMap[timeKey] = autoPrompt;
+            }
+        }
+
+        try {
+            await Promise.all(nextList.map((item) => new Promise((resolve) => {
+                if (!item?.url) {
+                    resolve();
+                    return;
+                }
+                const img = new Image();
+                img.onload = () => {
+                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(item.url);
+                    resolve();
+                };
+                img.onerror = resolve;
+                img.src = getFullUrl(item.url);
+            })));
+        } catch (_) {}
+
+        setLocalKeyframes(nextList);
+        await reconstructKeyframes(nextList, {
+            multi_panel_image_url: stableCompositeUrl,
+            multi_panel_image_preset: normalizeMultiPanelPresetKey(presetKey),
+            multi_panel_last_split_source_url: stableCompositeUrl,
+            keyframe_prompt_cn_map: nextCnMap,
+        });
+        refreshShotAssetsMeta();
+        return nextList;
+    }, [activeEpisode?.episode_info, cropGeneratedGridPanelToBlob, editingShot, loadImageElementFromBlob, localKeyframes, project?.global_info, projectId, reconstructKeyframes, refreshShotAssetsMeta]);
+
     const generateAssetWithLang = async (assetType, keyframeIndex = -1, options = {}) => {
         if (!editingShot) return;
         const shotState = generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false };
@@ -6484,6 +6674,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [multiPanelPresetKey, setMultiPanelPresetKey] = useState('4panel');
     const [multiPanelPresetInstruction, setMultiPanelPresetInstruction] = useState(() => getMultiPanelPresetFallbackInstruction('4panel', 'cn'));
     const [isGeneratingMultiPanelImage, setIsGeneratingMultiPanelImage] = useState(false);
+    const [isResplittingMultiPanelImage, setIsResplittingMultiPanelImage] = useState(false);
 
     useEffect(() => {
         if (!editingShot) return;
@@ -6575,13 +6766,54 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const nextStr = JSON.stringify(techNotes);
                 await onUpdateShot(targetShotId, { technical_notes: nextStr });
                 setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, technical_notes: nextStr } : prev));
-                showNotification(t('多画格图生成成功', 'Multi-panel image generated successfully'), 'success');
+                await applyMultiPanelImageResult({
+                    shotRecord: shotSnapshot,
+                    compositeUrl: finalUrl,
+                    presetKey: activePresetKey,
+                    basePrompt: rawVideoPrompt,
+                    promptLanguage: resolvedPromptSubmitLang,
+                });
+                showNotification(t('多画格图已自动裁剪并填入关键帧', 'Multi-panel image was auto-split and filled into keyframes'), 'success');
             }
         } catch (e) {
              onLog?.(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
              showNotification(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
         } finally {
             setIsGeneratingMultiPanelImage(false);
+        }
+    };
+
+    const handleResplitMultiPanelImage = async () => {
+        if (!editingShot || isResplittingMultiPanelImage) return;
+        const shotSnapshot = editingShot;
+        const techNotes = getEditingShotTech() || {};
+        const compositeUrl = String(techNotes.multi_panel_image_url || techNotes.storyboard_url || '').trim();
+        if (!compositeUrl) {
+            showNotification(t('当前没有可重新拆分的多画格图', 'No multi-panel image is available to re-split'), 'warning');
+            return;
+        }
+
+        const cnVideoPrompt = String(techNotes.video_prompt_cn || '').trim();
+        const rawVideoPrompt = (resolvedPromptSubmitLang === 'cn'
+            ? (cnVideoPrompt || getShotVideoPromptEn(shotSnapshot) || 'Video motion')
+            : (getShotVideoPromptEn(shotSnapshot) || cnVideoPrompt || 'Video motion'));
+
+        setIsResplittingMultiPanelImage(true);
+        onLog?.('Re-splitting multi-panel image into keyframes...', 'info');
+        try {
+            await applyMultiPanelImageResult({
+                shotRecord: shotSnapshot,
+                compositeUrl,
+                presetKey: techNotes.multi_panel_image_preset || multiPanelPresetKey,
+                basePrompt: rawVideoPrompt,
+                promptLanguage: resolvedPromptSubmitLang,
+            });
+            showNotification(t('已重新拆分并回填关键帧', 'Keyframes were re-split and refilled'), 'success');
+        } catch (error) {
+            onLog?.(`${t('重新拆分失败', 'Re-split failed')}: ${error?.message || 'unknown error'}`, 'error');
+            showNotification(`${t('重新拆分失败', 'Re-split failed')}: ${error?.message || 'unknown error'}`, 'error');
+        } finally {
+            setIsResplittingMultiPanelImage(false);
         }
     };
 
@@ -8262,7 +8494,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
                                 />
                             </div>
-                            
+
                             {/* 1. Workflow / Media Assets */}
                             <div className="space-y-6">
                                 
@@ -8890,33 +9122,123 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                 {/* Keyframes Section (Enhanced) */}
                                 <div className="space-y-4 border-t border-white/10 pt-4">
-                                     <div className="flex justify-between items-center">
-                                        <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
-                                            {t('关键帧（时间线）', 'Keyframes (Timeline)')}
-                                            <span className="bg-white/10 text-white px-1.5 rounded-full text-[9px]">
-                                                {localKeyframes.length}
-                                            </span>
-                                        </div>
-                                        <button 
-                                            onClick={() => {
-                                                const newTime = `${(localKeyframes.length + 1) * 1.0}s`;
-                                                const newKf = { 
-                                                    id: Date.now(), 
-                                                    time: newTime, 
-                                                    prompt: "[Global Style] ...", 
-                                                    url: "" 
-                                                };
-                                                const newList = [...localKeyframes, newKf];
-                                                setLocalKeyframes(newList);
-                                                // Trigger save logic? Maybe wait for edit?
-                                                // auto-save structure
-                                                // reconstructKeyframes(newList); // Optional, maybe let user edit first
-                                            }}
-                                            className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded flex items-center gap-1"
-                                        >
-                                            <Plus className="w-3 h-3"/> {t('新增关键帧', 'Add Keyframe')}
-                                        </button>
-                                    </div>
+                                    {(() => {
+                                        let tech = {};
+                                        try {
+                                            tech = JSON.parse(editingShot.technical_notes || '{}');
+                                        } catch (e) {}
+                                        const multiPanelUrl = String(tech.multi_panel_image_url || tech.storyboard_url || '').trim();
+                                        const currentPresetOption = getMultiPanelPresetOption(tech.multi_panel_image_preset || multiPanelPresetKey);
+
+                                        return (
+                                            <>
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div>
+                                                        <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                                            {t('关键帧（时间线）', 'Keyframes (Timeline)')}
+                                                            <span className="bg-white/10 text-white px-1.5 rounded-full text-[9px]">
+                                                                {localKeyframes.length}
+                                                            </span>
+                                                        </div>
+                                                        <div className="text-xs text-muted-foreground mt-1">{t('多画格图会自动拆分并直接回填到关键帧。', 'Multi-panel images are automatically split and filled back into keyframes.')}</div>
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <select
+                                                            value={multiPanelPresetKey}
+                                                            onChange={async (e) => {
+                                                                const nextPresetKey = normalizeMultiPanelPresetKey(e.target.value);
+                                                                setMultiPanelPresetKey(nextPresetKey);
+                                                                const nextTech = { ...tech, multi_panel_image_preset: nextPresetKey };
+                                                                const nextTechNotes = JSON.stringify(nextTech);
+                                                                setEditingShot((prev) => ({ ...(prev || {}), technical_notes: nextTechNotes }));
+                                                                try {
+                                                                    await onUpdateShot(editingShot.id, { technical_notes: nextTechNotes });
+                                                                } catch (error) {
+                                                                    onLog?.(`${t('保存多画格预设失败', 'Failed to save multi-panel preset')}: ${error?.message || 'unknown error'}`, 'error');
+                                                                }
+                                                            }}
+                                                            className="h-9 rounded border border-white/10 bg-black/30 px-3 text-sm text-white"
+                                                            title={t('选择多画格预设', 'Choose multi-panel preset')}
+                                                        >
+                                                            {MULTI_PANEL_PRESET_OPTIONS.map((option) => (
+                                                                <option key={option.key} value={option.key}>
+                                                                    {t(option.labelZh, option.labelEn)}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleGenerateMultiPanelImage()}
+                                                            disabled={isGeneratingMultiPanelImage}
+                                                            title={t('按当前视频提示词生成并自动拆分到关键帧', 'Generate from the current video prompt and auto-split into keyframes')}
+                                                            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isGeneratingMultiPanelImage ? 'bg-white/10 text-white/40 cursor-wait' : 'bg-white/10 text-white/80 hover:bg-white/20'}`}
+                                                        >
+                                                            {isGeneratingMultiPanelImage ? t('生成中...', 'Generating...') : t('生成并拆分', 'Generate + Split')}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleResplitMultiPanelImage()}
+                                                            disabled={!multiPanelUrl || isResplittingMultiPanelImage}
+                                                            title={t('基于当前多画格图重新切分并重建关键帧', 'Re-split the current multi-panel image and rebuild keyframes')}
+                                                            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${(!multiPanelUrl || isResplittingMultiPanelImage) ? 'bg-amber-500/10 text-amber-300/50 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                                        >
+                                                            {isResplittingMultiPanelImage ? t('重新拆分中...', 'Re-splitting...') : t('重新拆分', 'Re-split')}
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => {
+                                                                const newTime = `${(localKeyframes.length + 1) * 1.0}s`;
+                                                                const newKf = { 
+                                                                    id: Date.now(), 
+                                                                    time: newTime, 
+                                                                    prompt: "[Global Style] ...", 
+                                                                    url: "" 
+                                                                };
+                                                                const newList = [...localKeyframes, newKf];
+                                                                setLocalKeyframes(newList);
+                                                            }}
+                                                            className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded flex items-center gap-1"
+                                                        >
+                                                            <Plus className="w-3 h-3"/> {t('新增关键帧', 'Add Keyframe')}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                {multiPanelUrl ? (
+                                                    <div className="rounded-lg border border-white/10 bg-black/15 px-3 py-2">
+                                                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                                                            <div className="flex items-center gap-2 min-w-0">
+                                                                <Layers className="w-3.5 h-3.5 text-amber-200 shrink-0" />
+                                                                <span className="text-muted-foreground uppercase font-bold shrink-0">{t(`${currentPresetOption.labelZh}预设图`, `${currentPresetOption.labelEn} Preset Image`)}</span>
+                                                                <span className="text-white/60 truncate">{t('已作为关键帧拆分来源', 'Used as the split source for keyframes')}</span>
+                                                            </div>
+                                                            <div className="flex flex-wrap gap-2">
+                                                                <button type="button" onClick={() => window.open(getFullUrl(multiPanelUrl), '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10">
+                                                                    <LinkIcon size={12} />
+                                                                    {t('查看原图', 'View Source')}
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={async () => {
+                                                                        const nextTech = { ...tech };
+                                                                        delete nextTech.multi_panel_image_url;
+                                                                        delete nextTech.multi_panel_image_preset;
+                                                                        delete nextTech.multi_panel_last_split_source_url;
+                                                                        delete nextTech.storyboard_url;
+                                                                        const nextStr = JSON.stringify(nextTech);
+                                                                        setEditingShot(prev => ({ ...(prev || {}), technical_notes: nextStr }));
+                                                                        await onUpdateShot(editingShot.id, { technical_notes: nextStr });
+                                                                    }}
+                                                                    className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20"
+                                                                >
+                                                                    <Trash2 size={12} />
+                                                                    {t('删除原图记录', 'Delete Source Record')}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+                                            </>
+                                        );
+                                    })()}
                                     
                                     <div className="flex gap-4 overflow-x-auto pb-4 min-h-[160px] snap-x">
                                         {localKeyframes.length === 0 && (
@@ -9934,30 +10256,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <pre className="mt-1 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(voicePlanMeta, null, 2)}</pre>
                                                                     </div>
                                                                 )}
-                                                                {(tech.multi_panel_image_url || tech.storyboard_url) && (
-                                                                    <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3 mt-2">
-                                                                        <div className="text-[11px] text-muted-foreground uppercase font-bold">{t(`${currentMultiPanelPresetOption.labelZh}预设图`, `${currentMultiPanelPresetOption.labelEn} Preset Image`)}</div>
-                                                                        <SafeImage src={tech.multi_panel_image_url || tech.storyboard_url} className="w-full rounded" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} />
-                                                                        <div className="flex flex-wrap gap-2 mt-2">
-                                                                            <button type="button" onClick={() => window.open(getFullUrl(tech.multi_panel_image_url || tech.storyboard_url), '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10">
-                                                                                <LinkIcon size={12} />
-                                                                                {t('查看', 'View')}
-                                                                            </button>
-                                                                            <button type="button" onClick={async () => {
-                                                                                const nextTech = { ...tech };
-                                                                                delete nextTech.multi_panel_image_url;
-                                                                                delete nextTech.multi_panel_image_preset;
-                                                                                delete nextTech.storyboard_url;
-                                                                                const nextStr = JSON.stringify(nextTech);
-                                                                                setEditingShot(prev => ({ ...(prev || {}), technical_notes: nextStr }));
-                                                                                await onUpdateShot(editingShot.id, { technical_notes: nextStr });
-                                                                            }} className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20">
-                                                                                <Trash2 size={12} />
-                                                                                {t('删除', 'Delete')}
-                                                                            </button>
-                                                                        </div>
-                                                                    </div>
-                                                                )}
                                                                 {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3">
@@ -9991,38 +10289,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'primary',
                                                                     })}
                                                                     {renderPromptLangMenu('video')}
-                                                                    <select
-                                                                        value={multiPanelPresetKey}
-                                                                            onChange={async (e) => {
-                                                                                const nextPresetKey = normalizeMultiPanelPresetKey(e.target.value);
-                                                                                setMultiPanelPresetKey(nextPresetKey);
-                                                                                const nextTech = { ...tech, multi_panel_image_preset: nextPresetKey };
-                                                                                const nextTechNotes = JSON.stringify(nextTech);
-                                                                                setEditingShot((prev) => ({ ...(prev || {}), technical_notes: nextTechNotes }));
-                                                                                try {
-                                                                                    await onUpdateShot(editingShot.id, { technical_notes: nextTechNotes });
-                                                                                } catch (error) {
-                                                                                    onLog?.(`${t('保存多画格预设失败', 'Failed to save multi-panel preset')}: ${error?.message || 'unknown error'}`, 'error');
-                                                                                }
-                                                                            }}
-                                                                        className="h-9 rounded border border-white/10 bg-black/30 px-3 text-sm text-white"
-                                                                        title={t('选择多画格预设', 'Choose multi-panel preset')}
-                                                                    >
-                                                                        {MULTI_PANEL_PRESET_OPTIONS.map((option) => (
-                                                                            <option key={option.key} value={option.key}>
-                                                                                {t(option.labelZh, option.labelEn)}
-                                                                            </option>
-                                                                        ))}
-                                                                    </select>
-                                                                    {renderDetailActionButton({
-                                                                        label: t('生成多画格图', 'Generate Panel Preset'),
-                                                                        busyLabel: t('生成中...', 'Generating...'),
-                                                                        onClick: () => handleGenerateMultiPanelImage(),
-                                                                        disabled: isGeneratingMultiPanelImage,
-                                                                        busy: isGeneratingMultiPanelImage,
-                                                                        variant: 'secondary',
-                                                                        title: t('按当前视频提示词生成所选多画格预设图', 'Generate the selected multi-panel preset image from the current video prompt'),
-                                                                    })}
                                                                     {renderDetailActionButton({
                                                                         label: t('强制停止', 'Force Stop'),
                                                                         busyLabel: t('停止中...', 'Stopping...'),

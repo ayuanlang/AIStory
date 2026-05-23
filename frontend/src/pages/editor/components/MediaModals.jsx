@@ -575,7 +575,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     useEffect(() => {
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
-             setShowHistoricalProjectAssets(false);
+             setShowHistoricalProjectAssets(true);
              setEpisodeFilter('all');
              setAssetTypeFilter('all');
              setSecondaryFilterKind('all');
