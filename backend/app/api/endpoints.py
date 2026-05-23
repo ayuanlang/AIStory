@@ -18825,6 +18825,96 @@ def _sync_asset_denormalized_fields(asset: Optional[Asset]) -> Optional[Asset]:
     return asset
 
 
+def _infer_legacy_shot_asset_meta(
+    db: Session,
+    asset: Optional[Asset],
+    meta: Optional[Dict[str, Any]] = None,
+    *,
+    shot_cache: Optional[Dict[int, Optional[Shot]]] = None,
+    scene_cache: Optional[Dict[int, Optional[Scene]]] = None,
+    episode_cache: Optional[Dict[int, Optional[Episode]]] = None,
+) -> Dict[str, Any]:
+    if asset is None:
+        return _asset_meta_dict(meta)
+
+    stable_meta = _asset_meta_dict(meta if meta is not None else getattr(asset, "meta_info", None))
+    has_core_scope = bool(
+        _asset_optional_int(stable_meta.get("project_id") or getattr(asset, "project_id", None))
+        and _asset_optional_int(stable_meta.get("episode_id") or getattr(asset, "episode_id", None))
+        and _asset_optional_int(stable_meta.get("shot_id"))
+        and str(stable_meta.get("asset_type") or stable_meta.get("frame_type") or "").strip()
+    )
+    if has_core_scope:
+        return stable_meta
+
+    filename = str(getattr(asset, "filename", None) or "").strip()
+    if not filename:
+        return stable_meta
+
+    inferred_asset_type = ""
+    shot_match = re.search(r"^shot_(\d+)_keyframe_", filename, re.IGNORECASE)
+    if shot_match:
+        inferred_asset_type = "keyframe"
+    else:
+        shot_match = re.search(r"^shot_(\d+)_video_last_frame_", filename, re.IGNORECASE)
+        if shot_match:
+            inferred_asset_type = "end_frame"
+
+    if not shot_match:
+        return stable_meta
+
+    shot_id_int = _asset_optional_int(shot_match.group(1))
+    if not shot_id_int:
+        return stable_meta
+
+    local_shot_cache = shot_cache if shot_cache is not None else {}
+    local_scene_cache = scene_cache if scene_cache is not None else {}
+    local_episode_cache = episode_cache if episode_cache is not None else {}
+
+    shot = local_shot_cache.get(shot_id_int)
+    if shot_id_int not in local_shot_cache:
+        shot = db.query(Shot).filter(Shot.id == shot_id_int).first()
+        local_shot_cache[shot_id_int] = shot
+    if not shot:
+        return stable_meta
+
+    scene_id_int = _asset_optional_int(getattr(shot, "scene_id", None))
+    scene = local_scene_cache.get(scene_id_int or 0)
+    if scene_id_int and scene_id_int not in local_scene_cache:
+        scene = db.query(Scene).filter(Scene.id == scene_id_int).first()
+        local_scene_cache[scene_id_int] = scene
+
+    episode_id_int = _asset_optional_int(getattr(scene, "episode_id", None) if scene else None)
+    episode = local_episode_cache.get(episode_id_int or 0)
+    if episode_id_int and episode_id_int not in local_episode_cache:
+        episode = db.query(Episode).filter(Episode.id == episode_id_int).first()
+        local_episode_cache[episode_id_int] = episode
+
+    next_meta = dict(stable_meta)
+    next_meta.setdefault("shot_id", shot_id_int)
+    if getattr(shot, "shot_id", None):
+        next_meta.setdefault("shot_number", getattr(shot, "shot_id", None))
+    if getattr(shot, "shot_name", None):
+        next_meta.setdefault("shot_name", getattr(shot, "shot_name", None))
+    if inferred_asset_type:
+        next_meta.setdefault("asset_type", inferred_asset_type)
+        next_meta.setdefault("frame_type", inferred_asset_type)
+    if episode_id_int:
+        next_meta.setdefault("episode_id", episode_id_int)
+    project_id_int = _asset_optional_int(getattr(episode, "project_id", None) if episode else None)
+    if project_id_int:
+        next_meta.setdefault("project_id", project_id_int)
+
+    if next_meta != stable_meta:
+        asset.meta_info = next_meta
+        if project_id_int:
+            asset.project_id = project_id_int
+        if episode_id_int:
+            asset.episode_id = episode_id_int
+
+    return next_meta
+
+
 def _resolve_effective_current_project_asset_ids(db: Session, assets: List[Asset]) -> Set[int]:
     if not assets:
         return set()
@@ -19257,6 +19347,9 @@ def get_assets(
     }
     filter_reason_stats: Dict[str, int] = {}
     episode_reject_samples: List[Dict[str, Any]] = []
+    asset_shot_cache: Dict[int, Optional[Shot]] = {}
+    asset_scene_cache: Dict[int, Optional[Scene]] = {}
+    asset_episode_cache: Dict[int, Optional[Episode]] = {}
 
     def _normalize_filter_text(value: Any) -> str:
         raw = str(value or '').strip()
@@ -19364,7 +19457,14 @@ def get_assets(
 
         for asset_row in batch:
             filter_stats["scanned"] += 1
-            meta = _asset_meta_dict(asset_row.meta_info)
+            meta = _infer_legacy_shot_asset_meta(
+                db,
+                asset_row,
+                _asset_meta_dict(asset_row.meta_info),
+                shot_cache=asset_shot_cache,
+                scene_cache=asset_scene_cache,
+                episode_cache=asset_episode_cache,
+            )
             _sync_asset_denormalized_fields(asset_row)
             if not _is_asset_accessible(asset_row, meta):
                 filter_stats["inaccessible"] += 1
@@ -19425,7 +19525,14 @@ def get_assets(
 
     for a in filtered_assets:
         # Ensure meta is a dict
-        meta = _asset_meta_dict(a.meta_info)
+        meta = _infer_legacy_shot_asset_meta(
+            db,
+            a,
+            _asset_meta_dict(a.meta_info),
+            shot_cache=asset_shot_cache,
+            scene_cache=asset_scene_cache,
+            episode_cache=asset_episode_cache,
+        )
             
         p_id = meta.get('project_id')
         if p_id: 
@@ -19576,17 +19683,17 @@ def create_asset_url(
 @router.post("/assets/upload", response_model=dict)
 def upload_asset(
     file: UploadFile = File(...),
-    type: str = "image", # image or video
-    remark: Optional[str] = None,
-    project_id: Optional[str] = None,
-    episode_id: Optional[str] = None,
-    entity_id: Optional[str] = None,
-    shot_id: Optional[str] = None,
-    shot_number: Optional[str] = None,
-    shot_name: Optional[str] = None,
-    asset_type: Optional[str] = None,
-    source_asset_url: Optional[str] = None,
-    idempotency_key: Optional[str] = None,
+    type: str = Form("image"), # image or video
+    remark: Optional[str] = Form(None),
+    project_id: Optional[str] = Form(None),
+    episode_id: Optional[str] = Form(None),
+    entity_id: Optional[str] = Form(None),
+    shot_id: Optional[str] = Form(None),
+    shot_number: Optional[str] = Form(None),
+    shot_name: Optional[str] = Form(None),
+    asset_type: Optional[str] = Form(None),
+    source_asset_url: Optional[str] = Form(None),
+    idempotency_key: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
