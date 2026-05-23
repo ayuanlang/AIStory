@@ -3849,7 +3849,7 @@ _PROMPT_SKILL_ALIAS = {
     "shot_generator.txt": "skills/shot_generation.md",
     "shot_regenerate.txt": "shot_regenerate.txt",
     "promo_generator_global.txt": "skill:promo_generation/promo_generator_global.txt",
-    "promo_generator_episode_script.txt": "skill:promo_generation/promo_generator_episode_script.txt",
+    "promo_generator_episode_script.txt": "promo_generator_episode_script.md",
     "image_style_extractor.txt": "skill:image_style_extraction/image_style_extractor.txt",
     "voice_tts_planner_system.txt": "voice_tts_planner_system.txt",
     "voice_tts_planner_user.txt": "voice_tts_planner_user.txt",
