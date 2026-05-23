@@ -3844,12 +3844,12 @@ _PROMPT_SKILL_ALIAS = {
     "story_generator_episode.txt": "skill:story_generation/story_generator_episode.txt",
     "story_generator_analyze_novel.txt": "skill:story_generation/story_generator_analyze_novel.txt",
     "script_generator_scenes.txt": "skill:script_generation/script_generator_scenes.txt",
-    "script_generator_episode_script.txt": "skill:script_generation/script_generator_episode_script.txt",
+    "script_generator_episode_script.txt": "script_generator_episode_script.md",
     "scene_regenerate.txt": "skill:script_generation/scene_regenerate.txt",
     "shot_generator.txt": "skills/shot_generation.md",
     "shot_regenerate.txt": "shot_regenerate.txt",
     "promo_generator_global.txt": "skill:promo_generation/promo_generator_global.txt",
-    "promo_generator_episode_script.txt": "promo_generator_episode_script.md",
+    "promo_generator_episode_script.txt": "script_generator_episode_script.md",
     "image_style_extractor.txt": "skill:image_style_extraction/image_style_extractor.txt",
     "voice_tts_planner_system.txt": "voice_tts_planner_system.txt",
     "voice_tts_planner_user.txt": "voice_tts_planner_user.txt",
@@ -12412,10 +12412,8 @@ async def generate_project_episode_scripts_from_global_framework(
         f"character_canon_len={len(character_canon_md)} character_source={character_canon_source}"
     )
 
-    if generator_kind == "promo":
-        prompt_filename = "promo_generator_episode_script.txt"
-    else:
-        prompt_filename = "script_generator_episode_script.txt"
+    # Single stable prompt entry for episode script generation.
+    prompt_filename = "script_generator_episode_script.md"
     try:
         sys_prompt = _resolve_prompt_text(prompt_filename)
     except FileNotFoundError:
@@ -12821,7 +12819,7 @@ async def generate_project_episode_scripts_from_global_framework(
             ei = _episode_info_from_episode(ep_db)
             ei["episode_script_generated_at"] = now_bj_iso()
             ei["episode_script_episode_number"] = int(idx)
-            if prompt_filename == "promo_generator_episode_script.txt":
+            if generator_kind == "promo":
                 ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
             else:
                 ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"

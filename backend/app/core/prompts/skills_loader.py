@@ -71,8 +71,23 @@ def get_skill_prompt_text(skill_id: str, prompt_name: str = "system_prompt.txt")
         return None
 
     prompt_refs = meta.get("prompts") if isinstance(meta.get("prompts"), list) else []
+
+    # Prefer refs that match requested prompt_name, then fall back to other refs.
+    requested_name = Path(file_name).name.lower()
+    prioritized_refs: List[str] = []
+    fallback_refs: List[str] = []
     for ref in prompt_refs:
         ref_text = str(ref or "").strip()
+        if not ref_text:
+            continue
+        ref_name = Path(ref_text).name.lower()
+        if ref_name == requested_name:
+            prioritized_refs.append(ref_text)
+        else:
+            fallback_refs.append(ref_text)
+
+    for ref_text in prioritized_refs + fallback_refs:
+        ref_text = str(ref_text or "").strip()
         if not ref_text:
             continue
 
