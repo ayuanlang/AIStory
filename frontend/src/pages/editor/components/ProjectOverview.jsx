@@ -276,19 +276,22 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     useEffect(() => {
         if (episodes && episodes.length > 0) {
             let defaultEp = 1;
-            const ungeneratedEps = episodes.filter(e => !e.script_content || String(e.script_content).trim() === '');
+            const getEpNum = (e, i) => Number(e.episode_number) || parseEpisodeNumberFromText(e.title) || (i + 1);
+            
+            const ungeneratedEps = episodes.map((e, index) => ({ e, index }))
+                .filter(({e}) => !e.script_content || String(e.script_content).trim() === '');
+            
             if (ungeneratedEps.length > 0) {
-                defaultEp = Math.min(...ungeneratedEps.map(e => e.episode_number || 1));
+                defaultEp = Math.min(...ungeneratedEps.map(({e, index}) => getEpNum(e, index)));
             } else {
-                defaultEp = Math.max(...episodes.map(e => e.episode_number || 1));
+                defaultEp = Math.max(...episodes.map((e, index) => getEpNum(e, index)));
             }
             
             if (!hasSetDefaultEp) {
                 setTargetEpisodeNumberForGen(String(defaultEp));
                 setHasSetDefaultEp(true);
             } else if (targetEpisodeNumberForGen) {
-                // 如果当前选中的集数已经生成了内容，自动跳转到下一个没生成的集数
-                const currentEpTarget = episodes.find(e => String(e.episode_number) === String(targetEpisodeNumberForGen));
+                const currentEpTarget = episodes.find((e, i) => String(getEpNum(e, i)) === String(targetEpisodeNumberForGen));
                 if (currentEpTarget && currentEpTarget.script_content && String(currentEpTarget.script_content).trim() !== '') {
                     setTargetEpisodeNumberForGen(String(defaultEp));
                 }
