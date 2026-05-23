@@ -2858,6 +2858,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const importReport = await onImportText(analyzedText || '', 'auto', importOptions);
             if (onLog) onLog('Auto-import finished.', 'success');
 
+            const subjectsJson = importOptions?.subjectsJson || getAnalysisEntitiesPayloadFromJsonText(analyzedText || '');
+            const signature = buildSubjectsImportSignature(subjectsJson);
+            
+            const importedCounts = importReport?.importedSubjectCounts || {};
+            const createdCount = Number(importedCounts.character || 0) + Number(importedCounts.prop || 0) + Number(importedCounts.environment || 0);
+            const skippedCount = Array.isArray(importReport?.skippedSubjectItems) ? importReport.skippedSubjectItems.length : 0;
+            const handledCount = createdCount + skippedCount;
+            
+            const expectedCount = (Array.isArray(subjectsJson?.characters) ? subjectsJson.characters.length : 0) +
+                                  (Array.isArray(subjectsJson?.props) ? subjectsJson.props.length : 0) +
+                                  (Array.isArray(subjectsJson?.environments) ? subjectsJson.environments.length : 0);
+
+            if (signature && handledCount >= expectedCount && expectedCount > 0) {
+                lastAutoSubjectsImportRef.current = {
+                    signature,
+                    result: importReport || {},
+                };
+            }
+
             if (switchToScenes && typeof onSwitchToScenes === 'function') {
                 onSwitchToScenes();
             }
@@ -5937,6 +5956,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         analysisRunInFlightRef.current = true;
         clearAnalysisTaskMarker(activeEpisode?.id);
+        lastAutoSubjectsImportRef.current = { signature: '', result: null };
         const startedAt = Date.now();
         analysisStopRequestedRef.current = false;
         setIsAnalyzing(true);

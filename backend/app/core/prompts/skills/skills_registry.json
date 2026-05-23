@@ -98,6 +98,28 @@
         "skills/shot_generation.md",
         "shot_regenerate.txt"
       ]
+    },
+    {
+      "id": "master_story_architect",
+      "title": "Master Story Architect (剧本故事DNA)",
+      "type": "story",
+      "prompts": [
+        "master_story_architect.md"
+      ],
+      "legacy_refs": [
+        "master_story_architect.md"
+      ]
+    },
+    {
+      "id": "master_episode_writer",
+      "title": "Master Episode Writer (生成剧本)",
+      "type": "script",
+      "prompts": [
+        "master_episode_writer.md"
+      ],
+      "legacy_refs": [
+        "master_episode_writer.md"
+      ]
     }
   ]
 }
